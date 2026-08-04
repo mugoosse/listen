@@ -230,6 +230,59 @@ enum Merge {
 
     // MARK: - Turns
 
+    /// One ASR sentence, and where its text sits inside its turn.
+    struct Sentence {
+        var start: Double
+        var end: Double
+        /// A UTF-16 range into the turn's text, which is what AppKit wants.
+        var range: NSRange
+    }
+
+    /// Find each sentence inside the turn that contains it.
+    ///
+    /// This is what makes the playhead readable inside a paragraph. A turn is a
+    /// whole stretch of one person talking and can run for minutes; highlighting
+    /// the turn says who is speaking but not where in it you are.
+    ///
+    /// Sentences, not words, because that is the finest timing the ASR exposes
+    /// (see CLAUDE.md). If word timings ever arrive this is the function that
+    /// gets a finer input, not a different design.
+    ///
+    /// The ranges are found by searching the turn text rather than rebuilt from
+    /// the segments, so a `turns.json` that was assembled by something else,
+    /// which is the case for every imported recording, still lines up. A
+    /// sentence whose text is not found is skipped: the turn-level highlight
+    /// still works, and a wrong range would highlight the wrong words while
+    /// looking entirely deliberate.
+    static func sentences(in turns: [Turn], from segments: [LabelledSegment]) -> [[Sentence]] {
+        var out = [[Sentence]](repeating: [], count: turns.count)
+        var index = 0
+        for (t, turn) in turns.enumerated() {
+            let text = turn.text as NSString
+            var cursor = 0
+            while index < segments.count {
+                let segment = segments[index]
+                // A segment ending before this turn began belongs to an earlier
+                // turn or to none. Skipping rather than stopping is what keeps
+                // one unplaceable segment from silently ending the highlight
+                // for the rest of the recording.
+                if segment.end < turn.start - 0.001 { index += 1; continue }
+                guard segment.speaker == turn.speaker,
+                      segment.start <= turn.end + 0.001 else { break }
+                index += 1
+
+                let body = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !body.isEmpty, cursor < text.length else { continue }
+                let rest = NSRange(location: cursor, length: text.length - cursor)
+                let found = text.range(of: body, options: [.literal], range: rest)
+                guard found.location != NSNotFound else { continue }
+                out[t].append(Sentence(start: segment.start, end: segment.end, range: found))
+                cursor = found.location + found.length
+            }
+        }
+        return out
+    }
+
     /// Condense consecutive segments by the same speaker into one turn.
     ///
     /// This is the LLM-friendly view and what the MCP server serves: a

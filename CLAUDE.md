@@ -531,3 +531,38 @@ for a microphone track, the transcript's named count for a single mixed track,
 and nothing at all for a system track, whose population is exactly what is
 being asked. `Enroll` then attaches the microphone's voiceprint to whichever
 named speaker the system side did not account for, which is the user.
+
+### Synthetic voices measured the model's ceiling, not the task
+
+The voiceprint thresholds were first calibrated on `say`-generated speech,
+which gave same-person pairs of 0.979 to 0.995 and a suggested match threshold
+of **0.72**. Re-measured on 14 voiceprints from real meetings across 5 people:
+
+    same person       min +0.668  median +0.807  max +0.901
+    different people  min -0.091  median +0.136  max +0.371
+
+The worst genuine same-person pair is **0.668**, below the synthetic threshold.
+Shipping 0.72 would have refused to suggest a person the bank had already heard
+four times, and it would have looked like the feature simply not working rather
+than like a number being wrong.
+
+One TTS voice reading two scripts is nearly identical to itself. A person on
+two days, on two microphones, in two rooms, is not. The different-person side
+moved the other way (0.597 synthetic against 0.371 real), so both errors pushed
+toward a threshold too high to be useful.
+
+The thresholds are now 0.47 and 0.57, one third and two thirds across the real
+gap. The lesson generalises past this feature: synthetic audio is fine for
+checking that a pipeline runs, and worthless for choosing a threshold.
+
+### A silent track must not cost a transcript
+
+FluidAudio throws "No speech detected in audio" rather than returning nothing,
+and plenty of recordings genuinely contain a silent track: a webinar nobody
+spoke into, a call taken on mute. That exception used to abort the whole
+recording, so a meeting with one live track produced neither voiceprints nor,
+in `Pipeline`, a transcript.
+
+Both now catch it. `Enroll` takes whatever the other track gives; `Pipeline`
+keeps the transcript and puts everybody under one label, because a transcript
+with imperfect speakers is worth enormously more than no transcript.

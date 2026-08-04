@@ -25,21 +25,29 @@ actor Enroll {
         var unmatched: Int               // diarized voices no name claimed
     }
 
-    /// Recordings that would benefit: a transcript with at least one real name,
-    /// audio to work from, and no voiceprints yet.
+    /// Recordings that would benefit: a transcript, audio to work from, and no
+    /// voiceprints yet.
+    ///
+    /// Deliberately **not** limited to recordings with named speakers. A
+    /// voiceprint filed under "A" contributes nothing to the sounds-like
+    /// ranking, which excludes placeholders on purpose, but it is not wasted:
+    /// naming that speaker later moves the embedding to the name
+    /// (`VoiceBank.rename`), so the voice joins the bank immediately instead of
+    /// requiring another pass over the audio. Diarizing an hour is minutes;
+    /// doing it once, up front, is the cheap order.
     static func candidates() -> [Recording] {
         Recording.all().filter { recording in
-            guard !recording.playbackTracks.isEmpty else { return false }
-            guard recording.voiceprints.isEmpty else { return false }
-            return recording.speakers.contains { !VoiceBank.isPlaceholder($0) }
+            !recording.playbackTracks.isEmpty
+                && recording.voiceprints.isEmpty
+                && !recording.speakers.isEmpty
         }
     }
 
-    /// Every recording with names, whether or not it already has voiceprints.
+    /// Every recording with a transcript, whether or not it already has
+    /// voiceprints.
     static func forceCandidates() -> [Recording] {
-        Recording.all().filter { recording in
-            !recording.playbackTracks.isEmpty
-                && recording.speakers.contains { !VoiceBank.isPlaceholder($0) }
+        Recording.all().filter {
+            !$0.playbackTracks.isEmpty && !$0.speakers.isEmpty
         }
     }
 
@@ -47,8 +55,11 @@ actor Enroll {
              progress: (@Sendable (String) -> Void)? = nil) async throws -> Result {
         let fm = FileManager.default
         let turns = recording.storedTurns
-        let named = Set(turns.map(\.speaker)).filter { !VoiceBank.isPlaceholder($0) }
-        guard !named.isEmpty else { throw PipelineError.nothingToTranscribe }
+        // Every speaker, placeholder or not. An unnamed one still gets a
+        // voiceprint so that naming it later is a rename rather than another
+        // pass over the audio.
+        let everyone = Set(turns.map(\.speaker))
+        guard !everyone.isEmpty else { throw PipelineError.nothingToTranscribe }
 
         try await diarizer.load { progress?($0) }
 
@@ -65,31 +76,46 @@ actor Enroll {
             // transcript: telling the clusterer to find two people in a track
             // that holds one splits that one person in half.
             if hasSystem {
-                let system = try await diarizer.run(recording.systemURL)
-                trace("enrol \(recording.id): system track, "
-                      + "\(system.embeddings.count) voices")
-                unmatched += attach(system, to: turns, into: &bank)
+                // A silent track is ordinary, not an error: plenty of meetings
+                // have nobody speaking into the microphone, and the diarizer
+                // throws rather than returning nothing. Letting that abort the
+                // recording loses the voiceprints on the track that did have
+                // speech.
+                do {
+                    let system = try await diarizer.run(recording.systemURL)
+                    trace("enrol \(recording.id): system track, "
+                          + "\(system.embeddings.count) voices")
+                    unmatched += attach(system, to: turns, into: &bank)
+                } catch {
+                    trace("enrol \(recording.id): system track, "
+                          + "\(error.localizedDescription)")
+                }
             }
             if hasMic {
                 // Whoever the system side did not account for is the person on
                 // the microphone. One voice, so say so rather than letting the
                 // clusterer split a single speaker across a long meeting.
-                let mic = try await diarizer.run(recording.micURL, expecting: 1)
-                let remaining = named.subtracting(bank.keys)
-                trace("enrol \(recording.id): mic track, "
-                      + "\(mic.embeddings.count) voices, unaccounted: \(remaining)")
-                if remaining.count == 1, let name = remaining.first,
-                   let vector = mic.embeddings.values.first {
-                    bank[name] = Voiceprint(embedding: vector,
-                                            speech: mic.speech.values.reduce(0, +))
-                } else {
-                    unmatched += attach(mic, to: turns, into: &bank)
+                do {
+                    let mic = try await diarizer.run(recording.micURL, expecting: 1)
+                    let remaining = everyone.subtracting(bank.keys)
+                    trace("enrol \(recording.id): mic track, "
+                          + "\(mic.embeddings.count) voices, unaccounted: \(remaining)")
+                    if remaining.count == 1, let name = remaining.first,
+                       let vector = mic.embeddings.values.first {
+                        bank[name] = Voiceprint(embedding: vector,
+                                                speech: mic.speech.values.reduce(0, +))
+                    } else {
+                        unmatched += attach(mic, to: turns, into: &bank)
+                    }
+                } catch {
+                    trace("enrol \(recording.id): mic track, "
+                          + "\(error.localizedDescription)")
                 }
             }
         } else if fm.fileExists(atPath: recording.mixURL.path) {
             // One mixed track, so every named speaker is in it and the count
             // from the transcript is the right prior.
-            let mix = try await diarizer.run(recording.mixURL, expecting: named.count)
+            let mix = try await diarizer.run(recording.mixURL, expecting: everyone.count)
             trace("enrol \(recording.id): mixed track, \(mix.embeddings.count) voices")
             unmatched += attach(mix, to: turns, into: &bank)
         } else {
@@ -125,8 +151,7 @@ actor Enroll {
 
         var unmatched = 0
         for (label, vector) in diarization.embeddings {
-            guard let best = totals[label]?.max(by: { $0.value < $1.value }),
-                  !VoiceBank.isPlaceholder(best.key) else {
+            guard let best = totals[label]?.max(by: { $0.value < $1.value }) else {
                 unmatched += 1
                 continue
             }

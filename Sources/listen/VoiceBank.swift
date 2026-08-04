@@ -26,34 +26,35 @@ enum VoiceBank {
 
     // MARK: - Thresholds
 
-    /// Measured with `listen calibrate` on 12 named voiceprints across 4
-    /// people, 12 same-person and 48 different-person cross-recording pairs:
+    /// Measured with `listen calibrate` on **real recordings**: 14 named
+    /// voiceprints across 5 people, 27 same-person and 57 different-person
+    /// cross-recording pairs.
     ///
-    ///     same person       min +0.979  median +0.991  max +0.995
-    ///     different people  min +0.127  median +0.225  max +0.597
+    ///     same person       min +0.668  median +0.807  max +0.901
+    ///     different people  min -0.091  median +0.136  max +0.371
     ///
-    /// Clean separation, gap +0.382, so these sit one third and two thirds of
+    /// Clean separation, gap +0.297, so these sit one third and two thirds of
     /// the way across it.
     ///
-    /// **Re-derived, not copied, and the difference is not academic.** The
-    /// Python pipeline used `MATCH_THRESHOLD = 0.50` against pyannote
-    /// embeddings, where different-person pairs topped out at 0.46. In
-    /// FluidAudio's space different-person pairs reach **0.597**, so carrying
-    /// 0.50 over would have called strangers a match on a third of the pairs
-    /// measured here. Different model, different space, and the numbers do not
-    /// transfer.
+    /// **These replace numbers measured on synthesised speech, which were
+    /// wrong in a way worth remembering.** That earlier run gave same-person
+    /// pairs of 0.979 to 0.995 and suggested a match threshold of 0.72. Real
+    /// voices score far lower against themselves: the worst genuine same-person
+    /// pair here is **0.668**, so the synthetic threshold would have refused to
+    /// suggest a person the bank had heard four times. One TTS voice reading
+    /// two scripts is nearly identical to itself; a person on two days, on two
+    /// microphones, in two rooms, is not. Synthetic audio measures the model's
+    /// ceiling, not the task.
     ///
-    /// **The caveat, because it matters:** this was measured on synthesised
-    /// speech, where one voice reading two different scripts is far more
-    /// self-consistent than a person on two different days with two different
-    /// microphones. Same-person scores above 0.97 are not a real-world figure;
-    /// they are an upper bound on separability. Expect real recordings to sit
-    /// lower and closer together, and re-run `listen calibrate` against a real
-    /// library before trusting these. The failure they are tuned toward is the
-    /// safe one: too high means no suggestion, and a suggestion is never
-    /// auto-applied anyway.
-    static let matchThreshold: Float = 0.72
-    static let strongThreshold: Float = 0.85
+    /// The different-person side moved too, and the other way: 0.597 synthetic
+    /// against 0.371 real. Both errors pushed the same direction, toward a
+    /// threshold too high to be useful.
+    ///
+    /// Re-run `listen calibrate` as the library grows. Five people is enough to
+    /// separate cleanly and not enough to have met a confusable pair, so the
+    /// different-person maximum is the number most likely to rise.
+    static let matchThreshold: Float = 0.47
+    static let strongThreshold: Float = 0.57
 
     // MARK: - Reading
 

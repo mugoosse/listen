@@ -21,3 +21,6 @@ sparkle_private_key.txt
 
 # local test helpers, not part of the app
 scratch-*
+
+# CodeGraph index: regenerate with /index, not source
+.codegraph/

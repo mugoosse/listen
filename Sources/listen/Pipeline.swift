@@ -67,13 +67,23 @@ actor Pipeline {
             model = transcript.model
 
             progress?("identifying speakers")
-            try await diarizer.load { progress?($0) }
-            let diarization = try await diarizer.run(everyone)
-            embeddings = diarization.embeddings
-            speech = diarization.speech
+            // Diarization failing must not cost the transcript. It throws on a
+            // track with no speech in it, which is an ordinary thing for a
+            // recording to contain, and a transcript with everybody under one
+            // label is worth enormously more than no transcript at all.
+            var turns: [SpeakerTurn] = []
+            do {
+                try await diarizer.load { progress?($0) }
+                let diarization = try await diarizer.run(everyone)
+                turns = diarization.turns
+                embeddings = diarization.embeddings
+                speech = diarization.speech
+            } catch {
+                log("speakers not identified: \(error.localizedDescription)")
+            }
 
-            var assigned = Merge.assign(transcript.segments, to: diarization.turns,
-                                        fallback: "unknown")
+            var assigned = Merge.assign(transcript.segments, to: turns,
+                                        fallback: "A")
             let mapping = Merge.relabel(&assigned)
             // Carry the voiceprints over to the letters the transcript uses,
             // otherwise the embeddings are filed under labels nothing displays.

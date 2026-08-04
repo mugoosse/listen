@@ -497,3 +497,37 @@ everyone-track: diarize it whole, discover every speaker, and label nobody
 "Me". The two-track shortcut relies on the user being the one in `mic.wav`, and
 in a mixed track that is not true of anybody, so applying it would attach the
 user's name to whoever happened to be first.
+
+### The legacy m4a holds two tracks, and everything reads only the first
+
+This one cost the most to find, because every symptom pointed elsewhere.
+`listen enroll` produced one name per recording when the transcripts clearly
+had two, and the diarizer reported **1 speaker across 219 turns of an 80 minute
+two-person call** without erroring.
+
+A clustering threshold sweep came back completely flat: 1 voice at 0.6, 0.5,
+0.4 and 0.3. A parameter that changes nothing is the tell. The audio really did
+contain one voice, because the file has **two audio tracks**, a stereo one
+carrying what the Mac was playing and a mono one carrying the microphone, and
+`AVAsset` handed over only the first. Confirmed by transcribing each track: one
+holds the far end and the other holds the user.
+
+So `AudioExtract` splits them on import, into the same `system.wav` and
+`mic.wav` a native recording produces, and the whole two-track pipeline applies
+to an imported meeting unchanged. Classification is by channel count rather
+than track index, because stereo-means-system and mono-means-microphone is a
+property of what they are rather than of the order this recorder wrote them in.
+
+### A known speaker count is a good prior, and a bad one applied to one track
+
+`Diarizer.run(_:expecting:)` sets `numSpeakers`, which is far stronger than any
+threshold when the number really is known. It has to be applied to the right
+audio, though: forcing 2 onto a system track that holds only the far end split
+that one person into two voices, and the numbers looked plausible (532 s and
+99 s) rather than obviously wrong.
+
+So the prior is used only where the count is actually known for that track: 1
+for a microphone track, the transcript's named count for a single mixed track,
+and nothing at all for a system track, whose population is exactly what is
+being asked. `Enroll` then attaches the microphone's voiceprint to whichever
+named speaker the system side did not account for, which is the user.

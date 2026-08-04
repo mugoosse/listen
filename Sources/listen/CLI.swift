@@ -51,7 +51,7 @@ enum CLI {
         case "label":
             label(rest)
         case "import":
-            importLegacy(rest)
+            await importLegacy(rest)
         case "enroll":
             await enroll(rest)
         case "help", "--help", "-h":
@@ -99,12 +99,13 @@ enum CLI {
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
       import <path>              bring in a meet_transcriptions library
-      enroll                     re-derive voiceprints for named speakers
+      enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       calibrate                  voiceprint threshold report
       mcp                        stdio MCP server, read-only
 
     import options:
       --dry-run                  list what would be imported, copy nothing
+      --replace                  re-import recordings already in the library
 
     label options:
       <name>                     name the speaker
@@ -369,10 +370,23 @@ enum CLI {
     /// `listen enroll`: build voiceprints for recordings that have names but no
     /// embeddings, which is every imported one.
     private static func enroll(_ args: [String]) async -> Never {
-        for arg in args where arg.hasPrefix("-") {
-            fail("unknown option `\(arg)`. Try `listen help`.")
+        var ids: [String] = []
+        var force = false
+        for arg in args {
+            if arg == "--force" { force = true }
+            else if arg.hasPrefix("-") { fail("unknown option `\(arg)`. Try `listen help`.") }
+            else { ids.append(arg) }
         }
-        let candidates = Enroll.candidates()
+
+        // Naming ids explicitly bypasses the "no voiceprints yet" filter, so a
+        // recording that enrolled badly can be redone without deleting its
+        // sidecar by hand.
+        var candidates = ids.isEmpty ? Enroll.candidates()
+                                     : ids.compactMap { Recording.find($0) }
+        if force, ids.isEmpty { candidates = Enroll.forceCandidates() }
+        if !ids.isEmpty, candidates.count != ids.count {
+            fail("no recording matching one of: \(ids.joined(separator: ", "))")
+        }
         guard !candidates.isEmpty else {
             log("nothing to enrol: every recording with named speakers already has "
                 + "voiceprints.")
@@ -399,12 +413,14 @@ enum CLI {
     }
 
     /// `listen import <path> [--dry-run]`.
-    private static func importLegacy(_ args: [String]) -> Never {
+    private static func importLegacy(_ args: [String]) async -> Never {
         var path: String?
         var dryRun = false
+        var replace = false
         for arg in args {
             switch arg {
             case "--dry-run": dryRun = true
+            case "--replace": replace = true
             case let other where other.hasPrefix("-"):
                 fail("unknown option `\(other)`. Try `listen help`.")
             default:
@@ -428,7 +444,8 @@ enum CLI {
             + "\(named) named speakers")
 
         do {
-            let outcome = try LegacyImport.run(candidates, dryRun: dryRun)
+            let outcome = try await LegacyImport.run(candidates, dryRun: dryRun,
+                                                     replace: replace)
             for id in outcome.imported {
                 let c = candidates.first { $0.id == id }
                 print("\(dryRun ? "would import" : "imported") \(id)  "

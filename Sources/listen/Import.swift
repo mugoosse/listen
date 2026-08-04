@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// Importing the library the Python pipeline built.
@@ -179,15 +180,19 @@ enum LegacyImport {
     /// Copies rather than moves. The legacy app keeps working, which matters
     /// while the port is being checked: an import that is wrong is then a
     /// deletion away from being retried, rather than a restore from backup.
-    static func run(_ candidates: [Candidate], dryRun: Bool) throws -> Outcome {
+    static func run(_ candidates: [Candidate], dryRun: Bool,
+                    replace: Bool = false) async throws -> Outcome {
         var outcome = Outcome()
         try Library.prepare()
 
         for candidate in candidates {
             let destination = Library.recordings.appendingPathComponent(candidate.id)
             if FileManager.default.fileExists(atPath: destination.path) {
-                outcome.skipped.append(candidate.id)
-                continue
+                guard replace else {
+                    outcome.skipped.append(candidate.id)
+                    continue
+                }
+                try? FileManager.default.removeItem(at: destination)
             }
             let size = (try? FileManager.default.attributesOfItem(
                 atPath: candidate.audio.path)[.size] as? Int64) ?? 0
@@ -201,11 +206,6 @@ enum LegacyImport {
                 try FileManager.default.createDirectory(
                     at: destination, withIntermediateDirectories: true)
 
-                // The legacy track is already a mixdown of both sides, so it
-                // lands as mix.m4a: that is what it is, and it is what the
-                // player reaches for first. There is deliberately no mic.wav,
-                // because claiming a track is the user when it is everybody is
-                // the one thing that would poison the speaker labelling.
                 var recording = Recording(
                     folder: destination,
                     metadata: Metadata(
@@ -215,7 +215,28 @@ enum LegacyImport {
                         duration: candidate.duration,
                         source: "imported",
                         state: Metadata.State.pending.rawValue))
-                try FileManager.default.copyItem(at: candidate.audio, to: recording.mixURL)
+                // The legacy recorder wrote both sides into one file as two
+                // tracks: a stereo one for what the Mac was playing and a mono
+                // one for the microphone. Split, an imported recording is the
+                // same shape as one Listen captured itself, and the two-track
+                // pipeline applies to it unchanged. Left unsplit it looks like
+                // a single mixdown, and everything that reads it takes only the
+                // first track: the diarizer heard exactly one person in an 80
+                // minute two-person call and said so without complaining.
+                let layout = await AudioExtract.classify(AVURLAsset(url: candidate.audio))
+                if let system = layout.system {
+                    try await AudioExtract.extract(track: system, from: candidate.audio,
+                                                   to: recording.systemURL)
+                }
+                if let mic = layout.mic {
+                    try await AudioExtract.extract(track: mic, from: candidate.audio,
+                                                   to: recording.micURL)
+                }
+                if layout.system == nil, layout.mic == nil {
+                    // One track only: a mixdown, and honest to keep as one.
+                    try FileManager.default.copyItem(at: candidate.audio,
+                                                     to: recording.mixURL)
+                }
 
                 if candidate.hasTranscript {
                     let enc = JSONEncoder()

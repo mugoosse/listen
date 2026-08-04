@@ -27,6 +27,11 @@ struct DiarizationOutput {
 /// up the accuracy.
 actor Diarizer {
     private var manager: OfflineDiarizerManager?
+    /// Loaded once and shared between managers, because the CoreML load is the
+    /// expensive part and a different speaker count needs a different config
+    /// but the same models.
+    private var models: OfflineDiarizerModels?
+    private var loadedExpecting: Int?
 
     /// Where FluidAudio keeps its CoreML bundles.
     ///
@@ -39,14 +44,57 @@ actor Diarizer {
         FileManager.default.fileExists(atPath: modelsDirectory.path)
     }
 
+    /// Clustering settings, overridable for measurement.
+    ///
+    /// `threshold` is a Euclidean distance over unit-normalized embeddings, so
+    /// **larger merges more**: raise it and two people become one. The library
+    /// default is 0.6. `LISTEN_DIARIZE_THRESHOLD` and `LISTEN_MIN_SPEAKERS`
+    /// exist to sweep it against real recordings rather than guess.
+    static func config(expecting: Int? = nil) -> OfflineDiarizerConfig {
+        let env = ProcessInfo.processInfo.environment
+        var clustering = OfflineDiarizerConfig.Clustering.community
+        if let raw = env["LISTEN_DIARIZE_THRESHOLD"], let value = Double(raw) {
+            clustering.threshold = value
+        }
+        if let raw = env["LISTEN_MIN_SPEAKERS"], let value = Int(raw) {
+            clustering.minSpeakers = value
+        }
+        // A known speaker count is a much stronger signal than any threshold.
+        // Enrolment has one: the imported transcript already says how many
+        // people were named, so there is no reason to make the clusterer
+        // rediscover it and get it wrong.
+        if let expecting, expecting > 0 { clustering.numSpeakers = expecting }
+        return OfflineDiarizerConfig(clustering: clustering)
+    }
+
     func load(progress: (@Sendable (String) -> Void)? = nil) async throws {
         if manager != nil { return }
         if !Self.isDownloaded { progress?("downloading the diarization models") }
-        let m = OfflineDiarizerManager()
+        let m = OfflineDiarizerManager(config: Self.config())
         // FluidAudio logs through OSLog rather than stdout, so unlike mlx-audio
         // this one does not need shielding from the transcript.
         try await m.prepareModels()
         manager = m
+    }
+
+    /// Point the diarizer at a known number of speakers.
+    ///
+    /// Rebuilds the manager, not the models: the CoreML load is the slow part
+    /// and is reused, while the clustering config is cheap.
+    private func manager(expecting: Int?) async throws -> OfflineDiarizerManager {
+        guard let manager else { throw DiarizerError.notLoaded }
+        guard let expecting, expecting > 0 else { return manager }
+        if loadedExpecting == expecting, let cached = self.manager { return cached }
+        if models == nil {
+            models = try? await OfflineDiarizerModels.load(
+                from: OfflineDiarizerModels.defaultModelsDirectory())
+        }
+        guard let models else { return manager }
+        let tuned = OfflineDiarizerManager(config: Self.config(expecting: expecting))
+        tuned.initialize(models: models)
+        loadedExpecting = expecting
+        self.manager = tuned
+        return tuned
     }
 
     /// Diarize one track.
@@ -55,8 +103,8 @@ actor Diarizer {
     /// the user, so running a clustering model over it would be spending ANE
     /// time to rediscover something already known, and occasionally getting it
     /// wrong by splitting one person into two.
-    func run(_ url: URL) async throws -> DiarizationOutput {
-        guard let manager else { throw DiarizerError.notLoaded }
+    func run(_ url: URL, expecting: Int? = nil) async throws -> DiarizationOutput {
+        let manager = try await manager(expecting: expecting)
         let result = try await manager.process(url)
 
         var turns: [SpeakerTurn] = []

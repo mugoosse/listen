@@ -15,7 +15,10 @@ if CLI.wants(CommandLine.arguments) {
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)     // menu bar only, no Dock icon
+// .regular, not .accessory: Listen's main surface is a window people read for
+// minutes at a time, so it needs a Dock icon and a Cmd-Tab entry to get back
+// to. Speak is .accessory because it has no primary window at all.
+app.setActivationPolicy(.regular)
 // NSApplication holds its delegate weakly, so keep a strong reference.
 objc_setAssociatedObject(app, "listen.delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
 app.run()

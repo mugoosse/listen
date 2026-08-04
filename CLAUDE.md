@@ -211,6 +211,47 @@ that is real meeting audio with crosstalk and silence. Keep watching the
 counts; when there is a real corpus behind the number, either delete the rules
 and say so in the commit, or record why they stayed.
 
+### Listen is not `LSUIElement`, and Speak is
+
+This is the one place the Speak template was deliberately reversed. Speak is a
+menu bar utility with no primary window, so hiding it from the Dock is right.
+Listen's main surface is a window people read transcripts in for minutes at a
+time, and an app you cannot reach with Cmd-Tab or the Dock is an app you cannot
+get back to once its window is behind a browser.
+
+So: `.regular` activation policy, no `LSUIElement`, menu bar item kept for
+start and stop, `applicationShouldTerminateAfterLastWindowClosed` returns false
+because a recording may still be running, and `applicationShouldHandleReopen`
+brings the window back.
+
+The onboarding rule this reverses one reason for still holds. Windows must
+float and re-activate after each permission prompt: a window behind a system
+dialog is unrecoverable either way.
+
+### The transcription queue has no database
+
+A recording whose audio exists and whose transcript does not **is** pending.
+That one sentence is the whole design: `Queue.resume()` rebuilds the queue by
+listing the library at launch, so a job interrupted by a quit or a crash costs
+one re-run rather than leaving a stuck row somewhere. Adding a job table would
+reintroduce exactly the inconsistency the layout removes.
+
+One job at a time, on purpose. Parakeet is on the GPU and FluidAudio is on the
+Neural Engine, and two jobs contend for the same hardware rather than finishing
+sooner. `dashboard.py` reached the same conclusion.
+
+### Transcript edits do not live in the sheet that presents them
+
+`TranscriptEditor` owns rename, discard and merge; `SpeakerSheet` only asks the
+question. They are split so `listen label` exercises the exact code path the
+window uses, rather than a second implementation that agrees with it right up
+until it does not. There is no test target, so this is what verification of
+speaker editing looks like.
+
+The `.raw.json.bak` backup is written **once**, before the first edit. Writing
+it on every edit would overwrite it with edited data the second time, and it
+would no longer be a way back to what the model actually said.
+
 ### The cache root is not always `~/.cache/huggingface`
 
 Inherited wholesale from Speak, and the reason models are shared between the

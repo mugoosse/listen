@@ -27,6 +27,13 @@ final class App: NSObject, NSApplicationDelegate {
 
         Capture.shared.onChange = { [weak self] in self?.rebuildMenu() }
 
+        // Anything with audio and no transcript is pending, so the queue is
+        // rebuilt from the file system rather than from saved state. A job
+        // interrupted by a quit costs one re-run, not a stuck row.
+        Queue.shared.resume()
+
+        LibraryWindow.shared.show()
+
         // A capture left staged by a crash is offered rather than resumed: the
         // audio is on disk and playable thanks to WAVWriter's rolling header,
         // so the only open question is whether the user wants it.
@@ -53,9 +60,15 @@ final class App: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Open Listen", action: #selector(openLibrary),
+                     keyEquivalent: "o").target = self
         let count = Recording.all().count
         menu.addItem(withTitle: count == 1 ? "1 recording" : "\(count) recordings",
                      action: nil, keyEquivalent: "").isEnabled = false
+        if Queue.shared.isBusy {
+            menu.addItem(withTitle: "Transcribing…", action: nil, keyEquivalent: "")
+                .isEnabled = false
+        }
         menu.addItem(withTitle: "Reveal Library in Finder",
                      action: #selector(revealLibrary), keyEquivalent: "").target = self
 
@@ -121,7 +134,12 @@ final class App: NSObject, NSApplicationDelegate {
         awaitingConfirm = nil
         do {
             if keep {
-                _ = try Capture.shared.keep(recording)
+                let kept = try Capture.shared.keep(recording)
+                // Transcription starts as soon as the recording joins the
+                // library, without being asked for. Nobody records a meeting
+                // in order to not read it.
+                Queue.shared.enqueue(kept.id)
+                LibraryWindow.shared.reload()
             } else {
                 try Capture.shared.discard(recording)
             }
@@ -131,6 +149,10 @@ final class App: NSObject, NSApplicationDelegate {
         }
         indicator.hide()
         rebuildMenu()
+    }
+
+    @objc private func openLibrary() {
+        LibraryWindow.shared.show()
     }
 
     @objc private func revealLibrary() {
@@ -157,6 +179,20 @@ final class App: NSObject, NSApplicationDelegate {
         // Audio, which survives the process.
         if Capture.shared.isRecording { _ = Capture.shared.stop() }
         NSApp.terminate(nil)
+    }
+
+    /// Clicking the Dock icon brings the library back rather than doing
+    /// nothing, which is what it does by default once the window is closed.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { LibraryWindow.shared.show() }
+        return true
+    }
+
+    /// Closing the window does not quit. A recording may still be running, and
+    /// quitting mid-capture to tidy a window away is the wrong trade.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     func applicationWillTerminate(_ note: Notification) {

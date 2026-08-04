@@ -97,12 +97,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>Listen</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <!-- Menu bar only for now, matching speak. This is revisited at milestone
-         4: Listen has a real two-pane main window, and an app whose primary
-         surface is a window someone reads transcripts in probably wants a Dock
-         icon. Note that dropping LSUIElement also drops the reason onboarding
-         windows must float, so the two decisions move together. -->
-    <key>LSUIElement</key><true/>
+    <!-- Deliberately NOT LSUIElement, which is where this differs from Speak.
+         Speak is a menu bar utility with no primary window, so hiding it from
+         the Dock is right. Listen's main surface is a window people read
+         transcripts in for minutes at a time, and an app you cannot reach with
+         Cmd-Tab or the Dock is an app you cannot get back to once the window
+         is behind a browser. The menu bar item stays for start and stop.
+
+         The onboarding rule this reverses one reason for still holds: windows
+         float and re-activate after each permission prompt, because a window
+         behind a system dialog is unrecoverable either way. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Listen records your side of a meeting on this Mac.</string>
     <!-- The Core Audio process tap used for system audio (milestone 2) asks

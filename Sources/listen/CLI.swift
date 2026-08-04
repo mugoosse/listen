@@ -11,7 +11,7 @@ enum CLI {
     /// Subcommands that do something. Anything else that looks like a command
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
-        "record", "list", "show", "transcribe", "export", "calibrate", "mcp",
+        "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -41,13 +41,21 @@ enum CLI {
             await transcribe(rest)
         case "record":
             await record(rest)
+        case "list":
+            list(rest)
+        case "show":
+            show(rest)
+        case "export":
+            export(rest)
+        case "label":
+            label(rest)
         case "help", "--help", "-h":
             print(usage)
             exit(0)
         case "--version", "-v":
             print(version)
             exit(0)
-        case "list", "show", "export", "calibrate", "mcp":
+        case "calibrate", "mcp":
             fail("`listen \(command)` is not built yet (\(milestone[command] ?? "later")).")
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
@@ -55,9 +63,6 @@ enum CLI {
     }
 
     private static let milestone = [
-        "list": "milestone 4, library and UI",
-        "show": "milestone 4, library and UI",
-        "export": "milestone 4, library and UI",
         "calibrate": "milestone 6, voiceprints",
         "mcp": "milestone 8, CLI install and MCP",
     ]
@@ -76,17 +81,25 @@ enum CLI {
 
     usage: listen <command> [options]
 
-      transcribe <file>          transcribe an audio file and print it
+      transcribe <file|id>       transcribe a file, or a whole recording
       record [--seconds N]       capture until stopped, or for N seconds
-      list [--limit N]           recordings as a table            (milestone 4)
-      show <id>                  metadata and transcript          (milestone 4)
-      export <id>                write a transcript out           (milestone 4)
+      list [--limit N] [--json]  recordings as a table
+      show <id>                  metadata and transcript
+      export <id> [--format]     write a transcript out
+      label <id> <speaker> ...   name, merge or discard a speaker
       calibrate                  voiceprint threshold report      (milestone 6)
       mcp                        stdio MCP server                 (milestone 8)
+
+    label options:
+      <name>                     name the speaker
+      --merge-into <speaker>     reassign them onto another speaker
+      --discard                  drop their segments
 
     transcribe options:
       --format md|json|txt       default md. json carries the timings.
       --model v2|v3              default v2, or whatever Settings holds.
+      --diarize                  label speakers in a bare audio file.
+                                 Implied when the argument is a recording.
 
     Running `listen` with no command starts the app.
     """
@@ -184,6 +197,157 @@ enum CLI {
         } catch {
             fail("\(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Library
+
+    /// `listen list [--limit N] [--json]`.
+    private static func list(_ args: [String]) -> Never {
+        var limit = Int.max
+        var asJSON = false
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--limit":
+                i += 1
+                guard i < args.count, let n = Int(args[i]), n > 0 else {
+                    fail("--limit needs a positive number")
+                }
+                limit = n
+            case "--json": asJSON = true
+            default: fail("unknown option `\(args[i])`. Try `listen help`.")
+            }
+            i += 1
+        }
+
+        let recordings = Array(Recording.all().prefix(limit))
+        if asJSON {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = (try? enc.encode(recordings.map(\.metadata))) ?? Data()
+            print(String(data: data, encoding: .utf8) ?? "[]")
+            exit(0)
+        }
+
+        guard !recordings.isEmpty else {
+            log("no recordings yet. `listen record` makes one.")
+            exit(0)
+        }
+        // Pad to the widest id so the columns line up without a table library.
+        let width = recordings.map(\.id.count).max() ?? 0
+        for r in recordings {
+            let state = r.metadata.stateValue == .done ? "" : "  \(r.metadata.state)"
+            print("\(r.id.padding(toLength: width, withPad: " ", startingAt: 0))  "
+                  + "\(r.lengthText.isEmpty ? "-" : r.lengthText)  \(r.metadata.title)\(state)")
+        }
+        exit(0)
+    }
+
+    /// `listen show <id>`.
+    private static func show(_ args: [String]) -> Never {
+        guard let id = args.first else { fail("show needs a recording id.") }
+        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+
+        print(recording.metadata.title)
+        print(recording.when + (recording.lengthText.isEmpty
+                                ? "" : " · " + recording.lengthText))
+        let speakers = recording.speakers
+        if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
+        print("")
+
+        let turns = recording.storedTurns
+        guard !turns.isEmpty else {
+            print(recording.hasTranscript ? "(no speech)" : "(not transcribed yet)")
+            exit(0)
+        }
+        for t in turns {
+            print("[\(TranscriptFormat.stamp(t.start))] \(t.speaker): \(t.text)")
+        }
+        exit(0)
+    }
+
+    /// `listen export <id> [--format md|json|txt]`.
+    private static func export(_ args: [String]) -> Never {
+        var id: String?
+        var format = "md"
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--format":
+                i += 1
+                guard i < args.count, ["md", "json", "txt"].contains(args[i]) else {
+                    fail("--format takes md, json or txt")
+                }
+                format = args[i]
+            case let other where other.hasPrefix("-"):
+                fail("unknown option `\(other)`. Try `listen help`.")
+            default:
+                guard id == nil else { fail("export takes one recording.") }
+                id = args[i]
+            }
+            i += 1
+        }
+        guard let id else { fail("export needs a recording id.") }
+        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        let turns = recording.storedTurns
+
+        switch format {
+        case "json":
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            print(String(data: (try? enc.encode(turns)) ?? Data(), encoding: .utf8) ?? "[]")
+        case "txt":
+            for t in turns { print("[\(TranscriptFormat.stamp(t.start))] \(t.speaker): \(t.text)") }
+        default:
+            print("# \(recording.metadata.title)\n")
+            print("\(recording.when)\n")
+            for t in turns {
+                print("**\(t.speaker)** · \(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
+            }
+        }
+        exit(0)
+    }
+
+    /// `listen label <id> <speaker> [<name> | --merge-into X | --discard]`.
+    ///
+    /// The same `TranscriptEditor` calls the window makes, so this is a real
+    /// exercise of that path rather than a parallel implementation. It is also
+    /// how speaker edits get verified, there being no test target.
+    private static func label(_ args: [String]) -> Never {
+        guard args.count >= 2 else {
+            fail("label needs a recording and a speaker. Try `listen help`.")
+        }
+        guard let recording = Recording.find(args[0]) else { fail("no recording `\(args[0])`.") }
+        let speaker = args[1]
+        guard recording.speakers.contains(speaker) else {
+            fail("no speaker `\(speaker)` in \(recording.id). "
+                 + "Present: \(recording.speakers.joined(separator: ", ")).")
+        }
+
+        let rest = Array(args.dropFirst(2))
+        let edit: TranscriptEditor.Edit
+        switch rest.first {
+        case "--discard":
+            edit = .discard(speaker)
+        case "--merge-into":
+            guard rest.count >= 2 else { fail("--merge-into needs a speaker") }
+            guard recording.speakers.contains(rest[1]) else {
+                fail("no speaker `\(rest[1])` to merge into.")
+            }
+            edit = .merge(speaker, into: rest[1])
+        case .some(let name) where !name.hasPrefix("-"):
+            edit = .rename(speaker, to: name)
+        default:
+            fail("label needs a name, --merge-into <speaker>, or --discard.")
+        }
+
+        guard TranscriptEditor.apply(edit, to: recording) else {
+            fail("\(recording.id) has no transcript to edit yet.")
+        }
+        guard let updated = Recording.find(recording.id) else { exit(0) }
+        log("speakers now: \(updated.speakers.joined(separator: ", "))")
+        log("state: \(updated.metadata.state)")
+        exit(0)
     }
 
     /// A path that is a recording folder, so `transcribe ./staging/<id>` works.

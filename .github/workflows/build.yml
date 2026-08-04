@@ -1,0 +1,81 @@
+name: Build
+
+# Every push and pull request, unsigned. This needs no secrets, so it runs on
+# forks and on pull requests from anyone. It is the only check that catches a
+# change which does not compile before it reaches a release.
+#
+# It deliberately does not sign, notarize or upload anything. The release
+# workflow is the only thing that publishes.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # make_app.sh derives the build number from commit count
+
+      # Pick the newest Xcode the image has, rather than pinning a version that
+      # ages out of the runner image. It has to be Xcode 26 or later:
+      # AppleEngine.swift uses SpeechAnalyzer, which does not exist in earlier
+      # SDKs, and only Xcode 26 understands -downloadComponent.
+      - name: Select Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "using $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      # `swift build` links but produces a binary that dies at runtime with
+      # "Failed to load the default metallib", because SwiftPM never compiles
+      # MLX's Metal kernels. Xcode 26 ships that compiler as a separate ~688 MB
+      # component; earlier Xcodes have it built in and reject the flag outright.
+      - name: Install Metal toolchain
+        run: |
+          if xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal compiler already present"
+          else
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: .xcbuild/SourcePackages
+          key: spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-
+
+      - name: Build
+        run: ./build.sh
+
+      # Bundling is where framework embedding and signing order go wrong, and
+      # those failures do not show up in a plain build. Without a certificate
+      # this falls back to ad-hoc signing, which is fine for a structural check.
+      - name: Bundle
+        run: ./make_app.sh
+
+      - name: Verify the bundle
+        run: |
+          # --deep --strict walks Sparkle's nested XPC services and helper app.
+          # A framework copied with cp -R instead of ditto fails here, because
+          # the version symlinks a framework needs get flattened.
+          codesign --verify --deep --strict --verbose=2 Listen.app
+
+          # Confirm the framework is actually embedded and reachable, rather
+          # than merely linked. This is the failure that only appears at launch.
+          test -d Listen.app/Contents/Frameworks/Sparkle.framework
+          otool -l Listen.app/Contents/MacOS/Listen \
+            | grep -q "@executable_path/../Frameworks"
+
+          # Sparkle refuses every update if the key is missing, so a build that
+          # silently dropped it would ship an app that can never update.
+          /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" \
+            Listen.app/Contents/Info.plist

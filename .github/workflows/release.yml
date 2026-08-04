@@ -1,0 +1,171 @@
+name: Release
+
+# Tag a version and this builds, signs, notarizes and publishes it:
+#
+#   echo 1.0.1 > VERSION && git commit -am "1.0.1" && git tag v1.0.1
+#   git push && git push --tags
+#
+# The tag has to agree with VERSION. release.sh refuses to publish otherwise,
+# because a release named v1.0.1 containing Listen-1.0.0.dmg is worse than a
+# failed build.
+#
+# Repository secrets. Without them the build still runs and produces
+# artifacts, just unsigned and unpublished, so a fork can build with no setup:
+#
+#   SIGNING_CERTIFICATE_P12   base64 of a Developer ID Application .p12
+#                             base64 -i cert.p12 | pbcopy
+#   SIGNING_CERTIFICATE_PWD   password used when exporting that .p12
+#   NOTARY_APPLE_ID           Apple ID email
+#   NOTARY_TEAM_ID            10-character team identifier
+#   NOTARY_PASSWORD           app-specific password from appleid.apple.com
+#   SPARKLE_PRIVATE_KEY       EdDSA key from Sparkle's generate_keys -x
+#
+# See RELEASING.md for how to produce each one.
+
+# Manual only, deliberately. Releases are cut locally with ./release.sh, which
+# pushes the tag itself; if this also triggered on tag push, every local
+# release would start a CI job that builds for ten minutes, finds no signing
+# secrets and refuses to publish, mailing a failure for a release that
+# actually succeeded.
+#
+# Keeping it dispatch-only means the whole pipeline stays here, ready, for
+# whenever the secrets are set, without firing on its own. See RELEASING.md
+# for why the keys are not in GitHub secrets today.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, for example v1.0.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write        # provenance attestation signs with a workflow identity
+  attestations: write
+  actions: write         # dispatching the Homebrew tap workflow
+
+jobs:
+  release:
+    # Apple Silicon runner: the build is arm64-only and Metal needs real
+    # hardware, not a cross-compile.
+    runs-on: macos-15
+
+    # `secrets` is not an available context in a step-level `if`, so every
+    # "do we have this credential" test is resolved once here, at job level,
+    # where it is available. Writing `if: secrets.FOO != ''` on a step looks
+    # like it works and silently never runs.
+    env:
+      HAS_CERT: ${{ secrets.SIGNING_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
+      HAS_SPARKLE: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the tag that was asked for, not whatever main points at.
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0        # make_app.sh derives the build number from commit count
+
+      # Pick the newest Xcode the image has, rather than pinning a version that
+      # ages out of the runner image. It has to be Xcode 26 or later:
+      # AppleEngine.swift uses SpeechAnalyzer, which does not exist in earlier
+      # SDKs, and only Xcode 26 understands -downloadComponent.
+      - name: Select Xcode
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "using $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      # SwiftPM alone never compiles MLX's Metal kernels, and Xcode 26 ships
+      # the Metal compiler as a separate ~688 MB component.
+      - name: Install Metal toolchain
+        run: |
+          if xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal compiler already present"
+          else
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: .xcbuild/SourcePackages
+          key: spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-
+
+      - name: Import signing certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          CERT_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
+          CERT_PWD: ${{ secrets.SIGNING_CERTIFICATE_PWD }}
+        run: |
+          # A dedicated keychain, unlocked for this job only, so the runner
+          # never prompts and nothing leaks into the default keychain.
+          KEYCHAIN=$RUNNER_TEMP/build.keychain
+          PASSWORD=$(uuidgen)
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Store notarization credentials
+        if: env.HAS_NOTARY == 'true'
+        run: |
+          xcrun notarytool store-credentials listen-notary \
+            --apple-id "${{ secrets.NOTARY_APPLE_ID }}" \
+            --team-id "${{ secrets.NOTARY_TEAM_ID }}" \
+            --password "${{ secrets.NOTARY_PASSWORD }}"
+
+      - name: Write Sparkle signing key
+        if: env.HAS_SPARKLE == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          # Sparkle signs the appcast with this. Without it the feed is
+          # unsigned and every client refuses the update, which is the point:
+          # an unsigned update channel is an arbitrary-code-execution channel.
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_key"
+          chmod 600 "$RUNNER_TEMP/sparkle_key"
+          echo "SPARKLE_PRIVATE_KEY_FILE=$RUNNER_TEMP/sparkle_key" >> "$GITHUB_ENV"
+
+      # One code path for local and CI releases. release.sh validates the tag
+      # against VERSION, refuses to publish anything Gatekeeper would block,
+      # and creates the release as a draft until every asset has uploaded.
+      - name: Build, notarize and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # release.sh cross-checks this against VERSION. On a dispatch run the
+          # real GITHUB_REF_NAME is the branch, so hand it the tag instead or
+          # the check compares "main" to "v1.0.1" and fails every time.
+          GITHUB_REF_NAME: ${{ inputs.tag }}
+        run: ./release.sh --publish
+
+      - name: Remove Sparkle signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sparkle_key"
+
+      # Records that these exact bytes were produced by this workflow from this
+      # commit. Anyone can check with:
+      #   gh attestation verify Listen-1.0.0.dmg --repo mugoosse/listen
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
+
+      # The cask needs the sha256 of the DMG, which cannot exist until the DMG
+      # does. Dispatched rather than inlined so a tap failure does not mark a
+      # successful release as failed.
+      - name: Update the Homebrew cask
+        if: env.HAS_TAP_TOKEN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run homebrew-tap.yml -f tag="${{ inputs.tag }}"

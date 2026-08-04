@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen: local meeting transcription for macOS</title>
+<meta name="description" content="Records your meetings, writes them down and works out who said what. Entirely on your Mac. No bot, no account, no upload.">
+<meta property="og:title" content="Listen">
+<meta property="og:description" content="Local meeting transcription for macOS. No bot, no account, no upload.">
+<meta property="og:type" content="website">
+<style>
+:root {
+  --ink:        #0d0d0c;
+  --ink-raised: #161615;
+  --line:       #262624;
+  --text:       #f2f2f0;
+  --grey:       #a0a09d;
+  --grey-dim:   #6d6d6a;
+  --mint:       #9bdcb0;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+header { padding: 96px 0 64px; }
+h1 { font-size: 40px; margin: 0 0 12px; letter-spacing: -0.02em; }
+.tagline { color: var(--grey); font-size: 17px; margin: 0 0 8px; }
+.claim { color: var(--mint); margin: 0 0 36px; }
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+a.button {
+  display: inline-block; padding: 10px 18px; border: 1px solid var(--line);
+  border-radius: 8px; color: var(--text); text-decoration: none;
+  background: var(--ink-raised);
+}
+a.button:hover { border-color: var(--grey-dim); }
+a.button.primary { background: var(--mint); color: var(--ink); border-color: var(--mint); }
+section { padding: 40px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
+h3 { font-size: 15px; margin: 28px 0 6px; }
+p { margin: 0 0 16px; color: var(--grey); }
+p.lead { color: var(--text); }
+code, pre {
+  font-family: inherit; background: var(--ink-raised);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+code { padding: 2px 6px; font-size: 13px; }
+pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; margin: 0 0 16px; }
+pre code { border: 0; padding: 0; background: none; }
+ul { padding-left: 20px; color: var(--grey); }
+li { margin-bottom: 8px; }
+strong { color: var(--text); font-weight: 600; }
+footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
+footer a { color: var(--grey); }
+table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+td { padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--grey); vertical-align: top; }
+td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Listen</h1>
+  <p class="tagline">Records your meetings, writes them down, and works out who said what.</p>
+  <p class="claim">Entirely on your Mac. No bot, no account, nothing uploaded.</p>
+  <div class="buttons">
+    <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+    <a class="button" href="https://github.com/mugoosse/listen">Source</a>
+  </div>
+</header>
+
+<section>
+  <h2>What it does</h2>
+  <p class="lead">You press record. Nobody joins the call, nothing appears on
+  the calendar, and no one else is told the meeting is being recorded by a
+  service, because there is no service.</p>
+
+  <h3>Both sides of the call</h3>
+  <p>Your microphone and everything your Mac is playing, on two separate
+  tracks. It uses a Core Audio process tap, which asks for audio recording
+  permission and <strong>not</strong> screen recording. Hearing a meeting
+  should not cost access to everything on your screen.</p>
+
+  <h3>Fast enough not to think about</h3>
+  <p>Parakeet through MLX, about 240 times faster than real time on an M4 Max.
+  An hour-long meeting is written up in well under a minute, and transcription
+  starts on its own as soon as you keep a recording.</p>
+
+  <h3>Who said what</h3>
+  <p>Speakers are separated on the Neural Engine. Your own track needs no
+  guessing at all: the microphone is you by definition, which removes the
+  single most common mistake this kind of tool makes.</p>
+
+  <h3>Voices it has heard before</h3>
+  <p>Name someone once and Listen suggests them the next time it hears them.
+  Suggestions are ranked and never applied on their own, so the transcript
+  never quietly claims somebody said something.</p>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <pre><code>brew install --cask mugoosse/tap/listen</code></pre>
+  <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
+  below that Listen records your microphone only.</p>
+  <p>The speech model is about 2.5 GB and downloads on first run, after you
+  press the button that says so. If you already use
+  <a href="https://github.com/mugoosse/speak">Speak</a> it is already on your
+  disk, and Listen will find it rather than fetching it twice.</p>
+</section>
+
+<section>
+  <h2>Ask an agent about your own meetings</h2>
+  <p>Listen ships an MCP server. Read-only, no port, and the app does not need
+  to be running.</p>
+  <pre><code>{
+  "mcpServers": {
+    "listen": {
+      "command": "/usr/local/bin/listen",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+  <p>Settings has this ready to copy with the right path already filled in.</p>
+</section>
+
+<section>
+  <h2>What leaves your Mac</h2>
+  <table>
+    <tr><td>huggingface.co</td><td>Once, to download the speech model.</td></tr>
+    <tr><td>github.com</td><td>Every two days, to check for an update.</td></tr>
+  </table>
+  <p>That is the whole list, and it is declared in the app's
+  <code>InternetAccessPolicy.plist</code> so a firewall like Little Snitch can
+  hold it to that. Audio, transcripts and voiceprints are never uploaded, and
+  there is no telemetry.</p>
+</section>
+
+<section>
+  <h2>Recording first, deciding after</h2>
+  <p>Recording begins the moment you press Start and writes to disk
+  immediately. Listen asks whether to keep it when you stop, not before.</p>
+  <p>That order is deliberate. A recorder that waits for you to confirm has
+  already lost the first minute, which is the part where everybody says who
+  they are. Walk away without answering and the audio is deleted after
+  24 hours.</p>
+</section>
+
+<footer>
+  <p>MIT licensed. Built on Parakeet by NVIDIA, MLX by Apple, FluidAudio and
+  Sparkle. <a href="https://github.com/mugoosse/listen">github.com/mugoosse/listen</a></p>
+</footer>
+
+</div>
+</body>
+</html>

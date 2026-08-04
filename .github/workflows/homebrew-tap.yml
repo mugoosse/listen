@@ -1,0 +1,92 @@
+name: Update Homebrew tap
+
+# Points mugoosse/homebrew-tap at a published release and pins the DMG's
+# sha256. Run automatically by the release workflow, or by hand:
+#
+#   gh workflow run homebrew-tap.yml -f tag=v1.0.1
+#
+# Needs one secret, HOMEBREW_TAP_TOKEN: a fine-grained personal access token
+# with contents:write and pull-requests:write on the tap repository. The
+# default GITHUB_TOKEN cannot reach another repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.0.1"
+        required: true
+        type: string
+      tap_repo:
+        description: "Tap repository, owner/repo"
+        required: false
+        default: "mugoosse/homebrew-tap"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAG: ${{ inputs.tag }}
+      TAP_REPO: ${{ inputs.tap_repo || 'mugoosse/homebrew-tap' }}
+    steps:
+      - name: Check the token exists
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set. See RELEASING.md." >&2
+            exit 1
+          fi
+
+      - name: Download the released DMG
+        run: |
+          set -eu
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --dir /tmp/rel --pattern "Listen-$VERSION.dmg"
+
+      - name: Compute the checksum
+        run: |
+          set -eu
+          SHA=$(sha256sum "/tmp/rel/Listen-$VERSION.dmg" | cut -d' ' -f1)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          echo "Listen-$VERSION.dmg  $SHA"
+
+      - name: Open a pull request on the tap
+        run: |
+          set -eu
+          git clone "https://x-access-token:$GH_TOKEN@github.com/$TAP_REPO" tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Rewrite only the two lines that change. Editing with sed rather
+          # than regenerating the file keeps the caveats and zap stanzas, which
+          # are hand-written and not derivable from the release.
+          sed -i -E "s|^  version \".*\"|  version \"$VERSION\"|" Casks/listen.rb
+          sed -i -E "s|^  sha256 .*|  sha256 \"$SHA\"|" Casks/listen.rb
+
+          if git diff --quiet; then
+            echo "Cask already at $VERSION with this checksum, nothing to do."
+            exit 0
+          fi
+
+          BRANCH="listen-$VERSION"
+          git checkout -b "$BRANCH"
+          git commit -am "listen $VERSION"
+          git push -u origin "$BRANCH" --force
+          gh pr create --repo "$TAP_REPO" --head "$BRANCH" --base main \
+            --title "listen $VERSION" \
+            --body "Automated from ${{ github.repository }}@$TAG.
+
+          sha256 of \`Listen-$VERSION.dmg\`: \`$SHA\`
+
+          Verify with:
+          \`\`\`sh
+          gh release download $TAG --repo ${{ github.repository }} --pattern 'Listen-$VERSION.dmg'
+          shasum -a 256 Listen-$VERSION.dmg
+          \`\`\`" \
+          || gh pr edit --repo "$TAP_REPO" "$BRANCH" --title "listen $VERSION"

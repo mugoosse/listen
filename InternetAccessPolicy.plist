@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Every outbound connection Listen can make, declared so a firewall such as
+  Little Snitch can show the user what each one is for and what blocking it
+  costs. Listen's claim is that your meetings never leave the machine; that claim
+  is only worth anything if the connections it does make are stated plainly.
+
+  Transcription itself is absent from this list on purpose. It has no network
+  path at all: the model runs locally and audio is never sent anywhere.
+-->
+<plist version="1.0">
+<dict>
+    <key>ApplicationDescription</key>
+    <string>Push-to-talk dictation that transcribes entirely on your Mac.</string>
+    <key>Connections</key>
+    <array>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>github.com</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>Listen checks for new versions every two days.</string>
+            <key>DenyConsequences</key>
+            <string>You will not be told when a new version is released. Everything else keeps working.</string>
+        </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>huggingface.co</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>Downloading the Parakeet speech model you selected, once, about 2.4 GB. No audio is ever uploaded.</string>
+            <key>DenyConsequences</key>
+            <string>The Parakeet engines cannot be downloaded. The Apple Intelligence engine needs no download and still works.</string>
+        </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>cdn-lfs.huggingface.co</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>The CDN that actually serves the model weights.</string>
+            <key>DenyConsequences</key>
+            <string>The model download stalls partway through.</string>
+        </dict>
+    </array>
+</dict>
+</plist>

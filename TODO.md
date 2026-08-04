@@ -15,7 +15,7 @@ Last updated: Sparkle keypair generated and the update channel wired end to end.
 | 3 | Diarization | done |
 | 4 | Library and UI | done, being revised (see UI below) |
 | 5 | Speaker labelling | done |
-| 6 | Voiceprints | done, thresholds measured on synthetic audio only |
+| 6 | Voiceprints | done, thresholds measured on real recordings |
 | 7 | Settings, onboarding, permissions | done, never tested on a clean account |
 | 8 | CLI install, MCP | done |
 | 9 | Release pipeline | built and keyed, nothing published |
@@ -60,10 +60,6 @@ on upstream.
 - **v3 versus v2 on meeting audio** (SPEC 10.4). v3's language misdetection is
   a short-clip problem and meetings are not short, so v3 may behave far better
   here than in Speak. Unmeasured.
-- **Voiceprint thresholds against real voices.** 0.72 and 0.85 were measured on
-  synthesised speech, where one voice reading two scripts is far more
-  self-consistent than a person on two days. Re-run `listen calibrate` on a
-  real library.
 - **Whether the Whisper-era cleanup is needed at all** (SPEC 4.4 step 4). It
   has fired *never* so far. Counters are in place; delete it and say so once
   there is real meeting audio behind the number.
@@ -109,12 +105,18 @@ dimensions as FluidAudio's and a completely different space, so importing them
 would have produced confident nonsense in the sounds-like ranking with nothing
 to catch it.
 
-- [ ] The 23 imported recordings with no transcript are queued as pending and
-      will transcribe on next launch. That is roughly 10 hours of audio through
-      Parakeet, so expect it to take a few minutes and to be worth watching the
-      first time.
+Done. The whole library is transcribed: **39 recordings with speech, 7 with
+none, 0 pending, 51 voiceprints across the bank.** Thresholds re-measured on
+real voices at 0.47 and 0.57.
+
 - [ ] Imported titles are verbatim, so several read "Google Chrome" or
       "2607-13-WhatsApp". Renaming is a click but nothing suggests a better one.
+- [ ] 12 imported recordings still have unnamed speakers (A, B). They have
+      voiceprints, so naming one is now a rename rather than another pass over
+      the audio, and the bank should suggest who they are.
+- [ ] Re-run `listen calibrate` as more people are named. Five people is enough
+      to separate cleanly and not enough to have met a confusable pair, so the
+      different-person maximum is the number most likely to rise.
 
 ## Later
 

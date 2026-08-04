@@ -226,6 +226,7 @@ enum Library {
 extension Settings {
     private static let startAtLoginAppliedKey = "startAtLoginDefaultApplied"
     private static let autoDetectKey = "autoDetectMeetings"
+    private static let skippedKey = "skippedBundleIDs"
     private static let onboardedKey = "onboarded"
 
     static var startAtLoginDefaultApplied: Bool {
@@ -241,6 +242,30 @@ extension Settings {
     static var autoDetectMeetings: Bool {
         get { UserDefaults.standard.bool(forKey: autoDetectKey) }
         set { UserDefaults.standard.set(newValue, forKey: autoDetectKey) }
+    }
+
+    /// Apps that never count as a meeting.
+    ///
+    /// The detection rule is "input and output running at once", which is
+    /// deliberately broader than a list of known meeting apps, so some things
+    /// that are not meetings will match it. Other recorders are the obvious
+    /// case: Blackbox holds the microphone while it captures a call, so with
+    /// both installed each one looks like a meeting to the other.
+    ///
+    /// Stored as a sorted array rather than a set, because `UserDefaults`
+    /// cannot hold a `Set` and an unordered array would rewrite the plist on
+    /// every launch.
+    static var skippedBundleIDs: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: skippedKey) ?? []) }
+        set { UserDefaults.standard.set(newValue.sorted(), forKey: skippedKey) }
+    }
+
+    static func skip(_ bundleID: String) {
+        skippedBundleIDs.insert(bundleID)
+    }
+
+    static func unskip(_ bundleID: String) {
+        skippedBundleIDs.remove(bundleID)
     }
 
     /// Setup has been completed. The presence of the key is the answer, so a

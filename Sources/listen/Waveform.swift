@@ -11,7 +11,7 @@ struct Waveform: Codable {
     /// Bumped when the extraction changes, so an old cache is recomputed rather
     /// than drawn wrongly. Nothing else in the folder is versioned because
     /// nothing else is derived from a formula that might be adjusted.
-    static let version = 2
+    static let version = 3
 
     /// About twice the widest the pane realistically gets, so resampling is
     /// always downwards and the bars are an honest maximum rather than an
@@ -19,7 +19,7 @@ struct Waveform: Codable {
     static let resolution = 1400
 
     var version: Int
-    /// Peak amplitude per bucket, normalised to 0...1 across the recording.
+    /// Loudness per bucket, normalised to 0...1 across the recording.
     var peaks: [Float]
     var duration: Double
 }
@@ -73,7 +73,16 @@ extension Waveform {
         }
         guard duration > 0 else { return nil }
 
-        var peaks = [Float](repeating: 0, count: resolution)
+        // Energy per bucket, not the peak in it.
+        //
+        // Measured on an 80 minute meeting: at this resolution a bucket is
+        // three and a half seconds, and the loudest instant in three and a half
+        // seconds of speech is near the loudest instant in the whole recording,
+        // so a peak envelope came out as a solid block with no structure in it.
+        // Mean energy over the bucket separates talking from pausing, which is
+        // the shape somebody scrubbing a meeting is looking for.
+        var energy = [Double](repeating: 0, count: resolution)
+        var counts = [Double](repeating: 0, count: resolution)
         for (file, rate) in files {
             let scale = Double(resolution) / (duration * rate)
             let format = file.processingFormat
@@ -87,12 +96,19 @@ extension Waveform {
                 let count = Int(buffer.frameLength)
                 guard count > 0, let channel = buffer.floatChannelData?[0] else { break }
                 for i in 0..<count {
-                    let bucket = min(resolution - 1, Int(Double(frame + AVAudioFramePosition(i)) * scale))
-                    let value = abs(channel[i])
-                    if value > peaks[bucket] { peaks[bucket] = value }
+                    let bucket = min(resolution - 1,
+                                     Int(Double(frame + AVAudioFramePosition(i)) * scale))
+                    let value = Double(channel[i])
+                    energy[bucket] += value * value
+                    counts[bucket] += 1
                 }
                 frame += AVAudioFramePosition(count)
             }
+        }
+
+        var peaks = [Float](repeating: 0, count: resolution)
+        for i in peaks.indices where counts[i] > 0 {
+            peaks[i] = Float((energy[i] / counts[i]).squareRoot())
         }
 
         // Normalised for display, which is the opposite of the rule in
@@ -100,14 +116,12 @@ extension Waveform {
         // scrubber drawn at true amplitude is a flat line for anyone who
         // recorded quietly, and a scrubber you cannot read is not one.
         let loudest = peaks.max() ?? 0
-        if loudest > 0.0001 {
-            // Square root, not linear. Speech is a few loud syllables over a
-            // lot of quiet ones, so a linear envelope is spikes on a floor and
-            // the quiet passages are indistinguishable from silence.
-            for i in peaks.indices { peaks[i] = (peaks[i] / loudest).squareRoot() }
-        } else {
-            peaks = [Float](repeating: 0, count: resolution)
+        guard loudest > 0.0001 else {
+            return Waveform(version: version,
+                            peaks: [Float](repeating: 0, count: resolution),
+                            duration: duration)
         }
+        for i in peaks.indices { peaks[i] /= loudest }
 
         return Waveform(version: version, peaks: peaks, duration: duration)
     }

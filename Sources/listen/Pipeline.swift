@@ -103,7 +103,20 @@ actor Pipeline {
             }
         }
 
-        guard !labelled.isEmpty else { throw PipelineError.nothingToTranscribe }
+        // No speech is an answer, not a failure. Some recordings really are a
+        // muted microphone and a silent tab, and throwing here left them with
+        // no transcript, which is exactly the condition `Queue.resume()` reads
+        // as "still pending": they were re-transcribed on every launch, for
+        // ever, and the audio was re-read each time to reach the same nothing.
+        //
+        // Writing an empty transcript records that the work was done. The
+        // detail pane already says "This recording has no speech in it."
+        if labelled.isEmpty {
+            let empty = StoredTranscript(segments: [], duration: recording.metadata.duration,
+                                         model: model, wordLevel: wordLevel, cleanup: [:])
+            try write(empty, turns: [], embeddings: [:], speech: [:], to: recording)
+            return empty
+        }
 
         // Interleave the two tracks by time. They were captured together, so
         // their clocks agree and sorting is all the alignment needed.

@@ -77,11 +77,12 @@ final class Queue {
             await MainActor.run {
                 var finished = Recording.find(id) ?? recording
                 switch result {
-                case .success:
-                    // Transcribed but nobody is named yet, which is a state the
-                    // sidebar shows: it is the difference between "there is
-                    // nothing to read" and "there is something to do".
-                    finished.metadata.state = Metadata.State.needsLabelling.rawValue
+                case .success(let transcript):
+                    // A recording with no speech in it has nothing to label, so
+                    // it is finished rather than waiting on somebody.
+                    finished.metadata.state = transcript.segments.isEmpty
+                        ? Metadata.State.done.rawValue
+                        : Metadata.State.needsLabelling.rawValue
                 case .failure(let error):
                     finished.metadata.state = Metadata.State.failed.rawValue
                     log("transcription failed for \(id): \(error.localizedDescription)")

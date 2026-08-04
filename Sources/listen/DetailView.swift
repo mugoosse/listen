@@ -250,6 +250,23 @@ final class DetailView: NSView {
                                         constant: -20).isActive = true
             turnViews.append(view)
         }
+
+        // Open at the beginning. The stack view is not flipped, so its origin
+        // is the bottom of the transcript and a freshly selected recording
+        // opened somewhere near the end of the meeting with a half a paragraph
+        // cut off at the top, which reads as a rendering fault rather than as a
+        // scroll position.
+        DispatchQueue.main.async { [self] in
+            layoutSubtreeIfNeeded()
+            scrollingProgrammatically = true
+            // Through `scrollToVisible` rather than by setting the clip view's
+            // origin, which has to be told the document height minus the
+            // viewport and scrolls the transcript clean out of sight when it is
+            // told anything else.
+            stack.scrollToVisible(NSRect(x: 0, y: stack.bounds.maxY - 1,
+                                         width: 1, height: 1))
+            DispatchQueue.main.async { self.scrollingProgrammatically = false }
+        }
     }
 
     // MARK: - Waveform

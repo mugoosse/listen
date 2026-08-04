@@ -1,0 +1,17 @@
+.build/
+.xcbuild/
+# Not all of .swiftpm: the shared scheme has to be tracked. xcodebuild
+# generates schemes on demand, but only when it can write them, and on a clean
+# CI checkout it cannot, so the build fails with "does not contain a scheme
+# named listen". Committing it makes the scheme deterministic everywhere.
+.swiftpm/configuration/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Listen.app/
+listen.app/
+*.log
+.DS_Store
+dist/
+.notarization
+
+# local test helpers, not part of the app
+scratch-*

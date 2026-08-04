@@ -26,22 +26,34 @@ enum VoiceBank {
 
     // MARK: - Thresholds
 
-    /// **Not yet measured. Do not trust these numbers.**
+    /// Measured with `listen calibrate` on 12 named voiceprints across 4
+    /// people, 12 same-person and 48 different-person cross-recording pairs:
     ///
-    /// The Python pipeline's `MATCH_THRESHOLD = 0.50` and
-    /// `STRONG_THRESHOLD = 0.65` were calibrated against pyannote embeddings on
-    /// 24 voiceprints across 8 people, where same-person pairs scored at or
-    /// above 0.68 and different-person pairs at or below 0.46. FluidAudio uses
-    /// a different embedding model, so those numbers mean nothing in this
-    /// space and carrying them over would be borrowing someone else's
-    /// measurement.
+    ///     same person       min +0.979  median +0.991  max +0.995
+    ///     different people  min +0.127  median +0.225  max +0.597
     ///
-    /// These are placeholders chosen to be conservative. `listen calibrate`
-    /// (milestone 6) computes the real ones from the library on disk, and the
-    /// measured figures replace these with a comment saying what they were
-    /// measured on, as the Python does.
-    static let matchThreshold: Float = 0.50
-    static let strongThreshold: Float = 0.65
+    /// Clean separation, gap +0.382, so these sit one third and two thirds of
+    /// the way across it.
+    ///
+    /// **Re-derived, not copied, and the difference is not academic.** The
+    /// Python pipeline used `MATCH_THRESHOLD = 0.50` against pyannote
+    /// embeddings, where different-person pairs topped out at 0.46. In
+    /// FluidAudio's space different-person pairs reach **0.597**, so carrying
+    /// 0.50 over would have called strangers a match on a third of the pairs
+    /// measured here. Different model, different space, and the numbers do not
+    /// transfer.
+    ///
+    /// **The caveat, because it matters:** this was measured on synthesised
+    /// speech, where one voice reading two different scripts is far more
+    /// self-consistent than a person on two different days with two different
+    /// microphones. Same-person scores above 0.97 are not a real-world figure;
+    /// they are an upper bound on separability. Expect real recordings to sit
+    /// lower and closer together, and re-run `listen calibrate` against a real
+    /// library before trusting these. The failure they are tuned toward is the
+    /// safe one: too high means no suggestion, and a suggestion is never
+    /// auto-applied anyway.
+    static let matchThreshold: Float = 0.72
+    static let strongThreshold: Float = 0.85
 
     // MARK: - Reading
 

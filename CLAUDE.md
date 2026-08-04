@@ -333,3 +333,33 @@ things you want to discover early, not during a release.
 There is no test target, matching Speak. Verification is manual through the CLI
 plus debug tracing. If you add one, note that MLX needs the Metal toolchain, so
 tests must run through `xcodebuild`, not `swift test`.
+
+### Voiceprint thresholds were re-derived, and the old ones would have been wrong
+
+`listen calibrate` on 12 named voiceprints across 4 people (12 same-person and
+48 different-person cross-recording pairs):
+
+    same person       min +0.979  median +0.991  max +0.995
+    different people  min +0.127  median +0.225  max +0.597
+
+Clean separation, gap +0.382, top-1 identification 12/12. `matchThreshold` and
+`strongThreshold` sit one third and two thirds across the gap, at 0.72 and 0.85.
+
+The Python pipeline's 0.50 was measured against **pyannote** embeddings, where
+different-person pairs topped out at 0.46. In FluidAudio's space they reach
+0.597, so copying 0.50 across would have called strangers a match on a third of
+the pairs measured here. This is exactly why SPEC 4.5 says to re-derive rather
+than copy.
+
+**Measured on synthesised speech**, which is the caveat that matters. One TTS
+voice reading two scripts is far more self-consistent than a person on two days
+with two microphones, so same-person scores above 0.97 are an upper bound on
+separability rather than a real-world figure. Re-run `listen calibrate` against
+a real library before trusting these numbers.
+
+Two rules keep the measurement honest and are easy to break: pairs from the
+same recording are skipped (they come from the clustering step that decided
+they were different people, so using them measures the diarizer agreeing with
+itself), and placeholder labels are excluded (`A` in one meeting has nothing to
+do with `A` in another, and pairing them manufactures both false same-person
+and false different-person pairs).

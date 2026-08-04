@@ -55,7 +55,9 @@ enum CLI {
         case "--version", "-v":
             print(version)
             exit(0)
-        case "calibrate", "mcp":
+        case "calibrate":
+            calibrate()
+        case "mcp":
             fail("`listen \(command)` is not built yet (\(milestone[command] ?? "later")).")
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
@@ -63,9 +65,18 @@ enum CLI {
     }
 
     private static let milestone = [
-        "calibrate": "milestone 6, voiceprints",
         "mcp": "milestone 8, CLI install and MCP",
     ]
+
+    /// `listen calibrate`: the voiceprint threshold report.
+    private static func calibrate() -> Never {
+        guard let report = Calibrate.run() else {
+            fail("not enough named voiceprints yet. Name speakers in at least two "
+                 + "recordings, then run this again.")
+        }
+        Calibrate.print(report)
+        exit(0)
+    }
 
     private static var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
@@ -87,7 +98,7 @@ enum CLI {
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
-      calibrate                  voiceprint threshold report      (milestone 6)
+      calibrate                  voiceprint threshold report
       mcp                        stdio MCP server                 (milestone 8)
 
     label options:

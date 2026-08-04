@@ -21,6 +21,8 @@ DIST="$ROOT/dist"
 APP="$ROOT/Listen.app"
 VERSION=$(tr -d ' \n' < "$ROOT/VERSION")
 KEYCHAIN_PROFILE="${LISTEN_NOTARY_PROFILE:-listen-notary}"
+# SPARKLE_PUBLIC_KEY and SPARKLE_ACCOUNT, the same file make_app.sh reads.
+. "$ROOT/sparkle.conf"
 PUBLISH=0
 RESUME=""
 
@@ -91,10 +93,39 @@ if [ "$PUBLISH" -eq 1 ]; then
     # an update channel that silently never works, and the only fix afterwards
     # is asking everyone to reinstall by hand. See RELEASING.md, Sparkle keys.
     if [ -z "${SPARKLE_PUBLIC_KEY:-}" ]; then
-        echo "error: SPARKLE_PUBLIC_KEY is not set, so the app would ship with" >&2
+        echo "error: SPARKLE_PUBLIC_KEY is empty, so the app would ship with" >&2
         echo "       no update key and could never update itself." >&2
-        echo "       Generate a keypair once (RELEASING.md), then export it." >&2
+        echo "       Generate a keypair once (RELEASING.md), then put the" >&2
+        echo "       public half in sparkle.conf." >&2
         exit 1
+    fi
+
+    # The private half that signs the appcast lives in the login keychain under
+    # SPARKLE_ACCOUNT, and every Sparkle tool defaults to a different account.
+    # Signing with the wrong key produces a perfectly well-formed feed that
+    # every installed copy rejects, and nothing on this machine reports it: the
+    # failure is only visible on a user's Mac, as an update that never arrives.
+    # So compare the two halves before spending an hour on notarization.
+    #
+    # Skipped in CI, which has no keychain and reads the key from a file.
+    if [ -z "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
+        GENERATE_KEYS=$(find "$ROOT/.build/artifacts" \
+            "$ROOT/.xcbuild/SourcePackages/artifacts" \
+            -name generate_keys -type f 2>/dev/null | head -1)
+        if [ -z "$GENERATE_KEYS" ]; then
+            echo "error: generate_keys not found. Run ./build.sh first." >&2
+            exit 1
+        fi
+        HAVE=$("$GENERATE_KEYS" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null || true)
+        if [ "$HAVE" != "$SPARKLE_PUBLIC_KEY" ]; then
+            echo "error: the key in keychain account '$SPARKLE_ACCOUNT' is not the one" >&2
+            echo "       sparkle.conf ships. The appcast would be signed with a key" >&2
+            echo "       no installed copy accepts." >&2
+            if [ -z "$HAVE" ]; then
+                echo "       That account holds no key at all. See RELEASING.md." >&2
+            fi
+            exit 1
+        fi
     fi
 fi
 
@@ -293,23 +324,41 @@ if [ -n "$GENERATE_APPCAST" ]; then
     mkdir -p "$ARCHIVES"
     cp "$ZIP" "$ARCHIVES/"
     # Locally the private key comes from the login keychain, where
-    # generate_keys put it. CI has no keychain to read, so it writes the key to
-    # a file and points at it with SPARKLE_PRIVATE_KEY_FILE.
-    KEYARG=""
-    [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ] && \
+    # generate_keys put it, under Listen's own account rather than the default
+    # one. Omitting --account does not fail: it signs with whatever the default
+    # account holds, which on this machine is Speak's key, and produces a feed
+    # no copy of Listen will accept. CI has no keychain to read, so it writes
+    # the key to a file and points at it with SPARKLE_PRIVATE_KEY_FILE.
+    if [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ]; then
         KEYARG="--ed-key-file $SPARKLE_PRIVATE_KEY_FILE"
+    else
+        KEYARG="--account $SPARKLE_ACCOUNT"
+    fi
+    LOG="$DIST/appcast.log"
     # shellcheck disable=SC2086
     if "$GENERATE_APPCAST" $KEYARG --download-url-prefix \
         "https://github.com/mugoosse/listen/releases/download/$TAG/" \
         --link "https://github.com/mugoosse/listen" \
-        "$ARCHIVES" >/dev/null 2>&1
+        "$ARCHIVES" >"$LOG" 2>&1
     then
         mv "$ARCHIVES/appcast.xml" "$APPCAST"
-        echo "appcast: $(basename "$APPCAST") (feed $FEED)"
+        # generate_appcast writes a feed whether or not it managed to sign
+        # anything, so the file existing is not evidence that it did. An entry
+        # with no edSignature is one Sparkle refuses, which is an update
+        # channel that looks published and never works.
+        if grep -q 'edSignature=' "$APPCAST"; then
+            echo "appcast: $(basename "$APPCAST") (feed $FEED)"
+        else
+            echo "error: the appcast carries no edSignature, so nothing signed" >&2
+            echo "       it and every client would refuse the update." >&2
+            if [ "$PUBLISH" -eq 1 ]; then exit 1; fi
+        fi
     else
-        echo "warning: generate_appcast failed. Updates will not be offered." >&2
+        echo "error: generate_appcast failed. Updates would not be offered." >&2
+        sed 's/^/       /' "$LOG" >&2
+        if [ "$PUBLISH" -eq 1 ]; then exit 1; fi
     fi
-    rm -rf "$ARCHIVES"
+    rm -rf "$ARCHIVES" "$LOG"
 else
     echo "warning: generate_appcast not found. Run: swift package resolve" >&2
 fi

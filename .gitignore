@@ -13,5 +13,11 @@ listen.app/
 dist/
 .notarization
 
+# A Sparkle private key exported for backup. It belongs in a password manager
+# and nowhere else; this is a backstop for the minutes between writing it and
+# deleting it, not somewhere to leave it. The public half is in sparkle.conf
+# and is meant to be committed.
+sparkle_private_key.txt
+
 # local test helpers, not part of the app
 scratch-*

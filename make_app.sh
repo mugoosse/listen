@@ -23,6 +23,11 @@ APP="$ROOT/Listen.app"
 VERSION=$(tr -d ' \n' < "$ROOT/VERSION")
 BUILD="${LISTEN_BUILD:-$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)}"
 
+# SPARKLE_PUBLIC_KEY and SPARKLE_ACCOUNT, shared with release.sh so the key
+# baked into Info.plist and the key the appcast is signed with cannot come
+# apart.
+. "$ROOT/sparkle.conf"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -66,10 +71,10 @@ fi
 
 # Sparkle verifies every update against this key before installing it, so a
 # wrong or missing value is the difference between an update channel and an
-# arbitrary-code-execution channel. Listen has no keypair yet: it is generated
-# with the rest of the release pipeline at milestone 9. Until then the update
-# keys are simply absent, which makes Sparkle refuse to update rather than
-# accept anything. Shipping a placeholder key would be the dangerous option.
+# arbitrary-code-execution channel. The key comes from sparkle.conf; an empty
+# one omits the update keys entirely, which makes Sparkle refuse every update
+# rather than accept one signed by somebody else. Shipping a placeholder key
+# would be the dangerous option.
 if [ -n "$SPARKLE_PUBLIC_KEY" ]; then
     SPARKLE_KEYS="    <key>SUFeedURL</key>
     <string>https://github.com/mugoosse/listen/releases/latest/download/appcast.xml</string>

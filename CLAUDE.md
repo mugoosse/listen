@@ -306,13 +306,38 @@ expensive. `make_app.sh` signs with a real certificate when one exists.
 codesign -d -r- /Applications/Listen.app     # must not contain cdhash
 ```
 
-### Sparkle has no keypair yet
+### Sparkle's key is not in the default keychain account
 
-`make_app.sh` omits `SUFeedURL` and `SUPublicEDKey` entirely unless
-`SPARKLE_PUBLIC_KEY` is set. Sparkle then refuses to update rather than
-accepting anything, which is the safe failure. The keypair is generated with
-the rest of the release pipeline at milestone 9. Shipping a placeholder key
-would be the dangerous option.
+Listen has its own keypair, deliberately not Speak's. Sparkle's own tool says
+you only need one key however many apps you ship, and for a single publisher
+that is reasonable advice, but one leaked key would then be an
+arbitrary-code-execution channel into both apps at once. Two keys, two backups.
+
+The cost of that choice is that **every Sparkle tool defaults to the `ed25519`
+keychain account, and on this machine that account holds Speak's key.** A
+`generate_appcast` run without `--account listen` does not fail. It signs, it
+writes a well-formed feed, `--publish` uploads it, and every installed copy of
+Listen then rejects the update because the signature does not match the
+`SUPublicEDKey` in its own bundle. Nothing on the release machine reports any
+of this; the only symptom is an update that never arrives, on somebody else's
+Mac.
+
+So the account name and the public key live together in `sparkle.conf`, sourced
+by both `make_app.sh` (which bakes `SUPublicEDKey` into `Info.plist`) and
+`release.sh` (which signs the feed). Two readers, one definition, no way for
+them to disagree. `release.sh` also compares
+`generate_keys --account "$SPARKLE_ACCOUNT" -p` against the shipped public key
+before it builds anything, because the alternative is discovering the mismatch
+an hour later in someone's release notes.
+
+Measured, on the 0.1.0 bundle: `sign_update --verify --account listen` accepts
+the generated signature, and `--account ed25519` rejects it. The flag is
+load-bearing rather than decorative.
+
+An empty `SPARKLE_PUBLIC_KEY` still omits `SUFeedURL` and `SUPublicEDKey`
+altogether, which makes Sparkle refuse every update rather than accept one.
+That is the escape hatch for a fork, which must not ship a build that trusts
+Listen's key. Shipping a placeholder key would be the dangerous option.
 
 The framework is still linked, embedded and signed from milestone 0 so that the
 rpath and the inside-out nested signing are exercised from the start. Both are

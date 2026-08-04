@@ -3,7 +3,7 @@
 Where the project is, what is left, and what needs a decision. Update this in
 the same commit as the work it describes.
 
-Last updated: first round of UI feedback applied.
+Last updated: Sparkle keypair generated and the update channel wired end to end.
 
 ## Milestones
 
@@ -18,7 +18,7 @@ Last updated: first round of UI feedback applied.
 | 6 | Voiceprints | done, thresholds measured on synthetic audio only |
 | 7 | Settings, onboarding, permissions | done, never tested on a clean account |
 | 8 | CLI install, MCP | done |
-| 9 | Release pipeline | built, nothing published |
+| 9 | Release pipeline | built and keyed, nothing published |
 
 ## Blocking decisions
 
@@ -38,14 +38,6 @@ starts running with no other change.
 `[[String: Any]]` segment dictionaries. Purely additive, cannot break any
 consumer, makes a clean upstream PR. Needs a decision on forking versus waiting
 on upstream.
-
-### Sparkle keypair
-
-Not generated. `make_app.sh` omits `SUFeedURL` and `SUPublicEDKey` entirely, so
-Sparkle refuses every update rather than accepting anything, and
-`release.sh --publish` refuses to run without `SPARKLE_PUBLIC_KEY`. Generating
-and backing this up is the one step that must happen before a first release.
-See `RELEASING.md`.
 
 ## Known defects
 
@@ -75,6 +67,10 @@ See `RELEASING.md`.
 - **Whether the Whisper-era cleanup is needed at all** (SPEC 4.4 step 4). It
   has fired *never* so far. Counters are in place; delete it and say so once
   there is real meeting audio behind the number.
+- **A Sparkle update installing.** The keypair exists and the feed is signed
+  and verified against it (`sign_update --verify --account listen`), but no
+  build has ever updated to another build. That needs two published releases,
+  so it cannot be checked until after the first one.
 
 ## UI feedback, round one
 

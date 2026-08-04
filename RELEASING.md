@@ -47,30 +47,37 @@ App-specific passwords come from appleid.apple.com, not your Apple ID password.
 
 ### 3. A Sparkle keypair
 
-**Listen does not have one yet.** Until it does, `make_app.sh` omits
-`SUFeedURL` and `SUPublicEDKey` entirely, so Sparkle refuses to update rather
-than accepting anything. That is the safe failure and it is deliberate: a
-placeholder key would be an arbitrary-code-execution channel.
+**Done.** The public half is in `sparkle.conf` and ends up in `Info.plist` as
+`SUPublicEDKey`; the private half is in the login keychain under the account
+`listen`. Nothing below needs doing again on this machine. It is written down
+because it has to be redone on a new one, and because the account name is the
+part that bites.
 
 ```sh
-./.build/artifacts/sparkle/Sparkle/bin/generate_keys
+.xcbuild/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account listen
 ```
 
-It writes the private key into the login keychain and prints the public key.
-Put the public key in `make_app.sh`'s `SPARKLE_PUBLIC_KEY` default, and export
-it when releasing.
+`--account listen` is not optional. Without it the key goes into the default
+`ed25519` account, which already holds **Speak's** key, and the two apps then
+share an update-signing key: one leak would be an arbitrary-code-execution
+channel into both. Every other Sparkle tool defaults to that same account, so
+`release.sh` passes `--account` when it signs, and checks the two halves agree
+before it builds. See CLAUDE.md for what the unchecked version looks like.
 
-**Back the private key up before you ship anything with it.**
+**The private key must be backed up.** Losing it ends the update channel for
+every installed copy: an installed app only accepts updates signed by the key
+it shipped with, so a new key means every existing user reinstalls by hand.
+There is no recovery.
 
 ```sh
-./.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle-private-key.txt
-# store it in a password manager, then:
-rm sparkle-private-key.txt
+.xcbuild/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys \
+    --account listen -x sparkle_private_key.txt
+# store the contents in a password manager, then:
+rm sparkle_private_key.txt
 ```
 
-Losing it ends the update channel for every installed copy. Installed apps only
-accept updates signed by the key they shipped with, so a new key means every
-existing user has to reinstall by hand. There is no recovery.
+`sparkle_private_key.txt` is gitignored, which is a backstop and not a plan.
+Delete it once it is in the password manager.
 
 ### 4. Repository secrets, for CI
 

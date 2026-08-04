@@ -58,15 +58,11 @@ enum CLI {
         case "calibrate":
             calibrate()
         case "mcp":
-            fail("`listen \(command)` is not built yet (\(milestone[command] ?? "later")).")
+            MCP.serve()
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }
     }
-
-    private static let milestone = [
-        "mcp": "milestone 8, CLI install and MCP",
-    ]
 
     /// `listen calibrate`: the voiceprint threshold report.
     private static func calibrate() -> Never {
@@ -79,12 +75,11 @@ enum CLI {
     }
 
     private static var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-        // Run from .xcbuild rather than the bundle and there is no Info.plist
-        // to read. Say so instead of printing "listen (null)".
-        guard let v else { return "listen (unbundled build)" }
-        return "listen \(v)" + (b.map { " (build \($0))" } ?? "")
+        // Resolved through AppInfo rather than Bundle.main, because the
+        // installed command is a symlink and Bundle.main follows the path it
+        // was launched by, not the binary it landed on.
+        guard let v = AppInfo.version else { return "listen (unbundled build)" }
+        return "listen \(v)" + (AppInfo.build.map { " (build \($0))" } ?? "")
     }
 
     private static let usage = """
@@ -99,7 +94,7 @@ enum CLI {
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
       calibrate                  voiceprint threshold report
-      mcp                        stdio MCP server                 (milestone 8)
+      mcp                        stdio MCP server, read-only
 
     label options:
       <name>                     name the speaker

@@ -363,3 +363,48 @@ they were different people, so using them measures the diarizer agreeing with
 itself), and placeholder labels are excluded (`A` in one meeting has nothing to
 do with `A` in another, and pairing them manufactures both false same-person
 and false different-person pairs).
+
+### `Bundle.main` is wrong when the CLI is run through its symlink
+
+The installed `listen` command is a symlink in `/usr/local/bin` or
+`~/.local/bin`, and `Bundle.main` is derived from the path the process was
+launched by rather than the binary it landed on. Run that way it points at the
+symlink's directory, finds no `Info.plist`, and `listen --version` prints
+"unbundled build" while the MCP configuration block loses the command path it
+exists to show.
+
+`AppInfo` resolves the real executable with `resolvingSymlinksInPath()` and
+walks up to `Contents/Info.plist`. Anything reading the version or the
+executable path goes through it, not through `Bundle.main`.
+
+A symlink and not a copy, incidentally, for the same family of reason: a copy
+goes stale the first time Sparkle replaces the app, leaving a `listen` on the
+PATH that is an older version of the app it claims to be.
+
+### An installed command that is not on the PATH says so
+
+`/usr/local/bin` does not exist on a Mac without Homebrew and creating it needs
+an admin prompt this app deliberately does not raise, so the install usually
+lands in `~/.local/bin`, which is frequently not on the PATH. An installed
+command that cannot be run is worse than one that was never installed, because
+nothing else would explain why. `CLIInstall.isOnPath` checks, and the
+Developers pane says to add it to the shell profile.
+
+A GUI launch inherits no shell environment, so `PATH` is empty there. The check
+falls back to the default login list rather than reporting a false negative.
+
+### The MCP server owns stdout completely
+
+`listen mcp` speaks line-delimited JSON-RPC on stdout. Any stray `print` for
+the lifetime of that process corrupts the stream and the client reports a parse
+error rather than anything useful. This is the same hazard as mlx-audio's
+"Using cached model at" line, which is why `withStdoutOnStderr` exists, and the
+MCP path must never load a model.
+
+Notifications, which have no `id`, take no reply. Answering one is a protocol
+violation some clients treat as fatal, hence the explicit
+`notifications/initialized` case that returns without sending.
+
+A failure inside a tool call is returned as content with `isError`, not as a
+JSON-RPC error: the call arrived and was understood, and the agent needs to see
+why it failed rather than being told the request was malformed.

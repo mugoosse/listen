@@ -222,3 +222,34 @@ enum Library {
 
     static var recordings: URL { root.appendingPathComponent("recordings") }
 }
+
+extension Settings {
+    private static let startAtLoginAppliedKey = "startAtLoginDefaultApplied"
+    private static let autoDetectKey = "autoDetectMeetings"
+    private static let onboardedKey = "onboarded"
+
+    static var startAtLoginDefaultApplied: Bool {
+        get { UserDefaults.standard.bool(forKey: startAtLoginAppliedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: startAtLoginAppliedKey) }
+    }
+
+    /// Watch for a meeting app becoming audio-active and offer to record.
+    ///
+    /// Off by default. An app that starts recording on its own the first time
+    /// someone joins a call, before they have decided they want that, is a
+    /// worse first impression than one that waits to be asked.
+    static var autoDetectMeetings: Bool {
+        get { UserDefaults.standard.bool(forKey: autoDetectKey) }
+        set { UserDefaults.standard.set(newValue, forKey: autoDetectKey) }
+    }
+
+    /// Setup has been completed. The presence of the key is the answer, so a
+    /// fresh install is distinguishable from someone who finished setup and
+    /// then turned everything off.
+    static var onboarded: Bool {
+        get { UserDefaults.standard.bool(forKey: onboardedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: onboardedKey) }
+    }
+
+    static var isFirstRun: Bool { UserDefaults.standard.object(forKey: onboardedKey) == nil }
+}

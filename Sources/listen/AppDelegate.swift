@@ -32,7 +32,15 @@ final class App: NSObject, NSApplicationDelegate {
         // interrupted by a quit costs one re-run, not a stuck row.
         Queue.shared.resume()
 
-        LibraryWindow.shared.show()
+        // Setup on a first run, the library otherwise. `isFirstRun` is the
+        // absence of the key rather than a false value, so somebody who
+        // finished setup and turned everything off is not shown it again.
+        if Settings.isFirstRun {
+            Onboarding.shared.show()
+        } else {
+            LibraryWindow.shared.show()
+        }
+        _ = Updater.shared
 
         // A capture left staged by a crash is offered rather than resumed: the
         // audio is on disk and playable thanks to WAVWriter's rolling header,
@@ -73,6 +81,8 @@ final class App: NSObject, NSApplicationDelegate {
                      action: #selector(revealLibrary), keyEquivalent: "").target = self
 
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings),
+                     keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Quit Listen", action: #selector(quit), keyEquivalent: "q")
             .target = self
         status?.menu = menu
@@ -153,6 +163,10 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc private func openLibrary() {
         LibraryWindow.shared.show()
+    }
+
+    @objc private func openSettings() {
+        SettingsWindow.shared.show()
     }
 
     @objc private func revealLibrary() {

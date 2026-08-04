@@ -11,6 +11,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", branch: "main"),
+        // Diarization and speaker embeddings, CoreML on the Neural Engine.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.6.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.9.4"),
         // Present transitively through mlx-audio-swift, declared explicitly so
         // we can drive the model download ourselves and get a progress
@@ -23,6 +25,7 @@ let package = Package(
             dependencies: [
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
             ],

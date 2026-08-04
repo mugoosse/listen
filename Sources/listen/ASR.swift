@@ -111,13 +111,20 @@ actor ASR {
     private var model: (any STTGenerationModel)?
     private var loadedRepo: String?
 
-    /// Meeting audio is long, so this is the real chunking path rather than the
-    /// single-chunk case a dictation takes. mlx-audio's Parakeet decoder chunks
-    /// internally at this size with a 2 second overlap and merges the token
-    /// sequences on the longest contiguous match, so timings survive the seam.
-    /// 120 s is what Speak uses and what has been exercised; larger chunks cost
-    /// memory for no accuracy that has been measured.
-    static let chunkSeconds: Float = Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "") ?? 120
+    /// Ten minutes, which is a measured compromise between two real failures.
+    ///
+    /// mlx-audio corrupts exactly one word at every chunk seam (see CLAUDE.md),
+    /// so fewer seams is better. But decoding a whole file in one pass does not
+    /// scale: measured on 67 minutes of speech, `chunkDuration: 0` reached
+    /// 3.93 GB and died with a Metal `kIOGPUCommandBufferCallbackErrorOutOfMemory`,
+    /// while 600 s chunks peaked at 3.28 GB and finished in 36.7 s. Speak's
+    /// 120 s would work too, at 33 seams an hour instead of 6.
+    ///
+    /// So: the largest chunk that has been shown to survive an hour. The real
+    /// fix is to cut at silence so no word ever straddles a seam, which would
+    /// let this go back up.
+    static let chunkSeconds: Float =
+        Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "") ?? 600
 
     /// Load the weights, downloading them first if they are not on disk.
     ///

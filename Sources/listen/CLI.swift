@@ -39,13 +39,15 @@ enum CLI {
         switch command {
         case "transcribe":
             await transcribe(rest)
+        case "record":
+            await record(rest)
         case "help", "--help", "-h":
             print(usage)
             exit(0)
         case "--version", "-v":
             print(version)
             exit(0)
-        case "record", "list", "show", "export", "calibrate", "mcp":
+        case "list", "show", "export", "calibrate", "mcp":
             fail("`listen \(command)` is not built yet (\(milestone[command] ?? "later")).")
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
@@ -53,7 +55,6 @@ enum CLI {
     }
 
     private static let milestone = [
-        "record": "milestone 2, capture",
         "list": "milestone 4, library and UI",
         "show": "milestone 4, library and UI",
         "export": "milestone 4, library and UI",
@@ -76,7 +77,7 @@ enum CLI {
     usage: listen <command> [options]
 
       transcribe <file>          transcribe an audio file and print it
-      record [--stop]            start or stop a capture          (milestone 2)
+      record [--seconds N]       capture until stopped, or for N seconds
       list [--limit N]           recordings as a table            (milestone 4)
       show <id>                  metadata and transcript          (milestone 4)
       export <id>                write a transcript out           (milestone 4)
@@ -168,6 +169,97 @@ enum CLI {
         } catch {
             fail("\(error.localizedDescription)")
         }
+    }
+
+    /// `listen record [--seconds N]`.
+    ///
+    /// Captures in this process until interrupted, or for a fixed time. This is
+    /// the capture equivalent of `transcribe`: it exercises the process tap and
+    /// the microphone with no UI in the way, which is the only sane way to
+    /// debug a tap that has to survive an hour.
+    ///
+    /// Note this is not SPEC 6's `record --stop`. Stopping a capture running
+    /// inside the *app* from a second process needs IPC that does not exist
+    /// yet; until it does, saying so is better than shipping a `--stop` that
+    /// silently does nothing.
+    private static func record(_ args: [String]) async -> Never {
+        var seconds: Double?
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--seconds":
+                i += 1
+                guard i < args.count, let v = Double(args[i]), v > 0 else {
+                    fail("--seconds needs a positive number")
+                }
+                seconds = v
+            case "--stop":
+                fail("`--stop` needs the app running and is not built yet. "
+                     + "Use `listen record --seconds N`, or Ctrl-C.")
+            default:
+                fail("unknown option `\(args[i])`. Try `listen help`.")
+            }
+            i += 1
+        }
+
+        let capture = await Capture.shared
+        let recording: Recording
+        do {
+            recording = try await capture.start(source: "cli")
+        } catch {
+            fail(error.localizedDescription)
+        }
+        for warning in await capture.warnings { log(warning) }
+        log("recording to \(recording.folder.path)")
+        log(seconds.map { "stopping after \(Int($0))s" } ?? "press Ctrl-C to stop")
+
+        // Handle Ctrl-C so the WAV headers are finalised and the tap and
+        // aggregate device are destroyed. Killed without this they survive in
+        // Core Audio, and the next run adds another.
+        signal(SIGINT, SIG_IGN)
+        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        interrupt.setEventHandler {
+            Task { @MainActor in finish(capture.stop()) }
+        }
+        interrupt.resume()
+
+        if let seconds {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                finish(capture.stop())
+            }
+        }
+
+        // Keep the process alive, pumping the run loop so the main-actor tasks
+        // and the signal source above get to run.
+        //
+        // A bare `RunLoop.current.run()` does not work: it returns immediately
+        // when the run loop has no input sources attached, and the process then
+        // fell straight through to exit. The symptom was a recording that
+        // stopped after 80 milliseconds with a system track containing nothing
+        // but a WAV header, which looks exactly like a tap that does not work.
+        while true {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+    }
+
+    @MainActor
+    private static func finish(_ recording: Recording?) -> Never {
+        guard let recording else { exit(1) }
+        let mic = recording.micURL, sys = recording.systemURL
+        func report(_ label: String, _ url: URL) {
+            let bytes = ((try? FileManager.default.attributesOfItem(
+                atPath: url.path)[.size]) as? Int) ?? 0
+            guard bytes > 44 else { log("\(label): nothing captured"); return }
+            // 44 bytes of header, then Float32 mono at 16 kHz.
+            log(String(format: "%@: %.1fs, %@", label, Double(bytes - 44) / 4 / SAMPLE_RATE,
+                       ModelChoice.humanBytes(Int64(bytes))))
+        }
+        report("mic", mic)
+        report("system", sys)
+        // The folder, on stdout, so it composes: `listen transcribe $(listen record ...)`.
+        print(recording.folder.path)
+        exit(0)
     }
 
     private static func fail(_ message: String) -> Never {

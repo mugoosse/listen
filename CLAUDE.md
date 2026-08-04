@@ -112,6 +112,80 @@ The principled fix is to cut chunks at silence rather than at a fixed offset,
 so no word ever straddles a seam. mlx-audio ships `MLXAudioVAD`, so the parts
 exist. Until then the chunk length is a trade against memory, measured below.
 
+### A process tap with an empty include list records perfect silence
+
+The worst bug in this codebase so far, because nothing anywhere reports an
+error. `CATapDescription.processes` is an **include** list unless
+`isExclusive` is set, and the SDK header is explicit: "True if this description
+should tap all processes except the process listed in the 'processes'
+property."
+
+So `processes = []` with `isExclusive = false` asks to tap nothing. It does not
+fail. `AudioHardwareCreateProcessTap` succeeds, the aggregate device reports a
+sensible 48 kHz mono format, the IO proc fires at the right rate, and every
+buffer is correctly sized and full of zeros. Measured: 143,696 samples,
+`peak = 0.00000`, `nonzero = 0`. An hour-long meeting would record as a
+9 MB file of silence and the only symptom would be an empty transcript.
+
+Tapping everything is `processes = []` **plus** `isExclusive = true`. The two
+properties have to move together, which is why they are adjacent in
+`createTap()` with that comment between them.
+
+Tapping everything is also the right scope for a meeting: participants' audio
+comes out of a browser or the Zoom client, and narrowing to a guessed list of
+bundle identifiers is the other way to record silence.
+
+### AVAudioEngine cannot be pointed at a tap-backed aggregate device
+
+Setting `kAudioOutputUnitProperty_CurrentDevice` to the aggregate either fails
+or yields silence, so `SystemAudioRecorder` drives
+`AudioDeviceCreateIOProcIDWithBlock` on the aggregate directly. The microphone
+path still uses `AVAudioEngine`, which is why there are two capture classes
+rather than one.
+
+### The aggregate device is not ready when it is created
+
+Reading `kAudioDevicePropertyStreamFormat` immediately after creating the
+aggregate returns a zero sample rate. An `AVAudioConverter` built from that
+produces no output at all, so the failure surfaces an hour later as an empty
+file rather than at setup as an error. `deviceFormat` polls for up to two
+seconds. Measured here: it takes one poll, so anything that "simplifies" the
+loop away will appear to work on this machine and fail on a busier one.
+
+### Reading a duration after stopping gives zero
+
+Both recorders close and release their `WAVWriter` in `stop()`, and the
+duration is the writer's. `Capture.stop()` therefore samples the durations
+before stopping, otherwise every meeting is recorded as zero seconds long.
+
+### `withUnsafePointer(to:) { $0 }` returns a dangling pointer
+
+Building an `AVAudioFormat` from an `AudioStreamBasicDescription` with
+`AVAudioFormat(streamDescription: withUnsafePointer(to: asbd) { $0 })` crashes
+with SIGTRAP. The pointer is only valid inside the closure. The working form
+passes an `inout` and does the work inside:
+`withUnsafePointer(to: &asbd, { AVAudioFormat(streamDescription: $0) })`.
+
+### `RunLoop.current.run()` returns immediately
+
+It returns as soon as the run loop has no input sources attached, so `listen
+record` fell straight through to `exit`. The symptom was a recording that
+stopped after 80 milliseconds with a system track containing nothing but a WAV
+header, which is indistinguishable from a tap that does not work. The CLI runs
+`run(until:)` in a loop instead.
+
+### WAV headers are rewritten as the recording runs
+
+`WAVWriter` exists instead of `AVAudioFile` because `AVAudioFile` finalises the
+header on close. A crash or a power cut during an hour-long meeting would leave
+a file whose RIFF and data chunks claim a length of zero: every sample on disk,
+and nothing able to play them. `WAVWriter` patches the two length fields every
+two seconds and `fsync`s, so the worst case is losing the last couple of
+seconds rather than the meeting.
+
+Format tag 3, not 1. These are floats, and a reader told they are integers
+decodes noise at full scale.
+
 ### The cache root is not always `~/.cache/huggingface`
 
 Inherited wholesale from Speak, and the reason models are shared between the

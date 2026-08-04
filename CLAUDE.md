@@ -470,6 +470,75 @@ Two things are easy to get backwards after that:
 Verified by writing a width of 380 into the autosaved defaults, relaunching and
 reading it back.
 
+### The transcript opened near the end of the meeting
+
+A freshly selected recording opened on its last few turns with half a paragraph
+cut off above them, which reads as a rendering fault rather than as a scroll
+position. `renderTurns` now scrolls to the top itself.
+
+Two things are easy to get wrong here, and both were got wrong once:
+
+1. **Use `scrollToVisible`, not the clip view's origin.** `scroll(to:)` has to
+   be handed the document height *minus* the viewport height. Hand it anything
+   else, the document height for instance, and the transcript goes entirely out
+   of sight, leaving an empty pane under the player.
+2. **The top is `stack.bounds.maxY`, not zero**, even though
+   `TopAlignedClipView` is flipped. Flipping the *clip view* decides where a
+   short transcript sits and which way the scrollers run; it changes nothing
+   about the stack view's own coordinates, where the first turn is still the
+   one with the highest y. The two flags read as if they should agree.
+   Measured both ways on an 80 minute recording: y = 0 opens on the last turn,
+   y = maxY - 1 on the first.
+
+### A peak envelope of a meeting is a solid block
+
+The scrubber's first version stored the peak amplitude per bucket, which is
+what a waveform usually means. At 1400 buckets across an 80 minute meeting a
+bucket is three and a half seconds, and the loudest instant in three and a half
+seconds of speech is close to the loudest instant in the whole recording, so
+every bar came out near full height and the waveform carried no information at
+all.
+
+`Waveform.make` stores **mean energy** per bucket instead, which separates
+talking from pausing and is the shape somebody scrubbing a meeting is looking
+for. `version` exists on the stored envelope precisely so a change like this
+recomputes the caches rather than drawing old numbers under new rules.
+
+Normalising it for display is also the opposite of the rule in `Mixdown`, and
+deliberately so: playback volume has to stay true to the recording, but a
+scrubber drawn at true amplitude is a flat line for anyone who recorded
+quietly.
+
+### Sentence highlighting is search, not arithmetic
+
+The playhead highlights the sentence inside the turn, which needs to know where
+each ASR sentence sits in the turn's text. `turns.json` and `transcript.json`
+are written together, so the ranges could be rebuilt by repeating the join that
+`Merge.turns` does, but an **imported** recording's turns were assembled by the
+Python pipeline and its sentences would then land one word out.
+
+`Merge.sentences` therefore searches the turn text for each segment's text,
+carrying a cursor forward so a repeated sentence matches the right occurrence,
+and skips anything it cannot find. Measured over the real library, 22
+recordings and 12,600 segments: **12,596 located, every turn but one covered**.
+The four misses are one-word segments whose text occurs earlier in the same
+turn, and a miss costs that sentence its highlight and nothing else, which is
+the point of skipping rather than guessing.
+
+Sentences and not words because that is the finest timing mlx-audio exposes.
+See the note above; if word timings ever arrive, this function takes a finer
+input rather than being replaced.
+
+### Building the mixdown on the main thread froze the first press of play
+
+`Mixdown.make` reads both tracks and encodes an m4a, which for an hour-long
+meeting is seconds of work. It used to run inline in the button's action, so
+the window locked up with the play button stuck down and no sound. `withPlayer`
+now does it on a detached task and creates the `AVAudioPlayer` back on the main
+actor. The view keeps its own `position` rather than reading the player's, so
+scrubbing moves the playhead immediately and the player is told where to start
+when it finally exists.
+
 ### The legacy voiceprints are a different space with the same dimension
 
 `meet_transcriptions` stores pyannote embeddings; Listen uses FluidAudio. Both

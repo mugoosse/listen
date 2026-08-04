@@ -120,6 +120,48 @@ struct Recording {
         try save()
     }
 
+    /// Record the outcome of a transcription run.
+    ///
+    /// One derivation, called by both the queue and the CLI. They used to each
+    /// have their own idea: `listen transcribe` wrote the transcript and left
+    /// `state` alone, so four recordings that had been through a failed run
+    /// kept saying "could not transcribe" in the sidebar while their transcript
+    /// sat next to them on disk.
+    /// The state, reconciled against what is actually on disk.
+    ///
+    /// `metadata.state` is a cache and the files are the truth, which is the
+    /// same principle that lets the queue be rebuilt by listing the library. A
+    /// process killed mid-job leaves `transcribing` behind for ever, and an
+    /// imported recording arrives saying `pending` whatever happens to it
+    /// afterwards, so seven recordings sat in the sidebar claiming to be
+    /// waiting or working while their finished transcript lay beside them.
+    ///
+    /// Deriving it here means no repair pass is needed and a future writer that
+    /// forgets to update the field cannot reintroduce the same lie.
+    var effectiveState: Metadata.State {
+        let stored = metadata.stateValue
+        guard hasTranscript else {
+            // Staging is the one state the files cannot tell you, because it is
+            // about which folder the recording is in rather than what is in it.
+            return stored == .unconfirmed ? .unconfirmed : .pending
+        }
+        switch stored {
+        case .pending, .transcribing, .failed:
+            return storedTurns.isEmpty ? .done : .needsLabelling
+        case .unconfirmed, .needsLabelling, .done:
+            return stored
+        }
+    }
+
+    mutating func markTranscribed(_ transcript: StoredTranscript) {
+        // Nothing to label in a recording with no speech in it, so it is
+        // finished rather than waiting on somebody.
+        metadata.state = transcript.segments.isEmpty
+            ? Metadata.State.done.rawValue
+            : Metadata.State.needsLabelling.rawValue
+        try? save()
+    }
+
     func delete() throws {
         try FileManager.default.removeItem(at: folder)
     }

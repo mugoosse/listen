@@ -105,6 +105,15 @@ final class DetailView: NSView {
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 40, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        // The clip view has to be flipped, and it has to be replaced before the
+        // document view is set. An NSClipView is not flipped by default, so its
+        // origin is the bottom left and a document view shorter than the
+        // viewport is placed at the *bottom*: a two-line transcript sat on the
+        // floor of the window with the whole meeting's worth of empty space
+        // above it, which reads as a rendering fault rather than as a layout
+        // rule. Flipped, short content starts at the top and grows downward,
+        // which is also the direction a conversation runs.
+        scroll.contentView = TopAlignedClipView()
         scroll.documentView = stack
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
@@ -251,18 +260,21 @@ final class DetailView: NSView {
             turnViews.append(view)
         }
 
-        // Open at the beginning. The stack view is not flipped, so its origin
-        // is the bottom of the transcript and a freshly selected recording
-        // opened somewhere near the end of the meeting with a half a paragraph
-        // cut off at the top, which reads as a rendering fault rather than as a
-        // scroll position.
+        // Open at the beginning. A freshly selected recording used to open
+        // somewhere near the end of the meeting with half a paragraph cut off
+        // above it, which reads as a rendering fault rather than as a scroll
+        // position.
+        //
+        // The top is `bounds.maxY`, not zero. `TopAlignedClipView` flips the
+        // *clip view*, which decides where a short transcript sits and which
+        // way the scrollers run, and changes nothing about the stack view's own
+        // coordinates: its arranged subviews are still laid out with the first
+        // turn at the highest y. Measured both ways round on an 80 minute
+        // recording, because the two flags read as if they should agree and do
+        // not: y = 0 opens on the last turn, y = maxY - 1 on the first.
         DispatchQueue.main.async { [self] in
             layoutSubtreeIfNeeded()
             scrollingProgrammatically = true
-            // Through `scrollToVisible` rather than by setting the clip view's
-            // origin, which has to be told the document height minus the
-            // viewport and scrolls the transcript clean out of sight when it is
-            // told anything else.
             stack.scrollToVisible(NSRect(x: 0, y: stack.bounds.maxY - 1,
                                          width: 1, height: 1))
             DispatchQueue.main.async { self.scrollingProgrammatically = false }
@@ -418,6 +430,9 @@ final class DetailView: NSView {
 
     /// Push the playhead into everything that shows it.
     private func refresh() {
+        // One source of truth for the length, so the hover readout on the
+        // waveform cannot be describing the recording before this one.
+        waveform.duration = length
         waveform.progress = length > 0 ? position / length : 0
         timeLabel.stringValue = TranscriptFormat.stamp(position)
             + " / " + TranscriptFormat.stamp(length)
@@ -653,4 +668,22 @@ final class DetailViewController: NSViewController {
     }
 
     func stopPlayback() { detail.stopPlayback() }
+}
+
+/// A clip view whose origin is the top left.
+///
+/// `NSClipView` is not flipped, so its origin is the bottom left and a document
+/// view shorter than the viewport is laid out at the **bottom**. A short
+/// transcript therefore sat on the floor of the detail pane with the rest of
+/// the window empty above it.
+///
+/// This is the same rule that puts a short Settings pane on the floor of its
+/// window, handled there by making the stack fill the clip view's height. Here
+/// the content genuinely varies from two lines to an hour of meeting, so
+/// flipping the clip view is the honest fix: content starts at the top and
+/// grows downward, which is the direction a conversation runs, and scrolling to
+/// the top becomes `y = 0` rather than an expression involving the document
+/// height.
+final class TopAlignedClipView: NSClipView {
+    override var isFlipped: Bool { true }
 }

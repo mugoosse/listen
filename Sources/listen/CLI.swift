@@ -12,7 +12,7 @@ enum CLI {
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
-        "import", "enroll",
+        "import", "enroll", "sources",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -62,6 +62,8 @@ enum CLI {
             exit(0)
         case "calibrate":
             calibrate()
+        case "sources":
+            sources()
         case "mcp":
             MCP.serve()
         default:
@@ -76,6 +78,55 @@ enum CLI {
                  + "recordings, then run this again.")
         }
         Calibrate.print(report)
+        exit(0)
+    }
+
+    /// `listen sources`: what meeting detection can see right now.
+    ///
+    /// Detection has no other way to be checked. It fires on a state inside
+    /// Core Audio that lasts as long as a call does and leaves nothing behind,
+    /// so "it did not offer to record my meeting" is otherwise unanswerable:
+    /// the rule may not have matched, the app may be in the skip list, or the
+    /// process list may not be readable at all. This prints all three.
+    ///
+    /// Run it during a call, which is the only time it says anything.
+    private static func sources() -> Never {
+        let processes = MeetingDetector.report()
+        let skipped = Settings.skippedBundleIDs
+        print("audio processes: \(processes.count)")
+        print("")
+        print("  in  out  pid      bundle")
+        for p in processes.sorted(by: { ($0.bundleID ?? "") < ($1.bundleID ?? "") }) {
+            // Everything is listed, including the processes the rule ignores,
+            // because the interesting case is usually one that should have
+            // matched and did not.
+            let mark = p.input && p.output ? "*" : " "
+            print(String(format: "%@  %@   %@   %-7@  %@",
+                         mark,
+                         p.input ? "y" : "-",
+                         p.output ? "y" : "-",
+                         p.pid.map(String.init) ?? "?",
+                         p.bundleID ?? "(none)"))
+        }
+
+        let callers = MeetingDetector.activeCallers()
+        print("")
+        if callers.isEmpty {
+            print("nothing looks like a call. Run this during one.")
+        } else {
+            for id in callers {
+                print(skipped.contains(id) ? "on a call, skipped: \(id)"
+                                           : "on a call: \(id)")
+            }
+        }
+        if !skipped.isEmpty {
+            print("")
+            print("skip list: " + skipped.sorted().joined(separator: ", "))
+        }
+        print("")
+        print(Settings.autoDetectMeetings
+              ? "detection is on."
+              : "detection is off, so none of this would start a recording.")
         exit(0)
     }
 
@@ -101,6 +152,7 @@ enum CLI {
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       calibrate                  voiceprint threshold report
+      sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server, read-only
 
     import options:
@@ -488,7 +540,12 @@ enum CLI {
         Settings.model = choice
         do {
             let t0 = Date()
+            var updated = recording
             let transcript = try await Pipeline().run(recording) { log($0) }
+            // The same bookkeeping the queue does, through the same call, so
+            // the two cannot come to different conclusions about a recording
+            // they both just transcribed.
+            updated.markTranscribed(transcript)
             log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
                        transcript.duration))
             log(transcript.cleanup.isEmpty ? "cleanup fired: never"

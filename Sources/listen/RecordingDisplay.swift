@@ -36,7 +36,7 @@ extension Recording {
     var stateText: String {
         if Queue.shared.running == id { return Queue.shared.stage ?? "transcribing" }
         if Queue.shared.isQueued(id) { return "waiting" }
-        switch metadata.stateValue {
+        switch effectiveState {
         case .transcribing:  return "transcribing"
         case .failed:        return "could not transcribe"
         case .pending:       return hasTranscript ? "" : "not transcribed"

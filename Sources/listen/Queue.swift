@@ -78,11 +78,7 @@ final class Queue {
                 var finished = Recording.find(id) ?? recording
                 switch result {
                 case .success(let transcript):
-                    // A recording with no speech in it has nothing to label, so
-                    // it is finished rather than waiting on somebody.
-                    finished.metadata.state = transcript.segments.isEmpty
-                        ? Metadata.State.done.rawValue
-                        : Metadata.State.needsLabelling.rawValue
+                    finished.markTranscribed(transcript)
                 case .failure(let error):
                     finished.metadata.state = Metadata.State.failed.rawValue
                     log("transcription failed for \(id): \(error.localizedDescription)")

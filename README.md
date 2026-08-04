@@ -62,6 +62,21 @@ Transcription starts on its own once a recording is kept, one job at a time.
 Quit halfway through and it picks up where it left off, because a recording
 with audio and no transcript simply *is* one that still needs transcribing.
 
+### Playing a recording back
+
+The player above the transcript draws the whole meeting as a waveform, so the
+quiet stretches and the busy ones are visible before you click. Click or drag
+anywhere on it to move the playhead; scrubbing a paused recording leaves it
+paused, because dragging through a meeting to find a moment is a way of reading
+it rather than of listening to it.
+
+While it plays, the turn being spoken is tinted and the sentence being spoken
+is highlighted inside it, which is what keeps a five-minute paragraph readable
+at the speed it is being said. The transcript follows along until you scroll,
+and then it stays where you put it.
+
+Clicking any turn plays from there.
+
 ### Naming speakers
 
 Click a speaker's name in the transcript. Type a name, or take one of the
@@ -125,6 +140,7 @@ metadata.json      title, recorded_at, duration, source, state
 mic.wav            your track
 system.wav         everyone else
 mix.m4a            generated on demand for playback
+waveform.json      the scrubber's envelope, also on demand
 transcript.json    segments with speakers
 turns.json         condensed per-speaker turns
 embeddings.json    one voiceprint per speaker

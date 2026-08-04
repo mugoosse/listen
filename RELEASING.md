@@ -81,17 +81,34 @@ Delete it once it is in the password manager.
 
 ### 4. Repository secrets, for CI
 
-| Secret | What |
-|---|---|
-| `SIGNING_CERTIFICATE_P12` | base64 of a Developer ID Application `.p12` |
-| `SIGNING_CERTIFICATE_PWD` | the password used when exporting it |
-| `NOTARY_APPLE_ID` | Apple ID email |
-| `NOTARY_TEAM_ID` | 10-character team identifier |
-| `NOTARY_PASSWORD` | app-specific password |
-| `SPARKLE_PRIVATE_KEY` | the EdDSA private key, for signing the appcast |
+| Secret | What | Set |
+|---|---|---|
+| `SIGNING_CERTIFICATE_P12` | base64 of a Developer ID Application `.p12` | no |
+| `SIGNING_CERTIFICATE_PWD` | the password used when exporting it | no |
+| `NOTARY_APPLE_ID` | Apple ID email | no |
+| `NOTARY_TEAM_ID` | 10-character team identifier | no |
+| `NOTARY_PASSWORD` | app-specific password | no |
+| `SPARKLE_PRIVATE_KEY` | the EdDSA private key, for signing the appcast | yes |
+
+```sh
+gh secret set SPARKLE_PRIVATE_KEY --repo mugoosse/listen < sparkle_private_key.txt
+```
 
 Without them the build still runs and produces artifacts, unsigned and
 unpublished, so a fork can build with no setup at all.
+
+### 5. A public repository, before the first release and not after
+
+`mugoosse/listen` is private. Everything above works while it is, and a release
+published from it does not: `releases/latest/download/appcast.xml` and every
+asset URL answer 404 to anyone not signed in, which is every Sparkle client and
+the Homebrew cask both.
+
+The order matters. Making the repository public after a release has already
+gone out is fine. Publishing a release while it is private ships an update
+channel that fails for reasons no user can see, and the app cannot be told
+about it afterwards: the feed URL is baked into every bundle already
+installed.
 
 ## Things the process depends on
 

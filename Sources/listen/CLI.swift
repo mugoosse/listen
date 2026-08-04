@@ -12,6 +12,7 @@ enum CLI {
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
+        "import", "enroll",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -49,6 +50,10 @@ enum CLI {
             export(rest)
         case "label":
             label(rest)
+        case "import":
+            importLegacy(rest)
+        case "enroll":
+            await enroll(rest)
         case "help", "--help", "-h":
             print(usage)
             exit(0)
@@ -93,8 +98,13 @@ enum CLI {
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
+      import <path>              bring in a meet_transcriptions library
+      enroll                     re-derive voiceprints for named speakers
       calibrate                  voiceprint threshold report
       mcp                        stdio MCP server, read-only
+
+    import options:
+      --dry-run                  list what would be imported, copy nothing
 
     label options:
       <name>                     name the speaker
@@ -354,6 +364,96 @@ enum CLI {
         log("speakers now: \(updated.speakers.joined(separator: ", "))")
         log("state: \(updated.metadata.state)")
         exit(0)
+    }
+
+    /// `listen enroll`: build voiceprints for recordings that have names but no
+    /// embeddings, which is every imported one.
+    private static func enroll(_ args: [String]) async -> Never {
+        for arg in args where arg.hasPrefix("-") {
+            fail("unknown option `\(arg)`. Try `listen help`.")
+        }
+        let candidates = Enroll.candidates()
+        guard !candidates.isEmpty else {
+            log("nothing to enrol: every recording with named speakers already has "
+                + "voiceprints.")
+            exit(0)
+        }
+        log("enrolling \(candidates.count) recording(s)")
+
+        let enroller = Enroll()
+        var people: [String: Double] = [:]
+        for recording in candidates {
+            do {
+                let result = try await enroller.run(recording) { log($0) }
+                for (name, seconds) in result.named { people[name, default: 0] += seconds }
+                let summary = result.named.keys.sorted().joined(separator: ", ")
+                print("\(recording.id)  \(summary.isEmpty ? "no named voice matched" : summary)"
+                      + (result.unmatched > 0 ? "  (\(result.unmatched) unmatched)" : ""))
+            } catch {
+                log("\(recording.id): \(error.localizedDescription)")
+            }
+        }
+        log("voice bank now holds \(people.count) people")
+        log("run `listen calibrate` to check the thresholds against real voices")
+        exit(0)
+    }
+
+    /// `listen import <path> [--dry-run]`.
+    private static func importLegacy(_ args: [String]) -> Never {
+        var path: String?
+        var dryRun = false
+        for arg in args {
+            switch arg {
+            case "--dry-run": dryRun = true
+            case let other where other.hasPrefix("-"):
+                fail("unknown option `\(other)`. Try `listen help`.")
+            default:
+                guard path == nil else { fail("import takes one path.") }
+                path = arg
+            }
+        }
+        guard let path else {
+            fail("import needs the path to a meet_transcriptions checkout.")
+        }
+        let root = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+
+        let candidates = LegacyImport.scan(root)
+        guard !candidates.isEmpty else {
+            fail("nothing importable under \(root.path). Expected a recordings/ folder.")
+        }
+
+        let withTranscript = candidates.filter(\.hasTranscript)
+        let named = candidates.reduce(0) { $0 + $1.namedCount }
+        log("found \(candidates.count) recordings, \(withTranscript.count) transcribed, "
+            + "\(named) named speakers")
+
+        do {
+            let outcome = try LegacyImport.run(candidates, dryRun: dryRun)
+            for id in outcome.imported {
+                let c = candidates.first { $0.id == id }
+                print("\(dryRun ? "would import" : "imported") \(id)  "
+                      + "\(c?.hasTranscript == true ? "with transcript" : "audio only")"
+                      + (c.map { $0.names.isEmpty ? "" : "  (\($0.names.values.sorted().joined(separator: ", ")))" } ?? ""))
+            }
+            for id in outcome.skipped { log("already in the library, skipped: \(id)") }
+            for (id, why) in outcome.failed { log("failed \(id): \(why)") }
+            log("\(dryRun ? "would copy" : "copied") "
+                + ModelChoice.humanBytes(outcome.bytes))
+
+            if !dryRun, !outcome.imported.isEmpty {
+                // The pyannote voiceprints are deliberately left behind: they
+                // are a different embedding space from FluidAudio's and would
+                // produce confident nonsense in the sounds-like ranking. The
+                // names came across, so re-deriving is the way to get a real
+                // voice bank out of them.
+                log("voiceprints were not imported: they are pyannote vectors and "
+                    + "Listen uses FluidAudio. Run `listen enroll` to re-derive them "
+                    + "from the audio, keeping the names.")
+            }
+            exit(0)
+        } catch {
+            fail(error.localizedDescription)
+        }
     }
 
     /// A path that is a recording folder, so `transcribe ./staging/<id>` works.

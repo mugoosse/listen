@@ -101,6 +101,25 @@ Still worth doing on the list:
       with a real library in it.
 - [ ] No empty state when the library has nothing in it at all.
 
+## Legacy import
+
+`listen import <path>` brings in a `meet_transcriptions` library: 45
+recordings, 22 with transcripts, and the speaker naming that was done by hand.
+`listen enroll` then re-derives FluidAudio voiceprints from the imported audio
+and attaches the imported names to them.
+
+The pyannote vectors are deliberately left behind. They are the same 256
+dimensions as FluidAudio's and a completely different space, so importing them
+would have produced confident nonsense in the sounds-like ranking with nothing
+to catch it.
+
+- [ ] The 23 imported recordings with no transcript are queued as pending and
+      will transcribe on next launch. That is roughly 10 hours of audio through
+      Parakeet, so expect it to take a few minutes and to be worth watching the
+      first time.
+- [ ] Imported titles are verbatim, so several read "Google Chrome" or
+      "2607-13-WhatsApp". Renaming is a click but nothing suggests a better one.
+
 ## Later
 
 - Waveform in the player, if it can be made cheap.

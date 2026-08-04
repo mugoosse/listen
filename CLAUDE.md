@@ -444,3 +444,31 @@ Two things are easy to get backwards after that:
 
 Verified by writing a width of 380 into the autosaved defaults, relaunching and
 reading it back.
+
+### The legacy voiceprints are a different space with the same dimension
+
+`meet_transcriptions` stores pyannote embeddings; Listen uses FluidAudio. Both
+are **256-dimensional**, which is the whole danger: importing the old vectors
+into `embeddings.json` raises no error anywhere, produces no exception, and no
+length check catches it. Cosine similarity between a vector from one model and
+a vector from the other is simply a meaningless number between -1 and 1, and it
+flows straight into the sounds-like ranking looking exactly like a real score.
+
+So `LegacyImport` deliberately imports everything **except** the vectors. The
+names come across, because 25 of the 55 speaker slots in the old library were
+labelled by hand and that is the part nobody wants to redo. `listen enroll`
+then re-derives real FluidAudio voiceprints from the imported audio and matches
+them to those names by overlap on the clock, which is the only thing the two
+labellings share.
+
+The same trap applies to the thresholds, for the same reason. See the
+calibration note above.
+
+### An imported recording has no mic track, and must not pretend otherwise
+
+The legacy recorder produced one mixed file. It lands as `mix.m4a`, which is
+what it is, and `Pipeline.run` treats a mix-only recording as the
+everyone-track: diarize it whole, discover every speaker, and label nobody
+"Me". The two-track shortcut relies on the user being the one in `mic.wav`, and
+in a mixed track that is not true of anybody, so applying it would attach the
+user's name to whoever happened to be first.

@@ -34,8 +34,21 @@ actor Pipeline {
              progress: (@Sendable (String) -> Void)? = nil) async throws -> StoredTranscript {
         try await asr.load(Settings.model) { progress?($0) }
 
-        let hasSystem = FileManager.default.fileExists(atPath: recording.systemURL.path)
-        let hasMic = FileManager.default.fileExists(atPath: recording.micURL.path)
+        let fm = FileManager.default
+        var hasSystem = fm.fileExists(atPath: recording.systemURL.path)
+        let hasMic = fm.fileExists(atPath: recording.micURL.path)
+
+        // An imported recording has neither track, only the mixdown the legacy
+        // recorder produced. Treat that as the everyone-track: diarize it whole
+        // and discover every speaker, including the user. There is deliberately
+        // no shortcut labelling anybody "Me" here, because in a mixed track the
+        // user is not distinguishable by which file they are in, and guessing
+        // would be worse than asking.
+        var everyone = recording.systemURL
+        if !hasSystem, !hasMic, fm.fileExists(atPath: recording.mixURL.path) {
+            everyone = recording.mixURL
+            hasSystem = true
+        }
 
         var labelled: [LabelledSegment] = []
         var embeddings: [String: [Float]] = [:]
@@ -47,15 +60,15 @@ actor Pipeline {
         // only one worth diarizing. Doing both would spend ANE time to
         // rediscover something already known and occasionally get it wrong by
         // splitting the user into two people.
-        if hasSystem, !Self.isSilent(recording.systemURL) {
+        if hasSystem {
             progress?("transcribing the other participants")
-            let transcript = try await asr.transcribe(recording.systemURL)
+            let transcript = try await asr.transcribe(everyone)
             wordLevel = transcript.hasWordTimings
             model = transcript.model
 
             progress?("identifying speakers")
             try await diarizer.load { progress?($0) }
-            let diarization = try await diarizer.run(recording.systemURL)
+            let diarization = try await diarizer.run(everyone)
             embeddings = diarization.embeddings
             speech = diarization.speech
 

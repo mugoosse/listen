@@ -18,6 +18,10 @@ final class App: NSObject, NSApplicationDelegate {
         // exists to handle.
         Library.sweepStaging()
 
+        // Without this there is no menu bar at all, so Cmd-Q does not quit and
+        // Cmd-C does nothing in a text field.
+        MainMenu.install()
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(
             systemSymbolName: "waveform", accessibilityDescription: "Listen")
@@ -106,6 +110,11 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Capture
+
+    /// Also reachable from the library window's toolbar, so recording does not
+    /// require going to the menu bar while reading a transcript.
+    @objc func startRecordingFromUI() { startRecording() }
+    @objc func stopRecordingFromUI() { stopRecording() }
 
     @objc private func startRecording() {
         do {

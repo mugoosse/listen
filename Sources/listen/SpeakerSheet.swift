@@ -15,7 +15,7 @@ enum SpeakerSheet {
     static func present(for recording: Recording, speaker: String,
                         in parent: NSWindow?, done: @escaping () -> Void) {
         let alert = NSAlert()
-        alert.messageText = "Who is \(speaker)?"
+        alert.messageText = "Who is \(SpeakerName.display(speaker))?"
 
         let suggestions = VoiceBank.suggestions(for: speaker, in: recording)
         alert.informativeText = suggestions.isEmpty
@@ -69,7 +69,7 @@ enum SpeakerSheet {
     private static func discard(_ speaker: String, in recording: Recording,
                                 parent: NSWindow?, done: @escaping () -> Void) {
         let alert = NSAlert()
-        alert.messageText = "Discard everything attributed to \(speaker)?"
+        alert.messageText = "Discard everything attributed to \(SpeakerName.display(speaker))?"
         alert.informativeText = "Their segments are removed from the transcript. "
             + "The audio is untouched, so transcribing again brings them back."
         alert.alertStyle = .warning
@@ -97,16 +97,18 @@ enum SpeakerSheet {
         }
 
         let alert = NSAlert()
-        alert.messageText = "Merge \(speaker) into which speaker?"
+        alert.messageText = "Merge \(SpeakerName.display(speaker)) into which speaker?"
         alert.informativeText = "Every segment attributed to \(speaker) is reassigned. "
             + "This cannot be undone from here."
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26))
-        popup.addItems(withTitles: others)
+        popup.addItems(withTitles: others.map(SpeakerName.display))
         alert.accessoryView = popup
         alert.addButton(withTitle: "Merge")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn,
-              let target = popup.titleOfSelectedItem else { done(); return }
+              popup.indexOfSelectedItem >= 0,
+              popup.indexOfSelectedItem < others.count else { done(); return }
+        let target = others[popup.indexOfSelectedItem]
 
         TranscriptEditor.apply(.merge(speaker, into: target), to: recording)
         done()

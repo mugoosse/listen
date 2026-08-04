@@ -408,3 +408,39 @@ violation some clients treat as fatal, hence the explicit
 A failure inside a tool call is returned as content with `isError`, not as a
 JSON-RPC error: the call arrived and was understood, and the agent needs to see
 why it failed rather than being told the request was malformed.
+
+### An app with no nib has no menu bar, and it is not obvious
+
+Listen builds its own `NSMenu` in `MainMenu.install()`. Without it there is no
+menu bar at all, and the gap hides because the window looks finished: what is
+actually missing is every standard keystroke. Cmd-Q does not quit, and Cmd-A,
+Cmd-C and Cmd-V do nothing in any text field, because those are implemented by
+menu items with key equivalents rather than by the fields. This surfaced as
+"renaming a recording is unusable", which is several steps away from the cause.
+
+The Edit menu items target `nil` on purpose, so they travel the responder chain
+and land on whatever has focus.
+
+### The sidebar width fought the split view
+
+The first library window was a bare `NSSplitView` with
+`widthAnchor` constraints on both sides. Dragging the divider snapped straight
+back: the constraints and the split view were both trying to own the same
+number and the constraints won on the next layout pass.
+
+`NSSplitViewController` with `minimumThickness` and `maximumThickness` owns it
+properly, and `DetailView` no longer carries a width constraint of its own.
+
+Two things are easy to get backwards after that:
+
+1. **Holding priority.** The sidebar's has to be *higher* than the content
+   pane's, so resizing the window moves the right-hand edge. The default is the
+   other way round, which rewrites the saved width on every window resize and
+   looks exactly like the sidebar refusing to stay put.
+2. **Ordering.** Set the window's frame autosave name before the split view's.
+   Restoring the frame resizes the window, and a resize redistributes the
+   split, so the other order overwrites the divider position with whatever the
+   resize produced.
+
+Verified by writing a width of 380 into the autosaved defaults, relaunching and
+reading it back.

@@ -3,44 +3,29 @@ import AppKit
 
 /// The main window: recordings on the left, the selected one on the right.
 ///
-/// Apple Notes shape, deliberately. The visual register to match is Anarlog and
-/// Granola: light, calm, generous whitespace, content first. This should not
-/// read as a developer tool, which mostly means resisting the urge to put a
-/// number on everything.
+/// Apple Notes shape. The visual register to match is Anarlog and Granola:
+/// light, calm, generous whitespace, content first.
 ///
-/// There is no People tab. Recordings only, asked for explicitly.
+/// Built on `NSSplitViewController`, not a bare `NSSplitView`. The first
+/// version used the latter with `widthAnchor` constraints on each side, and
+/// dragging the divider snapped straight back to the original width: the
+/// constraints and the split view were both trying to own the same number, and
+/// the constraints won on the next layout pass. `NSSplitViewItem` owns it
+/// properly through `minimumThickness` and `maximumThickness`, and it is also
+/// what makes the sidebar collapsible and gives the divider position a saved
+/// position for free.
 @MainActor
-final class LibraryWindow: NSObject, NSWindowDelegate {
+final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     static let shared = LibraryWindow()
 
     private var window: NSWindow?
-    private var table: NSTableView!
-    private var searchField: NSSearchField!
-    private var filterBar: NSSegmentedControl!
-    private var detail: DetailView!
+    private var split: NSSplitViewController?
+    private var sidebarItem: NSSplitViewItem?
+    private let sidebar = SidebarViewController()
+    private let detail = DetailViewController()
 
-    private var all: [Recording] = []
-    private var shown: [Recording] = []
-    private var filter: Filter = .all
-    private var query = ""
-
-    enum Filter: Int, CaseIterable {
-        case all, needsLabelling, done
-        var title: String {
-            switch self {
-            case .all:           return "All"
-            case .needsLabelling: return "Needs labelling"
-            case .done:          return "Done"
-            }
-        }
-        func matches(_ r: Recording) -> Bool {
-            switch self {
-            case .all:            return true
-            case .needsLabelling: return r.metadata.stateValue == .needsLabelling
-            case .done:           return r.metadata.stateValue == .done
-            }
-        }
-    }
+    private static let newRecordingItem = NSToolbarItem.Identifier("newRecording")
+    private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
 
     // MARK: - Showing
 
@@ -52,200 +37,217 @@ final class LibraryWindow: NSObject, NSWindowDelegate {
     }
 
     private func build() {
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1040, height: 680),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered, defer: false)
+        let controller = NSSplitViewController()
+
+        let side = NSSplitViewItem(sidebarWithViewController: sidebar)
+        side.minimumThickness = 200
+        side.maximumThickness = 460
+        side.canCollapse = true
+        // Higher than the detail pane's, so resizing the *window* moves the
+        // divider's right-hand neighbour and leaves the sidebar the width it
+        // was set to. The default is the other way round, which quietly
+        // rewrites the saved width every time the window changes size and
+        // looks exactly like the sidebar refusing to stay where it was put.
+        side.holdingPriority = NSLayoutConstraint.Priority(260)
+        sidebar.identifier = NSUserInterfaceItemIdentifier("sidebar")
+        controller.addSplitViewItem(side)
+        sidebarItem = side
+
+        let main = NSSplitViewItem(viewController: detail)
+        main.minimumThickness = 420
+        main.holdingPriority = NSLayoutConstraint.Priority(250)
+        detail.identifier = NSUserInterfaceItemIdentifier("detail")
+        controller.addSplitViewItem(main)
+
+        let w = NSWindow(contentViewController: controller)
         w.title = "Listen"
+        w.styleMask.insert(.fullSizeContentView)
         w.titlebarAppearsTransparent = true
+        w.setContentSize(NSSize(width: 1040, height: 680))
         w.center()
+        // Frame first, then the divider. Restoring the frame resizes the
+        // window, and a resize redistributes the split, so doing it the other
+        // way round overwrites the divider position with whatever the resize
+        // produced.
         w.setFrameAutosaveName("ListenLibrary")
+        controller.splitView.autosaveName = "ListenSplit"
         w.delegate = self
+        w.isReleasedWhenClosed = false
 
-        let split = NSSplitView(frame: .zero)
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.translatesAutoresizingMaskIntoConstraints = false
+        let toolbar = NSToolbar(identifier: "ListenToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        w.toolbar = toolbar
 
-        split.addArrangedSubview(buildSidebar())
-        detail = DetailView()
-        split.addArrangedSubview(detail)
-
-        let content = NSView()
-        content.addSubview(split)
-        NSLayoutConstraint.activate([
-            split.topAnchor.constraint(equalTo: content.topAnchor),
-            split.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-        ])
-        w.contentView = content
         window = w
+        split = controller
 
-        // Redraw the row a job is working on rather than the whole list, so a
-        // rename being typed elsewhere is not thrown away by a progress tick.
+        sidebar.onSelect = { [weak self] recording in
+            self?.detail.show(recording)
+            self?.window?.toolbar?.validateVisibleItems()
+        }
+        sidebar.onRenamed = { [weak self] in self?.reload() }
+        detail.onChanged = { [weak self] in self?.reload() }
+
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
-    }
-
-    private func buildSidebar() -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        searchField = NSSearchField()
-        searchField.placeholderString = "Search"
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-
-        filterBar = NSSegmentedControl(
-            labels: Filter.allCases.map(\.title), trackingMode: .selectOne,
-            target: self, action: #selector(filterChanged))
-        filterBar.selectedSegment = 0
-        filterBar.segmentDistribution = .fillEqually
-        filterBar.translatesAutoresizingMaskIntoConstraints = false
-
-        table = NSTableView()
-        table.headerView = nil
-        table.rowHeight = 62
-        table.style = .inset
-        table.selectionHighlightStyle = .regular
-        table.addTableColumn(NSTableColumn(identifier: .init("main")))
-        table.delegate = self
-        table.dataSource = self
-        table.target = self
-        table.menu = rowMenu()
-
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-
-        container.addSubview(searchField)
-        container.addSubview(filterBar)
-        container.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
-            searchField.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
-            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
-            filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            filterBar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        return container
-    }
-
-    private func rowMenu() -> NSMenu {
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Rename", action: #selector(renameSelected), keyEquivalent: "")
-            .target = self
-        menu.addItem(withTitle: "Reveal in Finder", action: #selector(revealSelected),
-                     keyEquivalent: "").target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Transcribe Again", action: #selector(retranscribeSelected),
-                     keyEquivalent: "").target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Delete", action: #selector(deleteSelected), keyEquivalent: "")
-            .target = self
-        return menu
     }
 
     // MARK: - Data
 
     func reload() {
-        let selectedID = selected?.id
-        all = Recording.all()
-        applyFilter()
-        table?.reloadData()
-        // Keep the selection on the same recording rather than the same row
-        // index. A transcription finishing reorders nothing today, but a rename
-        // or a delete does, and jumping to a different meeting mid-read is the
-        // kind of thing nobody reports and everybody notices.
-        if let selectedID, let row = shown.firstIndex(where: { $0.id == selectedID }) {
-            table?.selectRowIndexes([row], byExtendingSelection: false)
-        }
-        updateFilterCounts()
-        refreshDetail()
-    }
-
-    private func applyFilter() {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        shown = all.filter { recording in
-            guard filter.matches(recording) else { return false }
-            guard !q.isEmpty else { return true }
-            if recording.metadata.title.lowercased().contains(q) { return true }
-            // Search the transcript too, which is the reason anyone searches a
-            // meeting library at all: you remember what was said, not what the
-            // recording was called.
-            return recording.transcriptText.lowercased().contains(q)
+        sidebar.reload()
+        // Re-read the selected recording from disk so a transcript that just
+        // finished appears without anyone clicking away and back.
+        if let id = sidebar.selectedRecording?.id, let fresh = Recording.find(id) {
+            detail.show(fresh)
+        } else if sidebar.selectedRecording == nil {
+            detail.show(nil)
         }
     }
 
-    private func updateFilterCounts() {
-        for (i, f) in Filter.allCases.enumerated() {
-            let n = all.filter(f.matches).count
-            filterBar.setLabel(n > 0 ? "\(f.title) \(n)" : f.title, forSegment: i)
+    var selected: Recording? { sidebar.selectedRecording }
+
+    // MARK: - Toolbar
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, Self.newRecordingItem, .flexibleSpace, Self.actionsItem]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, Self.newRecordingItem, .flexibleSpace, Self.actionsItem]
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        switch id {
+        case Self.newRecordingItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Record"
+            item.toolTip = "Start recording"
+            item.image = NSImage(systemSymbolName: "square.and.pencil",
+                                 accessibilityDescription: "Start recording")
+            item.target = self
+            item.action = #selector(newRecording)
+            return item
+
+        case Self.actionsItem:
+            // A menu rather than a row of buttons. Everything in it acts on
+            // the selected recording, and most of it is rare or destructive,
+            // which is not what a toolbar button is for.
+            let menu = NSMenu()
+            menu.delegate = self
+            let item = NSMenuToolbarItem(itemIdentifier: id)
+            item.label = "Actions"
+            item.toolTip = "Actions for this recording"
+            item.image = NSImage(systemSymbolName: "ellipsis",
+                                 accessibilityDescription: "Actions")
+            item.menu = menu
+            item.showsIndicator = false
+            return item
+
+        default:
+            return nil
         }
-    }
-
-    var selected: Recording? {
-        guard let row = table?.selectedRow, row >= 0, row < shown.count else { return nil }
-        return shown[row]
-    }
-
-    private func refreshDetail() {
-        detail?.show(selected)
     }
 
     // MARK: - Actions
 
-    @objc private func searchChanged() {
-        query = searchField.stringValue
-        applyFilter()
-        table.reloadData()
+    @objc private func newRecording() {
+        // Start, and stop, from the same control. The menu bar item does the
+        // same thing; this exists because someone reading a transcript should
+        // not have to go to the menu bar to record the next meeting.
+        if Capture.shared.isRecording {
+            NSApp.sendAction(#selector(App.stopRecordingFromUI), to: nil, from: self)
+        } else {
+            NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
+        }
     }
 
-    @objc private func filterChanged() {
-        filter = Filter(rawValue: filterBar.selectedSegment) ?? .all
-        applyFilter()
-        table.reloadData()
+    /// Focus the search field, for Cmd-F.
+    func focusSearch() {
+        window?.makeKeyAndOrderFront(nil)
+        sidebar.focusSearch()
     }
 
-    @objc private func renameSelected() {
-        guard var recording = selected else { return }
-        let alert = NSAlert()
-        alert.messageText = "Rename recording"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        field.stringValue = recording.metadata.title
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        recording.metadata.title = name
-        try? recording.save()
-        reload()
+    func windowWillClose(_ notification: Notification) {
+        detail.stopPlayback()
+    }
+}
+
+// MARK: - The actions menu
+
+extension LibraryWindow: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let recording = selected else {
+            menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
+                .isEnabled = false
+            return
+        }
+
+        add(menu, "Export…", #selector(exportSelected), "square.and.arrow.down")
+        menu.addItem(.separator())
+        add(menu, recording.hasTranscript ? "Transcribe Again" : "Transcribe",
+            #selector(retranscribeSelected), "arrow.triangle.2.circlepath")
+        add(menu, "Rename…", #selector(renameSelected), "pencil")
+        menu.addItem(.separator())
+        add(menu, "Show in Finder", #selector(revealSelected), "folder")
+        menu.addItem(.separator())
+
+        let delete = add(menu, "Delete", #selector(deleteSelected), "trash")
+        // Red, like Anarlog's. The only irreversible item in the menu should
+        // not look like the others.
+        delete.attributedTitle = NSAttributedString(
+            string: "Delete", attributes: [.foregroundColor: NSColor.systemRed])
     }
 
-    @objc private func revealSelected() {
+    @discardableResult
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector,
+                     _ symbol: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        menu.addItem(item)
+        return item
+    }
+
+    @objc func renameSelected() {
+        // Renaming happens in the detail pane's title field, which is where
+        // the name is. Focusing it is less surprising than a dialog asking for
+        // a string with no context around it.
+        detail.beginEditingTitle()
+    }
+
+    @objc func revealSelected() {
         guard let recording = selected else { return }
         NSWorkspace.shared.selectFile(recording.metadataURL.path,
                                       inFileViewerRootedAtPath: recording.folder.path)
     }
 
-    @objc private func retranscribeSelected() {
+    @objc func retranscribeSelected() {
         guard let recording = selected else { return }
         Queue.shared.enqueue(recording.id)
+        reload()
     }
 
-    @objc private func deleteSelected() {
+    @objc func exportSelected() {
+        guard let recording = selected else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = recording.metadata.title
+            .replacingOccurrences(of: "/", with: "-") + ".md"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var out = "# \(recording.metadata.title)\n\n\(recording.when)\n\n"
+        for turn in recording.storedTurns {
+            out += "**\(SpeakerName.display(turn.speaker))** · "
+                + "\(TranscriptFormat.stamp(turn.start))\n\n\(turn.text)\n\n"
+        }
+        try? out.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    @objc func deleteSelected() {
         guard let recording = selected else { return }
         let alert = NSAlert()
         alert.messageText = "Delete \(recording.metadata.title)?"
@@ -261,115 +263,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate {
     }
 }
 
-// MARK: - Table
+// MARK: - Speaker naming
 
-extension LibraryWindow: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
-
-    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?,
-                   row: Int) -> NSView? {
-        let recording = shown[row]
-        let cell = RecordingCell()
-        cell.configure(recording)
-        return cell
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        refreshDetail()
-    }
-}
-
-/// One row: title, when, how long, and what is happening to it.
-@MainActor
-final class RecordingCell: NSView {
-    private let title = NSTextField(labelWithString: "")
-    private let subtitle = NSTextField(labelWithString: "")
-    private let state = NSTextField(labelWithString: "")
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        title.font = .systemFont(ofSize: 13, weight: .medium)
-        title.lineBreakMode = .byTruncatingTail
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
-        state.font = .systemFont(ofSize: 11)
-        state.textColor = .tertiaryLabelColor
-        state.alignment = .right
-
-        for v in [title, subtitle, state] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(v)
-        }
-        NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            state.topAnchor.constraint(equalTo: subtitle.topAnchor),
-            state.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            state.leadingAnchor.constraint(greaterThanOrEqualTo: subtitle.trailingAnchor,
-                                           constant: 6),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(_ recording: Recording) {
-        title.stringValue = recording.metadata.title
-        subtitle.stringValue = [recording.when, recording.lengthText]
-            .filter { !$0.isEmpty }.joined(separator: " · ")
-        state.stringValue = recording.stateText
-    }
-}
-
-extension Recording {
-    var when: String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let date = parser.date(from: metadata.recorded_at) else { return "" }
-        let f = DateFormatter()
-        f.doesRelativeDateFormatting = true
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f.string(from: date)
-    }
-
-    var lengthText: String {
-        let t = Int(metadata.duration)
-        guard t > 0 else { return "" }
-        return t >= 3600 ? String(format: "%dh %02dm", t / 3600, (t % 3600) / 60)
-                         : String(format: "%d:%02d", t / 60, t % 60)
-    }
-
-    /// What the row says on the right.
-    ///
-    /// Empty when there is nothing to say. A row that reads "Done" on every
-    /// finished recording is a column of noise; the states worth a word are the
-    /// ones that mean something is happening or something is owed.
-    @MainActor
-    var stateText: String {
-        if Queue.shared.running == id { return Queue.shared.stage ?? "transcribing" }
-        if Queue.shared.isQueued(id) { return "waiting" }
-        switch metadata.stateValue {
-        case .pending:        return hasTranscript ? "" : "not transcribed"
-        case .transcribing:   return "transcribing"
-        case .needsLabelling: return "needs labelling"
-        case .failed:         return "failed"
-        case .done, .unconfirmed: return ""
-        }
-    }
-
-    /// The transcript as one string, for searching.
-    var transcriptText: String {
-        guard let data = try? Data(contentsOf: turnsURL),
-              let turns = try? JSONDecoder().decode([Turn].self, from: data)
-        else { return "" }
-        return turns.map(\.text).joined(separator: " ")
-    }
-
-    var storedTranscript: StoredTranscript? {
-        guard let data = try? Data(contentsOf: transcriptURL) else { return nil }
-        return try? JSONDecoder().decode(StoredTranscript.self, from: data)
+/// How a speaker is written in the interface.
+///
+/// The pipeline stores `A`, `B`, `C`, which are stable and short and exactly
+/// right on disk. On screen a bare letter reads as a code the reader is
+/// expected to decode, so it becomes "Speaker A". That also removes any need
+/// for a "needs labelling" state in the list: an unnamed speaker is legible on
+/// its own, and a filter tab for it was solving a problem the wording caused.
+enum SpeakerName {
+    static func display(_ label: String) -> String {
+        VoiceBank.isPlaceholder(label) ? "Speaker \(label)" : label
     }
 }

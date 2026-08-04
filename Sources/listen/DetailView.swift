@@ -9,10 +9,14 @@ import AppKit
 /// makes this readable while listening rather than instead of listening.
 @MainActor
 final class DetailView: NSView {
-    private var recording: Recording?
+    fileprivate var recording: Recording?
     private var turns: [Turn] = []
 
-    private let titleLabel = NSTextField(labelWithString: "")
+    /// Editable in place. A recording's name is the one piece of text in this
+    /// window that belongs to the user rather than the pipeline, and putting it
+    /// behind a dialog makes renaming feel like a settings change rather than
+    /// typing.
+    let titleLabel = NSTextField(string: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let playButton = NSButton()
     private let slider = NSSlider()
@@ -20,6 +24,9 @@ final class DetailView: NSView {
     private let stack = NSStackView()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "")
+
+    /// Fires when this pane changes something the list also shows.
+    var onChanged: (() -> Void)?
 
     private var player: AVAudioPlayer?
     private var tick: Timer?
@@ -37,6 +44,12 @@ final class DetailView: NSView {
 
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
+        // Looks like a heading until it has focus, then behaves like a field.
+        titleLabel.isBordered = false
+        titleLabel.drawsBackground = false
+        titleLabel.focusRingType = .none
+        titleLabel.delegate = self
+        titleLabel.cell?.usesSingleLineMode = true
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
 
@@ -75,7 +88,6 @@ final class DetailView: NSView {
         }
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 420),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 38),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
@@ -240,7 +252,7 @@ final class DetailView: NSView {
         }
     }
 
-    private func stopPlayback() {
+    func stopPlayback() {
         tick?.invalidate()
         tick = nil
         player?.stop()
@@ -288,7 +300,9 @@ final class TurnView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 8
 
-        speakerButton.title = turn.speaker
+        // "Speaker A" rather than a bare "A". A letter on its own reads as a
+        // code the reader is meant to decode.
+        speakerButton.title = SpeakerName.display(turn.speaker)
         speakerButton.bezelStyle = .inline
         speakerButton.font = .systemFont(ofSize: 12, weight: .semibold)
         speakerButton.target = self
@@ -329,11 +343,66 @@ final class TurnView: NSView {
     @objc private func bodyTapped() { onSeek?() }
 }
 
-extension Recording {
-    var storedTurns: [Turn] {
-        guard let data = try? Data(contentsOf: turnsURL),
-              let turns = try? JSONDecoder().decode([Turn].self, from: data)
-        else { return [] }
-        return turns
+// MARK: - Renaming
+
+extension DetailView: NSTextFieldDelegate {
+    /// Commit the title when the field loses focus or Return is pressed.
+    ///
+    /// `metadata.json` already carried a `title` field in the Python version,
+    /// so the key is unchanged and the existing tools keep reading it.
+    func controlTextDidEndEditing(_ note: Notification) {
+        guard var current = recording else { return }
+        let name = titleLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            // An empty title would leave a row with nothing to click. Put the
+            // old one back rather than inventing a placeholder.
+            titleLabel.stringValue = current.metadata.title
+            return
+        }
+        guard name != current.metadata.title else { return }
+        current.metadata.title = name
+        try? current.save()
+        recording = current
+        onChanged?()
     }
+
+    func beginEditingTitle() {
+        window?.makeFirstResponder(titleLabel)
+        titleLabel.currentEditor()?.selectAll(nil)
+    }
+}
+
+/// Hosts `DetailView` so it can be a split view item.
+@MainActor
+final class DetailViewController: NSViewController {
+    private let detail = DetailView()
+
+    var onChanged: (() -> Void)? {
+        get { detail.onChanged }
+        set { detail.onChanged = newValue }
+    }
+
+    override func loadView() {
+        let container = NSView()
+        container.addSubview(detail)
+        NSLayoutConstraint.activate([
+            detail.topAnchor.constraint(equalTo: container.topAnchor),
+            detail.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            detail.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        view = container
+    }
+
+    func show(_ recording: Recording?) {
+        loadViewIfNeeded()
+        detail.show(recording)
+    }
+
+    func beginEditingTitle() {
+        loadViewIfNeeded()
+        detail.beginEditingTitle()
+    }
+
+    func stopPlayback() { detail.stopPlayback() }
 }

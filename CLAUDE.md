@@ -186,6 +186,31 @@ seconds rather than the meeting.
 Format tag 3, not 1. These are floats, and a reader told they are integers
 decodes noise at full scale.
 
+### Only the system track is diarized
+
+The microphone is the user by definition and the system output is everyone
+else, so clustering is run over the system track only and the mic track is
+labelled `Me` in one step. Running the diarizer over both would spend Neural
+Engine time rediscovering something already known, and would occasionally split
+the user into two people, which is the single most common diarization error.
+
+`Pipeline.isSilent` skips a track with no signal. A meeting where nobody
+touched the microphone leaves an hour of room noise, and Parakeet over room
+noise produces confident invented sentences attributed to the user.
+
+### The Whisper-era cleanup has not fired on Parakeet yet
+
+`Merge.clean` is ported from `transcribe_call.py`, where it exists because
+Whisper falls into repetition loops. Parakeet is claimed not to, so the port
+counts rather than assumes: every run reports `cleanup fired: never` or the
+rules that fired, and `StoredTranscript.cleanup` stores the counts.
+
+So far it has fired **never**, on synthetic two-speaker audio and on 13 and 67
+minute files. That is not yet enough evidence to delete it, because none of
+that is real meeting audio with crosstalk and silence. Keep watching the
+counts; when there is a real corpus behind the number, either delete the rules
+and say so in the commit, or record why they stayed.
+
 ### The cache root is not always `~/.cache/huggingface`
 
 Inherited wholesale from Speak, and the reason models are shared between the

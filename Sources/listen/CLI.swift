@@ -102,10 +102,13 @@ enum CLI {
         var path: String?
         var format = "md"
         var choice = Settings.model
+        var diarize = false
 
         var i = 0
         while i < args.count {
             switch args[i] {
+            case "--diarize":
+                diarize = true
             case "--format":
                 i += 1
                 guard i < args.count else { fail("--format needs a value: md, json or txt") }
@@ -130,9 +133,21 @@ enum CLI {
         }
 
         guard let path else { fail("transcribe needs a file. Try `listen help`.") }
+
+        // A recording id or folder runs the whole two-track pipeline instead:
+        // diarize the system track, label the mic track as the user, merge. A
+        // bare audio file cannot take that path because it has no track split.
+        if let recording = Recording.find(path) ?? Self.recordingFolder(path) {
+            await transcribeRecording(recording, format: format, choice: choice)
+        }
+
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            fail("no such file: \(url.path)")
+            fail("no such file or recording: \(url.path)")
+        }
+
+        if diarize {
+            await transcribeDiarized(url, format: format, choice: choice)
         }
 
         let asr = ASR()
@@ -168,6 +183,87 @@ enum CLI {
             exit(0)
         } catch {
             fail("\(error.localizedDescription)")
+        }
+    }
+
+    /// A path that is a recording folder, so `transcribe ./staging/<id>` works.
+    private static func recordingFolder(_ path: String) -> Recording? {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return Recording.load(url)
+    }
+
+    /// The two-track pipeline over a stored recording.
+    private static func transcribeRecording(_ recording: Recording, format: String,
+                                            choice: ModelChoice) async -> Never {
+        Settings.model = choice
+        do {
+            let t0 = Date()
+            let transcript = try await Pipeline().run(recording) { log($0) }
+            log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
+                       transcript.duration))
+            log(transcript.cleanup.isEmpty ? "cleanup fired: never"
+                                           : "cleanup fired: \(transcript.cleanup)")
+            log("wrote transcript.json and turns.json")
+
+            switch format {
+            case "json":
+                let enc = JSONEncoder()
+                enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                print(String(data: try enc.encode(transcript), encoding: .utf8) ?? "{}")
+            case "txt":
+                for t in Merge.turns(from: transcript.segments) {
+                    print("[\(TranscriptFormat.stamp(t.start))] \(t.speaker): \(t.text)")
+                }
+            default:
+                for t in Merge.turns(from: transcript.segments) {
+                    print("**\(t.speaker)** · \(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
+                }
+            }
+            exit(0)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// `listen transcribe <file> --diarize`: the whole pipeline over one file.
+    private static func transcribeDiarized(_ url: URL, format: String,
+                                           choice: ModelChoice) async -> Never {
+        Settings.model = choice
+        let pipeline = Pipeline()
+        do {
+            let t0 = Date()
+            let transcript = try await pipeline.runFile(url) { log($0) }
+            log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
+                       transcript.duration))
+            if !transcript.wordLevel {
+                log("segment-level speaker assignment: no word timings available."
+                    + " See CLAUDE.md, word timings.")
+            }
+            // Report whether the Whisper-era cleanup did anything, so the
+            // question of deleting it is answered with numbers.
+            log(transcript.cleanup.isEmpty ? "cleanup fired: never"
+                                           : "cleanup fired: \(transcript.cleanup)")
+
+            switch format {
+            case "json":
+                let enc = JSONEncoder()
+                enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                print(String(data: try enc.encode(transcript), encoding: .utf8) ?? "{}")
+            case "txt":
+                for t in Merge.turns(from: transcript.segments) {
+                    print("[\(TranscriptFormat.stamp(t.start))] \(t.speaker): \(t.text)")
+                }
+            default:
+                for t in Merge.turns(from: transcript.segments) {
+                    print("**\(t.speaker)** · \(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
+                }
+            }
+            exit(0)
+        } catch {
+            fail(error.localizedDescription)
         }
     }
 
@@ -238,6 +334,16 @@ enum CLI {
         // fell straight through to exit. The symptom was a recording that
         // stopped after 80 milliseconds with a system track containing nothing
         // but a WAV header, which looks exactly like a tap that does not work.
+        pumpForever()
+    }
+
+    /// Blocks the main thread, servicing the run loop.
+    ///
+    /// Deliberately not async. `RunLoop.current` and `run(until:)` are both
+    /// unavailable from an async context and are a hard error under Swift 6,
+    /// so the loop lives in a synchronous function that the async one calls
+    /// and never returns from.
+    private static func pumpForever() -> Never {
         while true {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }

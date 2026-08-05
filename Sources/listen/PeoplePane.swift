@@ -367,13 +367,7 @@ final class InitialsDisc: NSView {
         return parts.isEmpty ? "?" : String(parts).uppercased()
     }
 
-    static func colour(for label: String) -> NSColor {
-        let palette: [NSColor] = [.systemBlue, .systemPurple, .systemTeal, .systemIndigo,
-                                  .systemPink, .systemBrown, .systemGreen, .systemOrange]
-        var hash = 5381
-        for byte in label.utf8 { hash = (hash &* 33) &+ Int(byte) }
-        return palette[abs(hash) % palette.count]
-    }
+    static func colour(for label: String) -> NSColor { SpeakerColour.colour(for: label) }
 }
 
 // ---------------------------------------------------------------------------

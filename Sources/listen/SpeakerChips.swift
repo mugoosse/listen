@@ -97,10 +97,10 @@ final class SpeakerChips: NSView {
 
         let overflow = speakers.dropFirst(Self.maxChips)
         guard !overflow.isEmpty else { return }
-        let more = NSButton(title: "+\(overflow.count)", target: self,
-                            action: #selector(showOverflow))
-        more.bezelStyle = .inline
-        more.font = .systemFont(ofSize: 12, weight: .semibold)
+        let more = SpeakerPill()
+        more.target = self
+        more.action = #selector(showOverflow)
+        more.showPlain("+\(overflow.count)")
         more.toolTip = overflow.map { SpeakerName.display($0.label) }
             .joined(separator: ", ")
         let menu = NSMenu()
@@ -118,11 +118,13 @@ final class SpeakerChips: NSView {
     private func chip(_ label: String, share: Double?, seconds: Double) -> NSButton {
         let name = SpeakerName.display(label)
         let percent = share.map { " · \(max(1, Int(($0 * 100).rounded())))%" } ?? ""
-        let button = NSButton(title: name + percent, target: self,
-                              action: #selector(chipClicked(_:)))
-        button.bezelStyle = .inline
-        button.font = .systemFont(ofSize: 12, weight: .semibold)
-        button.cell?.lineBreakMode = .byTruncatingTail
+        let button = SpeakerPill()
+        button.target = self
+        button.action = #selector(chipClicked(_:))
+        // The label decides the colour and the title decides the words. They
+        // differ here: a chip carries a share, and "Me · 61%" is not somebody's
+        // name to look a colour up under.
+        button.show(label, title: name + percent)
         button.identifier = NSUserInterfaceItemIdentifier(label)
 
         let spoken = Recording.length(seconds)

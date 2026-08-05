@@ -858,7 +858,7 @@ final class TranscriptFieldEditor: NSTextView {
 /// One speaker turn in the transcript.
 @MainActor
 final class TurnView: NSView {
-    private let speakerButton = NSButton()
+    private let speakerButton = SpeakerPill(style: .name)
     private let timeLabel = NSTextField(labelWithString: "")
     private let bodyLabel = TranscriptBody(wrappingLabelWithString: "")
 
@@ -950,10 +950,10 @@ final class TurnView: NSView {
         layer?.cornerRadius = 8
 
         // "Speaker A" rather than a bare "A". A letter on its own reads as a
-        // code the reader is meant to decode.
-        speakerButton.title = SpeakerName.display(turn.speaker)
-        speakerButton.bezelStyle = .inline
-        speakerButton.font = .systemFont(ofSize: 12, weight: .semibold)
+        // code the reader is meant to decode. `show` also puts the person's own
+        // colour on the pill, which is what makes a page of transcript legible
+        // as a conversation before a word of it is read.
+        speakerButton.show(turn.speaker)
         speakerButton.target = self
         speakerButton.action = #selector(speakerTapped)
         speakerButton.toolTip = "Name this speaker"
@@ -992,7 +992,10 @@ final class TurnView: NSView {
         }
         NSLayoutConstraint.activate([
             speakerButton.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            speakerButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            // 8 and not 6: the pill's own padding used to hold the name clear of
+            // this edge, and without it the name has to line up with the
+            // paragraph under it or the turn reads as two indents.
+            speakerButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             timeLabel.centerYAnchor.constraint(equalTo: speakerButton.centerYAnchor),
             timeLabel.leadingAnchor.constraint(equalTo: speakerButton.trailingAnchor,
                                                constant: 8),

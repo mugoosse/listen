@@ -578,11 +578,7 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
 
     /// Deterministic from the name, so somebody is the same colour everywhere.
     private static func colour(for label: String) -> NSColor {
-        let palette: [NSColor] = [.systemBlue, .systemPurple, .systemTeal, .systemIndigo,
-                                  .systemPink, .systemBrown, .systemGreen, .systemOrange]
-        var hash = 5381
-        for byte in label.utf8 { hash = (hash &* 33) &+ Int(byte) }
-        return palette[abs(hash) % palette.count]
+        SpeakerColour.colour(for: label)
     }
 
     private static func when(_ date: Date) -> String {

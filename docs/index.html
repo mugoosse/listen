@@ -191,7 +191,11 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 <section id="install">
   <h2>Other ways to install</h2>
   <p>Prefer Homebrew?</p>
-  <pre><code>brew install --cask mugoosse/tap/listen</code></pre>
+  <pre><code>brew trust --cask mugoosse/tap/listen
+brew install --cask mugoosse/tap/listen</code></pre>
+  <p>The first line is Homebrew 6.0 and later refusing to load a cask from a
+  tap that is not one of its own until you say so. Install without it and
+  Homebrew stops and tells you the same thing.</p>
   <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
   below that Listen records your microphone only.</p>
   <p>The speech model is about 2.5 GB and downloads on first run, after you

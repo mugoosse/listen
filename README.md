@@ -57,8 +57,14 @@ Open the downloaded file and drag **Listen** to Applications.
 Prefer Homebrew?
 
 ```sh
+brew trust --cask mugoosse/tap/listen
 brew install --cask mugoosse/tap/listen
 ```
+
+The first line is Homebrew 6.0 and later refusing to load a cask from a tap
+that is not one of its own until you say so, which is the right default and
+worth knowing about rather than meeting as an error. Install without it and
+Homebrew stops and tells you the same thing.
 
 The speech model is about 2.5 GB and downloads on first run, after you press
 the button that says so. **If you already use

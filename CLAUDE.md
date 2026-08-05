@@ -588,6 +588,46 @@ Since the title is applied without asking, wrong is the expensive direction.
 Anchored on the start because overlap is not evidence of anything on a Mac that
 is switched on all day.
 
+#### Joining early is not in that table, and it is what a link invites
+
+Every offset in the measurement above is between -9 and +0 minutes, so the
+sample contains nobody who opened the invitation's Meet link well before the
+meeting. That is not because it is rare. A real recording: link opened at 17:19,
+detection started capture there, the calendar said 17:45. Twenty-six minutes, so
+the window missed it by sixteen and the meeting stayed "Untitled" with no guest
+list and therefore no speaker suggestions either.
+
+`MeetingCalendar.candidates` now has a second rule: a meeting that **began while
+the recording was running**. Three things about it are load-bearing:
+
+1. **It is asymmetric, and that is the whole safety argument.** "The recording
+   overlaps the event" would also match a recording that started inside somebody's
+   hour-long focus block, which is exactly the wrong match the 30m row bought.
+   This rule claims something much narrower: capture was already running at the
+   minute the invitation said the meeting would start.
+2. **It can only add a match, never change one.** Anything it finds is by
+   definition further than `window` from the recording's start, so it sorts
+   behind every first-rule candidate and the winner of a non-empty first rule is
+   untouched. The fourteen above are still those fourteen.
+3. **Somebody else has to be on the invitation.** It reaches as far as the
+   recording is long, which on an 80 minute meeting is well past the 30 minutes
+   already measured as too wide, so it wants a second piece of evidence that this
+   is a meeting rather than a block. Measured over the 42 recordings now in the
+   library: with and without that check the rule finds the **same one match**, so
+   today it costs nothing and it bounds the looser rule.
+
+Measured after: 15/42 matched, the fourteenth-plus-one being the recording this
+was written for. `listen calendar match` and `backfill` both print
+`[began while recording]` on anything the second rule found, because a match
+26 minutes out is otherwise impossible to reconcile with a documented window of
+ten.
+
+`Capture.stop()` writes `metadata.duration` **before** it asks the calendar
+again. The recording's span is the whole of the second rule and it is zero until
+that line runs, so attaching first judges a 33 minute recording as though it had
+lasted an instant. The attempt at `start()` still has a zero span, deliberately:
+capture has no length yet, so only the window rule applies there.
+
 #### The title is applied silently, and two guards are what make that safe
 
 `MeetingCalendar.attach` writes the title only when `Recording.isUntitled`, and
@@ -874,6 +914,64 @@ Settings and People keep the stop control unconditionally while capture runs, an
 so does the menu bar item. Those are now the only two ways to stop a meeting you
 are not looking at, which is the trade this makes: one control on the screen that
 is about that recording, rather than one on every screen.
+
+### The floating panel is sized from its strings, and one of them changes
+
+`RecordingIndicator.layout` measures every frame from the text it is drawing,
+which is the right call for a label that carries an app name. The clock is the
+exception: it is laid out once by `show`, when it reads "0:00", and then
+`setElapsed` rewrites it twice a second without anyone re-measuring. From ten
+minutes in, the label is a character too narrow and the panel spends the rest of
+the meeting reading "33:1". A cut-off clock is worse than no clock, because it
+still looks like a time.
+
+`setElapsed` therefore re-lays the panel out when the string's **length**
+changes, which for `monospacedDigitSystemFont` is exactly when its width does,
+and re-positions it because the panel is pinned to the right edge of the screen.
+Once per digit, not twice a second.
+
+It took ten minutes of a real meeting to see, which is the actual bug:
+`LISTEN_PANEL=recording` could only ever show "0:00", because a preview launch is
+recording nothing. `LISTEN_PANEL=recording:1994` now seeds the clock, and
+`RecordingIndicator.previewElapsed` is what the tick reads instead of `Capture`.
+Same argument as the affordance itself: a state that cannot be put on screen on
+demand is a state nobody checks.
+
+**A preview launch also stops before it touches the library.** It used to adopt
+staged recordings, sweep staging and resume the queue like any other launch, so
+looking at a panel beside the running app meant two processes transcribing the
+same audio. `MainMenu.install()` moved above the check so a preview still has a
+Cmd-Q; everything after it is skipped.
+
+### Setting `editing = false` is not what closes the person editor
+
+`PersonPane.render` is, and for a long time the only thing that called it after
+a save was the roster re-selecting the same person. A **rename** is exactly the
+case where that cannot happen: `PeopleNav.reload` and the window both re-select
+by label, and the label they are holding has just stopped existing. Nothing
+re-selected, nothing re-rendered, and the edit fields sat there with Cancel and
+Save still under them. Rename looked like it had done nothing, with the
+transcripts already rewritten behind it.
+
+Two halves to the fix, and both are needed:
+
+1. **`saveEdits` calls `render()` itself.** The pane closes its own editor
+   rather than depending on somebody else re-showing it.
+2. **`onLandOn(label)` replaces `onMerged`.** A rename, a merge and an unnaming
+   all leave the roster selecting a name that is gone, and all three now say
+   where the person went. `PeopleNav.select` returns `false` when the label is
+   not in the roster, so the window can show the empty page rather than leaving
+   the last one frozen. It used to return silently, which is the same class of
+   failure one layer down.
+
+**A rename that rewrites nothing is refused rather than followed.** Landing on
+a name nobody has empties the pane, and from the outside that reads as the app
+having deselected the person, not as a rename that failed. So `saveEdits` stops
+and says so when `People.rename` changes no recordings and there were
+recordings to change. Found by driving the real UI against a hand-written
+`transcript.json` that was missing `wordLevel`: `StoredTranscript` would not
+decode, `hasTranscript` was true, the rename silently rewrote nothing, and the
+person vanished from the page. Both the CLI and the window said nothing.
 
 ### A recording nobody named is called "Untitled"
 

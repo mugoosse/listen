@@ -99,15 +99,64 @@ enum MeetingCalendar {
     /// applied without asking, a wrong match is the expensive direction.
     static let window: TimeInterval = 10 * 60
 
+    /// A meeting that began while the recording was already running.
+    ///
+    /// The second rule, and deliberately **asymmetric**. "The recording
+    /// overlaps the event" would also cover a recording that started in the
+    /// middle of somebody's hour-long focus block, which is exactly the wrong
+    /// match the thirty minute row above bought: a WhatsApp call landing inside
+    /// a solo block called "Review the Q3 launch Reel". This rule says
+    /// something much narrower and much stronger, that capture was already
+    /// running at the minute the invitation said the meeting would begin.
+    ///
+    /// It exists because of a real recording: a Google Meet link opened 26
+    /// minutes early, capture started by detection at 17:19, and the meeting
+    /// beginning at 17:45 while it ran. Every offset in the measured table was
+    /// between -9 and +0 minutes, so joining early was simply not in the
+    /// sample; it is not rare, it is what a link in an invitation invites.
+    ///
+    /// Somebody else has to be on the invitation. This rule reaches as far as
+    /// the recording is long, which on an 80 minute meeting is far past the
+    /// thirty minutes already measured as too wide, so it asks for a second
+    /// piece of evidence that this is a meeting with people in it rather than a
+    /// block somebody put in their own calendar. That is the same standard
+    /// `people` is held to everywhere else here.
+    ///
+    /// Measured over the 42 recordings now in the library: with and without
+    /// this check the rule finds the same one match, so today it costs nothing.
+    /// It stays because the wrong match the thirty minute row bought was
+    /// exactly a solo block, and a rule that reaches further should not be
+    /// looser as well.
+    private static func beganDuring(_ event: CalendarEvent,
+                                    _ start: Date, _ end: Date) -> Bool {
+        guard event.start >= start, event.start <= end else { return false }
+        return event.people.contains { !$0.is_me }
+    }
+
     /// Every meeting that could be the one this recording is of.
     ///
-    /// Anchored on the **start**, not on overlap. A recording that overlaps an
-    /// event is not evidence of anything on a Mac that is on all day; a
-    /// recording that began when a meeting began is.
-    static func candidates(for start: Date) -> [CalendarEvent] {
-        events(from: start.addingTimeInterval(-window),
-               to: start.addingTimeInterval(window))
-            .filter { $0.couldBeAMeeting && abs($0.start.timeIntervalSince(start)) <= window }
+    /// Two rules: a meeting that **started when the recording did**, within
+    /// `window` either way, and a meeting that **started while it ran**.
+    ///
+    /// Anchored on starts, never on overlap. A recording that merely overlaps
+    /// an event is not evidence of anything on a Mac that is on all day.
+    ///
+    /// The second rule can only ever *add* a match, never change one. Anything
+    /// it finds is by definition more than `window` from the recording's start,
+    /// so it sorts behind everything the first rule found and the winner of a
+    /// non-empty first rule is untouched. The fourteen matches in the table
+    /// above are therefore still those fourteen.
+    ///
+    /// `duration` is zero for a recording that is still running, which switches
+    /// the second rule off: capture has no span yet. That is why `Capture` asks
+    /// again when it stops.
+    static func candidates(for start: Date, lasting duration: TimeInterval = 0) -> [CalendarEvent] {
+        let end = start.addingTimeInterval(max(0, duration))
+        return events(from: start.addingTimeInterval(-window),
+                      to: max(end, start.addingTimeInterval(window)))
+            .filter(\.couldBeAMeeting)
+            .filter { abs($0.start.timeIntervalSince(start)) <= window
+                      || beganDuring($0, start, end) }
             .sorted {
                 // Nearest start wins. Attendees only break a tie: the table
                 // above was measured with nearest-start alone, and preferring
@@ -120,12 +169,17 @@ enum MeetingCalendar {
             }
     }
 
-    static func match(for start: Date) -> CalendarEvent? { candidates(for: start).first }
+    static func match(for start: Date, lasting duration: TimeInterval = 0) -> CalendarEvent? {
+        candidates(for: start, lasting: duration).first
+    }
 
     /// The same, for a recording. Nil when it has no usable start time.
+    ///
+    /// The duration is the one on disk, which is zero while capture is running
+    /// and the real length afterwards.
     static func match(for recording: Recording) -> CalendarEvent? {
         guard let date = recording.date else { return nil }
-        return match(for: date)
+        return match(for: date, lasting: recording.metadata.duration)
     }
 
     // MARK: - Attaching a meeting to a recording

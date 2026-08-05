@@ -218,14 +218,21 @@ final class PeopleNav: NSViewController {
     }
 
     /// Select somebody by their transcript label, for arriving from a chip.
-    func select(_ label: String) {
+    ///
+    /// False when nobody in the roster has that label, which is not an edge
+    /// case: it is what a rename, a merge and an unnaming all leave behind.
+    /// Returning silently is what left the page showing a person who no longer
+    /// existed, so the caller has to decide what to do instead.
+    @discardableResult
+    func select(_ label: String) -> Bool {
         loadViewIfNeeded()
         if people.isEmpty { reload() }
-        guard let row = people.firstIndex(where: { $0.label == label }) else { return }
+        guard let row = people.firstIndex(where: { $0.label == label }) else { return false }
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
         selected = people[row]
         onSelect?(people[row])
+        return true
     }
 
     func focusSearch() { view.window?.makeFirstResponder(searchField) }
@@ -401,10 +408,15 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     private var scroll: NSScrollView!
     private var content: NSStackView!
 
+    /// The card changed and the person is still who they were, so the roster
+    /// row beside it is stale and its selection is not.
     var onChanged: (() -> Void)?
-    /// Somebody was folded into `label`, which is who the roster should land on
-    /// afterwards: the person being looked at no longer exists.
-    var onMerged: ((String) -> Void)?
+    /// The person being looked at no longer exists under the name the roster
+    /// has selected: they were renamed to `label`, merged into it, or unnamed
+    /// and are nobody, which is the empty string. Whichever, the roster has to
+    /// land on them, because re-selecting the label it holds cannot work and
+    /// fails by leaving the page exactly as it was.
+    var onLandOn: ((String) -> Void)?
 
     private static let maxWidth: CGFloat = 620
 
@@ -751,14 +763,40 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
                 guard confirm(renaming: person, to: typed) else { return }
                 let changed = People.rename(person.label, to: typed)
                 log("renamed \(person.label) to \(typed) in \(changed.count) recording(s)")
+                // Nothing rewritten where there was something to rewrite means
+                // the rename did not happen: a transcript that would not
+                // decode, or one that could not be written. Carrying on files
+                // the card under a name nobody has and sends the roster to
+                // somebody who does not exist, which empties the page. From
+                // the outside that reads as the app having deselected the
+                // person rather than as a rename that failed.
+                if changed.isEmpty, !person.recordings.isEmpty {
+                    warn("\(person.display) could not be renamed, so nothing was "
+                         + "changed. Their transcripts are as they were.")
+                    return
+                }
                 label = typed
             }
         }
         ContactBook.set(Contact(name: person.isYou ? SpeakerName.display(SpeakerName.you)
                                                    : label,
                                 emails: addresses, notes: text.isEmpty ? nil : text))
+
+        // Leave edit mode here rather than trusting the reload to do it.
+        // Setting `editing` is not what closes the editor: `render` is, and the
+        // only thing that used to call it was the roster re-selecting this
+        // person. A rename is exactly the case where that cannot happen,
+        // because the label the roster is holding has stopped existing, so
+        // nothing re-selected and nothing re-rendered. Rename looked like it
+        // had done nothing, with the transcripts already rewritten behind it.
         editing = false
-        onChanged?()
+        render()
+
+        // A rename means the person on screen no longer exists under the name
+        // the roster has selected, so it has to be told where they went. An
+        // edit to the addresses or the notes leaves the label alone, and there
+        // the roster keeps its selection and only the row's summary is stale.
+        if renaming { onLandOn?(label) } else { onChanged?() }
     }
 
     /// Fold this person into somebody else.
@@ -793,8 +831,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         let target = others[popup.indexOfSelectedItem]
         let changed = People.merge(person.label, into: target.label)
         log("merged \(person.label) into \(target.label) in \(changed.count) recording(s)")
-        onChanged?()
-        onMerged?(target.label)
+        onLandOn?(target.label)
     }
 
     /// Take the name off, so the speaker can be named again.
@@ -833,9 +870,9 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         let changed = People.unname(person.label)
         log("unnamed \(person.label) in \(changed.count) recording(s)")
         editing = false
-        onChanged?()
-        // The person on screen no longer exists under that name.
-        onMerged?("")
+        // The person on screen no longer exists under that name, and this time
+        // they are nobody: the empty string lands the roster on no page at all.
+        onLandOn?("")
     }
 
     private func warn(_ message: String) {

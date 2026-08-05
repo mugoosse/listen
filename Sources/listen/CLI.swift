@@ -265,16 +265,22 @@ enum CLI {
         }
 
         print("\(recording.metadata.title)")
-        print("started \(recording.when)")
+        // The length, because it is half the question: the second rule matches
+        // a meeting that began before this recording ended, so a report that
+        // did not say how long it ran would not explain its own answer.
+        print("started \(recording.when)"
+              + (recording.lengthText.isEmpty ? "" : " · ran \(recording.lengthText)"))
         if let attached = recording.metadata.calendar_event_id {
             print("already attached to event \(attached)")
         }
         print("")
 
-        let candidates = MeetingCalendar.candidates(for: start)
+        let candidates = MeetingCalendar.candidates(for: start,
+                                                    lasting: recording.metadata.duration)
         guard !candidates.isEmpty else {
             let minutes = Int(MeetingCalendar.window / 60)
-            print("no event starts within \(minutes) minutes of this recording.")
+            print("no event starts within \(minutes) minutes of this recording, "
+                  + "and none started while it was running.")
             // The near misses, because "nothing matched" and "something matched
             // and lost" look identical from the outside and have different fixes.
             let near = MeetingCalendar.events(from: start.addingTimeInterval(-3600),
@@ -288,7 +294,13 @@ enum CLI {
         }
 
         for (i, e) in candidates.enumerated() {
-            print("\(i == 0 ? "→" : " ") \(offset(of: e, from: start))  \(e.title)")
+            // Which rule found it. The two are not equally strong and the
+            // second one reaches much further, so a match nobody expected
+            // should say which one it came from rather than leaving the offset
+            // to be reconciled with a window it plainly exceeds.
+            let during = abs(e.start.timeIntervalSince(start)) > MeetingCalendar.window
+                ? "  [began while recording]" : ""
+            print("\(i == 0 ? "→" : " ") \(offset(of: e, from: start))  \(e.title)\(during)")
             print("    \(e.summary)")
             if let link = e.link { print("    \(link.absoluteString)") }
             for p in e.people {
@@ -330,16 +342,22 @@ enum CLI {
 
         let library = Recording.all()
         var matched = 0, renamed = 0, keptOwnName = 0, alreadyAttached = 0
-        var derived = 0, fromCalendar = 0
+        var derived = 0, fromCalendar = 0, began = 0
 
         for recording in library.sorted(by: { $0.id < $1.id }) {
             if !refresh, recording.metadata.calendar_event_id != nil {
                 alreadyAttached += 1
                 continue
             }
-            guard let start = recording.date,
-                  let event = MeetingCalendar.match(for: start) else { continue }
+            guard let event = MeetingCalendar.match(for: recording) else { continue }
             matched += 1
+            // Counted separately, because the two rules are not equally strong
+            // and this is where the weaker one is answerable for itself over a
+            // whole library rather than one recording at a time.
+            let during = recording.date.map {
+                abs(event.start.timeIntervalSince($0)) > MeetingCalendar.window
+            } ?? false
+            if during { began += 1 }
 
             // Count where the attendee names would come from. This is the one
             // number in the feature that is not measured yet: how often an
@@ -348,22 +366,28 @@ enum CLI {
                 if p.name != nil { fromCalendar += 1 } else if p.bestName != nil { derived += 1 }
             }
 
+            let how = during ? "  [began while recording]" : ""
             if recording.isUntitled {
                 renamed += 1
-                print(String(format: "  %@  %-28@ → %@", recording.id as NSString,
+                print(String(format: "  %@  %-28@ → %@%@", recording.id as NSString,
                              recording.metadata.title as NSString,
-                             MeetingCalendar.title(from: event) as NSString))
+                             MeetingCalendar.title(from: event) as NSString,
+                             how as NSString))
             } else {
                 keptOwnName += 1
-                print(String(format: "  %@  %-28@ (keeps its name; guest list attached)",
+                print(String(format: "  %@  %-28@ (keeps its name; guest list attached)%@",
                              recording.id as NSString,
-                             recording.metadata.title as NSString))
+                             recording.metadata.title as NSString,
+                             how as NSString))
             }
             if apply { MeetingCalendar.attach(to: recording, refresh: refresh) }
         }
 
         print("")
         print("\(library.count) recordings, \(matched) matched an event.")
+        if began > 0 {
+            print("  \(began) of them by a meeting that began while they ran")
+        }
         print("  \(renamed) would be named from the calendar")
         print("  \(keptOwnName) keep the name they have")
         if alreadyAttached > 0 { print("  \(alreadyAttached) already attached, left alone") }

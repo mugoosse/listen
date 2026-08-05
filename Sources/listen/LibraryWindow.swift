@@ -236,11 +236,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.peopleNav.reload()
             if let keep { self.peopleNav.select(keep) }
         }
-        // After a merge the person on screen no longer exists, so the roster
-        // lands on whoever they became rather than on an empty page.
-        personPane.onMerged = { [weak self] label in
-            self?.peopleNav.reload()
-            self?.peopleNav.select(label)
+        // A rename, a merge or an unnaming leaves the roster selecting a label
+        // that has stopped existing, so it is told where the person went. The
+        // pane has to be sent somewhere explicitly: `select` cannot find them,
+        // and a roster that quietly keeps its old selection leaves the page it
+        // was on frozen mid-edit.
+        personPane.onLandOn = { [weak self] label in
+            guard let self else { return }
+            self.peopleNav.reload()
+            if !self.peopleNav.select(label) { self.personPane.show(nil) }
         }
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }

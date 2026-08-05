@@ -17,6 +17,18 @@ final class App: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
+
+        // Installed first so a preview launch has a Cmd-Q, and unchanged for a
+        // real one: `QuitConfirm` still goes on top of it below.
+        MainMenu.install()
+        // A preview launch is for looking at a panel and nothing else, and it
+        // has to be safe to start beside the app that is already running.
+        // Everything below this line writes to the library: adopting staged
+        // recordings, sweeping staging, and a queue that would start
+        // transcribing the same audio the other process is already working on.
+        // So a preview does none of it and stops here.
+        if previewPanelIfAsked() { return }
+
         try? Library.prepare()
 
         // Adopt before sweeping, not after. The sweep deletes staged
@@ -28,10 +40,6 @@ final class App: NSObject, NSApplicationDelegate {
 
         // Still swept, as a net under anything adoption could not promote.
         Library.sweepStaging()
-
-        // Without this there is no menu bar at all, so Cmd-Q does not quit and
-        // Cmd-C does nothing in a text field.
-        MainMenu.install()
 
         // And then Cmd-Q asks before it quits. Installed after the menu on
         // purpose: it intercepts the keystroke ahead of the Quit item rather
@@ -71,7 +79,6 @@ final class App: NSObject, NSApplicationDelegate {
         }
         _ = Updater.shared
 
-        previewPanelIfAsked()
     }
 
     /// Recordings left in staging by a crash or a quit join the library.
@@ -95,7 +102,8 @@ final class App: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// `LISTEN_PANEL=detected|recording|settings` shows a state at launch.
+    /// `LISTEN_PANEL=detected|recording[:seconds]|settings` shows a state at
+    /// launch. True when it did, which is also the signal to launch no further.
     ///
     /// For looking at the thing, and nothing else. The panel's states are
     /// otherwise only reachable by holding a real meeting, so one of them
@@ -105,8 +113,8 @@ final class App: NSObject, NSApplicationDelegate {
     ///
     /// In the same family as `LISTEN_CHUNK`: a measurement affordance, not a
     /// feature, and not mentioned anywhere a user would read.
-    private func previewPanelIfAsked() {
-        guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return }
+    private func previewPanelIfAsked() -> Bool {
+        guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
         switch want {
         case "detected":
             // A real, installed bundle identifier, so the icon and the name are
@@ -121,7 +129,20 @@ final class App: NSObject, NSApplicationDelegate {
                     ?? .general)
         default:
             indicator.show(.recording)
+            // `recording:1994` runs the clock at 33:14 rather than 0:00, which
+            // is the only value a preview could show before this: the panel is
+            // not recording anything.
+            //
+            // That mattered. Every frame in the panel is measured from the
+            // strings it is drawing, and the clock is the only one that changes
+            // after `show` has laid it out, so a clock that has only ever been
+            // looked at reading "0:00" is a layout nobody has checked. The
+            // version that shipped was a character too narrow from ten minutes
+            // in, and lost a digit for the rest of the meeting.
+            indicator.previewElapsed = Double(want.dropFirst("recording".count)
+                                                  .drop { $0 == ":" })
         }
+        return true
     }
 
     // MARK: - Menu

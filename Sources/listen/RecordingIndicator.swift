@@ -82,6 +82,9 @@ final class RecordingIndicator {
     }
 
     private var panel: NSPanel?
+    /// What the panel is currently showing. Kept because the clock re-lays the
+    /// panel out as it grows, and the layout depends on the state.
+    private var showing: State?
     private var background: NSVisualEffectView?
     private var dot: NSView!
     private var iconView: NSImageView!
@@ -98,6 +101,11 @@ final class RecordingIndicator {
 
     /// Stop the recording that is running.
     var onStop: (() -> Void)?
+
+    /// A fixed clock for `LISTEN_PANEL=recording:<seconds>`, nil in every real
+    /// run. The tick reads this instead of `Capture`, which in a preview launch
+    /// is recording nothing and would put "0:00" back half a second later.
+    var previewElapsed: TimeInterval?
 
     /// The three answers to "are you in a meeting?".
     ///
@@ -170,6 +178,7 @@ final class RecordingIndicator {
             startTimers()
         }
 
+        showing = state
         layout(state)
         position(p)
         // orderFrontRegardless, not makeKeyAndOrderFront: taking key would pull
@@ -416,9 +425,27 @@ final class RecordingIndicator {
     func setElapsed(_ seconds: TimeInterval) {
         let t = Int(seconds)
         // An hour-long meeting needs the hour. Speak's never did.
-        timeLabel.stringValue = t >= 3600
+        let text = t >= 3600
             ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
             : String(format: "%d:%02d", t / 60, t % 60)
+        let was = timeLabel.stringValue
+        guard text != was else { return }
+        timeLabel.stringValue = text
+
+        // Every frame in this panel is measured from the strings it is drawing,
+        // and this is the only one that changes after `show` has laid it out.
+        // It was sized for "0:00" when capture started, so from ten minutes in
+        // the label was a character too narrow and the clock lost a digit for
+        // the rest of the meeting: a panel reading "33:1" is worse than one
+        // reading nothing, because it looks like a time.
+        //
+        // Monospaced digits, so the character count *is* the width, and this
+        // re-lays out once per digit rather than twice a second.
+        guard text.count != was.count, let showing, let p = panel else { return }
+        layout(showing)
+        // The panel is pinned to the right edge of the screen, so a width that
+        // grows past the minimum moves its origin too.
+        position(p)
     }
 
     private func startTimers() {
@@ -426,7 +453,7 @@ final class RecordingIndicator {
         tick = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.setElapsed(Capture.shared.elapsed)
+                self.setElapsed(self.previewElapsed ?? Capture.shared.elapsed)
             }
         }
         // A slow pulse rather than a blink: noticeable in peripheral vision

@@ -116,13 +116,21 @@ final class Capture {
         mic.stop()
         system.stop()
 
+        // The length has to be written before the second attempt below, not
+        // after it. `MeetingCalendar.candidates` matches a meeting that began
+        // while the recording ran, and the recording's span is exactly this
+        // number: attaching first would judge a 33 minute recording as though
+        // it had lasted an instant, which is the case the rule was added for.
+        recording.metadata.duration = captured
+
         // A second attempt, for the meeting that was put in the calendar after
-        // it had already started. `attach` is a no-op once
-        // `calendar_event_id` is set, so a recording matched at the start is
-        // left alone here and a title edited during the call survives.
+        // it had already started, and for the one that was joined early enough
+        // that the first attempt was still ten minutes short of it. `attach`
+        // is a no-op once `calendar_event_id` is set, so a recording matched at
+        // the start is left alone here and a title edited during the call
+        // survives.
         if let named = MeetingCalendar.attachIfEnabled(to: recording) { recording = named }
 
-        recording.metadata.duration = captured
         try? recording.save()
 
         current = nil

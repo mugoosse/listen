@@ -55,6 +55,25 @@ jobs:
           echo "SHA=$SHA" >> "$GITHUB_ENV"
           echo "Listen-$VERSION.dmg  $SHA"
 
+          # Cross-check against the checksums release.sh published, rather than
+          # trusting one download. Hashing whatever arrived is self-consistent
+          # by construction: a truncated or substituted file produces a hash
+          # that matches itself perfectly and pins the wrong bytes for everyone.
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --dir /tmp/rel --pattern "SHA256SUMS.txt" --clobber
+          WANT=$(awk -v f="Listen-$VERSION.dmg" '$2 == f { print $1 }' /tmp/rel/SHA256SUMS.txt)
+          if [ -z "$WANT" ]; then
+            echo "SHA256SUMS.txt has no entry for Listen-$VERSION.dmg." >&2
+            exit 1
+          fi
+          if [ "$SHA" != "$WANT" ]; then
+            echo "The downloaded DMG does not match the published checksum." >&2
+            echo "  downloaded: $SHA" >&2
+            echo "  published:  $WANT" >&2
+            exit 1
+          fi
+          echo "matches SHA256SUMS.txt"
+
       - name: Open a pull request on the tap
         run: |
           set -eu
@@ -68,6 +87,25 @@ jobs:
           # are hand-written and not derivable from the release.
           sed -i -E "s|^  version \".*\"|  version \"$VERSION\"|" Casks/listen.rb
           sed -i -E "s|^  sha256 .*|  sha256 \"$SHA\"|" Casks/listen.rb
+
+          # sed that matches nothing is not an error, and the no-diff check
+          # below cannot tell that from "already up to date": both leave the
+          # file untouched and both exit 0. So a cask whose format moved, or a
+          # file that got renamed, would report success here and never update
+          # again, and the only symptom would be `brew install` shipping an old
+          # version indefinitely. Assert the two lines instead of inferring.
+          if ! grep -qx "  version \"$VERSION\"" Casks/listen.rb; then
+            echo "The version line is not what was just written. The cask's" >&2
+            echo "format has moved and the sed above matched nothing." >&2
+            grep -n '^  version' Casks/listen.rb >&2 || echo "  no version line at all" >&2
+            exit 1
+          fi
+          if ! grep -qx "  sha256 \"$SHA\"" Casks/listen.rb; then
+            echo "The sha256 line is not what was just written. The cask's" >&2
+            echo "format has moved and the sed above matched nothing." >&2
+            grep -n '^  sha256' Casks/listen.rb >&2 || echo "  no sha256 line at all" >&2
+            exit 1
+          fi
 
           if git diff --quiet; then
             echo "Cask already at $VERSION with this checksum, nothing to do."

@@ -241,6 +241,18 @@ which is survivable because the skip list makes over-triggering one click.
 Capture starts on detection and the panel asks afterwards, which is SPEC 5.3
 point 1: the minute spent answering is the minute where people say who they are.
 
+Detection is **on** by default, reversing the original call. A recorder you have
+to remember to enable is off for the meeting you needed it for. What makes that
+defensible is that it asks on screen the moment it starts, and "No" deletes the
+audio, so nothing is ever kept quietly. Onboarding says so on the last pane
+rather than leaving it to be discovered.
+
+`autoDetectMeetings` reads `object(forKey:) as? Bool ?? true`, not
+`bool(forKey:)`. The latter returns false for a key that was never written, so
+it cannot tell "not set yet" from "turned off on purpose": a default of true
+would be inexpressible, and anyone who turned detection off would have it
+switched back on for them.
+
 ### Nothing asks "keep this recording?" any more
 
 SPEC 5.3's Keep and Discard step is gone, in favour of the fallback SPEC 5.3

@@ -177,11 +177,15 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
         case .done:
             titleLabel.stringValue = "You are set"
-            paragraph("Start a recording from the menu bar, or turn on meeting detection "
-                      + "in Settings and Listen will offer when a call starts.")
-            paragraph("Recording begins the moment you press Start, and asks whether to "
-                      + "keep it afterwards. That way the first minute of a meeting is "
-                      + "never the part you lose.")
+            // Said here rather than left to be discovered, because it is on
+            // without being asked for. An app that records a call you did not
+            // tell it about is only acceptable if it told you it would.
+            paragraph("Listen watches for a call starting and records it, asking on "
+                      + "screen whether you are in a meeting. Saying no deletes the "
+                      + "audio straight away. You can turn this off in Settings.")
+            paragraph("It records before you answer because the first minute of a "
+                      + "meeting, where people say who they are, is the part worth "
+                      + "keeping. Starting by hand from the menu bar always works too.")
         }
 
         updateControls()

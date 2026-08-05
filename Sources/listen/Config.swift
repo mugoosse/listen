@@ -234,13 +234,28 @@ extension Settings {
         set { UserDefaults.standard.set(newValue, forKey: startAtLoginAppliedKey) }
     }
 
-    /// Watch for a meeting app becoming audio-active and offer to record.
+    /// Watch for a call starting and record it, asking as it goes.
     ///
-    /// Off by default. An app that starts recording on its own the first time
-    /// someone joins a call, before they have decided they want that, is a
-    /// worse first impression than one that waits to be asked.
+    /// **On** by default. This was off, on the argument that an app which
+    /// starts recording the first time you join a call, before you have asked
+    /// it to, is a worse first impression than one that waits. That argument
+    /// loses to a simpler one: a meeting recorder you have to remember to turn
+    /// on is a meeting recorder that is off for the meeting you needed it for,
+    /// and the whole reason capture starts before the question is answered is
+    /// that the opening minute is the part worth keeping.
+    ///
+    /// What makes it defensible is that it asks, immediately and on screen, and
+    /// that "No" deletes the audio rather than filing it. Nothing is kept
+    /// quietly.
+    ///
+    /// The presence of the key is the answer, not its truthiness.
+    /// `UserDefaults.bool(forKey:)` returns false for a key that was never
+    /// written, which cannot tell "not set yet" from "deliberately turned off",
+    /// so reading it that way would make a default of true impossible to
+    /// express and would silently re-enable detection for anyone who turned it
+    /// off.
     static var autoDetectMeetings: Bool {
-        get { UserDefaults.standard.bool(forKey: autoDetectKey) }
+        get { UserDefaults.standard.object(forKey: autoDetectKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: autoDetectKey) }
     }
 

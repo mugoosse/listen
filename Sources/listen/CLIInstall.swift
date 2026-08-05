@@ -54,6 +54,24 @@ enum CLIInstall {
         return .notInstalled
     }
 
+    /// The version the installed command would actually report, or nil when
+    /// there is nothing installed.
+    ///
+    /// Read from the bundle the symlink resolves to, not from this one. Those
+    /// are the same app in the ordinary case, and when they are not, that is
+    /// exactly the thing worth showing: a `listen` on the PATH pointing at an
+    /// older copy in another folder answers "why is the command behaving like a
+    /// version I do not have installed?", which is otherwise unanswerable from
+    /// inside the app.
+    static var installedVersion: String? {
+        for directory in candidates {
+            let link = directory.appendingPathComponent("listen")
+            guard FileManager.default.fileExists(atPath: link.path) else { continue }
+            return AppInfo.versionString(forExecutable: link.resolvingSymlinksInPath())
+        }
+        return nil
+    }
+
     /// Returns the path installed to, or throws with a reason a person can act on.
     @discardableResult
     static func install() throws -> String {
@@ -160,13 +178,31 @@ enum AppInfo {
         if let info = Bundle.main.infoDictionary, info["CFBundleShortVersionString"] != nil {
             return info
         }
+        return plist(beside: executable)
+    }
+
+    /// The `Info.plist` two directories above an executable, which is where a
+    /// `.app` keeps it.
+    private static func plist(beside executable: URL) -> [String: Any]? {
         let contents = executable.deletingLastPathComponent()   // MacOS
                                 .deletingLastPathComponent()    // Contents
-        let plist = contents.appendingPathComponent("Info.plist")
-        guard let data = try? Data(contentsOf: plist),
+        let path = contents.appendingPathComponent("Info.plist")
+        guard let data = try? Data(contentsOf: path),
               let info = try? PropertyListSerialization.propertyList(
                 from: data, format: nil) as? [String: Any] else { return nil }
         return info
+    }
+
+    /// "0.1.0 (build 16)" for whichever bundle contains this executable.
+    ///
+    /// Takes the executable as an argument rather than reading `Bundle.main`,
+    /// so it can answer for a *different* copy of the app: the one an installed
+    /// symlink points at is not always this one.
+    static func versionString(forExecutable url: URL) -> String? {
+        guard let info = plist(beside: url),
+              let version = info["CFBundleShortVersionString"] as? String else { return nil }
+        let build = info["CFBundleVersion"] as? String
+        return version + (build.map { " (build \($0))" } ?? "")
     }
 
     static var version: String? { infoPlist?["CFBundleShortVersionString"] as? String }

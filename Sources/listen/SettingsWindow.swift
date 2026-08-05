@@ -121,12 +121,18 @@ class Pane: NSViewController {
     /// Grow the document view to whatever the content needs, so the scroll view
     /// has something to scroll.
     private func resizeDocument() {
-        guard let document else { return }
+        guard let document, let scroll = view as? NSScrollView else { return }
         stack.layoutSubtreeIfNeeded()
         let height = max(Self.paneHeight, stack.fittingSize.height)
         if document.frame.height != height {
             document.setFrameSize(NSSize(width: Self.paneWidth, height: height))
         }
+        // Back to the top. Growing the document under a clip view leaves the
+        // clip where it was, which on a pane that just became scrollable means
+        // opening part-way down with the first heading hidden behind the tab
+        // bar. A settings pane always starts at its first control.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     /// Re-read anything that can change while the window is open.
@@ -228,6 +234,15 @@ final class SettingsWindow: NSObject {
     private func build() {
         let tabs = NSTabViewController()
         tabs.tabStyle = .toolbar
+        // Otherwise the window is called "Untitled".
+        //
+        // `NSTabViewController` copies the selected child's `title` onto the
+        // window, and a plain `NSViewController` has none, so the title set
+        // below survived only until the first tab switch and then read
+        // "Untitled" for the rest of the session. Turning propagation off keeps
+        // one title, which is what a settings window with a tab bar already
+        // showing the pane name wants.
+        tabs.canPropagateSelectedChildViewControllerTitle = false
         for tab in SettingsTab.allCases {
             let pane: Pane
             switch tab {
@@ -282,8 +297,9 @@ final class GeneralPane: Pane {
              + "call looks like from outside. Capture starts immediately and a panel asks "
              + "whether you are in a meeting: saying no deletes it. It records first "
              + "because the minute spent answering is the minute where people say who "
-             + "they are. Off by default, and recording from the menu bar always works "
-             + "either way.")
+             + "they are. On by default, because a recorder you have to remember to turn "
+             + "on is off for the meeting you needed it for. Recording from the menu bar "
+             + "works either way.")
 
         separator()
         heading("Never ask about these apps")
@@ -647,15 +663,14 @@ final class DevelopersPane: Pane {
     private var installButton: NSButton?
 
     override func build() {
-        heading("Command line")
+        heading("CLI")
         note("`listen` is the same binary as the app, so it never goes stale: it is "
              + "symlinked into place rather than copied.")
         cliLabel = note("")
-        installButton = button("Install") { [weak self] in self?.install() }
-        button("Remove") { [weak self] in
-            CLIInstall.uninstall()
-            self?.refresh()
-        }
+        // One button, not an Install and a Remove side by side. Only one of
+        // them was ever the right thing to press, and showing both made the
+        // pane ask a question it could answer itself.
+        installButton = button("Install") { [weak self] in self?.toggle() }
 
         separator()
         heading("MCP")
@@ -689,6 +704,12 @@ final class DevelopersPane: Pane {
     override func refresh() {
         let state = CLIInstall.state
         var text = state.summary
+        // The version the command would actually report. Read from the bundle
+        // the symlink resolves to, so a link left pointing at an older copy
+        // says so instead of borrowing this app's version number.
+        if let version = CLIInstall.installedVersion {
+            text += " · \(version)"
+        }
         // An installed command that is not on the PATH cannot be run, and
         // nothing else would say why.
         if case .installed(let path) = state, !CLIInstall.isOnPath(path) {
@@ -696,7 +717,25 @@ final class DevelopersPane: Pane {
                 + "profile or the command will not be found."
         }
         cliLabel?.stringValue = text
-        installButton?.title = state == .notInstalled ? "Install" : "Reinstall"
+
+        switch state {
+        case .notInstalled: installButton?.title = "Install"
+        case .installed:    installButton?.title = "Remove"
+        // Reinstall rather than Remove, because the useful move for a link
+        // pointing at another copy is to repoint it here. Removing stays one
+        // press away: it becomes `.installed` and the button says Remove.
+        case .stale:        installButton?.title = "Reinstall"
+        }
+    }
+
+    /// Install or remove, whichever the current state calls for.
+    private func toggle() {
+        if case .installed = CLIInstall.state {
+            CLIInstall.uninstall()
+            refresh()
+            return
+        }
+        install()
     }
 
     private func install() {

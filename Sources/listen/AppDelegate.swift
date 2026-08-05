@@ -108,8 +108,12 @@ final class App: NSObject, NSApplicationDelegate {
             // the ones a user would see rather than placeholders that hide a
             // sizing bug.
             indicator.show(.detected("com.google.Chrome"))
-        case "settings":
-            SettingsWindow.shared.show(.general)
+        case let want where want.hasPrefix("settings"):
+            // `settings`, or `settings:developers` for a particular tab.
+            let name = want.dropFirst("settings".count).drop { $0 == ":" }
+            SettingsWindow.shared.show(
+                SettingsTab.allCases.first { $0.title.caseInsensitiveCompare(name) == .orderedSame }
+                    ?? .general)
         default:
             indicator.show(.recording)
         }

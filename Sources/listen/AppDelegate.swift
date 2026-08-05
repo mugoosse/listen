@@ -72,6 +72,21 @@ final class App: NSObject, NSApplicationDelegate {
         // interrupted by a quit costs one re-run, not a stuck row.
         Queue.shared.resume()
 
+        // Open at login, on by default, for new installations only.
+        //
+        // Straight from Speak, and the argument is stronger here. Speak is a
+        // menu bar utility you reach for; Listen watches for meetings, and
+        // `MeetingDetector` only polls while the app is running. Off by
+        // default means somebody who never finds the checkbox has a recorder
+        // that misses every call and says nothing about why, which is the same
+        // silent-failure shape the detection default already avoids.
+        //
+        // Read before the branch below, because finishing onboarding sets
+        // `Settings.onboarded` and this has to see the value from launch.
+        // `applyDefaultIfNeeded` records that it ran either way, so a later
+        // launch never overrides a choice made here or in System Settings.
+        LoginItem.applyDefaultIfNeeded(isNewInstallation: !Settings.onboarded)
+
         // Setup on a first run, the library otherwise. `isFirstRun` is the
         // absence of the key rather than a false value, so somebody who
         // finished setup and turned everything off is not shown it again.

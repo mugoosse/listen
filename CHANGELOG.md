@@ -8,6 +8,41 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.2.0 (2026-08-06)
+
+One change, and it is a default rather than a feature.
+
+### Listen opens at login on new installations
+
+Meeting detection only runs while Listen is running. The checkbox for opening
+it at login has been in Settings since 0.1.0, sitting unchecked, which meant
+anybody who did not go looking for it had a recorder that quietly missed every
+call and offered no account of why. That is the same silent failure that made
+detection itself default to on, so the two defaults now agree.
+
+New installations only. Upgrading from 0.1.0 or 0.1.1 changes nothing on a Mac
+that is already set up, so if you want it there, the checkbox is in Settings,
+General, under Startup. Turning it off is equally final: the decision is
+recorded the first time it is considered, and no later launch overrides what
+you chose, here or in System Settings, General, Login Items.
+
+The cost, plainly. Listen keeps a Dock icon and a window rather than living
+only in the menu bar, so opening at login means the library window opens with
+it. Suppressing that needs a way to tell a login launch from an ordinary one,
+and the obvious candidate is not one: `NSApplicationLaunchIsDefaultLaunchKey`
+never mentions login items and is also false for window restoration, so
+trusting it would trade an unwanted window for the worse failure of opening
+Listen and seeing nothing at all.
+
+### Still true from 0.1.0 and 0.1.1
+
+About six words an hour are corrupted at chunk seams on a Mac with the memory
+for 600 second chunks, and about 33 on a Mac with 12 GB or less, where the
+chunks are 120 seconds. Speaker labelling is per sentence rather than per word,
+so two people talking over each other inside one sentence come out as one
+speaker. Meeting detection is on by default: it starts recording, then asks on
+screen, and answering no deletes the audio straight away.
+
 ## 0.1.1 (2026-08-05)
 
 A fix for Macs with less memory, and the first update that arrives with its own

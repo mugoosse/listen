@@ -121,6 +121,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
          prefer taps over ScreenCaptureKit. -->
     <key>NSAudioCaptureUsageDescription</key>
     <string>Listen records the other side of a meeting on this Mac.</string>
+    <!-- The full-access key, not the legacy NSCalendarsUsageDescription.
+         LSMinimumSystemVersion is 14.0 and the call is
+         requestFullAccessToEvents; there is no read-only tier that returns
+         events, so asking for less would return an empty calendar and look
+         exactly like a Mac with nothing in it.
+
+         Unlike the two above, this one is optional. Listen records and
+         transcribes without it; refusing costs the meeting's name and the
+         attendee suggestions, which is why Permissions.allGranted does not
+         include it. -->
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Listen reads the calendars already on this Mac, to name a recording after the meeting it belongs to and to suggest who was in it. Nothing is sent anywhere.</string>
 ${SPARKLE_KEYS}
 </dict>
 </plist>

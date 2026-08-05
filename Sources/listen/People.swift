@@ -178,6 +178,12 @@ enum People {
                 changed.append(recording.id)
             }
         }
+        // The email addresses move with the name, for the same reason the
+        // voiceprint does. The contact book is keyed on this label, so leaving
+        // it behind points every address at a name nobody has any more, and
+        // nothing would say so: the suggestions would simply stop appearing,
+        // which reads as the calendar having broken rather than as a stale key.
+        ContactBook.rename(label, to: trimmed)
         return changed
     }
 }

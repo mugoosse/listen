@@ -454,6 +454,7 @@ final class AudioPane: Pane {
 final class MeetingsPane: Pane {
     private var skipList: NSStackView?
     private var addButton: NSPopUpButton?
+    private var calendarNote: NSTextField?
 
     override func build() {
         heading("Detection")
@@ -468,6 +469,21 @@ final class MeetingsPane: Pane {
              + "they are. On by default, because a recorder you have to remember to turn "
              + "on is off for the meeting you needed it for. Recording from the menu bar "
              + "works either way.")
+
+        separator()
+        heading("Calendar")
+        checkbox("Name a recording after the meeting it lines up with",
+                 Settings.nameFromCalendar) { Settings.nameFromCalendar = $0 }
+        calendarNote = note("")
+        note("A meeting counts as the same one when it starts within ten minutes of the "
+             + "recording. Measured over this library: at ten minutes, fourteen of "
+             + "forty-seven recordings matched and every match was right; at thirty, two "
+             + "more matched and both were wrong. A name you typed yourself is never "
+             + "replaced. Who was invited is remembered either way, and offered when you "
+             + "name a speaker.")
+        note("The calendar is only read, never written to. Google and Microsoft accounts "
+             + "come through whatever you have added in System Settings, Internet "
+             + "Accounts, so there is no account to make here and nothing leaves this Mac.")
 
         separator()
         heading("Never ask about these apps")
@@ -496,6 +512,13 @@ final class MeetingsPane: Pane {
 
     override func refresh() {
         refreshSkipped()
+        // The setting can be on while the permission is missing, and from the
+        // checkbox alone that is indistinguishable from the feature not
+        // working. Said here rather than left to be discovered.
+        calendarNote?.stringValue = MeetingCalendar.isAuthorized
+            ? "Reading \(MeetingCalendar.calendars().count) calendar(s) on this Mac."
+            : "Listen has no calendar access yet, so this does nothing. "
+              + "Settings → Permissions → Calendar."
     }
 
     // MARK: - Skipped apps
@@ -726,6 +749,8 @@ final class StoragePane: Pane {
 final class PermissionsPane: Pane {
     private var micLabel: NSTextField?
     private var tapLabel: NSTextField?
+    private var calendarLabel: NSTextField?
+    private var calendarButton: NSButton?
 
     override func build() {
         heading("Microphone")
@@ -739,6 +764,27 @@ final class PermissionsPane: Pane {
              + "which asks for audio recording and not screen recording. That is the "
              + "whole reason it works this way: hearing a meeting should not cost access "
              + "to everything on your screen.")
+
+        separator()
+        heading("Calendar")
+        calendarLabel = note("")
+        // One button for both jobs, dispatching at click time. macOS only lists
+        // an app under Privacy, Calendars once it has asked, so before the
+        // first request there is no switch in System Settings to send anyone
+        // to, and a button that opens an empty pane is worse than no button.
+        calendarButton = button("Allow calendar access") { [weak self] in
+            if Permissions.calendarNotDetermined {
+                Permissions.requestCalendar { _ in self?.refresh() }
+            } else {
+                Permissions.openCalendarSettings()
+            }
+        }
+        note("Unlike the two above, this one is optional. Without it Listen still "
+             + "records, transcribes and labels; what it loses is the meeting's name "
+             + "and the list of who was invited. It reads the calendars already on "
+             + "this Mac, including Google and Microsoft accounts added in System "
+             + "Settings, Internet Accounts. Nothing is sent anywhere and nothing is "
+             + "ever written back to a calendar.")
     }
 
     override func refresh() {
@@ -756,6 +802,23 @@ final class PermissionsPane: Pane {
                 ? "Working. The other side of a call is recorded."
                 : "Not available. Grant the microphone permission above, which is the "
                   + "same permission a process tap needs."
+        }
+
+        calendarButton?.title = Permissions.calendarNotDetermined
+            ? "Allow calendar access" : "Open System Settings"
+        if Permissions.calendar {
+            // The count, not just "granted". A grant that reaches an empty
+            // calendar store looks identical to a working one from here, and
+            // that is the failure this row exists to make visible.
+            let count = MeetingCalendar.calendars().count
+            calendarLabel?.stringValue = count == 0
+                ? "Granted, but there are no calendars on this Mac to read."
+                : "Granted. Reading \(count) calendar\(count == 1 ? "" : "s")."
+        } else if Permissions.calendarDenied {
+            calendarLabel?.stringValue = "Denied. Recordings keep the name you give "
+                + "them, and speakers are named by hand."
+        } else {
+            calendarLabel?.stringValue = "Not granted yet."
         }
     }
 }

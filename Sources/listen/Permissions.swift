@@ -1,14 +1,21 @@
 import AVFoundation
 import AppKit
 import CoreAudio
+import EventKit
 
-/// The two permissions Listen needs, and how to ask for them.
+/// The permissions Listen needs, and how to ask for them.
 ///
-/// Listen needs the microphone and nothing else. That is the point of using a
-/// Core Audio process tap for system audio rather than ScreenCaptureKit:
-/// **the tap asks for audio capture, not screen recording**. Asking someone to
-/// hand over their screen so an app can hear a meeting is a far larger request
-/// than the feature needs, and on a managed Mac it is often simply refused.
+/// To record, Listen needs the microphone and nothing else. That is the point
+/// of using a Core Audio process tap for system audio rather than
+/// ScreenCaptureKit: **the tap asks for audio capture, not screen recording**.
+/// Asking someone to hand over their screen so an app can hear a meeting is a
+/// far larger request than the feature needs, and on a managed Mac it is often
+/// simply refused.
+///
+/// The calendar is the odd one out and stays that way deliberately. It buys a
+/// name for the recording and a list of who was invited, and Listen records,
+/// transcribes and labels perfectly well without it, so it is never part of
+/// `allGranted` and nothing blocks on it.
 enum Permissions {
     static var microphone: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -59,7 +66,52 @@ enum Permissions {
         return false
     }
 
+    /// Deliberately excludes the calendar. Onboarding and the recording path
+    /// both gate on this, and a recorder that refuses to record because it
+    /// cannot read your diary would be trading the feature for the garnish.
     static var allGranted: Bool { microphone && (!systemAudioSupported || systemAudio) }
+
+    // MARK: - Calendar
+
+    /// Whether the calendar can be read.
+    ///
+    /// `.fullAccess` and nothing else. macOS 14 split the old single grant into
+    /// full and write-only, and write-only returns an **empty** event list
+    /// rather than an error, which on screen is indistinguishable from a Mac
+    /// with no calendars on it. `.authorized` is the pre-14 case and cannot
+    /// occur here: `LSMinimumSystemVersion` is 14.0.
+    static var calendar: Bool {
+        EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    }
+
+    static var calendarDenied: Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        return status == .denied || status == .restricted || status == .writeOnly
+    }
+
+    /// True before anyone has been asked, so the pane can offer to ask rather
+    /// than sending someone to System Settings for a switch that is not there
+    /// yet. macOS only lists an app under Calendars once it has requested.
+    static var calendarNotDetermined: Bool {
+        EKEventStore.authorizationStatus(for: .event) == .notDetermined
+    }
+
+    /// Ask for calendar access.
+    ///
+    /// Uses `MeetingCalendar.store` rather than a fresh `EKEventStore`. The
+    /// store this grant lands on has to be the one that later reads events: a
+    /// store created before the grant keeps answering from the access it was
+    /// born with, so reading through a second one returns nothing and looks
+    /// like an empty calendar.
+    /// The answer arrives on the main actor, which is stated in the type rather
+    /// than left to a `DispatchQueue.main.async` inside. EventKit calls back on
+    /// an arbitrary queue and every caller here is a view that has to redraw.
+    static func requestCalendar(_ done: @escaping @MainActor (Bool) -> Void) {
+        MeetingCalendar.store.requestFullAccessToEvents { granted, error in
+            if let error { log("calendar access failed: \(error.localizedDescription)") }
+            Task { @MainActor in done(granted) }
+        }
+    }
 
     static func openMicrophoneSettings() {
         openPane("com.apple.preference.security?Privacy_Microphone")
@@ -67,6 +119,10 @@ enum Permissions {
 
     /// System audio has no pane of its own; it is granted with the microphone.
     static func openSystemAudioSettings() { openMicrophoneSettings() }
+
+    static func openCalendarSettings() {
+        openPane("com.apple.preference.security?Privacy_Calendars")
+    }
 
     private static func openPane(_ path: String) {
         if let url = URL(string: "x-apple.systempreferences:" + path) {

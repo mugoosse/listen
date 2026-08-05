@@ -27,8 +27,14 @@ import AppKit
 final class Onboarding: NSObject, NSWindowDelegate {
     static let shared = Onboarding()
 
+    /// The calendar sits between the two recording permissions and the model,
+    /// and it is the only optional one. It is here at all because the Settings
+    /// pane is the only other place the system prompt can be raised from, so
+    /// leaving it out means anybody who never opens Settings never gets asked
+    /// and the feature is silently off for them. Its buttons say so: the way
+    /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, model, done
+        case welcome, microphone, systemAudio, calendar, model, done
     }
 
     private var window: NSWindow?
@@ -110,6 +116,12 @@ final class Onboarding: NSObject, NSWindowDelegate {
             String(step.rawValue),
             String(Permissions.microphone),
             String(Permissions.systemAudio),
+            // In the key, or the pane goes on saying "not granted yet" after
+            // the grant lands. The prompt is answered outside this window and
+            // there is no notification for it, so the poll below is the only
+            // thing that notices, and it only re-renders when this string
+            // changes.
+            String(Permissions.calendar),
             Settings.modelChosen ? Settings.model.id : "none",
             String(Settings.model.isDownloaded),
         ].joined(separator: "|")
@@ -151,6 +163,24 @@ final class Onboarding: NSObject, NSWindowDelegate {
                        + "microphone, so granting that usually fixes it.")
             }
 
+        case .calendar:
+            titleLabel.stringValue = "Your calendar"
+            paragraph("If a recording lines up with a meeting in your calendar, Listen "
+                      + "names it after that meeting and offers the people who were "
+                      + "invited when you come to name a speaker.")
+            // Said before the prompt, not after. This is the only permission
+            // Listen asks for that changes what it writes rather than what it
+            // can hear, and it does it without asking again each time.
+            paragraph("It only reads, and never writes anything back to a calendar. "
+                      + "Google and Microsoft calendars come through whatever you have "
+                      + "already added in System Settings, so there is no account to "
+                      + "make and nothing leaves this Mac.")
+            status(Permissions.calendar, "Calendar access granted",
+                   Permissions.calendarDenied
+                     ? "Denied. Recordings keep whatever name you give them."
+                     : "Not granted yet. This one is optional: everything else works "
+                       + "without it.")
+
         case .model:
             titleLabel.stringValue = "Speech model"
             paragraph("Pick the model that transcribes your meetings. You can change "
@@ -186,6 +216,15 @@ final class Onboarding: NSObject, NSWindowDelegate {
             paragraph("It records before you answer because the first minute of a "
                       + "meeting, where people say who they are, is the part worth "
                       + "keeping. Starting by hand from the menu bar always works too.")
+            // Only when it can actually happen. Naming from the calendar is the
+            // other thing Listen does without being asked each time, so it gets
+            // said here for the same reason detection does; saying it to
+            // somebody who declined the permission would just be noise about a
+            // feature they do not have.
+            if Permissions.calendar {
+                paragraph("Recordings that line up with a meeting in your calendar are "
+                          + "named after it. A name you type yourself is never replaced.")
+            }
         }
 
         updateControls()
@@ -211,6 +250,15 @@ final class Onboarding: NSObject, NSWindowDelegate {
             primary.title = "Continue"
             secondary.isHidden = false
             secondary.title = "Open System Settings"
+        case .calendar:
+            primary.title = Permissions.calendar ? "Continue"
+                : (Permissions.calendarDenied ? "Open System Settings"
+                                              : "Allow calendar access")
+            secondary.isHidden = false
+            // "Not now" and not "Skip". Skip is what the microphone step
+            // offers, where declining costs you half of every recording; here
+            // it costs a name, and the wording should not imply otherwise.
+            secondary.title = "Not now"
         case .model:
             // The button is the consent. It names the model and its size, so
             // nobody can start a 2.5 GB download without having read what it
@@ -257,6 +305,25 @@ final class Onboarding: NSObject, NSWindowDelegate {
             }
             return
 
+        case .calendar where Permissions.calendarDenied:
+            // Already refused, so there is nothing left to prompt: macOS raises
+            // the dialog once and answers from the recorded decision after
+            // that. Pressing this again would look like a button that does
+            // nothing.
+            Permissions.openCalendarSettings()
+            return
+
+        case .calendar where !Permissions.calendar:
+            Permissions.requestCalendar { _ in
+                // Re-activated for the same reason the microphone step is: the
+                // system dialog took focus, and this window floats but is not
+                // brought back on its own.
+                NSApp.activate(ignoringOtherApps: true)
+                Onboarding.shared.window?.makeKeyAndOrderFront(nil)
+                Onboarding.shared.render()
+            }
+            return
+
         case .model where Settings.modelChosen && !Settings.model.isDownloaded:
             download()
             return
@@ -278,6 +345,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
             advance()
         case .systemAudio:
             Permissions.openMicrophoneSettings()
+        case .calendar:
+            // Straight past, with nothing opened and nothing asked. "Not now"
+            // means not now, and Settings, Permissions has the switch whenever
+            // it does become now.
+            advance()
         default:
             advance()
         }

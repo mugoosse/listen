@@ -25,7 +25,14 @@ enum SpeakerSheet {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         field.stringValue = VoiceBank.currentName(of: speaker, in: recording) ?? ""
         field.placeholderString = "Name"
-        alert.accessoryView = field
+
+        // Who was invited, from the calendar event this recording was matched
+        // to. A different signal from "sounds like" above and kept visually
+        // apart from it on purpose: one is who the voice bank thinks this voice
+        // resembles, the other is who was actually in the room. Neither decides
+        // anything; both fill the field.
+        let invited = Invitations(recording: recording, field: field)
+        alert.accessoryView = invited.accessory
         alert.window.initialFirstResponder = field
 
         alert.addButton(withTitle: "Save")
@@ -43,6 +50,12 @@ enum SpeakerSheet {
             let name = field.stringValue.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty, name != speaker else { done(); return }
             apply(rename: speaker, to: name, in: recording)
+            // Only what was picked, and only if it survived to Save. Picking a
+            // suggestion is the assertion that this address is this person;
+            // typing a name is not, and links nothing. Editing the name after
+            // picking one breaks the claim, which is why the address is
+            // remembered against the button rather than against the field.
+            invited.claim(name)
             done()
         case .alertThirdButtonReturn:
             merge(speaker, in: recording, parent: parent, done: done)
@@ -115,6 +128,105 @@ enum SpeakerSheet {
     }
 
 }
+
+// ---------------------------------------------------------------------------
+
+/// The guest list from the calendar, as buttons that fill the name field.
+///
+/// Three sources answer "what is this person called", in descending order of
+/// confidence, and `CalendarPerson.bestName` walks them: the contact book first
+/// (somebody said so), then the name on the invitation, then a name guessed
+/// from the address. The third is why none of this is ever applied on its own.
+/// Measured on the development machine, EventKit put the email address in the
+/// name field for 118 of 140 attendee entries, so without the book and the
+/// guess almost every button here would read as an address.
+@MainActor
+private final class Invitations {
+    let accessory: NSView
+    private let field: NSTextField
+    /// The address behind the button most recently pressed.
+    private var picked: String?
+
+    init(recording: Recording, field: NSTextField) {
+        self.field = field
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.addArrangedSubview(field)
+        // Assigned before the buttons are built, and not after: their action
+        // closures capture `self`, and Swift refuses that while a stored
+        // property is still uninitialized.
+        accessory = stack
+
+        // Anyone flagged as the user is dropped: the microphone track is `Me`
+        // by construction, so offering the user's own name for somebody on the
+        // system track would attach it to the wrong person entirely.
+        //
+        // Anyone already named in this recording is dropped too. They are
+        // accounted for, and offering them again invites two speakers to be
+        // given one name, which is a merge and belongs on the Merge button
+        // where it says what it does.
+        let taken = Set(recording.speakers)
+        let people = (recording.metadata.calendar_people ?? [])
+            .filter { !$0.is_me }
+            .filter { !taken.contains($0.bestName ?? "\u{0}") }
+
+        if !people.isEmpty {
+            let heading = NSTextField(labelWithString: "In the invitation")
+            heading.font = .systemFont(ofSize: 11, weight: .semibold)
+            heading.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(heading)
+        }
+
+        for person in people {
+            guard let name = person.bestName ?? person.email else { continue }
+            let button = NSButton(title: name, target: nil, action: nil)
+            button.bezelStyle = .inline
+            button.font = .systemFont(ofSize: 12)
+            // The address, always, even when the button already shows a name.
+            // Two people called Ryan is the case this has to survive, and the
+            // name on the button is the thing that cannot tell them apart.
+            button.toolTip = [person.email,
+                              person.is_organizer ? "organizer" : nil]
+                .compactMap { $0 }.joined(separator: " · ")
+            let handler = ActionHandler { [weak self] _ in self?.pick(person, named: name) }
+            button.target = handler
+            button.action = #selector(ActionHandler.fire(_:))
+            objc_setAssociatedObject(button, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+            stack.addArrangedSubview(button)
+        }
+
+        // NSAlert sizes an accessory view from its frame, not from its
+        // constraints, so a stack left to autolayout arrives zero-high and the
+        // sheet looks as though the field is missing.
+        stack.layoutSubtreeIfNeeded()
+        let size = stack.fittingSize
+        stack.frame = NSRect(x: 0, y: 0, width: max(280, size.width), height: size.height)
+    }
+
+    private func pick(_ person: CalendarPerson, named name: String) {
+        field.stringValue = name
+        // The address, not the name. Pressing the button asserts *which
+        // attendee* this speaker is; the field says what to call them. Keeping
+        // them separate is what makes correcting a guessed name useful rather
+        // than destructive: picking "Byjenna0x" and typing "Jenna" over it
+        // files that address under Jenna, which is the whole point.
+        picked = person.email
+    }
+
+    /// Record what was picked, once Save is pressed and not before.
+    ///
+    /// Nothing is written if the sheet was cancelled, and nothing is written
+    /// for a name typed from nothing, because no address was ever asserted.
+    func claim(_ name: String) {
+        guard let picked else { return }
+        ContactBook.link(picked, to: name)
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 extension Recording {
     /// Every speaker in this transcript, in order of first appearance.

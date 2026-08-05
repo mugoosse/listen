@@ -13,6 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "me", "edit",
+        "calendar", "contacts",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -70,6 +71,10 @@ enum CLI {
             calibrate()
         case "sources":
             sources()
+        case "calendar":
+            calendar(rest)
+        case "contacts":
+            contacts(rest)
         case "dictionary":
             dictionary(rest)
         case "edit":
@@ -137,6 +142,307 @@ enum CLI {
         print(Settings.autoDetectMeetings
               ? "detection is on."
               : "detection is off, so none of this would start a recording.")
+        exit(0)
+    }
+
+    // MARK: - The calendar
+
+    /// `listen calendar`: what EventKit can see, and how it maps onto recordings.
+    ///
+    /// This exists for the reason `listen sources` exists. Matching a recording
+    /// to a meeting leaves nothing behind to inspect: the title lands silently,
+    /// and "why is my meeting called that?" is otherwise unanswerable, because
+    /// the candidate that won, the ones that lost and the window they were
+    /// judged in are all gone by the time anybody looks.
+    private static func calendar(_ args: [String]) -> Never {
+        let rest = Array(args.dropFirst())
+        switch args.first ?? "status" {
+        case "status":   calendarStatus()
+        case "events":   calendarEvents(rest)
+        case "match":    calendarMatch(rest)
+        case "backfill": calendarBackfill(rest)
+        default:
+            fail("unknown calendar subcommand `\(args[0])`. Try `listen help`.")
+        }
+    }
+
+    private static func calendarStatus() -> Never {
+        guard MeetingCalendar.isAuthorized else {
+            if Permissions.calendarDenied {
+                log("calendar access is denied. Settings → Permissions → Calendar, "
+                    + "or System Settings → Privacy & Security → Calendars.")
+            } else {
+                log("calendar access has not been granted yet. Open Listen's Settings → "
+                    + "Permissions and press Allow, which is the only place the system "
+                    + "prompt can be raised from.")
+            }
+            exit(1)
+        }
+
+        let calendars = MeetingCalendar.calendars()
+        print("calendars: \(calendars.count)")
+        var source = ""
+        for c in calendars {
+            if c.source != source { print("\n  \(c.source)"); source = c.source }
+            print("    \(c.title)")
+        }
+
+        // Today rather than a week, because the question this answers is "is it
+        // seeing my calendar at all", and a day is enough to tell.
+        let day = Foundation.Calendar.current.startOfDay(for: Date())
+        let events = MeetingCalendar.events(from: day, to: day.addingTimeInterval(86400))
+        print("\ntoday: \(events.count) event(s)")
+        for e in events { print("  " + line(for: e)) }
+        print("\nnaming recordings from the calendar is "
+              + (Settings.nameFromCalendar ? "on." : "off."))
+        exit(0)
+    }
+
+    private static func calendarEvents(_ args: [String]) -> Never {
+        guard MeetingCalendar.isAuthorized else { fail("no calendar access.") }
+        var days = 7
+        var i = 0
+        while i < args.count {
+            if args[i] == "--days" {
+                i += 1
+                guard i < args.count, let n = Int(args[i]), n > 0 else {
+                    fail("--days needs a positive number.")
+                }
+                days = n
+            } else {
+                fail("unknown option `\(args[i])`.")
+            }
+            i += 1
+        }
+
+        let now = Date()
+        let events = MeetingCalendar.events(from: now, to: now.addingTimeInterval(
+            Double(days) * 86400))
+        guard !events.isEmpty else {
+            log("nothing in the next \(days) day(s).")
+            exit(0)
+        }
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        var day = ""
+        for e in events {
+            let heading = f.string(from: e.start)
+            if heading != day { print(day.isEmpty ? heading : "\n" + heading); day = heading }
+            print("  " + line(for: e))
+        }
+        exit(0)
+    }
+
+    /// One line of an event, wherever it is printed.
+    private static func line(for event: CalendarEvent) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        let when = event.isAllDay ? "all day" : f.string(from: event.start)
+        var out = String(format: "%-8@ %@", when as NSString, event.title as NSString)
+        let people = event.people.compactMap { $0.is_me ? nil : ($0.bestName ?? $0.email) }
+        if !people.isEmpty { out += "  (" + people.joined(separator: ", ") + ")" }
+        // Said out loud rather than left implied. An all-day or declined event
+        // is in the list and can never be matched, and somebody looking for
+        // theirs deserves to know which of the two it is.
+        if !event.couldBeAMeeting {
+            out += event.isAllDay ? "  [all-day, never matched]"
+                                  : "  [declined, never matched]"
+        }
+        return out
+    }
+
+    /// `listen calendar match <id>`: every candidate, and which one wins.
+    private static func calendarMatch(_ args: [String]) -> Never {
+        guard let id = args.first else { fail("match needs a recording id.") }
+        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        guard MeetingCalendar.isAuthorized else { fail("no calendar access.") }
+        guard let start = recording.date else {
+            fail("`\(id)` has no start time to match against.")
+        }
+
+        print("\(recording.metadata.title)")
+        print("started \(recording.when)")
+        if let attached = recording.metadata.calendar_event_id {
+            print("already attached to event \(attached)")
+        }
+        print("")
+
+        let candidates = MeetingCalendar.candidates(for: start)
+        guard !candidates.isEmpty else {
+            let minutes = Int(MeetingCalendar.window / 60)
+            print("no event starts within \(minutes) minutes of this recording.")
+            // The near misses, because "nothing matched" and "something matched
+            // and lost" look identical from the outside and have different fixes.
+            let near = MeetingCalendar.events(from: start.addingTimeInterval(-3600),
+                                              to: start.addingTimeInterval(3600))
+                .filter(\.couldBeAMeeting)
+            if !near.isEmpty {
+                print("\nwithin an hour, and therefore too far away:")
+                for e in near { print("  " + offset(of: e, from: start) + "  " + e.title) }
+            }
+            exit(0)
+        }
+
+        for (i, e) in candidates.enumerated() {
+            print("\(i == 0 ? "→" : " ") \(offset(of: e, from: start))  \(e.title)")
+            print("    \(e.summary)")
+            if let link = e.link { print("    \(link.absoluteString)") }
+            for p in e.people {
+                let who = p.bestName ?? p.email ?? "(unnamed)"
+                let tags = [p.is_me ? "you" : nil,
+                            p.is_organizer ? "organizer" : nil].compactMap { $0 }
+                print("    · \(who)" + (p.email.map { " <\($0)>" } ?? "")
+                      + (tags.isEmpty ? "" : "  [" + tags.joined(separator: ", ") + "]"))
+            }
+        }
+        if candidates.count > 1 {
+            print("\nthe first wins: nearest start, with the longer guest list "
+                  + "breaking a tie.")
+        }
+        exit(0)
+    }
+
+    private static func offset(of event: CalendarEvent, from start: Date) -> String {
+        let minutes = Int((event.start.timeIntervalSince(start) / 60).rounded())
+        return String(format: "%+4dm", minutes)
+    }
+
+    /// `listen calendar backfill`: what the calendar would do to the library.
+    ///
+    /// A dry run unless `--apply` is given, and deliberately not something that
+    /// happens at launch. Renaming eight recordings at once without being asked
+    /// is exactly the surprise the rest of this app avoids.
+    private static func calendarBackfill(_ args: [String]) -> Never {
+        guard MeetingCalendar.isAuthorized else { fail("no calendar access.") }
+        var apply = false
+        var refresh = false
+        for arg in args {
+            switch arg {
+            case "--apply":   apply = true
+            case "--refresh": refresh = true
+            default:          fail("unknown option `\(arg)`.")
+            }
+        }
+
+        let library = Recording.all()
+        var matched = 0, renamed = 0, keptOwnName = 0, alreadyAttached = 0
+        var derived = 0, fromCalendar = 0
+
+        for recording in library.sorted(by: { $0.id < $1.id }) {
+            if !refresh, recording.metadata.calendar_event_id != nil {
+                alreadyAttached += 1
+                continue
+            }
+            guard let start = recording.date,
+                  let event = MeetingCalendar.match(for: start) else { continue }
+            matched += 1
+
+            // Count where the attendee names would come from. This is the one
+            // number in the feature that is not measured yet: how often an
+            // address alone produces a name a human would accept.
+            for p in event.people where !p.is_me {
+                if p.name != nil { fromCalendar += 1 } else if p.bestName != nil { derived += 1 }
+            }
+
+            if recording.isUntitled {
+                renamed += 1
+                print(String(format: "  %@  %-28@ → %@", recording.id as NSString,
+                             recording.metadata.title as NSString,
+                             MeetingCalendar.title(from: event) as NSString))
+            } else {
+                keptOwnName += 1
+                print(String(format: "  %@  %-28@ (keeps its name; guest list attached)",
+                             recording.id as NSString,
+                             recording.metadata.title as NSString))
+            }
+            if apply { MeetingCalendar.attach(to: recording, refresh: refresh) }
+        }
+
+        print("")
+        print("\(library.count) recordings, \(matched) matched an event.")
+        print("  \(renamed) would be named from the calendar")
+        print("  \(keptOwnName) keep the name they have")
+        if alreadyAttached > 0 { print("  \(alreadyAttached) already attached, left alone") }
+        print("attendee names: \(fromCalendar) from the invitation, "
+              + "\(derived) derived from an address.")
+        print(apply ? "\napplied." : "\nnothing was written. `--apply` does it.")
+        exit(0)
+    }
+
+    // MARK: - Contacts
+
+    /// `listen contacts`: which address belongs to whom.
+    ///
+    /// Needed for the reason `listen dictionary test` is needed. Whether an
+    /// address resolves to a name, and which of the three sources answered, is
+    /// not something anybody can work out by reading their own file: the book
+    /// is consulted first, then what the invitation said, then a guess made
+    /// from the address itself, and only the last of those is visible.
+    private static func contacts(_ args: [String]) -> Never {
+        let rest = Array(args.dropFirst())
+        switch args.first ?? "list" {
+        case "list":   contactsList()
+        case "link":   contactsLink(rest)
+        case "unlink": contactsUnlink(rest)
+        case "test":   contactsTest(rest)
+        default:
+            fail("unknown contacts subcommand `\(args[0])`. Try `listen help`.")
+        }
+    }
+
+    private static func contactsList() -> Never {
+        let book = ContactBook.load()
+        guard !book.isEmpty else {
+            log("no addresses have been claimed yet. Naming a speaker from a calendar "
+                + "suggestion files one, or `listen contacts link <email> <name>`.")
+            exit(0)
+        }
+        let library = Recording.all()
+        for contact in book {
+            // How much is behind the name, so a contact filed against somebody
+            // who is not actually in the library is visible rather than
+            // plausible.
+            let person = People.find(contact.name, in: library)
+            let seen = person.map { " · " + $0.summary } ?? " · not in any recording"
+            print(contact.name + seen)
+            for email in contact.emails { print("    " + email) }
+        }
+        exit(0)
+    }
+
+    private static func contactsLink(_ args: [String]) -> Never {
+        guard args.count >= 2 else { fail("link needs an address and a name.") }
+        let email = args[0]
+        let name = args.dropFirst().joined(separator: " ")
+        guard email.contains("@") else { fail("`\(email)` is not an email address.") }
+        if let problem = People.check(name) { fail(problem.localizedDescription) }
+
+        if let held = ContactBook.name(for: email), held != name {
+            // Said rather than done quietly. An address belongs to one person,
+            // so this is a correction of an earlier claim and worth seeing.
+            log("\(email) was \(held); it is now \(name).")
+        }
+        ContactBook.link(email, to: name)
+        exit(0)
+    }
+
+    private static func contactsUnlink(_ args: [String]) -> Never {
+        guard let email = args.first else { fail("unlink needs an address.") }
+        guard ContactBook.unlink(email) else { fail("nothing here claims `\(email)`.") }
+        log("forgot \(email).")
+        exit(0)
+    }
+
+    /// `listen contacts test <email>`: which of the three sources would answer.
+    private static func contactsTest(_ args: [String]) -> Never {
+        guard let email = args.first else { fail("test needs an address.") }
+        if let claimed = ContactBook.name(for: email) {
+            print("\(claimed)  (claimed: somebody said so)")
+        } else if let guessed = ContactBook.suggestedName(from: email) {
+            print("\(guessed)  (guessed from the address, never applied on its own)")
+        } else {
+            print("no name. The address would be shown as it is.")
+        }
         exit(0)
     }
 
@@ -451,9 +757,26 @@ enum CLI {
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       dictionary <sub>           your own terms and corrections
+      calendar <sub>             the calendars on this Mac, and what they name
+      contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server, read-only
+
+    calendar subcommands:
+      status                     access, calendars and today. The default.
+      events [--days N]          what is coming up, 7 days by default
+      match <id>                 every meeting that could be this recording,
+                                 with the offsets, and which one wins
+      backfill [--apply]         name every unnamed recording that matches an
+                                 event. Prints and changes nothing without --apply.
+      backfill --refresh         also re-read recordings already attached
+
+    contacts subcommands:
+      list                       every person and the addresses they answer to
+      link <email> <name>        say who an address belongs to
+      unlink <email>             forget one address
+      test <email>               the name that address would suggest
 
     dictionary subcommands:
       list                       every entry, with what each has changed

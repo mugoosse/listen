@@ -24,6 +24,11 @@ machine.
 - **Recognises voices across meetings.** Name someone once and Listen suggests
   them the next time it hears them. Suggestions are ranked and never applied on
   their own.
+- **Reads your calendar, with no account to make.** A recording is named after
+  the meeting it lines up with, and the people who were invited are offered when
+  you name a speaker. Google and Microsoft calendars come through whatever you
+  have already added in System Settings, so there is no sign-in, no
+  subscription and no server in the middle.
 - **Answers to an agent** over MCP, read-only, so you can ask about your own
   meetings without handing them to anyone.
 
@@ -79,9 +84,10 @@ Clicking any turn plays from there.
 
 ### Naming speakers
 
-Click a speaker's name in the transcript. Type a name, or take one of the
-suggestions ranked by voice. Two repairs are there because diarization gets
-these two things wrong often enough to need them:
+Click a speaker's name in the transcript. Type a name, take one of the
+suggestions ranked by voice, or take somebody off the invitation if this meeting
+was in your calendar. Two repairs are there because diarization gets these two
+things wrong often enough to need them:
 
 - **Discard** drops a phantom speaker, the one that appears over a stretch of
   silence with a line of invented filler attached.
@@ -138,6 +144,32 @@ rewriting one document whole means the loser of a race loses entries. Export
 writes the file Speak's own import reads, so the list travels back the other way
 too, and imports from TypeWhisper are understood as well.
 
+### Your calendar
+
+Settings, Permissions, Calendar. Listen reads the calendars this Mac already
+has, which includes any Google or Microsoft account you have added under System
+Settings, Internet Accounts. **There is no account to make and nothing to sign
+in to**, because macOS has already done that part. It only reads, and never
+writes anything back.
+
+Two things come of it. A recording is named after the meeting whose start is
+within ten minutes of it, and the people on the invitation are offered when you
+name a speaker.
+
+Ten minutes is measured rather than picked. Across a real library of 47
+recordings, ten, fifteen and twenty minutes all matched the same fourteen, and
+widening to thirty added two matches that were both wrong: a call matched a solo
+calendar block half an hour away. A name you typed yourself is never replaced.
+
+Calendars mostly give you an email address rather than a name, so Listen keeps
+its own small address book: when you take a suggestion, that address is filed
+against the name you chose, and it is offered directly the next time. One person
+can have as many addresses as they use. Nothing is written unless you pick
+somebody, and typing a name from scratch files nothing.
+
+This is optional, and refusing costs exactly those two things. Recording,
+transcription and speaker labelling are unaffected.
+
 ## The command line
 
 Install it from Settings, Developers. It is the same binary as the app,
@@ -151,9 +183,30 @@ listen show <id>                  metadata and transcript
 listen export <id> [--format]     write a transcript out
 listen label <id> <speaker> ...   name, merge or discard a speaker
 listen dictionary <sub>           your own terms and corrections
+listen calendar <sub>             the calendars on this Mac, and what they name
+listen contacts <sub>             which address belongs to which person
 listen calibrate                  voiceprint threshold report
 listen mcp                        stdio MCP server, read-only
 ```
+
+`listen calendar match <id>` is the one worth knowing about. Naming happens
+silently, so it prints every meeting that could have been the one, how many
+minutes each is away, and which one won:
+
+```
+$ listen calendar match 2026-08-03-160054-D478
+Ryan Mitchell - Meridian
+started 3 Aug 2026 at 16:00
+
+→   -1m  Emily Carter and Ryan Mitchell
+    Google / Home · 16:00 · 2 invited
+    https://us02web.zoom.us/j/00000000000
+    · Maxime Goossens <emily.carter@example.com>  [you]
+    · Ryan Mitchell <ryan.mitchell@example.org>  [organizer]
+```
+
+`listen calendar backfill` does the same over your whole library and changes
+nothing without `--apply`.
 
 `listen transcribe some.wav` needs no permissions at all, which makes it the
 fastest way to tell a model problem apart from a recording problem. It prints
@@ -196,7 +249,8 @@ metadata so an agent can decide what it needs before asking for all of it.
 `~/Library/Application Support/Listen/recordings/<id>/`
 
 ```
-metadata.json      title, recorded_at, duration, source, state
+metadata.json      title, recorded_at, duration, source, state,
+                   and the calendar event it was matched to
 mic.wav            your track
 system.wav         everyone else
 mix.m4a            generated on demand for playback
@@ -206,13 +260,17 @@ turns.json         condensed per-speaker turns
 embeddings.json    one voiceprint per speaker
 ```
 
-`dictionary.json` sits beside the recordings rather than inside one, because
-it is about the library as a whole.
+Two lists sit beside the recordings rather than inside one, because they are
+about the library as a whole: `dictionary.json` and `contacts.json`.
 
 One folder per recording, and no database anywhere. The folders *are* the
 library and the `embeddings.json` files *are* the voice bank, which means
 deleting a recording in Finder is a supported operation rather than a way to
 corrupt an index.
+
+The guest list is copied into `metadata.json` rather than looked up when needed,
+so a recording keeps answering after the meeting is deleted from the calendar or
+you take the permission away again.
 
 ## What leaves your Mac
 
@@ -223,7 +281,9 @@ like Little Snitch:
 - **github.com**, every two days, to check for an update.
 
 That is all. Audio, transcripts and voiceprints are never uploaded, and there
-is no telemetry.
+is no telemetry. Reading your calendar adds nothing to this list: it is the
+local calendar store, not a network call, which is the reason the feature needs
+no account.
 
 ## Building it
 

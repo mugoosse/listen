@@ -13,6 +13,36 @@ struct Metadata: Codable {
     var source: String
     var state: String
 
+    /// The meeting this recording is of, when the calendar knew about one.
+    ///
+    /// The iCal UID rather than an `eventIdentifier`, which is per-store and
+    /// shared by every occurrence of a repeating event.
+    ///
+    /// Its presence is also the "already looked" flag: matching runs once and
+    /// then never again, so a rename or a merge cannot be undone by a later
+    /// pass. `nil` means nothing matched, not that nothing was tried, and
+    /// `listen calendar match <id>` is how the difference is inspected.
+    var calendar_event_id: String?
+
+    /// Who was invited, snapshotted at match time.
+    ///
+    /// A snapshot and not a live read, for the reason the voiceprints live
+    /// beside the audio: the event can be edited or deleted, calendar access
+    /// can be revoked, and the library still has to answer. A recording is a
+    /// folder and the files in it are the truth.
+    var calendar_people: [CalendarPerson]?
+
+    // Both calendar fields are `Optional`, and that is what makes them safe to
+    // add to a struct with 47 files already on disk.
+    //
+    // The trap recorded against `StoredTranscript` is that Swift's synthesized
+    // decoder throws `keyNotFound` on a missing key *even when the property has
+    // a default value*, which is why that type has a hand-written
+    // `init(from:)`. It does not apply here: for an `Optional` property the
+    // synthesized decoder uses `decodeIfPresent`, so a missing key decodes as
+    // nil and every `metadata.json` written before today still reads. Verified
+    // with `listen list` over the whole library rather than assumed.
+
     enum State: String {
         /// Captured but not confirmed by the user. Lives in `staging/`.
         case unconfirmed

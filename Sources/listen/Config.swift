@@ -253,6 +253,7 @@ extension Settings {
     private static let autoDetectKey = "autoDetectMeetings"
     private static let skippedKey = "skippedBundleIDs"
     private static let onboardedKey = "onboarded"
+    private static let nameFromCalendarKey = "nameFromCalendar"
 
     static var startAtLoginDefaultApplied: Bool {
         get { defaults.bool(forKey: startAtLoginAppliedKey) }
@@ -298,6 +299,26 @@ extension Settings {
     static var skippedBundleIDs: Set<String> {
         get { Set(defaults.stringArray(forKey: skippedKey) ?? []) }
         set { defaults.set(newValue.sorted(), forKey: skippedKey) }
+    }
+
+    /// Name a recording after the meeting in your calendar that it lines up
+    /// with, and remember who was invited.
+    ///
+    /// **On** by default, and it applies the name without asking, which is only
+    /// defensible because of two guards and one measurement. The guards: it
+    /// never touches a title somebody typed, and it only considers events whose
+    /// start is within ten minutes of the recording's. The measurement, over
+    /// the 47 recordings in the real library: at ten minutes fourteen matched
+    /// and every match was plausible, while at thirty two more matched and both
+    /// of those were wrong. See `MeetingCalendar.window`.
+    ///
+    /// The presence of the key is the answer, not its truthiness, for the same
+    /// reason as `autoDetectMeetings` above: `bool(forKey:)` cannot tell "never
+    /// set" from "turned off on purpose", so a default of true would be
+    /// inexpressible and anyone who turned it off would have it turned back on.
+    static var nameFromCalendar: Bool {
+        get { defaults.object(forKey: nameFromCalendarKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: nameFromCalendarKey) }
     }
 
     static func skip(_ bundleID: String) {

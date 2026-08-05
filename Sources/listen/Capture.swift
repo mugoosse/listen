@@ -59,6 +59,14 @@ final class Capture {
             state: Metadata.State.unconfirmed.rawValue))
         try recording.save()
 
+        // Named from the calendar here rather than only at the end, so the row
+        // that appears in the sidebar the moment Record is pressed carries the
+        // meeting's name for the hour it is running rather than saying
+        // "Untitled" throughout. The measurement supports doing it this early:
+        // every offset observed in the real library was between -9 and +0
+        // minutes, so the event is already in EventKit when capture begins.
+        if let named = MeetingCalendar.attachIfEnabled(to: recording) { recording = named }
+
         warnings = []
 
         // Each track starts on its own. A Mac with no working microphone should
@@ -107,6 +115,12 @@ final class Capture {
         let captured = max(mic.duration, system.duration)
         mic.stop()
         system.stop()
+
+        // A second attempt, for the meeting that was put in the calendar after
+        // it had already started. `attach` is a no-op once
+        // `calendar_event_id` is set, so a recording matched at the start is
+        // left alone here and a title edited during the call survives.
+        if let named = MeetingCalendar.attachIfEnabled(to: recording) { recording = named }
 
         recording.metadata.duration = captured
         try? recording.save()

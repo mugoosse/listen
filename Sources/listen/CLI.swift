@@ -12,7 +12,7 @@ enum CLI {
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
-        "import", "enroll", "sources", "dictionary", "people", "rename", "me", "edit",
+        "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts",
         "help", "--help", "-h", "--version", "-v",
     ]
@@ -55,6 +55,10 @@ enum CLI {
             people(rest)
         case "rename":
             renamePerson(rest)
+        case "merge":
+            mergePeople(rest)
+        case "unname":
+            unnamePerson(rest)
         case "me":
             me(rest)
         case "import":
@@ -385,9 +389,35 @@ enum CLI {
         case "link":   contactsLink(rest)
         case "unlink": contactsUnlink(rest)
         case "test":   contactsTest(rest)
+        case "note":   contactsNote(rest)
         default:
             fail("unknown contacts subcommand `\(args[0])`. Try `listen help`.")
         }
+    }
+
+    /// `listen contacts note <name> [text]`: what you know about somebody.
+    ///
+    /// The same write the person page makes, so the field is exercised without
+    /// the window. With no text it prints what is there, which is also how you
+    /// check that a note landed on the person you meant.
+    private static func contactsNote(_ args: [String]) -> Never {
+        guard let name = args.first else {
+            fail("note needs a person. Try `listen contacts note \"Ryan\" \"CTO\"`.")
+        }
+        let existing = ContactBook.contact(name)
+        let text = args.dropFirst().joined(separator: " ")
+        guard !args.dropFirst().isEmpty else {
+            let note = existing?.note ?? ""
+            print(note.isEmpty ? "no note for \(name)" : note)
+            exit(0)
+        }
+        guard People.findByDisplayName(name) != nil || existing != nil else {
+            fail("nobody called `\(name)`. `listen people` lists everyone.")
+        }
+        ContactBook.set(Contact(name: name, emails: existing?.emails ?? [],
+                                notes: text.isEmpty ? nil : text))
+        print(text.isEmpty ? "note cleared for \(name)" : "\(name): \(text)")
+        exit(0)
     }
 
     private static func contactsList() -> Never {
@@ -753,6 +783,8 @@ enum CLI {
       edit <id> <old> <new>      correct one sentence of a transcript
       people [<name>]            who is in the library, or where one person is
       rename <name> <new name>   rename one person in every recording
+      merge <name> <into>        two rows in the roster, one human
+      unname <name>              take a name off, leaving speakers to name again
       me [<name> | --clear]      what the microphone track is called on screen
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
@@ -776,6 +808,7 @@ enum CLI {
       list                       every person and the addresses they answer to
       link <email> <name>        say who an address belongs to
       unlink <email>             forget one address
+      note <name> [text]         what you know about them, or read it back
       test <email>               the name that address would suggest
 
     dictionary subcommands:
@@ -1075,17 +1108,16 @@ enum CLI {
         }
 
         if let name {
-            guard let person = People.findByDisplayName(name) else {
+            guard let person = People.findByDisplayName(name)
+                    ?? ContactBook.contact(name).map({
+                        Person(label: $0.name, recordings: [], seconds: 0) }) else {
                 fail("nobody called `\(name)`. `listen people` lists everyone.")
             }
-            print("\(person.display)  \(person.summary)")
-            for recording in person.recordings {
-                print("  \(recording.id)  \(recording.metadata.title)")
-            }
+            card(person)
             exit(0)
         }
 
-        let everyone = People.all()
+        let everyone = People.roster()
         guard !everyone.isEmpty else {
             log("nobody is named yet. `listen label <id> <speaker> <name>` names one.")
             exit(0)
@@ -1101,6 +1133,52 @@ enum CLI {
             print(name.padding(toLength: width, withPad: " ", startingAt: 0) + "  " + summary)
         }
         exit(0)
+    }
+
+    /// One person as the card shows them.
+    ///
+    /// Printed by the same reads the window makes, so "what does the app think
+    /// it knows about Ryan" is answerable without opening it. That is the
+    /// whole reason these commands exist in a project with no test target.
+    private static func card(_ person: Person) {
+        let contact = ContactBook.contact(person.label)
+        print("\(person.display)  \(person.summary)")
+
+        var facts: [String] = []
+        if person.isYou { facts.append("you, on the microphone track") }
+        if let seen = person.lastSeen, !person.isYou {
+            let f = DateFormatter()
+            f.dateStyle = .medium
+            f.timeStyle = .none
+            facts.append("last heard " + f.string(from: seen))
+        }
+        let voiced = person.recordings.filter {
+            $0.voiceprints[person.label]?.isEvidence == true
+        }
+        if !voiced.isEmpty {
+            facts.append("recognised by voice in \(voiced.count)")
+        } else if !person.recordings.isEmpty, !person.isYou {
+            facts.append("no voiceprint yet")
+        }
+        if !facts.isEmpty { print("  " + facts.joined(separator: " · ")) }
+
+        for email in contact?.emails ?? [] { print("  " + email) }
+        if let note = contact?.note, !note.isEmpty { print("  " + note) }
+
+        guard !person.recordings.isEmpty else {
+            print("  in no recordings yet")
+            return
+        }
+        print("")
+        let width = person.recordings.map(\.id.count).max() ?? 0
+        for recording in person.recordings {
+            let spoken = People.speakers(in: recording)
+                .first { $0.label == person.label }
+                .map { Recording.length($0.seconds) } ?? ""
+            print("  " + recording.id.padding(toLength: width, withPad: " ", startingAt: 0)
+                  + "  " + recording.metadata.title
+                  + (spoken.isEmpty ? "" : "  (\(spoken))"))
+        }
     }
 
     /// `listen rename <name> <new name>`: one person, everywhere at once.
@@ -1134,6 +1212,64 @@ enum CLI {
         let changed = People.rename(person.label, to: name)
         guard !changed.isEmpty else { fail("nothing was changed.") }
         print("renamed \(person.display) to \(name) in \(changed.count) recording(s)")
+        for id in changed { print("  \(id)") }
+        exit(0)
+    }
+
+    /// `listen merge <person> <into>`: two rows in the roster, one human.
+    ///
+    /// The imported case: you are `Me` on the recordings made here and a name
+    /// on the ones that came from somewhere else. Merging into `Me` is allowed
+    /// where renaming to it is refused, because "that speaker was me" is a fact
+    /// about a recording rather than a name somebody typed.
+    private static func mergePeople(_ args: [String]) -> Never {
+        guard args.count >= 2 else {
+            fail("merge needs a person and who they are. Try `listen help`.")
+        }
+        guard let person = People.findByDisplayName(args[0]) else {
+            fail("nobody called `\(args[0])`. `listen people` lists everyone.")
+        }
+        let wanted = args.dropFirst().joined(separator: " ")
+        let target = People.findByDisplayName(wanted)?.label
+            ?? (wanted == SpeakerName.you ? SpeakerName.you : nil)
+        guard let target else {
+            fail("nobody called `\(wanted)`. `listen people` lists everyone.")
+        }
+        guard person.label != target else { fail("that is the same person.") }
+        guard person.label != SpeakerName.you else {
+            fail("you cannot be folded into somebody else. `\(SpeakerName.you)` is "
+                 + "what the pipeline writes for the microphone track, so the next "
+                 + "recording would put it back. Merge them into you instead.")
+        }
+
+        let changed = People.merge(person.label, into: target)
+        guard !changed.isEmpty else { fail("nothing was changed.") }
+        print("merged \(person.display) into \(SpeakerName.display(target)) in "
+              + "\(changed.count) recording(s)")
+        for id in changed { print("  \(id)") }
+        exit(0)
+    }
+
+    /// `listen unname <person>`: take a name off without losing the speaker.
+    ///
+    /// The wrong person named in ten recordings is a common enough mistake, and
+    /// the only way back used to be renaming them to something else. This puts
+    /// every one of them back to `Speaker A`, keeps the voiceprint on that
+    /// speaker, and removes the card that was filed under the name.
+    private static func unnamePerson(_ args: [String]) -> Never {
+        guard let name = args.first else {
+            fail("unname needs a person. Try `listen help`.")
+        }
+        guard let person = People.findByDisplayName(args.joined(separator: " "))
+                ?? People.findByDisplayName(name) else {
+            fail("nobody called `\(name)`. `listen people` lists everyone.")
+        }
+        guard person.label != SpeakerName.you else {
+            fail("`\(SpeakerName.you)` is the microphone track, which is you by "
+                 + "construction rather than by name, so there is no name to take off.")
+        }
+        let changed = People.unname(person.label)
+        print("unnamed \(person.display) in \(changed.count) recording(s)")
         for id in changed { print("  \(id)") }
         exit(0)
     }

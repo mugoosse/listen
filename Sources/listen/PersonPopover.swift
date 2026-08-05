@@ -1,33 +1,36 @@
 import AppKit
 
-/// One person, from the chip that names them: where else they appear, and the
-/// two ways their name can change.
+/// A person, from the chip that names them.
 ///
-/// A popover rather than a pane or a mode. Everything here is about a name and
-/// a list of recordings, both of which are small, and a popover keeps the
-/// transcript you were reading on screen behind it. It is also the only place
-/// in the app that edits more than one recording at once, which is why the
-/// confirmation says how many before it does anything.
+/// **It reads before it edits.** The first version of this opened a name field,
+/// and the complaint it earned was exactly right: clicking somebody's name to
+/// find out who they are and landing in a form is the interface answering a
+/// question nobody asked. So the card shows what is known, and editing is a
+/// button on it.
+///
+/// A popover rather than a pane or a mode. Everything here is small, and a
+/// popover keeps the transcript you were reading on screen behind it. The
+/// larger view of the same person is People mode, which this links to.
 @MainActor
 enum PersonPopover {
     /// `NSPopover` does not retain itself, and a popover that is released while
     /// open takes its content view controller with it mid-click.
     private static var current: NSPopover?
 
-    /// Open the popover for one person.
+    /// Open the card for one person.
     ///
     /// `view` has to outlive the popover, which is why the caller passes the
     /// row rather than the chip inside it. `NSPopover` closes itself as soon as
     /// its positioning view leaves the window, and anything that reloads the
     /// pane replaces every chip in the row.
     static func show(_ label: String, from view: NSView, rect: NSRect,
-                     done: @escaping () -> Void) {
+                     editing: Bool = false, done: @escaping () -> Void) {
         guard let person = People.find(label) else { return }
         current?.performClose(nil)
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = PersonPopoverController(person: person) {
+        popover.contentViewController = ContactCard(person: person, editing: editing) {
             current?.performClose(nil)
             done()
         }
@@ -35,9 +38,11 @@ enum PersonPopover {
         // unflipped view, which is where there is room: the chips sit near the
         // top of the window, so a popover asked for above has the title bar and
         // then the screen edge within a hundred points, and one that does not
-        // fit is not moved, it is closed. It came and went inside the same
-        // `show(relativeTo:)` call, reporting `isShown == false` immediately
-        // afterwards with a close reason of "standard".
+        // fit is not moved, it is closed.
+        //
+        // Off the click that opened it, too. A popover put up from inside a
+        // control's own action arrives while the mouse event is still being
+        // dispatched.
         DispatchQueue.main.async {
             popover.show(relativeTo: rect, of: view, preferredEdge: .minY)
         }
@@ -48,138 +53,275 @@ enum PersonPopover {
         current?.performClose(nil)
         current = nil
     }
+
+    /// The same actions as a menu.
+    ///
+    /// A popover is one window manager decision away from not appearing; a
+    /// contextual menu is not. Every entry point this feature has is therefore
+    /// also here, on the right button, which is where a Mac user looks for the
+    /// verbs that apply to a thing.
+    static func menu(for label: String, in recording: Recording,
+                     anchor: @escaping () -> (NSView, NSRect)?,
+                     done: @escaping () -> Void) -> NSMenu {
+        let menu = NSMenu()
+        let named = !VoiceBank.isPlaceholder(label)
+        // The label is the contact's name: the book is keyed on it, which is
+        // what makes a rename one operation rather than two that can disagree.
+        let shown = SpeakerName.display(label)
+
+        if named {
+            menu.addItem(Action("Contact Card", "person.crop.circle") {
+                guard let (view, rect) = anchor() else { return }
+                show(label, from: view, rect: rect, done: done)
+            })
+            menu.addItem(Action("Open in People", "person.2") {
+                LibraryWindow.shared.showPerson(label)
+            })
+            menu.addItem(Action("Show Only \(shown)", "line.3.horizontal.decrease") {
+                LibraryWindow.shared.filter(bySpeaker: label)
+            })
+            menu.addItem(.separator())
+            menu.addItem(Action("Edit \(shown)…", "pencil") {
+                guard let (view, rect) = anchor() else { return }
+                show(label, from: view, rect: rect, editing: true, done: done)
+            })
+            menu.addItem(Action("Not \(shown)…", "person.crop.circle.badge.questionmark") {
+                SpeakerSheet.present(for: recording, speaker: label,
+                                     in: NSApp.keyWindow, done: done)
+            })
+        } else {
+            menu.addItem(Action("Who Is This?…", "person.crop.circle.badge.questionmark") {
+                SpeakerSheet.present(for: recording, speaker: label,
+                                     in: NSApp.keyWindow, done: done)
+            })
+        }
+        return menu
+    }
 }
 
+/// A menu item that runs a closure.
+///
+/// `NSMenuItem` wants a target and a selector, and every one of these items is
+/// a different closure over a different person. The item owns its handler, so
+/// nothing has to keep a table of them alive.
 @MainActor
-private final class PersonPopoverController: NSViewController, NSTextFieldDelegate {
+final class Action: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, _ symbol: String?, _ run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
+    }
+
+    required init(coder: NSCoder) { fatalError() }
+
+    @objc private func fire() { run() }
+}
+
+// ---------------------------------------------------------------------------
+
+/// The card itself, in one of its two states.
+@MainActor
+private final class ContactCard: NSViewController, NSTextFieldDelegate {
     private let person: Person
     private let done: () -> Void
+    private var editing: Bool
 
-    private let nameField = NSTextField(string: "")
-    private let subtitle = NSTextField(labelWithString: "")
-    private let saveButton = NSButton(title: "", target: nil, action: nil)
-    private let note = NSTextField(wrappingLabelWithString: "")
-    private var committing = false
-
+    private static let width: CGFloat = 330
     /// Enough rows to see the shape of somebody's history without building two
     /// hundred views for a person who is in every meeting. The remainder is
     /// counted rather than dropped silently.
-    private static let maxRows = 25
-    private static let width: CGFloat = 320
+    private static let maxRows = 20
 
-    init(person: Person, done: @escaping () -> Void) {
+    private let first = NSTextField(string: "")
+    private let last = NSTextField(string: "")
+    private let emails = NSTextField(string: "")
+    private let notes = NSTextView()
+    private var committing = false
+
+    init(person: Person, editing: Bool, done: @escaping () -> Void) {
         self.person = person
+        self.editing = editing
         self.done = done
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private var contact: Contact? { ContactBook.contact(person.label) }
+
     override func loadView() {
+        view = NSView()
+        view.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
+        rebuild()
+    }
+
+    private func rebuild() {
+        for sub in view.subviews { sub.removeFromSuperview() }
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
-
-        nameField.stringValue = person.display
-        nameField.font = .systemFont(ofSize: 15, weight: .semibold)
-        nameField.delegate = self
-        nameField.target = self
-        nameField.action = #selector(commit)
-        // Only for the user: the Mac account name is a suggestion of what to
-        // type, never something applied on its own.
-        if person.isYou, Settings.userName == nil {
-            nameField.placeholderString = Settings.suggestedUserName
-        }
-
-        subtitle.stringValue = person.isYou
-            ? "You, on the microphone track · " + person.summary
-            : person.summary
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
-
-        // The trade-off, on the control rather than in a tooltip. The two
-        // renames are different operations and only one of them rewrites files,
-        // so they must not read as the same button.
-        note.stringValue = person.isYou
-            ? "Shown in place of \"Me\" in every recording, past and future. "
-              + "The transcripts keep saying Me, so this costs nothing to change."
-            : "Renaming rewrites the transcript in "
-              + (person.recordings.count == 1
-                 ? "1 recording" : "\(person.recordings.count) recordings")
-              + " and moves their voiceprint with the name."
-        note.font = .systemFont(ofSize: 11)
-        note.textColor = .tertiaryLabelColor
-
-        saveButton.target = self
-        saveButton.action = #selector(commit)
-        saveButton.bezelStyle = .rounded
-        saveButton.controlSize = .small
-        saveButton.keyEquivalent = "\r"
-        updateSaveButton()
-
-        for view in [nameField, subtitle, note, saveButton] {
-            stack.addArrangedSubview(view)
-            view.translatesAutoresizingMaskIntoConstraints = false
-        }
-        nameField.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
-        note.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
-        stack.setCustomSpacing(4, after: nameField)
-        stack.setCustomSpacing(10, after: subtitle)
-
-        let separator = NSBox()
-        separator.boxType = .separator
-        stack.addArrangedSubview(separator)
-        separator.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
-
-        stack.addArrangedSubview(recordingList())
-
-        // Useless for the user, who is in everything: a filter that selects the
-        // whole library is a control that appears to do nothing.
-        if !person.isYou {
-            let filter = NSButton(title: "Show only \(person.display) in the library",
-                                  target: self, action: #selector(filterLibrary))
-            filter.bezelStyle = .inline
-            filter.controlSize = .small
-            stack.addArrangedSubview(filter)
-        }
-
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let container = NSView()
-        container.addSubview(stack)
+
+        editing ? buildEditor(into: stack) : buildCard(into: stack)
+
+        view.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: container.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            container.widthAnchor.constraint(equalToConstant: Self.width),
+            stack.topAnchor.constraint(equalTo: view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
-        view = container
     }
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        view.window?.makeFirstResponder(nameField)
+    // MARK: - Reading
+
+    private func buildCard(into stack: NSStackView) {
+        // The actions sit in the corner as a circle, the way the person page
+        // puts them in the toolbar, so the foot of the card carries one plain
+        // verb rather than a button and a second button pretending to be one.
+        let more = NSButton(title: "", target: self, action: #selector(showMenu(_:)))
+        more.bezelStyle = .circular
+        // Sized to match the circles in the toolbar rather than left at the
+        // default, which draws a `.circular` button noticeably smaller than
+        // every other round button in the window and reads as a different kind
+        // of control.
+        more.controlSize = .large
+        more.image = NSImage(systemSymbolName: "ellipsis",
+                             accessibilityDescription: "More")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        more.toolTip = "Open in People, or edit"
+        more.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            more.widthAnchor.constraint(equalToConstant: 28),
+            more.heightAnchor.constraint(equalToConstant: 28),
+        ])
+        let header = NSStackView(views: [disc(), titles(), NSView(), more])
+        header.orientation = .horizontal
+        header.alignment = .top
+        header.spacing = 10
+        stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
+
+        if let contact, !contact.emails.isEmpty {
+            let block = NSStackView()
+            block.orientation = .vertical
+            block.alignment = .leading
+            block.spacing = 1
+            for address in contact.emails {
+                let label = NSTextField(labelWithString: address)
+                label.font = .systemFont(ofSize: 12)
+                label.textColor = .linkColor
+                label.isSelectable = true
+                block.addArrangedSubview(label)
+            }
+            stack.addArrangedSubview(block)
+        }
+
+        if let note = contact?.note, !note.isEmpty {
+            let label = NSTextField(wrappingLabelWithString: note)
+            label.font = .systemFont(ofSize: 12)
+            label.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(label)
+            width(label)
+        }
+
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(recordingList())
+        stack.addArrangedSubview(separator())
+
+        // "Show Recordings" and not "Only Ryan": the second says what the app
+        // does to its own list, and the first says what the person clicking it
+        // wants. The rest goes behind the same ellipsis the person page uses,
+        // so one card does not carry three buttons of equal weight.
+        let show = button("Show Recordings", #selector(filterLibrary))
+        show.toolTip = "Narrow the library to the recordings \(person.display) is in"
+        stack.addArrangedSubview(show)
     }
 
-    // MARK: - The recordings
+    /// The initials disc, which stands in for a photo.
+    ///
+    /// Coloured from the name rather than from a palette in order, so the same
+    /// person is the same colour in every meeting and a row of chips is
+    /// scannable without reading it.
+    private func disc() -> NSView {
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 17
+        box.layer?.backgroundColor = Self.colour(for: person.label).cgColor
+        box.translatesAutoresizingMaskIntoConstraints = false
+
+        let initials = NSTextField(labelWithString: contact?.initials
+                                   ?? Self.initials(of: person.display))
+        initials.font = .systemFont(ofSize: 13, weight: .semibold)
+        initials.textColor = .white
+        initials.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(initials)
+        NSLayoutConstraint.activate([
+            box.widthAnchor.constraint(equalToConstant: 34),
+            box.heightAnchor.constraint(equalToConstant: 34),
+            initials.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+            initials.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        return box
+    }
+
+    private func titles() -> NSView {
+        let name = NSTextField(labelWithString: person.display)
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.lineBreakMode = .byTruncatingTail
+
+        let summary = NSTextField(labelWithString: person.summary)
+        summary.font = .systemFont(ofSize: 11)
+        summary.textColor = .secondaryLabelColor
+
+        let stack = NSStackView(views: [name, summary])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 1
+
+        if person.isYou {
+            let badge = NSTextField(labelWithString: "You, on the microphone track")
+            badge.font = .systemFont(ofSize: 11)
+            badge.textColor = .tertiaryLabelColor
+            stack.addArrangedSubview(badge)
+        } else if let last = person.lastSeen {
+            let heard = NSTextField(labelWithString: "Last heard " + Self.when(last))
+            heard.font = .systemFont(ofSize: 11)
+            heard.textColor = .tertiaryLabelColor
+            stack.addArrangedSubview(heard)
+        }
+        return stack
+    }
 
     private func recordingList() -> NSView {
         let rows = NSStackView()
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = 2
+        rows.translatesAutoresizingMaskIntoConstraints = false
 
         for recording in person.recordings.prefix(Self.maxRows) {
             rows.addArrangedSubview(row(for: recording))
         }
         let hidden = person.recordings.count - Self.maxRows
         if hidden > 0 {
-            let more = NSTextField(labelWithString: "and \(hidden) more")
+            let more = NSTextField(labelWithString: "and \(hidden) more in People")
             more.font = .systemFont(ofSize: 11)
             more.textColor = .tertiaryLabelColor
             rows.addArrangedSubview(more)
+        }
+        if person.recordings.isEmpty {
+            let none = NSTextField(labelWithString: "In no recordings yet")
+            none.font = .systemFont(ofSize: 12)
+            none.textColor = .tertiaryLabelColor
+            rows.addArrangedSubview(none)
         }
 
         let scroll = NSScrollView()
@@ -188,138 +330,159 @@ private final class PersonPopoverController: NSViewController, NSTextFieldDelega
         scroll.contentView = TopAlignedClipView()
         scroll.documentView = rows
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        rows.translatesAutoresizingMaskIntoConstraints = false
-
         let lines = min(person.recordings.count, Self.maxRows) + (hidden > 0 ? 1 : 0)
         NSLayoutConstraint.activate([
             scroll.widthAnchor.constraint(equalToConstant: Self.width - 28),
-            scroll.heightAnchor.constraint(equalToConstant: min(CGFloat(lines) * 22 + 4, 200)),
+            scroll.heightAnchor.constraint(
+                equalToConstant: min(max(CGFloat(lines), 1) * 22 + 4, 160)),
             rows.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
         return scroll
     }
 
     private func row(for recording: Recording) -> NSView {
-        let button = NSButton(title: recording.metadata.title, target: self,
-                              action: #selector(openRecording(_:)))
-        button.isBordered = false
-        button.font = .systemFont(ofSize: 12)
-        button.alignment = .left
-        button.cell?.lineBreakMode = .byTruncatingTail
-        button.identifier = NSUserInterfaceItemIdentifier(recording.id)
-        button.contentTintColor = recording.isUntitled ? .secondaryLabelColor : .labelColor
-        button.toolTip = "Open this recording"
+        let title = NSTextField(labelWithString: recording.metadata.title)
+        title.font = .systemFont(ofSize: 12)
+        title.lineBreakMode = .byTruncatingTail
+        title.textColor = recording.isUntitled ? .secondaryLabelColor : .labelColor
+        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let date = NSTextField(labelWithString: Self.shortDate(recording))
         date.font = .systemFont(ofSize: 11)
         date.textColor = .tertiaryLabelColor
-
-        let row = NSStackView(views: [button, date])
-        row.orientation = .horizontal
-        row.distribution = .fill
-        row.spacing = 6
-        row.widthAnchor.constraint(equalToConstant: Self.width - 44).isActive = true
-        // The title takes the slack and gives up space first: a date squeezed
-        // to "5 Au" is unreadable, a truncated title is still recognisable.
-        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         date.setContentHuggingPriority(.required, for: .horizontal)
+
+        let content = NSStackView(views: [title, date])
+        content.orientation = .horizontal
+        content.distribution = .fill
+        content.spacing = 6
+
+        let row = HoverRow(content: content, target: self,
+                           action: #selector(openRecording(_:)), height: 24)
+        row.identifier = NSUserInterfaceItemIdentifier(recording.id)
+        row.toolTip = "Open this recording"
+        row.widthAnchor.constraint(equalToConstant: Self.width - 34).isActive = true
         return row
     }
 
-    private static func shortDate(_ recording: Recording) -> String {
-        guard let date = recording.date else { return "" }
-        let f = DateFormatter()
-        f.dateFormat = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
-            ? "d MMM" : "d MMM yyyy"
-        return f.string(from: date)
+    // MARK: - Writing
+
+    private func buildEditor(into stack: NSStackView) {
+        let split = Contact.split(person.display)
+        first.stringValue = contact?.firstName ?? split.first
+        last.stringValue = contact?.lastName ?? split.last
+        emails.stringValue = (contact?.emails ?? []).joined(separator: ", ")
+        notes.string = contact?.note ?? ""
+
+        for (field, placeholder) in [(first, "First"), (last, "Last")] {
+            field.placeholderString = placeholder
+            field.font = .systemFont(ofSize: 13)
+            field.delegate = self
+        }
+        emails.placeholderString = "name@example.com, other@example.com"
+        emails.font = .systemFont(ofSize: 12)
+
+        let names = NSStackView(views: [first, last])
+        names.orientation = .horizontal
+        names.distribution = .fillEqually
+        names.spacing = 6
+        stack.addArrangedSubview(names)
+        width(names)
+        stack.addArrangedSubview(emails)
+        width(emails)
+
+        // A text view, because notes are the one field somebody writes a
+        // paragraph into.
+        notes.font = .systemFont(ofSize: 12)
+        notes.isRichText = false
+        notes.textContainerInset = NSSize(width: 4, height: 4)
+        notes.drawsBackground = false
+        let notesScroll = NSScrollView()
+        notesScroll.documentView = notes
+        notesScroll.hasVerticalScroller = true
+        notesScroll.borderType = .bezelBorder
+        notesScroll.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(notesScroll)
+        NSLayoutConstraint.activate([
+            notesScroll.widthAnchor.constraint(equalToConstant: Self.width - 28),
+            notesScroll.heightAnchor.constraint(equalToConstant: 76),
+        ])
+
+        // Says what it will cost before it is pressed. Renaming somebody is the
+        // one edit here that rewrites transcripts, and the count is the part
+        // nobody can guess.
+        let note = NSTextField(wrappingLabelWithString: person.isYou
+            ? "Your name is shown in place of \"Me\" everywhere, past and future. "
+              + "The transcripts keep saying Me, so this costs nothing to change."
+            : "Renaming rewrites the transcript in "
+              + (person.recordings.count == 1
+                 ? "1 recording" : "\(person.recordings.count) recordings")
+              + " and moves their voiceprint with the name.")
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .tertiaryLabelColor
+        stack.addArrangedSubview(note)
+        width(note)
+
+        let cancel = button("Cancel", #selector(cancelEditing))
+        let save = button("Save", #selector(commit))
+        save.keyEquivalent = "\r"
+        let row = NSStackView(views: [cancel, save])
+        row.orientation = .horizontal
+        row.spacing = 6
+        stack.addArrangedSubview(row)
     }
 
-    // MARK: - Actions
-
-    @objc private func openRecording(_ sender: NSButton) {
-        guard let id = sender.identifier?.rawValue else { return }
-        PersonPopover.close()
-        LibraryWindow.shared.reveal(id)
+    @objc private func startEditing() {
+        editing = true
+        rebuild()
+        DispatchQueue.main.async { self.view.window?.makeFirstResponder(self.first) }
     }
 
-    @objc private func filterLibrary() {
-        PersonPopover.close()
-        LibraryWindow.shared.filter(bySpeaker: person.label)
-    }
-
-    func controlTextDidChange(_ obj: Notification) { updateSaveButton() }
-
-    private var typed: String {
-        nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func updateSaveButton() {
-        let changed = typed != person.display
-        saveButton.isEnabled = changed
-        saveButton.title = person.isYou
-            ? "Save"
-            : "Rename in \(person.recordings.count)"
+    @objc private func cancelEditing() {
+        editing = false
+        rebuild()
     }
 
     @objc private func commit() {
-        // Return in the field and the default button can both fire, and the
-        // second would arrive while the first is still putting a confirmation
-        // on screen: two alerts asking the same question, one behind the other.
-        // Only the path that leads to one latches, and it never unlatches
-        // because the popover is closing.
         guard !committing else { return }
-        guard typed != person.display else { done(); return }
+        let typed = Contact.join(first: first.stringValue, last: last.stringValue)
+        let addresses = emails.stringValue
+            .split(whereSeparator: { $0 == "," || $0 == " " })
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let text = notes.string.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if person.isYou {
-            // A preference, so no confirmation: nothing on disk changes and
-            // clearing the field puts "Me" back.
-            let chosen = typed.isEmpty || typed == SpeakerName.you ? nil : typed
-            Settings.userName = chosen
-            if let chosen, let other = People.find(chosen), !other.isYou {
-                sayThereAreTwo(chosen, other)
+        // The name first, because everything else is filed under it. Renaming
+        // moves the book entry too, through `People.rename`.
+        let renaming = !typed.isEmpty && typed != person.display
+        if renaming, !person.isYou {
+            if let problem = People.check(typed) {
+                complain(problem.localizedDescription)
+                return
             }
-            done()
+            committing = true
+            let person = self.person
+            let after = done
+            PersonPopover.close()
+            DispatchQueue.main.async {
+                guard Self.confirm(renaming: person, to: typed) else { return }
+                let changed = People.rename(person.label, to: typed)
+                ContactBook.set(Contact(name: typed, emails: addresses,
+                                        notes: text.isEmpty ? nil : text))
+                log("renamed \(person.label) to \(typed) in \(changed.count) recording(s)")
+                after()
+            }
             return
         }
 
-        let name = typed
-        if let problem = People.check(name) {
-            complain(problem.localizedDescription)
-            return
+        if person.isYou, renaming {
+            // A preference and not a transcript edit: the label stays `Me`.
+            Settings.userName = typed
         }
-
-        // The popover has to go before a modal alert runs: a transient popover
-        // closes itself when the alert takes the window, which would deallocate
-        // this controller in the middle of its own action.
-        committing = true
-        let person = self.person
-        let after = done
-        PersonPopover.close()
-        DispatchQueue.main.async {
-            guard Self.confirm(renaming: person, to: name) else { return }
-            let changed = People.rename(person.label, to: name)
-            log("renamed \(person.label) to \(name) in \(changed.count) recording(s)")
-            after()
-        }
-    }
-
-    /// Told, not prevented.
-    ///
-    /// A library really can hold both: an imported recording was labelled with
-    /// your name by hand, and the microphone track is `Me`, so choosing that
-    /// name puts two identically labelled people in the list. They are still
-    /// two people here, and the alternative to saying so is two identical chips
-    /// in one transcript with nothing to explain them. Merging them is the
-    /// per-recording Merge in that transcript, which is a transcript edit and
-    /// not a preference.
-    private func sayThereAreTwo(_ name: String, _ other: Person) {
-        let alert = NSAlert()
-        alert.messageText = "There is already somebody called \(name)."
-        alert.informativeText = "\(other.summary), named by hand rather than "
-            + "recorded on your microphone. This only changes what the microphone "
-            + "track is called, so the two stay separate."
-        alert.runModal()
+        ContactBook.set(Contact(name: person.isYou ? person.display : person.label,
+                                emails: addresses, notes: text.isEmpty ? nil : text))
+        done()
     }
 
     private func complain(_ message: String) {
@@ -327,19 +490,12 @@ private final class PersonPopoverController: NSViewController, NSTextFieldDelega
         alert.messageText = message
         alert.alertStyle = .warning
         alert.runModal()
-        nameField.stringValue = person.display
-        updateSaveButton()
     }
 
     /// Say how much this touches before touching it.
-    ///
-    /// The collision count is the part nobody would otherwise find out: two
-    /// people becoming one leaves a transcript that looks as though it was
-    /// always that way.
     private static func confirm(renaming person: Person, to name: String) -> Bool {
         let collisions = People.collisions(renaming: person.label, to: name)
         let count = person.recordings.count
-
         let alert = NSAlert()
         alert.messageText = "Rename \(person.display) to \(name) in "
             + (count == 1 ? "1 recording?" : "\(count) recordings?")
@@ -356,5 +512,92 @@ private final class PersonPopoverController: NSViewController, NSTextFieldDelega
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - Actions
+
+    @objc private func openRecording(_ sender: NSView) {
+        guard let id = sender.identifier?.rawValue else { return }
+        PersonPopover.close()
+        LibraryWindow.shared.reveal(id)
+    }
+
+    /// Everything the card can do that is not its one plain verb.
+    @objc private func showMenu(_ sender: NSButton) {
+        // No placeholder first item here, unlike the toolbar's menu. A pull-down
+        // button takes its first item as its own title and hides it; a menu
+        // popped up directly shows everything it is given, so the placeholder
+        // arrived on screen as a row reading "NSMenuItem".
+        let menu = NSMenu()
+        menu.addItem(Action("Open in People", "person.2") { [weak self] in
+            self?.openInPeople()
+        })
+        menu.addItem(Action("Edit", "pencil") { [weak self] in
+            self?.startEditing()
+        })
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    @objc private func filterLibrary() {
+        PersonPopover.close()
+        LibraryWindow.shared.filter(bySpeaker: person.label)
+    }
+
+    @objc private func openInPeople() {
+        PersonPopover.close()
+        LibraryWindow.shared.showPerson(person.label)
+    }
+
+    // MARK: - Furniture
+
+    private func button(_ title: String, _ action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        return b
+    }
+
+    private func separator() -> NSView {
+        let box = NSBox()
+        box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
+        return box
+    }
+
+    private func width(_ view: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
+    }
+
+    private static func initials(of name: String) -> String {
+        let parts = name.split(separator: " ").prefix(2).compactMap(\.first)
+        return parts.isEmpty ? "?" : String(parts).uppercased()
+    }
+
+    /// Deterministic from the name, so somebody is the same colour everywhere.
+    private static func colour(for label: String) -> NSColor {
+        let palette: [NSColor] = [.systemBlue, .systemPurple, .systemTeal, .systemIndigo,
+                                  .systemPink, .systemBrown, .systemGreen, .systemOrange]
+        var hash = 5381
+        for byte in label.utf8 { hash = (hash &* 33) &+ Int(byte) }
+        return palette[abs(hash) % palette.count]
+    }
+
+    private static func when(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.doesRelativeDateFormatting = true
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f.string(from: date).lowercased()
+    }
+
+    private static func shortDate(_ recording: Recording) -> String {
+        guard let date = recording.date else { return "" }
+        let f = DateFormatter()
+        f.dateFormat = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+            ? "d MMM" : "d MMM yyyy"
+        return f.string(from: date)
     }
 }

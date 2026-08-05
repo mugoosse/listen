@@ -17,8 +17,9 @@ import AppKit
 final class SpeakerChips: NSView {
     private let stack = NSStackView()
 
-    /// An unnamed speaker was clicked.
-    var onName: ((String) -> Void)?
+    /// An unnamed speaker was clicked, with the chip's rectangle in this
+    /// view's coordinates, so the picker can point at it.
+    var onName: ((String, NSView, NSRect) -> Void)?
 
     /// A named speaker was clicked, with the chip's rectangle in this view's
     /// coordinates.
@@ -32,9 +33,16 @@ final class SpeakerChips: NSView {
     /// with a close reason of "standard" and no other symptom.
     var onPerson: ((String, NSView, NSRect) -> Void)?
 
+    /// Something in a chip's menu changed the recording or the library.
+    var onChanged: (() -> Void)?
+
     /// True when there is nobody to show, so the pane can close the gap rather
     /// than leaving an empty band under the date.
     private(set) var isEmpty = true
+
+    /// The recording being shown, for the menus, which need to know what they
+    /// are acting on.
+    private var recording: Recording?
 
     /// How many chips before the rest go into an overflow menu.
     ///
@@ -67,6 +75,7 @@ final class SpeakerChips: NSView {
 
     func configure(_ recording: Recording) {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
+        self.recording = recording
 
         let speakers = People.speakers(in: recording)
         isEmpty = speakers.isEmpty
@@ -127,6 +136,19 @@ final class SpeakerChips: NSView {
             button.toolTip = spoken.isEmpty ? "Click for every recording they are in."
                 : "Spoke for \(spoken). Click for every recording they are in."
         }
+
+        // The same actions on the right button. A popover is one window manager
+        // decision away from not appearing, and a menu is not, so nothing this
+        // feature does is reachable only through one of them.
+        if let recording {
+            button.menu = PersonPopover.menu(
+                for: label, in: recording,
+                anchor: { [weak self, weak button] in
+                    guard let self, let button else { return nil }
+                    return (self, self.convert(button.frame, from: self.stack))
+                },
+                done: { [weak self] in self?.onChanged?() })
+        }
         return button
     }
 
@@ -154,7 +176,7 @@ final class SpeakerChips: NSView {
 
     private func route(_ label: String, at rect: NSRect) {
         if VoiceBank.isPlaceholder(label) {
-            onName?(label)
+            onName?(label, self, rect)
         } else {
             onPerson?(label, self, rect)
         }

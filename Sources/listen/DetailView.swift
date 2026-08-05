@@ -104,9 +104,15 @@ final class DetailView: NSView {
         // A chip is a control, so its click never reaches `mouseDown` below and
         // it has to let the title field go itself. Everything else in this pane
         // that claims a click does the same.
-        chips.onName = { [weak self] speaker in
+        chips.onName = { [weak self] speaker, anchor, rect in
             self?.endEditing()
-            self?.editSpeaker(speaker)
+            self?.editSpeaker(speaker, from: anchor, rect: rect)
+        }
+        chips.onChanged = { [weak self] in
+            guard let self, let id = self.recording?.id,
+                  let updated = Recording.find(id) else { return }
+            self.show(updated)
+            LibraryWindow.shared.reload()
         }
         chips.onPerson = { [weak self] speaker, anchor, rect in
             guard let self else { return }
@@ -328,9 +334,9 @@ final class DetailView: NSView {
                 // transcript whose segments could not be located in their turn.
                 self?.seek(to: sentence?.start ?? turn.start, playing: true)
             }
-            view.onSpeaker = { [weak self] in
+            view.onSpeaker = { [weak self] anchor, rect in
                 self?.endEditing()
-                self?.editSpeaker(turn.speaker)
+                self?.editSpeaker(turn.speaker, from: anchor, rect: rect)
             }
             view.onEdit = { [weak self] sentence, was, text in
                 self?.applyEdit(sentence, was: was, to: text)
@@ -587,12 +593,25 @@ final class DetailView: NSView {
 
     // MARK: - Labelling
 
-    private func editSpeaker(_ speaker: String) {
+    /// Clicking a speaker, wherever the click came from.
+    ///
+    /// One rule, so the pill in the transcript and the chip under the title are
+    /// the same control in two places: a name opens their card, and an unnamed
+    /// speaker opens the picker. Neither is a dialog. The alert this replaced
+    /// asked "Who is Ryan?" with a text field even when the answer was a
+    /// person the library had known for months.
+    private func editSpeaker(_ speaker: String, from view: NSView, rect: NSRect) {
         guard let recording else { return }
-        SpeakerSheet.present(for: recording, speaker: speaker, in: window) { [weak self] in
+        let refresh = { [weak self] in
             guard let self, let updated = Recording.find(recording.id) else { return }
             self.show(updated)
             LibraryWindow.shared.reload()
+        }
+        if VoiceBank.isPlaceholder(speaker) {
+            SpeakerPicker.show(for: recording, speaker: speaker,
+                               from: view, rect: rect, done: refresh)
+        } else {
+            PersonPopover.show(speaker, from: view, rect: rect, done: refresh)
         }
     }
 
@@ -846,7 +865,8 @@ final class TurnView: NSView {
 
     /// Clicked, carrying the sentence under the pointer when there was one.
     var onSeek: ((Merge.Sentence?) -> Void)?
-    var onSpeaker: (() -> Void)?
+    /// The pill was clicked, with itself and its frame to point at.
+    var onSpeaker: ((NSView, NSRect) -> Void)?
     /// A sentence was committed: which one, what it used to say, what it says
     /// now. The old text travels with it so the write can refuse if the
     /// transcript moved underneath.
@@ -979,7 +999,9 @@ final class TurnView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func speakerTapped() { onSpeaker?() }
+    @objc private func speakerTapped() {
+        onSpeaker?(self, speakerButton.frame)
+    }
 
     // MARK: - Editing a sentence
 

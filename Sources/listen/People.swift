@@ -26,6 +26,9 @@ struct Person {
     /// "7 recordings · 3h 12m", for a header that has to say how much is behind
     /// a name before anyone spends a click on it.
     var summary: String {
+        // "no recordings yet" rather than "0 recordings": a contact somebody
+        // created from an address is waiting to be heard, not empty.
+        if recordings.isEmpty { return "no recordings yet" }
         let count = recordings.count == 1 ? "1 recording" : "\(recordings.count) recordings"
         let time = Recording.length(seconds)
         return time.isEmpty ? count : count + " · " + time
@@ -82,6 +85,31 @@ enum People {
             }
             if $0.seconds != $1.seconds { return $0.seconds > $1.seconds }
             return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+
+    /// Everybody, including the ones with nothing recorded yet.
+    ///
+    /// A contact created from a card, or filed against a calendar address that
+    /// has not spoken in anything, is still a person: somebody typed an address
+    /// and a note for them. Leaving them out of the one list of people would
+    /// make the card that created them unreachable, which is how a store grows
+    /// entries nobody can see.
+    ///
+    /// One rule, used by the roster and by `listen people`, so the window and
+    /// the CLI cannot come to different answers about who exists.
+    static func roster(in library: [Recording] = Recording.all()) -> [Person] {
+        var everyone = all(in: library)
+        let known = Set(everyone.map(\.label))
+        for contact in ContactBook.load() where !known.contains(contact.name) {
+            everyone.append(Person(label: contact.name, recordings: [], seconds: 0))
+        }
+        return everyone.sorted {
+            if $0.isYou != $1.isYou { return $0.isYou }
+            if $0.recordings.count != $1.recordings.count {
+                return $0.recordings.count > $1.recordings.count
+            }
+            return $0.display.localizedCaseInsensitiveCompare($1.display) == .orderedAscending
         }
     }
 
@@ -172,18 +200,98 @@ enum People {
                        in library: [Recording] = Recording.all()) -> [String] {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard check(trimmed) == nil, trimmed != label else { return [] }
+        return relabel(label, to: trimmed, in: library)
+    }
+
+    /// Fold one person into another, everywhere they both appear.
+    ///
+    /// **The case this exists for is in every imported library.** The same
+    /// human is `Me` on the recordings made here, because the microphone track
+    /// is the user by construction, and a name on the ones that came from
+    /// somewhere else, because a mixed recording has no microphone track to be
+    /// the user of. Two rows in the roster, one person, and no amount of
+    /// renaming fixes it: `rename` refuses `Me` as a target, and it is right to.
+    ///
+    /// Merging is the exception, and only in one direction. Somebody can be
+    /// folded **into** you, because saying "that speaker was me" is a fact
+    /// about a recording. You cannot be folded into somebody else, because
+    /// `Me` is what the pipeline writes for the microphone track and the next
+    /// recording would put it straight back.
+    static func merge(_ label: String, into target: String,
+                      in library: [Recording] = Recording.all()) -> [String] {
+        let from = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let to = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !from.isEmpty, !to.isEmpty, from != to else { return [] }
+        guard from != SpeakerName.you else { return [] }
+        guard !VoiceBank.isPlaceholder(to) else { return [] }
+        return relabel(from, to: to, in: library)
+    }
+
+    /// Take somebody's name off every recording, leaving the speaker behind.
+    ///
+    /// **Not a delete.** Nothing is removed from any transcript: the turns, the
+    /// audio and the voiceprint all stay, and the speaker goes back to being
+    /// `Speaker A` in each recording, which is a speaker waiting to be named
+    /// rather than one who never existed. That is what makes this the right
+    /// answer to "this is the wrong person": naming them again is one click,
+    /// and the voiceprint moves with the letter, so the bank can still suggest
+    /// who they are.
+    ///
+    /// A free letter per recording, because placeholders are per recording.
+    /// Reusing one already in the room would silently merge two speakers, which
+    /// is the one thing this operation must not do.
+    static func unname(_ label: String,
+                       in library: [Recording] = Recording.all()) -> [String] {
+        guard label != SpeakerName.you else { return [] }
         var changed: [String] = []
         for recording in library where recording.speakers.contains(label) {
-            if TranscriptEditor.apply(.rename(label, to: trimmed), to: recording) {
+            let taken = Set(recording.speakers)
+            var index = 0
+            var letter = Merge.letter(index)
+            while taken.contains(letter) {
+                index += 1
+                letter = Merge.letter(index)
+            }
+            if TranscriptEditor.apply(.rename(label, to: letter), to: recording) {
                 changed.append(recording.id)
             }
         }
+        // The card goes with the name. It was filed under a string nobody has
+        // any more, and `set` drops an entry with neither an address nor a note.
+        ContactBook.set(Contact(name: label, emails: [], notes: nil))
+        return changed
+    }
+
+    /// Rewrite one label as another across the library.
+    ///
+    /// Shared by rename and merge because they are the same operation with
+    /// different permissions: renaming is merging into a name nobody has yet.
+    /// `TranscriptEditor` rebuilds the turns, keeps the longer voiceprint when
+    /// two land on one name, and re-derives each recording's state.
+    private static func relabel(_ label: String, to name: String,
+                                in library: [Recording]) -> [String] {
+        var changed: [String] = []
+        for recording in library where recording.speakers.contains(label) {
+            if TranscriptEditor.apply(.rename(label, to: name), to: recording) {
+                changed.append(recording.id)
+            }
+        }
+        // Notes are joined rather than dropped: two people who turn out to be
+        // one had two halves of the same story written about them.
+        let mine = ContactBook.contact(label)?.note ?? ""
+        let theirs = ContactBook.contact(name)?.note ?? ""
+        let joined = [theirs, mine].filter { !$0.isEmpty }.joined(separator: "\n")
         // The email addresses move with the name, for the same reason the
         // voiceprint does. The contact book is keyed on this label, so leaving
         // it behind points every address at a name nobody has any more, and
         // nothing would say so: the suggestions would simply stop appearing,
         // which reads as the calendar having broken rather than as a stale key.
-        ContactBook.rename(label, to: trimmed)
+        ContactBook.rename(label, to: name)
+        if !joined.isEmpty {
+            let merged = ContactBook.contact(name)
+            ContactBook.set(Contact(name: name, emails: merged?.emails ?? [],
+                                    notes: joined))
+        }
         return changed
     }
 }

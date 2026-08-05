@@ -29,6 +29,34 @@ final class SidebarViewController: NSViewController {
     /// always visibly on and one click from off: a filter you cannot see is a
     /// library with recordings missing from it.
     private var speakerFilter: String?
+
+    /// The two rows that used to be toolbar buttons.
+    ///
+    /// Codex's shape, and it earns its place here for a reason the toolbar
+    /// could not: Record is the app's primary action and belongs where the eye
+    /// already is, at the top of the list it will add to, and Settings is the
+    /// one thing you reach for least, so it belongs at the bottom out of the
+    /// way. A toolbar gives both the same weight and puts them equally far from
+    /// what they act on.
+    /// Where a row's content starts, matching the recording titles below.
+    ///
+    /// An inset table indents its rows and `RecordingCell` insets its title
+    /// inside that. Measured against the result rather than added up from the
+    /// two constants: at 18 the row's icon sat four points left of every title
+    /// in the list, which is exactly close enough to look like a mistake rather
+    /// than a margin.
+    private static let rowInset: CGFloat = 22
+
+    /// Where a row's *background* starts: level with the search field, so the
+    /// highlight is the width of the control above it rather than a shorter bar
+    /// floating inside the same column.
+    private static let rowEdge: CGFloat = 10
+
+    private var newButton: SidebarRow!
+    private var settingsButton: SidebarRow!
+
+    var onNewRecording: (() -> Void)?
+    var onSettings: (() -> Void)?
     private var filterBar: NSView!
     private var filterButton: NSButton!
     private var filterHeight: NSLayoutConstraint!
@@ -70,26 +98,56 @@ final class SidebarViewController: NSViewController {
         // One control, not a label with a close button beside it: the whole
         // pill turns the filter off, so there is no small target to hit.
         filterButton = NSButton(title: "", target: self, action: #selector(clearSpeakerFilter))
-        filterButton.bezelStyle = .inline
-        filterButton.font = .systemFont(ofSize: 11, weight: .medium)
-        filterButton.image = NSImage(systemSymbolName: "xmark",
-                                     accessibilityDescription: "Show everything")
+        // A capsule in the accent colour rather than a line of text with a
+        // cross after it. It is a token saying the list is not the whole
+        // library, so it should look like the chips that put it there, and the
+        // whole capsule is the target rather than the small glyph on its end.
+        filterButton.isBordered = false
+        filterButton.wantsLayer = true
+        filterButton.layer?.cornerRadius = 11
+        filterButton.layer?.backgroundColor = NSColor.controlAccentColor
+            .withAlphaComponent(0.18).cgColor
+        filterButton.contentTintColor = .controlAccentColor
+        filterButton.font = .systemFont(ofSize: 11, weight: .semibold)
+        filterButton.image = NSImage(systemSymbolName: "xmark.circle.fill",
+                                     accessibilityDescription: "Show everything")?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
         filterButton.imagePosition = .imageTrailing
         filterButton.toolTip = "Show every recording again"
         filterButton.translatesAutoresizingMaskIntoConstraints = false
+        filterButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         filterBar = NSView()
         filterBar.translatesAutoresizingMaskIntoConstraints = false
         filterBar.addSubview(filterButton)
         filterBar.isHidden = true
 
+        // "New Recording" and not "Record": it names the thing that appears in
+        // the list below it, the way every other row here is a noun, and it
+        // does not collide with the state it turns into. Somebody who has just
+        // installed this cannot tell what "Record" would record, so the tooltip
+        // says the part that cannot be guessed.
+        newButton = row("New Recording", "record.circle", #selector(newRecording))
+        newButton.toolTip = "Record this Mac's audio and your microphone"
+        settingsButton = row("Settings", "gearshape", #selector(openSettings))
+        settingsButton.toolTip = "Settings (⌘,)"
+        settingsButton.contentTintColor = .secondaryLabelColor
+
         container.addSubview(searchField)
+        container.addSubview(newButton)
         container.addSubview(filterBar)
         container.addSubview(scroll)
+        // A hairline, so the list ends rather than appearing to run underneath
+        // the row pinned over it.
+        let footerRule = NSBox()
+        footerRule.boxType = .separator
+        footerRule.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(footerRule)
+        container.addSubview(settingsButton)
         filterHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
         // Collapses to nothing, spacing included. A hidden view keeps its
         // frame, so an unfiltered list would otherwise sit six points lower
         // than it did before this row existed.
-        filterTop = filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor,
+        filterTop = filterBar.topAnchor.constraint(equalTo: newButton.bottomAnchor,
                                                    constant: 0)
         NSLayoutConstraint.activate([
             // Clear of the traffic lights, which sit over the content because
@@ -99,6 +157,15 @@ final class SidebarViewController: NSViewController {
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                                   constant: -10),
+            // Spaced like a row in the list below it rather than crammed
+            // against the search field: the icon lines up with the recording
+            // titles, and there is air on both sides of the pair.
+            newButton.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
+            newButton.leadingAnchor.constraint(equalTo: container.leadingAnchor,
+                                               constant: Self.rowEdge),
+            newButton.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                                constant: -Self.rowEdge),
+            newButton.heightAnchor.constraint(equalToConstant: 32),
             filterTop,
             filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             filterBar.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor,
@@ -106,10 +173,21 @@ final class SidebarViewController: NSViewController {
             filterHeight,
             filterButton.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor),
             filterButton.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
-            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footerRule.topAnchor),
+            footerRule.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            footerRule.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            footerRule.bottomAnchor.constraint(equalTo: settingsButton.topAnchor,
+                                               constant: -10),
+            settingsButton.leadingAnchor.constraint(equalTo: container.leadingAnchor,
+                                                    constant: Self.rowEdge),
+            settingsButton.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                                     constant: -Self.rowEdge),
+            settingsButton.bottomAnchor.constraint(equalTo: container.bottomAnchor,
+                                                   constant: -14),
+            settingsButton.heightAnchor.constraint(equalToConstant: 32),
         ])
         view = container
     }
@@ -236,7 +314,10 @@ final class SidebarViewController: NSViewController {
         loadViewIfNeeded()
         speakerFilter = label
         if let label {
-            filterButton.title = "Only " + SpeakerName.display(label) + " "
+            // Padded with spaces, which is what a borderless button gives you
+            // instead of an inset: the capsule would otherwise be drawn tight
+            // against both ends of the text.
+            filterButton.title = "  Only " + SpeakerName.display(label) + "  "
         }
         filterBar.isHidden = label == nil
         filterHeight.constant = label == nil ? 0 : 22
@@ -286,6 +367,36 @@ final class SidebarViewController: NSViewController {
         // means "show me this one".
         LibraryWindow.shared.renameSelected()
     }
+
+    /// A full-width row: icon, then text, then nothing. The shape of a
+    /// navigation item rather than of a button, because that is what these are.
+    private func row(_ title: String, _ symbol: String, _ action: Selector) -> SidebarRow {
+        let button = SidebarRow(title: title, target: self, action: action,
+                                contentInset: Self.rowInset - Self.rowEdge)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        return button
+    }
+
+    /// What the Record row says, which is also the only clock on screen while
+    /// the sidebar is what you are looking at.
+    ///
+    /// Red only while recording. A permanently coloured row is decoration; one
+    /// that turns red is a state.
+    func setRecording(_ recording: Bool, elapsed: TimeInterval) {
+        loadViewIfNeeded()
+        newButton.title = recording ? "Stop  " + Recording.length(elapsed)
+                                    : "New Recording"
+        newButton.image = NSImage(
+            systemSymbolName: recording ? "stop.fill" : "record.circle",
+            accessibilityDescription: recording ? "Stop recording" : "Start recording")
+        // Red only while recording. A permanently coloured row is decoration;
+        // one that turns red is a state, which is the same rule the toolbar
+        // control follows.
+        newButton.contentTintColor = recording ? .systemRed : .labelColor
+    }
+
+    @objc private func newRecording() { onNewRecording?() }
+    @objc private func openSettings() { onSettings?() }
 
     private func rowMenu() -> NSMenu {
         let menu = NSMenu()
@@ -339,6 +450,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         selectedRecording = recording(at: table.selectedRow)
+        // A cell is not told that the selection moved, and the pointer can be
+        // resting on the row that just became selected, so the hover would stay
+        // drawn on top of it.
+        table.restyleHoverCells()
         onSelect?(selectedRecording)
     }
 }
@@ -359,7 +474,7 @@ extension SidebarViewController: NSMenuDelegate {
 
 /// One row: title, when, how long, and what is happening to it.
 @MainActor
-final class RecordingCell: NSView {
+final class RecordingCell: HoverCell {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
 
@@ -388,6 +503,7 @@ final class RecordingCell: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ recording: Recording) {
+        restyle()
         title.stringValue = recording.metadata.title
         // An untitled recording says so in grey, so a list of them reads as a
         // list of things waiting for a name rather than as a list of things
@@ -406,6 +522,60 @@ final class RecordingCell: NSView {
     }
 }
 
+/// A table cell that lights up under the pointer.
+///
+/// `NSTableView` has no hover state of its own, so the recording list looked
+/// inert next to the rows above and below it, which do respond. The highlight
+/// is the same weight as `SidebarRow`'s, and it defers to the selection: a
+/// selected row is already painted, and drawing over it would only muddy the
+/// colour the table chose.
+@MainActor
+class HoverCell: NSView {
+    private var hovering = false { didSet { restyle() } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Reconsider the highlight. Called by the table when the selection moves,
+    /// because a cell is never told, and by `configure` because a reused cell
+    /// arrives carrying the state of the row it used to be.
+    func restyle() {
+        let selected = (superview as? NSTableRowView)?.isSelected ?? false
+        layer?.backgroundColor = hovering && !selected
+            ? NSColor.quaternaryLabelColor.withAlphaComponent(0.14).cgColor
+            : NSColor.clear.cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+}
+
+extension NSTableView {
+    /// Let every visible cell reconsider its hover.
+    @MainActor
+    func restyleHoverCells() {
+        let visible = rows(in: visibleRect)
+        guard visible.length > 0 else { return }
+        for row in visible.lowerBound..<(visible.lowerBound + visible.length) {
+            (view(atColumn: 0, row: row, makeIfNecessary: false) as? HoverCell)?.restyle()
+        }
+    }
+}
+
 extension Recording {
     /// Just the time. The day is already the group heading above it.
     var clockTime: String {
@@ -413,5 +583,108 @@ extension Recording {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         return f.string(from: date)
+    }
+}
+
+
+/// A sidebar row that lights up under the pointer.
+///
+/// A view rather than a button, for one reason: the highlight has to span the
+/// sidebar the way the search field above it does, while the icon and the text
+/// line up with the recording titles below. A button's frame is both its
+/// background and its content, so it can satisfy one or the other. Here the
+/// frame is the width of the search field and `contentInset` puts the content
+/// where the list is.
+@MainActor
+final class SidebarRow: NSView {
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+    private weak var target: AnyObject?
+    private let action: Selector
+
+    /// Where the icon starts, measured from the row's own leading edge.
+    private let contentInset: CGFloat
+
+    var title: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    var image: NSImage? {
+        get { icon.image }
+        set { icon.image = newValue }
+    }
+
+    /// Tints both halves, so a row is one colour rather than an icon and a
+    /// label that happen to agree.
+    var contentTintColor: NSColor? {
+        didSet {
+            icon.contentTintColor = contentTintColor
+            label.textColor = contentTintColor ?? .labelColor
+        }
+    }
+
+    private var hovering = false { didSet { restyle() } }
+    private var pressed = false { didSet { restyle() } }
+
+    init(title: String, target: AnyObject?, action: Selector,
+         contentInset: CGFloat = 12) {
+        self.target = target
+        self.action = action
+        self.contentInset = contentInset
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        translatesAutoresizingMaskIntoConstraints = false
+
+        label.stringValue = title
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.lineBreakMode = .byTruncatingTail
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: contentInset),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                            constant: -contentInset),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func restyle() {
+        let alpha: CGFloat = pressed ? 0.26 : (hovering ? 0.16 : 0)
+        layer?.backgroundColor = alpha == 0
+            ? NSColor.clear.cgColor
+            : NSColor.quaternaryLabelColor.withAlphaComponent(alpha).cgColor
+    }
+
+    /// Rebuilt on every layout, because a tracking area holds the rectangle it
+    /// was made with: one added once keeps lighting up the place the row used
+    /// to be after the sidebar is resized.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func mouseDown(with event: NSEvent) { pressed = true }
+
+    override func mouseUp(with event: NSEvent) {
+        pressed = false
+        // Only when the pointer is still on the row, which is what letting go
+        // somewhere else means everywhere on this platform.
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        NSApp.sendAction(action, to: target, from: self)
     }
 }

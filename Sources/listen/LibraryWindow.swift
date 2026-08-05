@@ -27,7 +27,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// What the window is showing. Settings is a mode of this window rather
     /// than a window of its own: the sidebar swaps the recording list for the
     /// section list and the content side swaps the transcript for a pane.
-    private enum Mode { case library, settings }
+    private enum Mode { case library, settings, people }
     private var mode: Mode = .library
 
     /// The two split items' view controllers, which never change. Swapping a
@@ -39,6 +39,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private let detailHost = PaneHost()
 
     private let settingsNav = SettingsNavViewController()
+    /// People is a third mode for the same reason settings is a second one: it
+    /// is a roster and a page, both of which want the whole window, and neither
+    /// of which is a recording.
+    private let peopleNav = PeopleNav()
+    private let personPane = PersonPane()
     /// Built once each and kept, so returning to a section finds it where it
     /// was left rather than scrolled back to the top with its fields cleared.
     private var panes: [SettingsTab: Pane] = [:]
@@ -48,6 +53,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let newRecordingItem = NSToolbarItem.Identifier("newRecording")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
     private static let settingsItem = NSToolbarItem.Identifier("openSettings")
+    private static let peopleItem = NSToolbarItem.Identifier("openPeople")
+    private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
 
     private var recordItem: NSToolbarItem?
@@ -115,8 +122,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         settingsNav.focusList()
     }
 
+    /// The way back, from wherever "back" is.
+    ///
+    /// It guarded on `.settings` when settings was the only other mode, so
+    /// People inherited a Library button that did nothing: the same control,
+    /// the same label, and no response. Anything that is not the library goes
+    /// back to the library.
     @objc func exitSettings() {
-        guard mode == .settings else { return }
+        guard mode != .library else { return }
         enter(.library)
     }
 
@@ -147,6 +160,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         let w = NSWindow(contentViewController: controller)
         w.title = "Listen"
+        // The app's name is already in the menu bar, and in the window it was
+        // the only thing occupying the top of the content area: every pane
+        // started a title's height below the toolbar to clear a word nobody
+        // needed twice. Hidden, the panes begin where they look like they
+        // should, and the window keeps its title for Mission Control and the
+        // Window menu, which read `title` rather than what is drawn.
+        w.titleVisibility = .hidden
         w.styleMask.insert(.fullSizeContentView)
         w.titlebarAppearsTransparent = true
         w.setContentSize(NSSize(width: 1040, height: 680))
@@ -175,6 +195,23 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.onRenamed = { [weak self] in self?.reload() }
         detail.onChanged = { [weak self] in self?.reload() }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
+        sidebar.onNewRecording = { [weak self] in self?.newRecording() }
+        sidebar.onSettings = { [weak self] in self?.showSettings() }
+        peopleNav.onSelect = { [weak self] person in self?.personPane.show(person) }
+        // A rename rewrites transcripts, so the roster beside it is stale the
+        // moment it lands, and so is the recording list behind both.
+        personPane.onChanged = { [weak self] in
+            guard let self else { return }
+            let keep = self.peopleNav.selected?.label
+            self.peopleNav.reload()
+            if let keep { self.peopleNav.select(keep) }
+        }
+        // After a merge the person on screen no longer exists, so the roster
+        // lands on whoever they became rather than on an empty page.
+        personPane.onMerged = { [weak self] label in
+            self?.peopleNav.reload()
+            self?.peopleNav.select(label)
+        }
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
 
@@ -212,6 +249,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             split.canToggleSidebar = false
             sidebarHost.show(settingsNav)
 
+        case .people:
+            // Same lock as settings, and the same reason: a person page with no
+            // roster beside it is a page you cannot navigate away from except
+            // backwards.
+            detail.stopPlayback()
+            sidebarWasCollapsed = sidebarItem.isCollapsed
+            if sidebarItem.isCollapsed { sidebarItem.isCollapsed = false }
+            sidebarItem.canCollapse = false
+            split.canToggleSidebar = false
+            peopleNav.reload()
+            sidebarHost.show(peopleNav)
+            detailHost.show(personPane)
+
         case .library:
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
@@ -225,6 +275,23 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             }
         }
         rebuildToolbar()
+    }
+
+    /// Open the roster, on `label` if somebody was asked for.
+    ///
+    /// The entry point from a chip's menu and from the toolbar. Selecting the
+    /// person is done after the mode change, because the roster does not exist
+    /// as a list of rows until it has been shown once.
+    func showPerson(_ label: String? = nil) {
+        if window == nil { build() }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        enter(.people)
+        if let label {
+            peopleNav.select(label)
+        } else if peopleNav.selected == nil {
+            personPane.show(nil)
+        }
     }
 
     private func showPane(_ tab: SettingsTab) {
@@ -300,8 +367,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.backItem, Self.newRecordingItem, .flexibleSpace,
-         Self.settingsItem, Self.actionsItem]
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
+         Self.newRecordingItem, .flexibleSpace, Self.peopleItem, Self.settingsItem,
+         Self.actionsItem, Self.personActionsItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -320,12 +388,48 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         switch mode {
         case .library:
-            return [.toggleSidebar, Self.newRecordingItem, .flexibleSpace,
-                    Self.settingsItem, Self.actionsItem]
+            // Record and Settings are rows in the sidebar now, where the eye
+            // already is and where the least-used thing can sit at the bottom.
+            // The record control comes back to the toolbar *while recording*,
+            // and only then: stopping a meeting must never wait for somebody to
+            // expand a sidebar they collapsed an hour ago.
+            //
+            // `sidebarTrackingSeparator` is what puts the toggle over the
+            // sidebar beside the traffic lights rather than at the left edge of
+            // the content, and it is the only way to reach that region: items
+            // before it belong to the sidebar, items after it to the content.
+            var items: [NSToolbarItem.Identifier] = [.toggleSidebar,
+                                                     .sidebarTrackingSeparator]
+            if Capture.shared.isRecording { items.append(Self.newRecordingItem) }
+            // The actions menu stays whether or not anything is selected, and
+            // says "No recording selected" when nothing is, which is what the
+            // person page's menu does with no person. A control that appears
+            // and disappears as you click around the list is harder to find
+            // than one that is always in the same place and tells you why it
+            // is empty.
+            items.append(contentsOf: [.flexibleSpace, Self.peopleItem, Self.actionsItem])
+            return items
         case .settings:
+            // No back item: the way out is a row at the top of the section
+            // list. In a window with a hidden title, a toolbar button sat over
+            // the pane's own heading, so "General" read as half a word behind
+            // "Library".
+            // No toggle: settings locks the sidebar open, and a control that
+            // is always disabled is a control that should not be drawn. The
+            // way back takes its place, as a row in the sidebar level with the
+            // traffic lights.
             return Capture.shared.isRecording
-                ? [Self.backItem, Self.newRecordingItem, .flexibleSpace]
-                : [Self.backItem, .flexibleSpace]
+                ? [.sidebarTrackingSeparator, Self.newRecordingItem, .flexibleSpace]
+                : [.sidebarTrackingSeparator, .flexibleSpace]
+        case .people:
+            // The person's actions live beside the way out, where every other
+            // menu in this window lives, rather than as a button inside the
+            // page. It also lets the name and the disc sit at the top of the
+            // page instead of below a row of controls.
+            return Capture.shared.isRecording
+                ? [.sidebarTrackingSeparator, Self.newRecordingItem, .flexibleSpace,
+                   Self.personActionsItem]
+                : [.sidebarTrackingSeparator, .flexibleSpace, Self.personActionsItem]
         }
     }
 
@@ -354,6 +458,28 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                                  accessibilityDescription: "Settings")
             item.target = self
             item.action = #selector(openSettings)
+            return item
+
+        case Self.personActionsItem:
+            let item = NSMenuToolbarItem(itemIdentifier: id)
+            item.label = "Actions"
+            item.toolTip = "Edit, merge or delete this contact"
+            item.image = NSImage(systemSymbolName: "ellipsis",
+                                 accessibilityDescription: "Actions")
+            // The pane owns the menu and rebuilds it as it opens: which items
+            // belong depends on who is selected and whether they have a card.
+            item.menu = personPane.actionsMenu
+            item.showsIndicator = false
+            return item
+
+        case Self.peopleItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "People"
+            item.toolTip = "Everybody this library knows"
+            item.image = NSImage(systemSymbolName: "person.2",
+                                 accessibilityDescription: "People")
+            item.target = self
+            item.action = #selector(openPeople)
             return item
 
         case Self.backItem:
@@ -398,6 +524,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // MARK: - Actions
 
     @objc private func openSettings() { showSettings() }
+    @objc private func openPeople() { showPerson() }
 
     @objc private func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the
@@ -454,6 +581,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     private func updateRecordButton() {
+        sidebar.setRecording(Capture.shared.isRecording, elapsed: Capture.shared.elapsed)
         let recording = Capture.shared.isRecording
         let symbol = recording ? "stop.fill" : "record.circle"
         recordButton.image = NSImage(

@@ -5,17 +5,28 @@ import AppKit
 final class App: NSObject, NSApplicationDelegate {
     private var status: NSStatusItem?
     private let indicator = RecordingIndicator()
-    /// The recording waiting for a Keep or Discard, if any.
-    private var awaitingConfirm: Recording?
+
+    /// The app whose call started the recording that is running now, while the
+    /// "are you in a meeting?" question is still unanswered. Nil for a manual
+    /// recording, and nil again the moment it is answered.
+    private var awaitingAnswer: String?
+    /// Set for a recording detection started, so the detector only ends what it
+    /// began. Somebody who pressed Record meant it, and a call ending is not a
+    /// reason to stop a recording they asked for.
+    private var startedByDetection = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
         try? Library.prepare()
 
-        // Anything nobody ever answered for, gone after 24 hours. Swept at
-        // launch rather than on a timer: the app is not always running, and a
-        // sweep that only happens while it is would never fire for the case it
-        // exists to handle.
+        // Adopt before sweeping, not after. The sweep deletes staged
+        // recordings older than 24 hours, and now that nothing is ever left
+        // waiting on an answer, a staged recording is not one somebody declined
+        // to keep: it is one a crash or a quit interrupted. Sweeping first
+        // would delete exactly the recording this is meant to rescue.
+        adoptStaged()
+
+        // Still swept, as a net under anything adoption could not promote.
         Library.sweepStaging()
 
         // Without this there is no menu bar at all, so Cmd-Q does not quit and
@@ -30,6 +41,15 @@ final class App: NSObject, NSApplicationDelegate {
         rebuildMenu()
 
         Capture.shared.onChange = { [weak self] in self?.rebuildMenu() }
+
+        let detector = MeetingDetector.shared
+        detector.onMeetingStarted = { [weak self] in self?.meetingStarted($0) }
+        detector.onMeetingEnded = { [weak self] in self?.meetingEnded() }
+        indicator.onYes = { [weak self] in self?.answerMeeting(.yes) }
+        indicator.onNo = { [weak self] in self?.answerMeeting(.no) }
+        indicator.onNeverFor = { [weak self] in self?.answerMeeting(.never) }
+        indicator.onStop = { [weak self] in self?.stopRecording() }
+        detector.refresh()
 
         // Anything with audio and no transcript is pending, so the queue is
         // rebuilt from the file system rather than from saved state. A job
@@ -46,11 +66,52 @@ final class App: NSObject, NSApplicationDelegate {
         }
         _ = Updater.shared
 
-        // A capture left staged by a crash is offered rather than resumed: the
-        // audio is on disk and playable thanks to WAVWriter's rolling header,
-        // so the only open question is whether the user wants it.
-        if let orphan = Recording.staged().first {
-            offerConfirm(orphan)
+        previewPanelIfAsked()
+    }
+
+    /// Recordings left in staging by a crash or a quit join the library.
+    ///
+    /// They used to be offered back with a Keep and Discard panel. Nothing asks
+    /// any more: a recording that exists is kept, and the way to get rid of one
+    /// is Delete in the library, where you can see what you are deleting and
+    /// hear it first. Being asked "keep this recording?" about an hour of audio
+    /// you have no memory of, at launch, with no way to listen to it before
+    /// answering, is a worse question than no question.
+    ///
+    /// This is SPEC 5.3's own stated fallback, which it describes as "Blackbox's
+    /// behaviour, which is to keep everything with a Discard button".
+    private func adoptStaged() {
+        for orphan in Recording.staged() {
+            do {
+                _ = try Capture.shared.keep(orphan)
+            } catch {
+                log("could not adopt \(orphan.id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// `LISTEN_PANEL=detected|recording|settings` shows a state at launch.
+    ///
+    /// For looking at the thing, and nothing else. The panel's states are
+    /// otherwise only reachable by holding a real meeting, so one of them
+    /// shipped with its label overlapping a button and stayed that way until
+    /// somebody happened to look. A state that cannot be put on screen on
+    /// demand is a state nobody checks.
+    ///
+    /// In the same family as `LISTEN_CHUNK`: a measurement affordance, not a
+    /// feature, and not mentioned anywhere a user would read.
+    private func previewPanelIfAsked() {
+        guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return }
+        switch want {
+        case "detected":
+            // A real, installed bundle identifier, so the icon and the name are
+            // the ones a user would see rather than placeholders that hide a
+            // sizing bug.
+            indicator.show(.detected("com.google.Chrome"))
+        case "settings":
+            SettingsWindow.shared.show(.general)
+        default:
+            indicator.show(.recording)
         }
     }
 
@@ -95,10 +156,21 @@ final class App: NSObject, NSApplicationDelegate {
             systemSymbolName: recording ? "waveform.circle.fill" : "waveform",
             accessibilityDescription: recording ? "Listen, recording" : "Listen")
         status?.button?.image?.isTemplate = true
+        // The window says so too. The menu bar item is 16 points wide and may
+        // be behind the notch, so it cannot be the only place that reports it.
+        LibraryWindow.shared.recordingChanged()
 
         if recording {
-            indicator.show(.recording)
-        } else if awaitingConfirm == nil {
+            // The unanswered question outranks the plain recording panel.
+            // Without this, every menu rebuild, and `Capture.onChange` fires
+            // one, would replace the question with "Recording" and there would
+            // be no way to answer it.
+            if let app = awaitingAnswer {
+                indicator.show(.detected(app))
+            } else {
+                indicator.show(.recording)
+            }
+        } else {
             indicator.hide()
         }
     }
@@ -117,6 +189,9 @@ final class App: NSObject, NSApplicationDelegate {
     @objc func stopRecordingFromUI() { stopRecording() }
 
     @objc private func startRecording() {
+        // Pressing Start is not an answer to a question nobody asked.
+        awaitingAnswer = nil
+        startedByDetection = false
         do {
             _ = try Capture.shared.start()
             if !Capture.shared.warnings.isEmpty {
@@ -132,25 +207,94 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc private func stopRecording() {
         guard let recording = Capture.shared.stop() else { return }
-        offerConfirm(recording)
+        finish(recording)
     }
 
-    /// Ask once, and keep the audio until answered.
+    /// Capture has stopped, so the recording joins the library.
     ///
-    /// This is the "record first, decide later" half of SPEC 5.3. Nothing is
-    /// deleted here: an unanswered recording stays in staging and is swept
-    /// after 24 hours, so the failure mode of walking away is losing a
-    /// recording you never wanted, not losing one you did.
-    private func offerConfirm(_ recording: Recording) {
-        awaitingConfirm = recording
-        indicator.onKeep = { [weak self] in self?.resolveConfirm(keep: true) }
-        indicator.onDiscard = { [weak self] in self?.resolveConfirm(keep: false) }
-        indicator.show(.confirm)
+    /// No question. The only thing that deletes a recording is answering "no"
+    /// to "are you in a meeting?", which happens at the start while the answer
+    /// is obvious, or Delete in the library later.
+    private func finish(_ recording: Recording) {
+        awaitingAnswer = nil
+        startedByDetection = false
+        MeetingDetector.shared.captureEnded()
+        resolve(recording, keep: true)
+        indicator.hide()
+        rebuildMenu()
     }
 
-    private func resolveConfirm(keep: Bool) {
-        guard let recording = awaitingConfirm else { return }
-        awaitingConfirm = nil
+    // MARK: - Detected meetings
+
+    private enum MeetingAnswer { case yes, no, never }
+
+    /// Something started a call. Record it, then ask.
+    private func meetingStarted(_ bundleID: String) {
+        // A recording already running wins. Somebody who pressed Start before
+        // joining meant it, and restarting would cut the meeting in two.
+        guard !Capture.shared.isRecording else { return }
+        do {
+            _ = try Capture.shared.start(source: bundleID)
+        } catch {
+            // Logged, not alerted. A detected meeting is not something the user
+            // asked for at this moment, and a modal in front of the call they
+            // are joining is worse than the recording it is apologising for.
+            log("could not start the detected recording: \(error.localizedDescription)")
+            MeetingDetector.shared.captureEnded()
+            return
+        }
+        awaitingAnswer = bundleID
+        startedByDetection = true
+        rebuildMenu()
+    }
+
+    /// Everything that was on a call has stopped.
+    private func meetingEnded() {
+        guard Capture.shared.isRecording, startedByDetection else { return }
+        stopRecording()
+    }
+
+    private func answerMeeting(_ answer: MeetingAnswer) {
+        guard let app = awaitingAnswer else { return }
+        awaitingAnswer = nil
+
+        if answer == .yes {
+            // Nothing to record: the recording is already running and is kept
+            // by default. Yes just dismisses the question, and the panel goes
+            // back to showing the clock and Stop.
+            rebuildMenu()
+            return
+        }
+
+        if answer == .never { Settings.skip(app) }
+        // Suppressed either way. The skip list is consulted on the next poll,
+        // but so is the app that is still on the call, so without this "No" is
+        // answered by the same question three seconds later.
+        MeetingDetector.shared.suppress(app)
+        startedByDetection = false
+
+        if let recording = Capture.shared.stop() {
+            // The one place a recording is deleted without being asked
+            // about. "No" is the answer, given while the call is in front of
+            // you and the answer is obvious.
+            do {
+                try Capture.shared.discard(recording)
+            } catch {
+                log("could not discard the declined recording: "
+                    + error.localizedDescription)
+            }
+        }
+        MeetingDetector.shared.captureEnded()
+        indicator.hide()
+        rebuildMenu()
+    }
+
+    /// Keep or delete, wherever the decision came from.
+    ///
+    /// Shared rather than duplicated, so a recording that ends normally and one
+    /// adopted from staging at launch join the library and the transcription
+    /// queue by exactly the same steps.
+    private func resolve(_ recording: Recording, keep: Bool) {
         do {
             if keep {
                 let kept = try Capture.shared.keep(recording)
@@ -166,8 +310,6 @@ final class App: NSObject, NSApplicationDelegate {
             notify(keep ? "Could not keep the recording" : "Could not discard the recording",
                    error.localizedDescription)
         }
-        indicator.hide()
-        rebuildMenu()
     }
 
     @objc private func openLibrary() {

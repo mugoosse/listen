@@ -27,6 +27,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let newRecordingItem = NSToolbarItem.Identifier("newRecording")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
 
+    private var recordItem: NSToolbarItem?
+    private var recordTick: Timer?
+
+    /// The toolbar's record control, which is also the stop control.
+    ///
+    /// It used to be a fixed pencil icon that silently changed meaning: the
+    /// same glyph started a recording and stopped one, so the window gave no
+    /// sign at all that it was recording and no hint that clicking again was
+    /// how to stop. An hour-long capture with no visible state is the failure
+    /// this app can least afford.
+    private lazy var recordButton: NSButton = {
+        let b = NSButton(title: "", target: self, action: #selector(newRecording))
+        b.bezelStyle = .rounded
+        b.imagePosition = .imageLeading
+        b.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        return b
+    }()
+
     // MARK: - Showing
 
     func show() {
@@ -123,11 +141,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         case Self.newRecordingItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Record"
-            item.toolTip = "Start recording"
-            item.image = NSImage(systemSymbolName: "square.and.pencil",
-                                 accessibilityDescription: "Start recording")
-            item.target = self
-            item.action = #selector(newRecording)
+            // A custom view rather than the item's own image, because while
+            // recording this has to say the elapsed time, and a plain
+            // `NSToolbarItem` in an icon-only toolbar has nowhere to put text.
+            item.view = recordButton
+            recordItem = item
+            updateRecordButton()
             return item
 
         case Self.actionsItem:
@@ -161,6 +180,45 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         } else {
             NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
         }
+    }
+
+    /// Called by the delegate whenever capture starts or stops.
+    func recordingChanged() {
+        updateRecordButton()
+        recordTick?.invalidate()
+        recordTick = nil
+        guard Capture.shared.isRecording else { return }
+        // Once a second, because the button shows seconds. The floating panel
+        // ticks twice a second for its own clock; this one does not need to.
+        recordTick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateRecordButton() }
+        }
+    }
+
+    private func updateRecordButton() {
+        let recording = Capture.shared.isRecording
+        let symbol = recording ? "stop.fill" : "record.circle"
+        recordButton.image = NSImage(
+            systemSymbolName: symbol,
+            accessibilityDescription: recording ? "Stop recording" : "Start recording")
+        // Red only while recording. A permanently red control is decoration;
+        // one that turns red is a state.
+        recordButton.contentTintColor = recording ? .systemRed : nil
+        recordButton.title = recording ? " Stop " + Self.clock(Capture.shared.elapsed) : ""
+        recordButton.toolTip = recording ? "Stop recording" : "Start recording"
+        recordItem?.label = recording ? "Stop" : "Record"
+        recordButton.sizeToFit()
+        // A toolbar item with a custom view keeps the width it was measured at,
+        // so it has to be told again every time the title changes or the clock
+        // is clipped as it passes ten minutes.
+        recordItem?.minSize = recordButton.frame.size
+        recordItem?.maxSize = recordButton.frame.size
+    }
+
+    private static func clock(_ seconds: TimeInterval) -> String {
+        let t = Int(seconds)
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
+                         : String(format: "%d:%02d", t / 60, t % 60)
     }
 
     /// Focus the search field, for Cmd-F.

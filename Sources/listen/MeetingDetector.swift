@@ -145,6 +145,28 @@ final class MeetingDetector {
     // Core Audio
     // -----------------------------------------------------------------------
 
+    /// One audio process, as the detection rule sees it.
+    struct Process {
+        let bundleID: String?
+        let pid: pid_t?
+        let input: Bool
+        let output: Bool
+    }
+
+    /// Every audio process the HAL knows about, unfiltered.
+    ///
+    /// Unfiltered on purpose: `listen sources` prints this, and a report that
+    /// had already dropped everything uninteresting could not answer "why was
+    /// my meeting not detected?", which is the only question it exists for.
+    nonisolated static func report() -> [Process] {
+        processObjects().map {
+            Process(bundleID: bundleID($0),
+                    pid: pid($0),
+                    input: flag($0, kAudioProcessPropertyIsRunningInput),
+                    output: flag($0, kAudioProcessPropertyIsRunningOutput))
+        }
+    }
+
     /// Bundle identifiers of every process currently running both an input and
     /// an output stream, with helper processes resolved to their parent app.
     ///
@@ -152,13 +174,14 @@ final class MeetingDetector {
     nonisolated static func activeCallers() -> [String] {
         let me = ProcessInfo.processInfo.processIdentifier
         var seen: [String] = []
-        for process in processObjects() {
-            guard flag(process, kAudioProcessPropertyIsRunningInput),
-                  flag(process, kAudioProcessPropertyIsRunningOutput)
-            else { continue }
-            // Listen holds the microphone and the tap while it records, so
-            // without this it detects itself and never stops detecting itself.
-            guard pid(process) != me else { continue }
+        for process in report() where process.input && process.output {
+            // Measured: Listen while capturing reports `input` and not
+            // `output`, because a process tap is not an output stream on the
+            // tapping process. So this guard is not currently load-bearing, and
+            // it stays anyway: the day capture plays anything at all, Listen
+            // starts matching its own rule, and the symptom is a recording that
+            // re-detects itself forever with no way to stop it from the panel.
+            guard process.pid != me else { continue }
             // A process with no bundle identifier cannot be a meeting app, and
             // dropping it here is what keeps daemons out of the prompt. This is
             // the `replayd` case: Apple's ReplayKit daemon opens input and
@@ -166,7 +189,7 @@ final class MeetingDetector {
             // meeting?" by a daemon you have never heard of is the failure this
             // whole feature is judged on. There is nothing to skip if it never
             // asks.
-            guard let id = bundleID(process) else { continue }
+            guard let id = process.bundleID else { continue }
             let parent = parentBundleID(id)
             if !seen.contains(parent) { seen.append(parent) }
         }
@@ -231,7 +254,7 @@ final class MeetingDetector {
     /// the helper's identifier is both unrecognisable in a prompt and useless
     /// in the skip list: it is per-renderer, so skipping the one you were shown
     /// skips nothing the next time. Blackbox resolves the same way.
-    static func parentBundleID(_ id: String) -> String {
+    nonisolated static func parentBundleID(_ id: String) -> String {
         let parts = id.split(separator: ".")
         if let i = parts.firstIndex(of: "helper"), i > 1 {
             return parts[..<i].joined(separator: ".")

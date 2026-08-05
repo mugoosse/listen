@@ -39,10 +39,11 @@ enum SettingsTab: Int, CaseIterable {
 /// screen, taking its buttons with it and leaving no way to reach them.
 @MainActor
 class Pane: NSViewController {
-    static let paneHeight: CGFloat = 430
+    static let paneHeight: CGFloat = 500
     static let paneWidth: CGFloat = 560
 
     let stack = NSStackView()
+    private var document: NSView?
 
     override func loadView() {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Self.paneWidth,
@@ -57,26 +58,51 @@ class Pane: NSViewController {
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 22, bottom: 20, right: 22)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let clip = NSView(frame: scroll.bounds)
+        // Flipped, and resized by hand in `resizeDocument`.
+        //
+        // The document view used to be a plain `NSView(frame:)` pinned to the
+        // stack top and bottom with a `greaterThanOrEqualTo` height. Because
+        // `translatesAutoresizingMaskIntoConstraints` stayed true, the frame
+        // won and the height constraint could never grow it, so a pane whose
+        // content did not fit was *compressed* rather than scrolled: headings
+        // drew at zero height and notes lost their last line. That read as a
+        // text-wrapping bug rather than a scrolling one, which is why it lasted
+        // until the General pane grew past 500 points. Every pane before that
+        // happened to fit.
+        //
+        // Turning the flag off is not the fix either. A document view with no
+        // constraints tying it to the clip view leaves the scroll view's layout
+        // ambiguous, and the whole settings window then failed to appear at
+        // all. Measured, twice. So the frame stays authoritative and
+        // `resizeDocument` sets it from the content.
+        //
+        // Flipped for the reason the old bottom constraint existed: an
+        // unflipped document view has its origin at the bottom, so a short pane
+        // hung off the floor of the window and a tall one opened scrolled to
+        // the end.
+        let clip = FlippedView(frame: NSRect(x: 0, y: 0, width: Self.paneWidth,
+                                             height: Self.paneHeight))
         clip.addSubview(stack)
         scroll.documentView = clip
+        document = clip
 
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: clip.topAnchor),
             stack.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
-            // Both a top constraint and a height of at least the clip view's.
-            // An NSClipView is not flipped, so a document view shorter than it
-            // is placed at the *bottom*: with only the top constraint a short
-            // pane hangs off the floor of the window. Filling the height hands
-            // the slack to the trailing spacer instead.
-            stack.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
-            clip.widthAnchor.constraint(equalToConstant: Self.paneWidth),
-            clip.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.paneHeight),
         ])
         view = scroll
+        // The frame above is not enough. `NSTabViewController` ignores a view
+        // controller's frame and sizes itself from `preferredContentSize`, so
+        // without this every pane got NSTabView's default 500 x 500 while all
+        // the layout arithmetic here went on using 560. Measured before the
+        // fix: window 500 wide, clip view 500 wide, document view 560 wide, so
+        // the right 60 points of every pane, and of every separator and note in
+        // it, was quietly cut off. It read as clipped text rather than as a
+        // sizing bug, which is why it survived this long.
+        preferredContentSize = NSSize(width: Self.paneWidth, height: Self.paneHeight)
         build()
-        stack.addArrangedSubview(NSView())      // spacer keeps content top-aligned
+        resizeDocument()
     }
 
     /// Overridden by each pane.
@@ -85,6 +111,22 @@ class Pane: NSViewController {
     override func viewWillAppear() {
         super.viewWillAppear()
         refresh()
+        // After `refresh`, not only after `build`. Panes add rows here rather
+        // than in `build` when the content can change while the app runs, and a
+        // document sized before those rows exist scrolls to the wrong place or
+        // not at all.
+        resizeDocument()
+    }
+
+    /// Grow the document view to whatever the content needs, so the scroll view
+    /// has something to scroll.
+    private func resizeDocument() {
+        guard let document else { return }
+        stack.layoutSubtreeIfNeeded()
+        let height = max(Self.paneHeight, stack.fittingSize.height)
+        if document.frame.height != height {
+            document.setFrameSize(NSSize(width: Self.paneWidth, height: height))
+        }
     }
 
     /// Re-read anything that can change while the window is open.
@@ -155,6 +197,11 @@ class Pane: NSViewController {
     }
 }
 
+/// Top-left origin, so a settings pane reads downwards like everything else.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// Closure-to-selector bridge, so panes read as a list of controls rather than
 /// a list of `@objc` methods.
 final class ActionHandler: NSObject {
@@ -212,6 +259,8 @@ final class SettingsWindow: NSObject {
 final class GeneralPane: Pane {
     private var loginBox: NSButton?
     private var deviceMenu: NSPopUpButton?
+    private var skipList: NSStackView?
+    private var addButton: NSPopUpButton?
 
     override func build() {
         heading("Startup")
@@ -225,13 +274,40 @@ final class GeneralPane: Pane {
 
         separator()
         heading("Meetings")
-        checkbox("Offer to record when a meeting starts", Settings.autoDetectMeetings) {
+        checkbox("Record when a meeting starts, and ask", Settings.autoDetectMeetings) {
             Settings.autoDetectMeetings = $0
+            MeetingDetector.shared.refresh()
         }
-        note("Watches for Zoom, Meet, Teams and Slack huddles becoming audio-active. "
-             + "Off by default: an app that starts recording the first time you join a "
-             + "call, before you have asked it to, is a worse first impression than one "
-             + "that waits. Recording from the menu bar always works either way.")
+        note("Watches for an app that is listening and speaking at once, which is what a "
+             + "call looks like from outside. Capture starts immediately and a panel asks "
+             + "whether you are in a meeting: saying no deletes it. It records first "
+             + "because the minute spent answering is the minute where people say who "
+             + "they are. Off by default, and recording from the menu bar always works "
+             + "either way.")
+
+        separator()
+        heading("Never ask about these apps")
+        let list = NSStackView()
+        list.orientation = .vertical
+        list.alignment = .leading
+        list.spacing = 6
+        stack.addArrangedSubview(list)
+        skipList = list
+
+        let add = NSPopUpButton()
+        add.pullsDown = true
+        let addHandler = ActionHandler { [weak self] _ in self?.addSkipped() }
+        add.target = addHandler
+        add.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(add, "handler", addHandler, .OBJC_ASSOCIATION_RETAIN)
+        stack.addArrangedSubview(add)
+        addButton = add
+
+        note("Listening and speaking at once is a broader rule than a list of known "
+             + "meeting apps, which is deliberate: a guessed list misses the fifth thing "
+             + "you join a call in. The cost is that other recorders match it too, so "
+             + "Blackbox and anything like it belongs here. The panel's \"Never for…\" "
+             + "button adds an app without coming back to this pane.")
 
         separator()
         heading("Microphone")
@@ -248,6 +324,7 @@ final class GeneralPane: Pane {
 
     override func refresh() {
         loginBox?.state = LoginItem.state.isSelected ? .on : .off
+        refreshSkipped()
         guard let menu = deviceMenu else { return }
         menu.removeAllItems()
         menu.addItem(withTitle: "System default")
@@ -275,6 +352,110 @@ final class GeneralPane: Pane {
 
     private func deviceChanged() {
         Settings.microphoneUID = deviceMenu?.selectedItem?.representedObject as? String
+    }
+
+    // MARK: - Skipped apps
+
+    private func refreshSkipped() {
+        guard let list = skipList else { return }
+        for view in list.arrangedSubviews { view.removeFromSuperview() }
+
+        let skipped = Settings.skippedBundleIDs.sorted {
+            AppNames.display($0).localizedCaseInsensitiveCompare(AppNames.display($1))
+                == .orderedAscending
+        }
+        if skipped.isEmpty {
+            let empty = NSTextField(labelWithString: "Nothing skipped.")
+            empty.font = .systemFont(ofSize: 11)
+            empty.textColor = .secondaryLabelColor
+            list.addArrangedSubview(empty)
+        }
+        for id in skipped {
+            list.addArrangedSubview(skipRow(id))
+        }
+        refreshAddMenu()
+    }
+
+    private func skipRow(_ bundleID: String) -> NSView {
+        let image = NSImageView()
+        image.image = AppNames.icon(bundleID)
+        image.translatesAutoresizingMaskIntoConstraints = false
+        image.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        image.heightAnchor.constraint(equalToConstant: 16).isActive = true
+
+        let name = NSTextField(labelWithString: AppNames.display(bundleID))
+        name.font = .systemFont(ofSize: 12)
+        // The identifier as the tooltip, because two apps can share a display
+        // name and the list has to be unambiguous enough to remove the right
+        // one.
+        name.toolTip = bundleID
+
+        let remove = NSButton(title: "Remove", target: nil, action: nil)
+        remove.bezelStyle = .rounded
+        remove.controlSize = .small
+        let handler = ActionHandler { [weak self] _ in
+            Settings.unskip(bundleID)
+            self?.refreshSkipped()
+        }
+        remove.target = handler
+        remove.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(remove, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+
+        // A fixed row width and a spacer that absorbs the slack, so every
+        // Remove lands in the same column. An `NSStackView` packs its arranged
+        // subviews against the leading edge and leaves the rest as trailing
+        // space, so without the spacer each row is only as wide as its own app
+        // name and the buttons come out in a ragged diagonal that reads as five
+        // unrelated controls rather than one list. Lowering the label's hugging
+        // priority is not enough on its own; the slack has to have somewhere to
+        // go.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        name.lineBreakMode = .byTruncatingTail
+
+        let row = NSStackView(views: [image, name, spacer, remove])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: Pane.paneWidth - 44).isActive = true
+        return row
+    }
+
+    /// The add menu, populated from what is running now.
+    ///
+    /// Accessory apps are included, not just the ones with a Dock icon. The
+    /// apps most worth skipping are menu bar recorders, and a "regular apps
+    /// only" filter would leave exactly those unselectable.
+    private func refreshAddMenu() {
+        guard let add = addButton else { return }
+        add.removeAllItems()
+        add.addItem(withTitle: "Add App…")       // the pull-down's own title
+
+        let skipped = Settings.skippedBundleIDs
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy != .prohibited }
+            .compactMap { app -> (String, String)? in
+                guard let id = app.bundleIdentifier, !skipped.contains(id) else { return nil }
+                return (id, app.localizedName ?? id)
+            }
+            .sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+
+        var seen = Set<String>()
+        for (id, name) in running where seen.insert(id).inserted {
+            add.addItem(withTitle: name)
+            add.lastItem?.representedObject = id
+            add.lastItem?.image = AppNames.icon(id)
+            add.lastItem?.image?.size = NSSize(width: 16, height: 16)
+        }
+        add.isEnabled = add.numberOfItems > 1
+    }
+
+    private func addSkipped() {
+        guard let id = addButton?.selectedItem?.representedObject as? String else { return }
+        Settings.skip(id)
+        refreshSkipped()
     }
 }
 

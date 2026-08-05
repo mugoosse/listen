@@ -121,7 +121,11 @@ real voices at 0.47 and 0.57.
 ## Later
 
 - Waveform in the player, if it can be made cheap.
-- Meeting detection actually wired up: `Settings.autoDetectMeetings` exists and
-  is read by nothing yet.
+- Meeting detection has never been seen firing on a real call. Both Core Audio
+  flags were verified separately (`out` while playing, `in` while recording),
+  but no single process was observed running both, so the positive path is
+  reasoned rather than measured. Run `listen sources` during the next real
+  meeting; it prints every audio process, both flags, and what the rule makes
+  of them.
 - Mixdown is generated on first playback and can take a moment on a long
   meeting; no progress is shown while it does.

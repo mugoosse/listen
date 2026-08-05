@@ -228,6 +228,66 @@ The onboarding rule this reverses one reason for still holds. Windows must
 float and re-activate after each permission prompt: a window behind a system
 dialog is unrecoverable either way.
 
+### Meeting detection asks while recording, not before
+
+The rule is Blackbox's, not SPEC 5.3's: a process running **both** an input and
+an output stream at once is on a call. SPEC 5.3 proposes a list of bundle
+identifiers for Zoom, Meet, Teams and Slack, and that is the same mistake as
+narrowing the tap's process list. A guessed list is wrong the first time
+somebody joins a call in the fifth thing, and being wrong means no recording
+with nothing on screen to explain why. The broad rule over-triggers instead,
+which is survivable because the skip list makes over-triggering one click.
+
+Capture starts on detection and the panel asks afterwards, which is SPEC 5.3
+point 1: the minute spent answering is the minute where people say who they are.
+
+### Nothing asks "keep this recording?" any more
+
+SPEC 5.3's Keep and Discard step is gone, in favour of the fallback SPEC 5.3
+itself names: "Blackbox's behaviour, which is to keep everything with a Discard
+button." A recording that exists is kept, and Delete in the library is how one
+goes away, where you can see its length and play it before deciding.
+
+The confirm panel was worse than no panel for two reasons that only showed up
+once it was used. It arrived at the *end*, an hour after the context for the
+question, and it offered no way to hear what it was asking about. And it also
+appeared at launch for anything staged by a crash, which meant being asked
+whether to keep an hour of audio you had no memory of recording.
+
+So the only question left is "are you in a meeting?", which is asked at the
+start, while the call is in front of you and the answer is obvious. "No" is
+also the only thing in the app that deletes a recording without a confirmation
+step, and that is deliberate: it is answering a question, not issuing a
+command, and following one no with another is how you train people to click
+through both.
+
+The consequence for staging: a staged recording is no longer one somebody
+declined to keep, it is one a crash or a quit interrupted. `adoptStaged()`
+promotes it at launch, and it has to run **before** `Library.sweepStaging()`,
+which deletes staged folders older than 24 hours. In the other order the sweep
+destroys exactly the recording adoption exists to rescue.
+
+Three things were measured with `listen sources`, which exists because
+detection leaves nothing behind to inspect afterwards:
+
+1. **A process tap is not an output stream on the tapping process.** Listen
+   while capturing reports `in y / out -` (measured, pid 8859). So Listen does
+   not match its own rule and the self-PID guard is not currently load-bearing.
+   It stays: the day capture plays anything, the app detects itself forever.
+2. **Every process that links CoreAudio gets a process object**, streams or
+   not. `listen sources` lists 30 on this machine with two on any kind of
+   stream, so filtering on the flags rather than on the list is the whole job.
+3. **Processes with no bundle identifier are dropped before the prompt.** This
+   is the `replayd` case: Apple's ReplayKit daemon opens input and output during
+   any system dictation, and Anarlog really does ask "are you in a meeting?"
+   about it. A daemon nobody has heard of asking that is the failure this
+   feature is judged on, and there is nothing to skip if it never asks.
+
+Helper bundle identifiers resolve to the parent, so Chrome is `com.google.Chrome`
+and not `com.google.Chrome.helper.renderer`. Without it the prompt names
+something unrecognisable, and worse, the skip list stores a per-renderer
+identifier that skips nothing the next time.
+
 ### The transcription queue has no database
 
 A recording whose audio exists and whose transcript does not **is** pending.

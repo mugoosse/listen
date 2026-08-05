@@ -11,16 +11,62 @@ a local release and a CI release cannot come apart.
 
 ## Cutting a release
 
+`/release` is the shortcut, and it does all of the below: commits and pushes
+what is outstanding, bumps `VERSION`, writes the changelog entry, asks once,
+then publishes and dispatches the cask. It lives in
+`.claude/skills/release/SKILL.md`. By hand:
+
 ```sh
+$EDITOR CHANGELOG.md          # a '## 1.0.1 (2026-08-12)' section on top
 echo 1.0.1 > VERSION
 git commit -am "1.0.1"
-git tag v1.0.1
-git push && git push --tags
+git push
+./release.sh --publish        # tags, pushes the tag, builds, notarizes, uploads
+gh workflow run homebrew-tap.yml -f tag=v1.0.1
 ```
 
-The tag triggers `.github/workflows/release.yml`. The tag has to agree with
-`VERSION`: a release named v1.0.1 containing `Listen-1.0.0.dmg` is worse than a
-failed build, so `release.sh` checks and refuses.
+Do not tag by hand. `release.sh` tags and pushes the tag itself, and a tag that
+disagrees with `VERSION` ships a release named v1.0.1 containing
+`Listen-1.0.0.dmg`, which is worse than a failed build. It checks and refuses.
+
+Pushing the tag does not start CI. `.github/workflows/release.yml` is
+dispatch-only, deliberately: a local release would otherwise start a job that
+builds for ten minutes, finds no signing secrets and mails a failure for a
+release that actually succeeded.
+
+## The changelog is the only place release notes are written
+
+`CHANGELOG.md`, newest section first, each starting `##` followed by a version
+number. `release.sh` extracts the top section and uses it twice: as the GitHub
+release body, and as the description embedded in the appcast, which is the
+"what's new" pane Sparkle shows before an update. There is no second file to
+keep in agreement, which is the same argument as `sparkle.conf` holding the
+account name and the public key together.
+
+Three things it refuses in preflight, before a ten-minute build rather than
+after it: no `CHANGELOG.md`, a top section whose version is not `VERSION`, and
+a top section that is empty. The middle one is the one that matters. A
+changelog left at the previous version publishes the previous release's notes
+under this one's name, and nothing anywhere reports it: the release page reads
+perfectly well, it just describes a different build.
+
+A section ends at the next heading that is `##` followed by a version number,
+rather than at the next `##` of any kind, so an entry can use its own
+sub-headings. 0.1.0's notes have three, and a parser keyed on heading level
+would have published its first paragraph and dropped the rest.
+
+### Sparkle needs the notes embedded, not linked
+
+`generate_appcast` embeds a release-notes file only when it is HTML. Given the
+`.md` the changelog produces, it emits a `<sparkle:releaseNotesLink>` instead.
+Measured: without `--embed-release-notes` the feed pointed at
+`releases/latest/download/Listen-0.1.0.md`, a file no release uploads, so every
+updater would have fetched a 404 into the pane. With the flag it becomes
+`<description sparkle:format="markdown">` inside the feed, and there is no
+second file to keep published.
+
+0.1.0's feed shipped with no description at all, so the only thing an updater
+was given to decide on was a version number.
 
 ## One-time setup
 
@@ -89,10 +135,17 @@ Delete it once it is in the password manager.
 | `NOTARY_TEAM_ID` | 10-character team identifier | no |
 | `NOTARY_PASSWORD` | app-specific password | no |
 | `SPARKLE_PRIVATE_KEY` | the EdDSA private key, for signing the appcast | yes |
+| `HOMEBREW_TAP_TOKEN` | fine-grained PAT, contents and pull-requests write on the tap | no |
 
 ```sh
 gh secret set SPARKLE_PRIVATE_KEY --repo mugoosse/listen < sparkle_private_key.txt
 ```
+
+`HOMEBREW_TAP_TOKEN` is the one the cask step needs, and the default
+`GITHUB_TOKEN` cannot stand in for it because it cannot reach another
+repository. It is not set, so `homebrew-tap.yml` fails on its first step by
+design rather than half-updating the tap. Until it is, the cask is two lines
+edited by hand; see Homebrew at the end of this file.
 
 Without them the build still runs and produces artifacts, unsigned and
 unpublished, so a fork can build with no setup at all.
@@ -175,12 +228,43 @@ build macOS will not open is never what anyone meant.
 
 ## Homebrew
 
+The cask is `Casks/listen.rb` in `mugoosse/homebrew-tap`. Two lines change per
+release, the version and the sha256 of the versioned DMG, which `release.sh`
+has already written into `dist/SHA256SUMS.txt`.
+
 ```sh
 gh workflow run homebrew-tap.yml -f tag=v1.0.1
 ```
+
+**That dispatch fails today**, and it is worth knowing why before reading the
+run log. It needs `HOMEBREW_TAP_TOKEN`, which is not set, so it exits on its
+first step. Nothing is half-written when it does. Until the secret exists, bump
+the cask by hand in a clone of the tap:
+
+```sh
+grep Listen-1.0.1.dmg dist/SHA256SUMS.txt        # the hash to paste
+$EDITOR Casks/listen.rb                          # version and sha256
+git commit -am "listen 1.0.1" && git push
+```
+
+The workflow only ever rewrites those two lines with `sed`, deliberately: the
+caveats and the zap stanza are hand-written and not derivable from a release,
+so regenerating the file would lose them. The consequence is that it cannot
+create the cask, only update one, which is why `Casks/listen.rb` had to be
+written by hand once before any of this could run.
 
 The cask pins a sha256 against the versioned filename, which only means
 anything while that URL is immutable. That is why both `Listen-1.0.1.dmg` and
 an unversioned `Listen.dmg` are published: the unversioned one makes
 `/releases/latest/download/Listen.dmg` a working direct download, and the
 versioned one stays put for the cask to pin.
+
+### The recordings survive `--zap`
+
+`zap trash:` lists the preferences and the caches and stops there.
+`~/Library/Application Support/Listen` holds the meetings, `--zap` is a flag
+people pass without reading it, and the two errors do not cost the same:
+preferences regenerate, an hour of somebody's meetings does not. The caveats
+say where they are and how to remove them, so it stays a choice somebody makes.
+The model cache is left alone for the reason Speak leaves it alone, that
+removing it would take Speak's copy too.

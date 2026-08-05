@@ -53,6 +53,31 @@ TAG="v$VERSION"
 # Which bundle each notarization submission belongs to. Outside dist/, which
 # is wiped on every run, and gitignored.
 STATE="$ROOT/.notarization"
+CHANGELOG="$ROOT/CHANGELOG.md"
+# The top section of the changelog, extracted below. One file is the source for
+# both the GitHub release body and the pane Sparkle shows before an update, so
+# the two cannot describe the same version differently.
+NOTES="$DIST/release-notes.md"
+
+# A section runs from a heading that is `##` followed by a version number to
+# the next one. Keyed on the version rather than on the heading level, because
+# an entry's own sub-headings are `##` in the release body people read, and a
+# parser that stopped at those would silently publish the first paragraph and
+# drop the rest.
+changelog_body() {
+    awk '
+        /^## [0-9]+\.[0-9]+\.[0-9]+/ { if (seen) exit; seen = 1; next }
+        seen && !body && /^[[:space:]]*$/ { next }
+        seen { body = 1; print }
+    ' "$CHANGELOG"
+}
+
+# The version the top section claims, from `## 0.2.0 (2026-08-12)`.
+changelog_version() {
+    awk '/^## [0-9]+\.[0-9]+\.[0-9]+/ {
+        sub(/^##[[:space:]]+/, ""); sub(/[[:space:](].*$/, ""); print; exit
+    }' "$CHANGELOG"
+}
 
 # --- preflight -------------------------------------------------------------
 #
@@ -80,6 +105,30 @@ if [ "$PUBLISH" -eq 1 ]; then
             echo "       Delete the tag or fix VERSION; they have to agree." >&2
             exit 1
         fi
+    fi
+
+    # A changelog whose top section was left at the previous version publishes
+    # the previous release's notes under this one's name, and nothing anywhere
+    # reports it: the release page reads perfectly well, it just describes a
+    # different build, and so does the pane Sparkle puts in front of everyone
+    # deciding whether to take the update. Same family as the tag check above,
+    # and cheap for the same reason.
+    if [ ! -f "$CHANGELOG" ]; then
+        echo "error: no CHANGELOG.md, so the release would have no notes and" >&2
+        echo "       Sparkle's update pane would be blank." >&2
+        exit 1
+    fi
+    HEADING=$(changelog_version)
+    if [ "$HEADING" != "$VERSION" ]; then
+        echo "error: CHANGELOG.md opens on ${HEADING:-no version section} but" >&2
+        echo "       VERSION says $VERSION. Add a '## $VERSION' section at the" >&2
+        echo "       top; they have to agree." >&2
+        exit 1
+    fi
+    if [ -z "$(changelog_body | tr -d '[:space:]')" ]; then
+        echo "error: the $VERSION section of CHANGELOG.md is empty, so the" >&2
+        echo "       release would ship a version number and no reason to take it." >&2
+        exit 1
     fi
 
     if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
@@ -165,6 +214,16 @@ fi
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
+
+# After the wipe, not before: dist/ is emptied on every run and would take the
+# notes with it. Publishing has already refused above if this section is
+# missing, so the warning is for a dry run, where no notes costs nothing.
+if [ -f "$CHANGELOG" ] && [ "$(changelog_version)" = "$VERSION" ]; then
+    changelog_body > "$NOTES"
+else
+    echo "warning: CHANGELOG.md has no $VERSION section at the top, so this" >&2
+    echo "         build gets no release notes and no Sparkle description." >&2
+fi
 
 # --- notarize --------------------------------------------------------------
 #
@@ -323,6 +382,14 @@ if [ -n "$GENERATE_APPCAST" ]; then
     ARCHIVES="$DIST/archives"
     mkdir -p "$ARCHIVES"
     cp "$ZIP" "$ARCHIVES/"
+    # generate_appcast picks up a .md, .html or .txt file whose basename
+    # matches an archive and embeds it as that item's description, which is the
+    # "what's new" pane Sparkle shows before an update. Without one the pane is
+    # empty: 0.1.0's feed shipped that way, so the only thing an updater was
+    # given to decide on was a version number. The name has to track the zip's.
+    if [ -f "$NOTES" ]; then
+        cp "$NOTES" "$ARCHIVES/Listen-$VERSION.md"
+    fi
     # Locally the private key comes from the login keychain, where
     # generate_keys put it, under Listen's own account rather than the default
     # one. Omitting --account does not fail: it signs with whatever the default
@@ -335,10 +402,20 @@ if [ -n "$GENERATE_APPCAST" ]; then
         KEYARG="--account $SPARKLE_ACCOUNT"
     fi
     LOG="$DIST/appcast.log"
+    # --embed-release-notes is not optional. By default generate_appcast embeds
+    # a notes file only when it is HTML, and emits a <sparkle:releaseNotesLink>
+    # for anything else. Measured: without the flag the feed pointed at
+    # releases/latest/download/Listen-0.1.0.md, which no release uploads, so
+    # every updater would have fetched a 404 into the pane. Embedded, it
+    # becomes <description sparkle:format="markdown"> in the feed itself, and
+    # there is no second file to keep published.
+    #
     # shellcheck disable=SC2086
     if "$GENERATE_APPCAST" $KEYARG --download-url-prefix \
         "https://github.com/mugoosse/listen/releases/download/$TAG/" \
         --link "https://github.com/mugoosse/listen" \
+        --embed-release-notes \
+        --full-release-notes-url "https://github.com/mugoosse/listen/blob/main/CHANGELOG.md" \
         "$ARCHIVES" >"$LOG" 2>&1
     then
         mv "$ARCHIVES/appcast.xml" "$APPCAST"
@@ -424,7 +501,7 @@ if [ "$PUBLISH" -eq 1 ]; then
     if ! gh release view "$TAG" >/dev/null 2>&1; then
         gh release create "$TAG" --draft --verify-tag \
             --title "Listen $VERSION" \
-            --notes-file "$ROOT/RELEASE_NOTES.md" --generate-notes
+            --notes-file "$NOTES" --generate-notes
     fi
     gh release upload "$TAG" "$ZIP" "$DMG" "$LATEST_DMG" "$SUMS" \
         $([ -f "$APPCAST" ] && echo "$APPCAST") --clobber

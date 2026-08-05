@@ -680,8 +680,24 @@ final class TranscriptFieldEditor: NSTextView {
 
     /// A field editor has to say it is one. Made here rather than by an `init`
     /// override so the class inherits `NSTextView`'s initialisers untouched.
+    ///
+    /// **`init(frame:)`, never `init(frame:textContainer: nil)`.** The second is
+    /// the designated initialiser and passing nil means "I will build the text
+    /// system myself": the view comes back with no text container, no layout
+    /// manager and no storage, and it fails silently rather than complaining.
+    /// Measured on the two side by side, with `string` set on each:
+    ///
+    ///     init(frame:textContainer: nil)   container nil, storage nil, string EMPTY
+    ///     init(frame:)                     container yes, storage yes, 40 chars
+    ///
+    /// Shipping the first one blanked the transcript. A right-click installs the
+    /// field editor over the paragraph, so an editor that can hold no text drew
+    /// no text, and `NSTextFieldCell` then wrote that emptiness back into the
+    /// label: the words did not reappear when the menu closed, which reads as
+    /// the transcript having been destroyed rather than as a view that cannot
+    /// draw. Nothing reached disk, because only `TranscriptEditor` writes one.
     static func make() -> TranscriptFieldEditor {
-        let editor = TranscriptFieldEditor(frame: .zero, textContainer: nil)
+        let editor = TranscriptFieldEditor(frame: .zero)
         editor.isFieldEditor = true
         return editor
     }

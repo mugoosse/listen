@@ -939,6 +939,15 @@ enum CLI {
                        transcript.duration,
                        transcript.duration / max(done.timeIntervalSince(loaded), 0.001)))
 
+            // The chunk length is chosen from installed memory, so two machines
+            // transcribing the same file produce a different number of seams and
+            // therefore a different number of corrupted words. Say which one this
+            // was: otherwise "my transcript has more glitches than yours" has
+            // nothing behind it to check.
+            log(String(format: "chunk %.0fs, about %.0f seam(s)",
+                       ASR.chunkSeconds,
+                       max((transcript.duration / Double(ASR.chunkSeconds)).rounded(.down), 0)))
+
             // Section 4.4 assigns each word to the overlapping speaker turn, so
             // the absence of word timings is a finding, not a detail. Say it
             // every run rather than leaving it in a document: this is the thing

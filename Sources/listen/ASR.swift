@@ -123,8 +123,28 @@ actor ASR {
     /// So: the largest chunk that has been shown to survive an hour. The real
     /// fix is to cut at silence so no word ever straddles a seam, which would
     /// let this go back up.
+    ///
+    /// **Except on a small machine, where 3.28 GB is not affordable.** That
+    /// figure was measured here, with 128 GB and nothing else running. An 8 GB
+    /// M1 Air is the entry Mac of the whole Apple Silicon era and is most of
+    /// what anyone still using a laptop from 2020 has; on one of those, 3.28 GB
+    /// alongside the browser and the video call the meeting was *in* is the
+    /// same Metal OOM that killed the whole-file pass, and it lands an hour in,
+    /// after the recording, where it costs the transcript rather than a retry.
+    ///
+    /// 120 s is not a guess at a safer number: it is Speak's, which has shipped
+    /// on 8 GB machines throughout. The trade is real and it is the right way
+    /// round. Six seams an hour become 33, so an hour-long meeting carries
+    /// about 33 corrupted words instead of 6, and that is worth paying on the
+    /// machines whose alternative is no transcript at all. Nothing changes for
+    /// a machine with the memory to spare.
+    ///
+    /// The threshold is 12 GB rather than 8 so that an 8 GB machine is not
+    /// decided by whether `physicalMemory` reports slightly under its nominal
+    /// size. Nothing ships between 8 and 16.
     static let chunkSeconds: Float =
-        Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "") ?? 600
+        Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "")
+            ?? (ProcessInfo.processInfo.physicalMemory > 12 << 30 ? 600 : 120)
 
     /// Load the weights, downloading them first if they are not on disk.
     ///

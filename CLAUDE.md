@@ -114,6 +114,29 @@ The principled fix is to cut chunks at silence rather than at a fixed offset,
 so no word ever straddles a seam. mlx-audio ships `MLXAudioVAD`, so the parts
 exist. Until then the chunk length is a trade against memory, measured below.
 
+#### The chunk length depends on the machine, so two Macs disagree
+
+`ASR.chunkSeconds` is 600 above 12 GB of installed memory and 120 at or below
+it. The 3.28 GB peak that made 600 s the answer was measured here, on 128 GB
+with nothing else running. An 8 GB M1 Air is the entry Mac of the entire Apple
+Silicon era, and on one of those, 3.28 GB alongside the browser and the video
+call the meeting is *in* is the same Metal OOM that killed the whole-file pass.
+It would land an hour in, after the recording, where it costs the transcript
+rather than a retry.
+
+120 s is not a guess at a safer number, it is Speak's, which has shipped on
+8 GB machines throughout. The trade is real and it is the right way round: an
+hour-long meeting on a small Mac carries about 33 corrupted words instead of 6,
+which is worth paying when the alternative is no transcript at all. Nothing
+changes on a machine with the memory to spare.
+
+The consequence is that the same file transcribed on two Macs has a different
+number of seams and therefore a different number of corrupted words, so
+`listen transcribe` reports the chunk length and the seam count on every run.
+Without that, "my transcript has more glitches than yours" has nothing behind
+it to check. `LISTEN_CHUNK` still overrides both, and still exists for
+measurement rather than for users.
+
 ### A process tap with an empty include list records perfect silence
 
 The worst bug in this codebase so far, because nothing anywhere reports an

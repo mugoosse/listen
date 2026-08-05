@@ -1,19 +1,28 @@
 import AVFoundation
 import AppKit
 
-/// Which tab, by name.
+/// Which section, by name.
 ///
 /// Never a literal index. Speak's menu opened "About" as tab 4, so inserting a
-/// tab above it would silently have opened Permissions instead.
-enum SettingsTab: Int, CaseIterable {
-    case general, models, storage, permissions, developers, about
+/// tab above it would silently have opened Permissions instead. The raw `Int`
+/// this used to carry was that index, read by `NSTabViewController`; the
+/// sections live in the library window's sidebar now, so it is gone rather than
+/// left lying around for someone to index by again.
+enum SettingsTab: CaseIterable {
+    case general, storage, permissions
+    case meetings, audio
+    case models, dictionary
+    case developers, about
 
     var title: String {
         switch self {
         case .general:     return "General"
-        case .models:      return "Models"
         case .storage:     return "Storage"
         case .permissions: return "Permissions"
+        case .meetings:    return "Meetings"
+        case .audio:       return "Audio"
+        case .models:      return "Models"
+        case .dictionary:  return "Dictionary"
         case .developers:  return "Developers"
         case .about:       return "About"
         }
@@ -22,40 +31,111 @@ enum SettingsTab: Int, CaseIterable {
     var symbol: String {
         switch self {
         case .general:     return "gearshape"
-        case .models:      return "cpu"
         case .storage:     return "internaldrive"
         case .permissions: return "lock.shield"
+        case .meetings:    return "video"
+        case .audio:       return "mic"
+        case .models:      return "cpu"
+        case .dictionary:  return "character.book.closed"
         case .developers:  return "terminal"
         case .about:       return "info.circle"
+        }
+    }
+
+    @MainActor
+    func makePane() -> Pane {
+        let pane: Pane
+        switch self {
+        case .general:     pane = GeneralPane()
+        case .storage:     pane = StoragePane()
+        case .permissions: pane = PermissionsPane()
+        case .meetings:    pane = MeetingsPane()
+        case .audio:       pane = AudioPane()
+        case .models:      pane = ModelsPane()
+        case .dictionary:  pane = DictionaryPane()
+        case .developers:  pane = DevelopersPane()
+        case .about:       pane = AboutPane()
+        }
+        // Here rather than at the call site, so a pane and the heading it draws
+        // cannot disagree about which section it is.
+        pane.tab = self
+        return pane
+    }
+}
+
+/// How the sections are grouped in the sidebar.
+///
+/// Nine rows in one flat list is a list you read rather than scan. The groups
+/// are the same shape Anarlog uses, and they are named after what is in them:
+/// "Recording" is what happens while a meeting runs and "Transcription" is what
+/// happens to it afterwards, which is also the order they happen in.
+enum SettingsGroup: CaseIterable {
+    case app, recording, transcription, advanced
+
+    var title: String {
+        switch self {
+        case .app:           return "App"
+        case .recording:     return "Recording"
+        case .transcription: return "Transcription"
+        case .advanced:      return "Advanced"
+        }
+    }
+
+    var tabs: [SettingsTab] {
+        switch self {
+        case .app:           return [.general, .storage, .permissions]
+        case .recording:     return [.meetings, .audio]
+        case .transcription: return [.models, .dictionary]
+        case .advanced:      return [.developers, .about]
         }
     }
 }
 
 /// A settings pane.
 ///
-/// Each one is a fixed-height `NSScrollView`, because `NSTabViewController`
-/// sizes the window to the tallest pane and the window is not resizable.
-/// Adding a tall pane otherwise pushes the window past the bottom of a laptop
-/// screen, taking its buttons with it and leaving no way to reach them.
+/// It lives in the library window's content side, so it is as wide as the
+/// window and scrolls when it is taller. It used to be a fixed 560 x 500 box
+/// because `NSTabViewController` sized a non-resizable window to the tallest
+/// pane; nothing sizes to it any more, so the only fixed number left is the cap
+/// on how wide a line of text is allowed to get.
 @MainActor
 class Pane: NSViewController {
-    static let paneHeight: CGFloat = 500
+    /// The width the pane is built at, before the window has ever laid it out.
+    /// A floor, not a promise: `sizeDocument` takes over from the first layout.
     static let paneWidth: CGFloat = 560
+    static let paneHeight: CGFloat = 500
+
+    /// How wide a run of text or a full-width row is allowed to get.
+    ///
+    /// Without a cap, a note stretches to whatever the window is and a sentence
+    /// runs 1400 points across a screen nobody can track a line on. The controls
+    /// are leading-aligned already, so capping the text keeps one left edge and
+    /// one comfortable measure.
+    static let maxContentWidth: CGFloat = 620
+
+    /// Which section this is, set by `SettingsTab.makePane`.
+    var tab: SettingsTab = .general
 
     let stack = NSStackView()
     private var document: NSView?
+    private let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Pane.paneWidth,
+                                                    height: Pane.paneHeight))
+    /// Every wrapping label, so their `preferredMaxLayoutWidth` can be moved
+    /// when the window is resized. See `sizeDocument`.
+    private var notes: [NSTextField] = []
 
     override func loadView() {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: Self.paneWidth,
-                                                height: Self.paneHeight))
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
 
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 22, bottom: 20, right: 22)
+        // 24 on each side, so the content lines up with the page title above it
+        // and with the recording title the pane replaces.
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 24, bottom: 24, right: 24)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // Flipped, and resized by hand in `resizeDocument`.
@@ -91,16 +171,30 @@ class Pane: NSViewController {
             stack.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
         ])
-        view = scroll
-        // The frame above is not enough. `NSTabViewController` ignores a view
-        // controller's frame and sizes itself from `preferredContentSize`, so
-        // without this every pane got NSTabView's default 500 x 500 while all
-        // the layout arithmetic here went on using 560. Measured before the
-        // fix: window 500 wide, clip view 500 wide, document view 560 wide, so
-        // the right 60 points of every pane, and of every separator and note in
-        // it, was quietly cut off. It read as clipped text rather than as a
-        // sizing bug, which is why it survived this long.
-        preferredContentSize = NSSize(width: Self.paneWidth, height: Self.paneHeight)
+
+        // The section name, in the place and the size the recording title
+        // occupies in the other mode, so switching between them does not move
+        // the heading. Static rather than scrolling with the content: the window
+        // has a transparent full-size title bar, and content scrolling under it
+        // draws over the traffic lights.
+        let title = NSTextField(labelWithString: tab.title)
+        title.font = .systemFont(ofSize: 22, weight: .semibold)
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(title)
+        container.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
+            title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
+            title.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                            constant: -24),
+            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 6),
+            scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        view = container
         build()
         resizeDocument()
     }
@@ -118,21 +212,66 @@ class Pane: NSViewController {
         resizeDocument()
     }
 
-    /// Grow the document view to whatever the content needs, so the scroll view
-    /// has something to scroll.
-    private func resizeDocument() {
-        guard let document, let scroll = view as? NSScrollView else { return }
-        stack.layoutSubtreeIfNeeded()
-        let height = max(Self.paneHeight, stack.fittingSize.height)
-        if document.frame.height != height {
-            document.setFrameSize(NSSize(width: Self.paneWidth, height: height))
-        }
-        // Back to the top. Growing the document under a clip view leaves the
-        // clip where it was, which on a pane that just became scrollable means
-        // opening part-way down with the first heading hidden behind the tab
-        // bar. A settings pane always starts at its first control.
+    /// Tear the pane down and build it again.
+    ///
+    /// For a pane whose *shape* changes rather than its values, which `refresh`
+    /// cannot express: the dictionary's two halves have different columns and a
+    /// different explanation underneath, so switching between them is a rebuild
+    /// and not a reload.
+    func rebuild() {
+        for view in stack.arrangedSubviews { view.removeFromSuperview() }
+        build()
+        refresh()
+        resizeDocument()
+    }
+
+    /// Size the document to the content, and put the pane back at the top.
+    ///
+    /// The two halves are separate because only one of them is wanted on a
+    /// resize: `sizeDocument` has to run on every layout pass to follow the
+    /// window, and scrolling to the top on every layout pass would drag the pane
+    /// back to its first control while somebody was reading the last one.
+    func resizeDocument() {
+        sizeDocument()
+        // Growing the document under a clip view leaves the clip where it was,
+        // which on a pane that just became scrollable means opening part-way
+        // down with the first heading out of sight. A settings pane always
+        // starts at its first control.
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        sizeDocument()
+    }
+
+    private func sizeDocument() {
+        guard let document else { return }
+        let width = scroll.contentSize.width
+        guard width > 0 else { return }
+
+        // Before measuring the height, not after. An `NSTextField` computes its
+        // height from `preferredMaxLayoutWidth` and not from whatever width it
+        // has been given, so a note left at the old width reports the old height
+        // and loses its last line as the window narrows. Only when it changed:
+        // setting it dirties layout, and setting it unconditionally from
+        // `viewDidLayout` is a layout pass that schedules another one forever.
+        let content = contentWidth
+        for note in notes where abs(note.preferredMaxLayoutWidth - content) > 0.5 {
+            note.preferredMaxLayoutWidth = content
+        }
+
+        stack.layoutSubtreeIfNeeded()
+        let size = NSSize(width: width,
+                          height: max(scroll.contentSize.height, stack.fittingSize.height))
+        if document.frame.size != size { document.setFrameSize(size) }
+    }
+
+    /// How wide a full-width row in this pane currently is.
+    private var contentWidth: CGFloat {
+        let inset = stack.edgeInsets.left + stack.edgeInsets.right
+        return min(max(scroll.contentSize.width - inset, 0), Pane.maxContentWidth)
     }
 
     /// Re-read anything that can change while the window is open.
@@ -154,8 +293,10 @@ class Pane: NSViewController {
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 11)
         label.textColor = .secondaryLabelColor
-        label.preferredMaxLayoutWidth = Pane.paneWidth - 60
+        label.preferredMaxLayoutWidth = contentWidth
         stack.addArrangedSubview(label)
+        widthCapped(label)
+        notes.append(label)
         return label
     }
 
@@ -185,6 +326,7 @@ class Pane: NSViewController {
         return button
     }
 
+    @discardableResult
     func row(_ views: [NSView]) -> NSStackView {
         let row = NSStackView(views: views)
         row.orientation = .horizontal
@@ -197,9 +339,28 @@ class Pane: NSViewController {
     func separator() {
         let line = NSBox()
         line.boxType = .separator
-        line.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(line)
-        line.widthAnchor.constraint(equalToConstant: Pane.paneWidth - 44).isActive = true
+        widthCapped(line)
+    }
+
+    /// Make a view as wide as the pane allows, up to `maxContentWidth`.
+    ///
+    /// The stack is leading-aligned, so it does not stretch what it arranges:
+    /// anything that should span the pane has to say so. A low-priority equality
+    /// with a required maximum resolves to the smaller of the two, which is the
+    /// full width in a narrow window and the cap in a wide one. 500 rather than
+    /// `.defaultLow`, which is the same 250 an `NSTextField` hugs at, and a tie
+    /// there leaves the width ambiguous.
+    func widthCapped(_ view: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        let fill = view.widthAnchor.constraint(
+            equalTo: stack.widthAnchor,
+            constant: -(stack.edgeInsets.left + stack.edgeInsets.right))
+        fill.priority = NSLayoutConstraint.Priority(500)
+        NSLayoutConstraint.activate([
+            fill,
+            view.widthAnchor.constraint(lessThanOrEqualToConstant: Pane.maxContentWidth),
+        ])
     }
 }
 
@@ -218,64 +379,8 @@ final class ActionHandler: NSObject {
 
 // ---------------------------------------------------------------------------
 
-@MainActor
-final class SettingsWindow: NSObject {
-    static let shared = SettingsWindow()
-    private var window: NSWindow?
-    private var controller: NSTabViewController?
-
-    func show(_ tab: SettingsTab = .general) {
-        if window == nil { build() }
-        controller?.selectedTabViewItemIndex = tab.rawValue
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-    }
-
-    private func build() {
-        let tabs = NSTabViewController()
-        tabs.tabStyle = .toolbar
-        // Otherwise the window is called "Untitled".
-        //
-        // `NSTabViewController` copies the selected child's `title` onto the
-        // window, and a plain `NSViewController` has none, so the title set
-        // below survived only until the first tab switch and then read
-        // "Untitled" for the rest of the session. Turning propagation off keeps
-        // one title, which is what a settings window with a tab bar already
-        // showing the pane name wants.
-        tabs.canPropagateSelectedChildViewControllerTitle = false
-        for tab in SettingsTab.allCases {
-            let pane: Pane
-            switch tab {
-            case .general:     pane = GeneralPane()
-            case .models:      pane = ModelsPane()
-            case .storage:     pane = StoragePane()
-            case .permissions: pane = PermissionsPane()
-            case .developers:  pane = DevelopersPane()
-            case .about:       pane = AboutPane()
-            }
-            let item = NSTabViewItem(viewController: pane)
-            item.label = tab.title
-            item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: nil)
-            tabs.addTabViewItem(item)
-        }
-
-        let w = NSWindow(contentViewController: tabs)
-        w.title = "Listen Settings"
-        w.styleMask = [.titled, .closable]
-        w.center()
-        w.isReleasedWhenClosed = false
-        window = w
-        controller = tabs
-    }
-}
-
-// ---------------------------------------------------------------------------
-
 final class GeneralPane: Pane {
     private var loginBox: NSButton?
-    private var deviceMenu: NSPopUpButton?
-    private var skipList: NSStackView?
-    private var addButton: NSPopUpButton?
 
     override func build() {
         heading("Startup")
@@ -286,9 +391,72 @@ final class GeneralPane: Pane {
                 alert.runModal()
             }
         }
+        note("Listen sits in the menu bar and records nothing until it is asked to, or "
+             + "until it sees a meeting start.")
+    }
 
-        separator()
-        heading("Meetings")
+    override func refresh() {
+        loginBox?.state = LoginItem.state.isSelected ? .on : .off
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+final class AudioPane: Pane {
+    private var deviceMenu: NSPopUpButton?
+
+    override func build() {
+        heading("Microphone")
+        let menu = NSPopUpButton()
+        let handler = ActionHandler { [weak self] _ in self?.deviceChanged() }
+        menu.target = handler
+        menu.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(menu, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+        stack.addArrangedSubview(menu)
+        deviceMenu = menu
+        note("Your own track. The other side of the call is captured separately and does "
+             + "not come through this device.")
+    }
+
+    override func refresh() {
+        guard let menu = deviceMenu else { return }
+        menu.removeAllItems()
+        menu.addItem(withTitle: "System default")
+        for device in AudioDevices.inputs() {
+            menu.addItem(withTitle: device.name)
+            menu.lastItem?.representedObject = device.uid
+        }
+        // Show a missing device rather than silently falling back to the
+        // default, which is how someone records a meeting from the wrong
+        // microphone and finds out afterwards.
+        if let uid = Settings.microphoneUID {
+            if let index = menu.itemArray.firstIndex(where: {
+                $0.representedObject as? String == uid
+            }) {
+                menu.selectItem(at: index)
+            } else {
+                menu.addItem(withTitle: "Not connected")
+                menu.lastItem?.representedObject = uid
+                menu.selectItem(at: menu.numberOfItems - 1)
+            }
+        } else {
+            menu.selectItem(at: 0)
+        }
+    }
+
+    private func deviceChanged() {
+        Settings.microphoneUID = deviceMenu?.selectedItem?.representedObject as? String
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+final class MeetingsPane: Pane {
+    private var skipList: NSStackView?
+    private var addButton: NSPopUpButton?
+
+    override func build() {
+        heading("Detection")
         checkbox("Record when a meeting starts, and ask", Settings.autoDetectMeetings) {
             Settings.autoDetectMeetings = $0
             MeetingDetector.shared.refresh()
@@ -324,50 +492,10 @@ final class GeneralPane: Pane {
              + "you join a call in. The cost is that other recorders match it too, so "
              + "Blackbox and anything like it belongs here. The panel's \"Never for…\" "
              + "button adds an app without coming back to this pane.")
-
-        separator()
-        heading("Microphone")
-        let menu = NSPopUpButton()
-        let handler = ActionHandler { [weak self] _ in self?.deviceChanged() }
-        menu.target = handler
-        menu.action = #selector(ActionHandler.fire(_:))
-        objc_setAssociatedObject(menu, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
-        stack.addArrangedSubview(menu)
-        deviceMenu = menu
-        note("Your own track. The other side of the call is captured separately and does "
-             + "not come through this device.")
     }
 
     override func refresh() {
-        loginBox?.state = LoginItem.state.isSelected ? .on : .off
         refreshSkipped()
-        guard let menu = deviceMenu else { return }
-        menu.removeAllItems()
-        menu.addItem(withTitle: "System default")
-        for device in AudioDevices.inputs() {
-            menu.addItem(withTitle: device.name)
-            menu.lastItem?.representedObject = device.uid
-        }
-        // Show a missing device rather than silently falling back to the
-        // default, which is how someone records a meeting from the wrong
-        // microphone and finds out afterwards.
-        if let uid = Settings.microphoneUID {
-            if let index = menu.itemArray.firstIndex(where: {
-                $0.representedObject as? String == uid
-            }) {
-                menu.selectItem(at: index)
-            } else {
-                menu.addItem(withTitle: "Not connected")
-                menu.lastItem?.representedObject = uid
-                menu.selectItem(at: menu.numberOfItems - 1)
-            }
-        } else {
-            menu.selectItem(at: 0)
-        }
-    }
-
-    private func deviceChanged() {
-        Settings.microphoneUID = deviceMenu?.selectedItem?.representedObject as? String
     }
 
     // MARK: - Skipped apps
@@ -387,7 +515,12 @@ final class GeneralPane: Pane {
             list.addArrangedSubview(empty)
         }
         for id in skipped {
-            list.addArrangedSubview(skipRow(id))
+            let row = skipRow(id)
+            // Added first, then widened. `widthCapped` constrains the row
+            // against the pane's stack, and two views with no common ancestor
+            // yet is an exception rather than a layout that sorts itself out.
+            list.addArrangedSubview(row)
+            widthCapped(row)
         }
         refreshAddMenu()
     }
@@ -417,14 +550,15 @@ final class GeneralPane: Pane {
         remove.action = #selector(ActionHandler.fire(_:))
         objc_setAssociatedObject(remove, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
 
-        // A fixed row width and a spacer that absorbs the slack, so every
-        // Remove lands in the same column. An `NSStackView` packs its arranged
+        // A full row width and a spacer that absorbs the slack, so every Remove
+        // lands in the same column. An `NSStackView` packs its arranged
         // subviews against the leading edge and leaves the rest as trailing
         // space, so without the spacer each row is only as wide as its own app
         // name and the buttons come out in a ragged diagonal that reads as five
         // unrelated controls rather than one list. Lowering the label's hugging
         // priority is not enough on its own; the slack has to have somewhere to
-        // go.
+        // go. The width itself comes from `widthCapped`, once the row is in the
+        // hierarchy.
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         name.lineBreakMode = .byTruncatingTail
@@ -434,8 +568,6 @@ final class GeneralPane: Pane {
         row.spacing = 8
         row.alignment = .centerY
         row.distribution = .fill
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.widthAnchor.constraint(equalToConstant: Pane.paneWidth - 44).isActive = true
         return row
     }
 
@@ -632,10 +764,9 @@ final class PermissionsPane: Pane {
 
 final class AboutPane: Pane {
     override func build() {
-        let name = NSTextField(labelWithString: "Listen")
-        name.font = .systemFont(ofSize: 22, weight: .semibold)
-        stack.addArrangedSubview(name)
-
+        // No "Listen" heading here any more: the pane draws its own section
+        // name at the top, and two 22pt words above the version number read as
+        // a mistake rather than as a title.
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
             ?? "dev"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
@@ -688,12 +819,9 @@ final class DevelopersPane: Pane {
         box.documentView = field
         box.hasVerticalScroller = true
         box.borderType = .bezelBorder
-        box.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(box)
-        NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: Pane.paneWidth - 44),
-            box.heightAnchor.constraint(equalToConstant: 120),
-        ])
+        widthCapped(box)
+        box.heightAnchor.constraint(equalToConstant: 120).isActive = true
 
         button("Copy configuration") {
             NSPasteboard.general.clearContents()

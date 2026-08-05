@@ -19,13 +19,36 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     static let shared = LibraryWindow()
 
     private var window: NSWindow?
-    private var split: NSSplitViewController?
+    private var split: LibrarySplitViewController?
     private var sidebarItem: NSSplitViewItem?
     private let sidebar = SidebarViewController()
     private let detail = DetailViewController()
 
+    /// What the window is showing. Settings is a mode of this window rather
+    /// than a window of its own: the sidebar swaps the recording list for the
+    /// section list and the content side swaps the transcript for a pane.
+    private enum Mode { case library, settings }
+    private var mode: Mode = .library
+
+    /// The two split items' view controllers, which never change. Swapping a
+    /// child inside them is the only way to change what a split view item shows:
+    /// `NSSplitViewItem.viewController` is read-only after the fact, and
+    /// removing and re-inserting items throws away the divider position that
+    /// `splitView.autosaveName` exists to keep.
+    private let sidebarHost = PaneHost()
+    private let detailHost = PaneHost()
+
+    private let settingsNav = SettingsNavViewController()
+    /// Built once each and kept, so returning to a section finds it where it
+    /// was left rather than scrolled back to the top with its fields cleared.
+    private var panes: [SettingsTab: Pane] = [:]
+    /// Whether the sidebar was collapsed before settings forced it open.
+    private var sidebarWasCollapsed = false
+
     private static let newRecordingItem = NSToolbarItem.Identifier("newRecording")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
+    private static let settingsItem = NSToolbarItem.Identifier("openSettings")
+    private static let backItem = NSToolbarItem.Identifier("backToLibrary")
 
     private var recordItem: NSToolbarItem?
     private var recordTick: Timer?
@@ -49,19 +72,60 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         return b
     }()
 
+    /// The way out of settings.
+    ///
+    /// A custom view for the same reason the record control is one: the toolbar
+    /// is `.iconOnly`, and a bare chevron with nowhere to say where it goes is
+    /// a button you have to click to find out what it does.
+    private lazy var backButton: NSButton = {
+        let b = NSButton(title: " Library", target: self, action: #selector(exitSettings))
+        b.bezelStyle = .rounded
+        b.imagePosition = .imageLeading
+        b.image = NSImage(systemSymbolName: "chevron.backward",
+                          accessibilityDescription: "Back to the library")
+        b.toolTip = "Back to the library (Esc)"
+        b.sizeToFit()
+        return b
+    }()
+
     // MARK: - Showing
 
+    /// Open the app. Always the library: this is what the Dock icon, Cmd-0 and
+    /// the menu bar's "Open Listen" mean, and landing in settings because that
+    /// is where somebody was three days ago is not.
     func show() {
         if window == nil { build() }
+        enter(.library)
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
 
-    private func build() {
-        let controller = NSSplitViewController()
+    /// Open settings, on `tab` or on whichever section was last open.
+    ///
+    /// nil rather than a `.general` default so that Cmd-, pressed while already
+    /// in settings does not throw you back to the first section.
+    func showSettings(_ tab: SettingsTab? = nil) {
+        if window == nil { build() }
+        enter(.settings)
+        settingsNav.select(tab ?? settingsNav.selectedTab)
+        showPane(settingsNav.selectedTab)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        settingsNav.focusList()
+    }
 
-        let side = NSSplitViewItem(sidebarWithViewController: sidebar)
+    @objc func exitSettings() {
+        guard mode == .settings else { return }
+        enter(.library)
+    }
+
+    var isShowingSettings: Bool { mode == .settings }
+
+    private func build() {
+        let controller = LibrarySplitViewController()
+
+        let side = NSSplitViewItem(sidebarWithViewController: sidebarHost)
         side.minimumThickness = 200
         side.maximumThickness = 460
         side.canCollapse = true
@@ -71,14 +135,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // rewrites the saved width every time the window changes size and
         // looks exactly like the sidebar refusing to stay where it was put.
         side.holdingPriority = NSLayoutConstraint.Priority(260)
-        sidebar.identifier = NSUserInterfaceItemIdentifier("sidebar")
+        sidebarHost.identifier = NSUserInterfaceItemIdentifier("sidebar")
         controller.addSplitViewItem(side)
         sidebarItem = side
 
-        let main = NSSplitViewItem(viewController: detail)
+        let main = NSSplitViewItem(viewController: detailHost)
         main.minimumThickness = 420
         main.holdingPriority = NSLayoutConstraint.Priority(250)
-        detail.identifier = NSUserInterfaceItemIdentifier("detail")
+        detailHost.identifier = NSUserInterfaceItemIdentifier("detail")
         controller.addSplitViewItem(main)
 
         let w = NSWindow(contentViewController: controller)
@@ -110,9 +174,93 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         detail.onChanged = { [weak self] in self?.reload() }
+        settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
+
+        sidebarHost.show(sidebar)
+        detailHost.show(detail)
     }
+
+    // MARK: - Modes
+
+    private func enter(_ next: Mode) {
+        guard let sidebarItem, let split, mode != next else { return }
+        // A mode change leaves nothing behind to inspect afterwards, and "the
+        // window went back to the library on its own" is otherwise unanswerable.
+        // It was answered once already: a window moved under a stationary
+        // pointer had pressed the back button, which no log would have shown.
+        trace("window mode \(mode) -> \(next)")
+        mode = next
+
+        switch next {
+        case .settings:
+            // A transport nobody can see is a transport nobody can pause, which
+            // is the same reason `windowWillClose` stops playback.
+            detail.stopPlayback()
+            sidebarWasCollapsed = sidebarItem.isCollapsed
+            // Directly and not through `animator()`: the content is being
+            // swapped underneath, and a sidebar sliding open around a list that
+            // has already changed reads as a glitch rather than as an opening.
+            if sidebarItem.isCollapsed { sidebarItem.isCollapsed = false }
+            // Settings with no visible section list is a pane you cannot
+            // navigate. This closes the divider drag and the double-click; the
+            // toolbar item and the menu item are handled separately, because
+            // there are three ways to collapse a sidebar and blocking one of
+            // them is blocking none of them.
+            sidebarItem.canCollapse = false
+            split.canToggleSidebar = false
+            sidebarHost.show(settingsNav)
+
+        case .library:
+            sidebarItem.canCollapse = true
+            split.canToggleSidebar = true
+            sidebarItem.isCollapsed = sidebarWasCollapsed
+            sidebarHost.show(sidebar)
+            detailHost.show(detail)
+            reload()
+            if let table = sidebar.view.window?.firstResponder as? NSView,
+               table.isDescendant(of: settingsNav.view) {
+                window?.makeFirstResponder(sidebar.view)
+            }
+        }
+        rebuildToolbar()
+    }
+
+    private func showPane(_ tab: SettingsTab) {
+        let pane = panes[tab] ?? {
+            let made = tab.makePane()
+            panes[tab] = made
+            return made
+        }()
+        detailHost.show(pane)
+        // Explicitly, as well as through `viewWillAppear`. Both are idempotent,
+        // and a pane that shows stale permission or storage numbers because an
+        // appearance callback did not arrive is the kind of wrong that looks
+        // like the setting itself failing.
+        pane.refresh()
+        // No window subtitle for the section name. It draws immediately above
+        // the pane's own 22pt heading, so the window read "Audio" twice, one
+        // line apart, which looks like a bug rather than like a title.
+    }
+
+    /// Give transcript paragraphs a field editor that knows about sentences.
+    ///
+    /// This is the only place a right-click on a turn can be answered. A
+    /// selectable `NSTextField` installs its field editor on `rightMouseDown`,
+    /// *before* the contextual menu is built, so hit testing lands on that text
+    /// view and an override on the field itself never runs. Measured, because
+    /// the opposite is the natural assumption.
+    ///
+    /// Returning nil means "the standard one", which is what the title field and
+    /// everything else in the window keeps. One editor is enough: AppKit uses a
+    /// single field editor per window, since only one field can be edited at a
+    /// time. Called constantly, so it stays a type check and nothing more.
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        client is TranscriptBody ? transcriptEditor : nil
+    }
+
+    private let transcriptEditor = TranscriptFieldEditor.make()
 
     // MARK: - Data
 
@@ -127,7 +275,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
     }
 
-    var selected: Recording? { sidebar.selectedRecording }
+    /// Nothing is selected while settings is open, so the Actions menu says so
+    /// and the File menu greys out rather than acting on a row nobody can see.
+    var selected: Recording? { mode == .library ? sidebar.selectedRecording : nil }
 
     /// Select a recording from somewhere that is not the list, which today
     /// means from a person's popover.
@@ -150,16 +300,61 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.newRecordingItem, .flexibleSpace, Self.actionsItem]
+        [.toggleSidebar, Self.backItem, Self.newRecordingItem, .flexibleSpace,
+         Self.settingsItem, Self.actionsItem]
     }
 
+    /// What the toolbar shows, which depends on the mode.
+    ///
+    /// The record control is in both. Starting or stopping a meeting must never
+    /// mean leaving the screen you are on first, and it is the only place the
+    /// elapsed clock is written. The sidebar toggle is only in the library, and
+    /// the back button takes the slot it leaves.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.newRecordingItem, .flexibleSpace, Self.actionsItem]
+        switch mode {
+        case .library:
+            return [.toggleSidebar, Self.newRecordingItem, .flexibleSpace,
+                    Self.settingsItem, Self.actionsItem]
+        case .settings:
+            return [Self.backItem, Self.newRecordingItem, .flexibleSpace]
+        }
+    }
+
+    /// Swap the items for the current mode.
+    ///
+    /// `NSToolbar` has no "reload your items" call, so this removes and
+    /// re-inserts them. Assigning a second `NSToolbar` to the window is the
+    /// other way and it re-runs the whole title bar layout to change two
+    /// buttons.
+    private func rebuildToolbar() {
+        guard let toolbar = window?.toolbar else { return }
+        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
+        for (index, id) in toolbarDefaultItemIdentifiers(toolbar).enumerated() {
+            toolbar.insertItem(withItemIdentifier: id, at: index)
+        }
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch id {
+        case Self.settingsItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Settings"
+            item.toolTip = "Settings (⌘,)"
+            item.image = NSImage(systemSymbolName: "gearshape",
+                                 accessibilityDescription: "Settings")
+            item.target = self
+            item.action = #selector(openSettings)
+            return item
+
+        case Self.backItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Library"
+            item.view = backButton
+            item.minSize = backButton.frame.size
+            item.maxSize = backButton.frame.size
+            return item
+
         case Self.newRecordingItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Record"
@@ -192,6 +387,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     // MARK: - Actions
+
+    @objc private func openSettings() { showSettings() }
 
     @objc private func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the
@@ -268,13 +465,109 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     /// Focus the search field, for Cmd-F.
+    ///
+    /// Leaves settings on the way. Cmd-F means find a recording, and the field
+    /// it focuses is in the other sidebar.
     func focusSearch() {
         window?.makeKeyAndOrderFront(nil)
+        exitSettings()
         sidebar.focusSearch()
     }
 
     func windowWillClose(_ notification: Notification) {
         detail.stopPlayback()
+        // Back to the library, so the collapse lock and the remembered sidebar
+        // state are unwound rather than left in place for the next `show()`.
+        exitSettings()
+    }
+}
+
+// MARK: - Menu validation
+
+/// The recording actions are only meaningful with a recording selected, and
+/// `selected` is nil for the whole time settings is open. Nothing validated
+/// them before, so they were permanently enabled and quietly did nothing when
+/// pressed; settings makes that reachable often enough to be worth fixing here.
+extension LibraryWindow: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(exportSelected), #selector(revealSelected),
+             #selector(renameSelected), #selector(retranscribeSelected),
+             #selector(deleteSelected):
+            return selected != nil
+        default:
+            return true
+        }
+    }
+}
+
+// MARK: - The two halves of the window
+
+/// Holds one view controller at a time, so a split view item can change what it
+/// shows.
+///
+/// The view draws nothing. `NSSplitViewItem(sidebarWithViewController:)` puts
+/// its material behind whatever it is given, and a host that painted a
+/// background would cover it and leave the sidebar looking like a plain panel.
+@MainActor
+final class PaneHost: NSViewController {
+    private(set) var current: NSViewController?
+
+    override func loadView() { view = NSView() }
+
+    func show(_ child: NSViewController) {
+        loadViewIfNeeded()
+        guard current !== child else { return }
+        if let old = current {
+            old.view.removeFromSuperview()
+            old.removeFromParent()
+        }
+        addChild(child)
+        child.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(child.view)
+        NSLayoutConstraint.activate([
+            child.view.topAnchor.constraint(equalTo: view.topAnchor),
+            child.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            child.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            child.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        current = child
+    }
+}
+
+/// The window's split view controller, which knows when the sidebar is locked.
+///
+/// Two of the three ways to collapse a sidebar go through here. The third is
+/// the toolbar item, which is simply not in the toolbar in settings mode.
+@MainActor
+final class LibrarySplitViewController: NSSplitViewController, NSMenuItemValidation {
+    var canToggleSidebar = true
+
+    override func toggleSidebar(_ sender: Any?) {
+        guard canToggleSidebar else { return }
+        super.toggleSidebar(sender)
+    }
+
+    /// Grey out View > Hide Sidebar rather than letting it look available and
+    /// do nothing. The item targets nil and travels the responder chain, so
+    /// this is where it lands.
+    ///
+    /// Conformance rather than an override: `NSSplitViewController` does not
+    /// implement this, which the compiler says plainly if you try. So there is
+    /// no super to call, and everything this does not recognise is enabled,
+    /// which is what the default behaviour was.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleSidebar(_:)) { return canToggleSidebar }
+        return true
+    }
+
+    /// Escape leaves settings.
+    ///
+    /// Here rather than on either child because this is last in the responder
+    /// chain, so anything that wants Escape for itself, a text field ending an
+    /// edit, gets it first.
+    override func cancelOperation(_ sender: Any?) {
+        LibraryWindow.shared.exitSettings()
     }
 }
 

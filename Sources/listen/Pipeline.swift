@@ -10,6 +10,34 @@ struct StoredTranscript: Codable {
     /// How often each cleanup rule fired, so the Whisper-era cleanup can be
     /// judged on Parakeet output rather than assumed necessary.
     var cleanup: [String: Int]
+    /// How often each dictionary rule fired, keyed `term:x` / `correction:y`.
+    ///
+    /// The dictionary rewrites this transcript before it is written, and this is
+    /// the record that it did. Without it a rule that fires somewhere nobody
+    /// expected is invisible: the transcript reads as what the model said, and
+    /// the only way to find out otherwise is to listen to the meeting again.
+    var dictionary: [String: Int] = [:]
+}
+
+extension StoredTranscript {
+    /// Decoded by hand so a field added later does not orphan the library.
+    ///
+    /// Swift's synthesized decoder throws on a missing key even when the
+    /// property has a default value, so adding `dictionary` to the struct alone
+    /// would have made every `transcript.json` written before today fail to
+    /// decode. That failure is silent in the worst possible way: `storedTurns`
+    /// and `storedTranscript` both return empty on a decode error, so the whole
+    /// library would have gone on showing "not transcribed yet" with the
+    /// transcripts still sitting on disk.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        segments = try c.decode([LabelledSegment].self, forKey: .segments)
+        duration = try c.decode(Double.self, forKey: .duration)
+        model = try c.decode(String.self, forKey: .model)
+        wordLevel = try c.decode(Bool.self, forKey: .wordLevel)
+        cleanup = try c.decode([String: Int].self, forKey: .cleanup)
+        dictionary = try c.decodeIfPresent([String: Int].self, forKey: .dictionary) ?? [:]
+    }
 }
 
 /// Runs a recording through ASR, diarization and the merge, and writes the
@@ -121,15 +149,23 @@ actor Pipeline {
         // Interleave the two tracks by time. They were captured together, so
         // their clocks agree and sorting is all the alignment needed.
         labelled.sort { $0.start < $1.start }
-        let (cleaned, fired) = Merge.clean(labelled)
+        var (cleaned, fired) = Merge.clean(labelled)
         if !fired.isEmpty { trace("cleanup fired: \(fired)") }
+
+        let rules = Self.applyDictionary(to: &cleaned)
+        // On stderr rather than behind LISTEN_DEBUG, unlike the cleanup counts.
+        // Cleanup is the app tidying up after the model, and the rules are ours.
+        // The dictionary is the user's own list rewriting their own meeting, and
+        // somebody who added a rule this morning should be told it fired.
+        if !rules.isEmpty { log("dictionary applied: \(rules)") }
 
         let stored = StoredTranscript(
             segments: cleaned,
             duration: recording.metadata.duration,
             model: model,
             wordLevel: wordLevel,
-            cleanup: fired)
+            cleanup: fired,
+            dictionary: rules)
 
         try write(stored, turns: Merge.turns(from: cleaned),
                   embeddings: embeddings, speech: speech, to: recording)
@@ -187,6 +223,34 @@ actor Pipeline {
             }
             try enc.encode(withSpeech).write(to: recording.embeddingsURL, options: .atomic)
         }
+    }
+
+    /// Run the user's dictionary over every segment, and report what fired.
+    ///
+    /// **After `Merge.clean`, deliberately.** Cleanup exists to answer whether
+    /// Parakeet needs the Whisper-era repetition rules at all, and that question
+    /// is only answerable against Parakeet's own output: measuring it after the
+    /// dictionary had rewritten the text would count rules firing on words the
+    /// model never produced.
+    ///
+    /// Per segment rather than over the whole transcript joined together. A
+    /// segment is one ASR sentence, so every real term sits inside one, and the
+    /// alternative would mean splitting the result back up afterwards against
+    /// text that changed length.
+    ///
+    /// Loaded once. `CustomDictionary.load` reads the file on every call by
+    /// design, and an hour-long meeting is a few thousand segments.
+    private static func applyDictionary(to segments: inout [LabelledSegment])
+        -> [String: Int] {
+        let entries = CustomDictionary.load()
+        guard !entries.isEmpty else { return [:] }
+        var fired: [String: Int] = [:]
+        for i in segments.indices {
+            let applied = CustomDictionary.apply(to: segments[i].text, entries: entries)
+            segments[i].text = applied.text
+            CustomDictionary.combine(applied.fired, into: &fired)
+        }
+        return fired
     }
 
     private static func remap<T>(_ values: [String: T],

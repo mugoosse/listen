@@ -117,7 +117,7 @@ final class App: NSObject, NSApplicationDelegate {
         case let want where want.hasPrefix("settings"):
             // `settings`, or `settings:developers` for a particular tab.
             let name = want.dropFirst("settings".count).drop { $0 == ":" }
-            SettingsWindow.shared.show(
+            LibraryWindow.shared.showSettings(
                 SettingsTab.allCases.first { $0.title.caseInsensitiveCompare(name) == .orderedSame }
                     ?? .general)
         default:
@@ -327,7 +327,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        SettingsWindow.shared.show()
+        LibraryWindow.shared.showSettings()
     }
 
     @objc private func revealLibrary() {

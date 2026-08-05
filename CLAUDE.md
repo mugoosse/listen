@@ -742,6 +742,91 @@ Two things are easy to get backwards after that:
 Verified by writing a width of 380 into the autosaved defaults, relaunching and
 reading it back.
 
+### Settings is a mode of the library window, not a second window
+
+Anarlog's shape, and the reason is the one the two-window version kept paying:
+a settings window is a second toolbar idiom, a second thing to manage, and a
+fixed 560 x 500 box that cannot use the space it has. `LibraryWindow` now has a
+`Mode`, and both split view items hold a `PaneHost` whose child is swapped:
+recording list or section list on the left, transcript or pane on the right.
+
+**A `PaneHost` rather than swapping the split view item's view controller**,
+because `NSSplitViewItem.viewController` cannot be changed afterwards and
+removing and re-inserting items throws away the divider position that
+`splitView.autosaveName` exists to keep. The host's view must draw nothing:
+`NSSplitViewItem(sidebarWithViewController:)` puts its material behind whatever
+it is given, and a host with a background covers it.
+
+**Do not touch `minimumThickness`, `maximumThickness` or the holding priorities
+on a mode change.** One `autosaveName` owns the divider, and moving the limits
+makes the split view redistribute and rewrite the saved width, which is the
+trap directly above wearing a different hat. Measured across a settings visit:
+`defaults read com.mgo.listen "NSSplitView Subview Frames ListenSplit"` returns
+the same 280 before and after.
+
+**There are three ways to collapse a sidebar, so blocking one is blocking
+none.** The toolbar item is not in the toolbar in settings mode;
+`LibrarySplitViewController` overrides `toggleSidebar` and validates View >
+Hide Sidebar to disabled, which is where the menu item lands because it targets
+nil; and `canCollapse = false` closes the divider drag and the double-click.
+`validateMenuItem` is a *conformance* here and not an override: the compiler
+says plainly that `NSSplitViewController` does not implement it, so there is no
+super to call.
+
+A sidebar collapsed before settings opened is expanded on the way in and
+collapsed again on the way out, with `isCollapsed` set directly rather than
+through `animator()`: the content is being swapped underneath, and a sidebar
+sliding open around a list that has already changed reads as a glitch.
+
+Four more things, each of which was got wrong once:
+
+1. **`show()` always enters library mode.** It is what the Dock icon, Cmd-0 and
+   "Open Listen" mean. `showSettings(_ tab: SettingsTab? = nil)` takes nil so
+   Cmd-, pressed while already in settings keeps the section you were on.
+2. **No window subtitle for the section name.** It draws immediately above the
+   pane's own 22 point heading, so the window read "Audio" twice, one line
+   apart, which looks like a bug rather than a title.
+3. **`selected` returns nil in settings mode**, so the Actions menu says "No
+   recording selected" instead of acting on a row nobody can see. That needed
+   `NSMenuItemValidation` on `LibraryWindow`, which nothing had: the File menu's
+   recording items were permanently enabled and quietly did nothing.
+4. **The record control stays in both modes.** Stopping a meeting must never
+   mean leaving the screen you are on first, and the button is the only place
+   the elapsed clock is written.
+
+`trace()` reports every mode change under `LISTEN_DEBUG=1`, because a mode leaves
+nothing behind to inspect. It earned itself immediately: "the window went back
+to the library on its own" turned out to be a test script moving the window
+under a stationary pointer, which pressed the back button. The stack trace said
+`NSControlTrackMouse`, and nothing else would have.
+
+### A settings pane is as wide as the window, up to 620 points
+
+`Pane` was built for a non-resizable 560 point window, so `note`, `separator`,
+the skip rows and the MCP box all sized themselves from a `paneWidth` constant.
+In a window that resizes, every one of those is a view that stretches to
+whatever the display is, and a note running 1400 points across is a line nobody
+can track back to its start.
+
+`widthCapped` replaces the constant: a low-priority equality to the stack's
+width with a required maximum, which resolves to the smaller of the two. The
+stack is leading-aligned and does not stretch what it arranges, so anything
+meant to span the pane has to ask.
+
+Two traps around it:
+
+1. **`preferredMaxLayoutWidth` has to be updated before the height is
+   measured.** An `NSTextField` computes its height from that and not from the
+   width it was given, so a note left at the old width reports the old height
+   and loses its last line as the window narrows.
+2. **It has to be guarded on change.** Setting it dirties layout, and setting it
+   unconditionally from `viewDidLayout` is a layout pass that schedules another
+   one forever.
+
+`skipRow` is added to the list *before* `widthCapped` is applied to it, because
+the constraint is against the pane's stack and two views with no common ancestor
+yet is an exception rather than a layout that sorts itself out.
+
 ### The transcript opened near the end of the meeting
 
 A freshly selected recording opened on its last few turns with half a paragraph

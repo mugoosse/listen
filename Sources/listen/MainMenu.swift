@@ -125,9 +125,9 @@ enum MainMenu {
 final class MenuActions: NSObject {
     static let shared = MenuActions()
 
-    @objc func openSettings() { SettingsWindow.shared.show() }
+    @objc func openSettings() { LibraryWindow.shared.showSettings() }
     @objc func openLibrary() { LibraryWindow.shared.show() }
-    @objc func showAbout() { SettingsWindow.shared.show(.about) }
+    @objc func showAbout() { LibraryWindow.shared.showSettings(.about) }
 
     @objc func newRecording() {
         if Capture.shared.isRecording {

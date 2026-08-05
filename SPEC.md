@@ -308,19 +308,38 @@ what to capture. Manual record from the menu bar must always work regardless.
 
 ### 5.4 Settings
 
-Tabbed, sized as speak's are. Each pane is a fixed-height `NSScrollView`,
-because `NSTabViewController` sizes the window to the tallest pane and the
-window is not resizable. Address tabs by name through a `SettingsTab` enum,
-never a literal index.
+**In the library window, not a window of its own.** Anarlog's shape: settings is
+a mode of the one window, where the sidebar swaps the recording list for a list
+of sections and the content side swaps the transcript for a pane. Address
+sections by name through a `SettingsTab` enum, never a literal index. The enum
+carried a raw `Int` while a tab view indexed by it; that index is gone.
 
-| Tab | Contents |
-|---|---|
-| General | Launch at login, meeting auto-detection on/off, what to do when a meeting is detected, audio input device. |
-| Models | Parakeet v2 / v3 choice, download and delete with size and shared-with-Speak status, diarization model status. |
-| Storage | Library location, disk used, retention for unconfirmed recordings, reveal in Finder. |
-| Permissions | Microphone and system audio recording, with TCC checks and deep links to System Settings. Copy speak's `Permissions.swift`. |
-| Developers | CLI install, MCP configuration. See §6 and §7. |
-| About | Version, author, credits, licence, update check. |
+The sections are grouped, because nine rows in one flat list is a list you read
+rather than scan:
+
+| Group | Section | Contents |
+|---|---|---|
+| App | General | Launch at login. |
+| | Storage | Library location, disk used, retention for unconfirmed recordings, reveal in Finder. |
+| | Permissions | Microphone and system audio recording, with TCC checks and deep links to System Settings. Copy speak's `Permissions.swift`. |
+| Recording | Meetings | Auto-detection on/off, and the never-ask list. |
+| | Audio | Input device. |
+| Transcription | Models | Parakeet v2 / v3 choice, download and delete with size and shared-with-Speak status, diarization model status. |
+| | Dictionary | Terms and corrections, and what they changed. |
+| Advanced | Developers | CLI install, MCP configuration. See §6 and §7. |
+| | About | Version, author, credits, licence, update check. |
+
+Getting in is the toolbar's gear, Cmd-, or the menu bar item. Getting out is the
+toolbar's back button or Escape, and both land back on the recording that was
+selected. A pane is as wide as the window up to a 620 point cap, so a line of
+text stays readable on a large display.
+
+**The sidebar cannot be collapsed while settings is open**, because a pane with
+no visible section list is a pane you cannot navigate. There are three ways to
+collapse it and blocking one of them is blocking none: the toolbar item is not
+in the toolbar in this mode, View > Hide Sidebar validates to disabled, and
+`canCollapse` closes the divider drag and double-click. A sidebar that was
+collapsed beforehand is opened on the way in and collapsed again on the way out.
 
 Keep it small. UI copy states the trade-off rather than hiding it in a tooltip.
 

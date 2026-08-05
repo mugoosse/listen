@@ -580,6 +580,41 @@ menu items with key equivalents rather than by the fields. This surfaced as
 The Edit menu items target `nil` on purpose, so they travel the responder chain
 and land on whatever has focus.
 
+### Cmd-Q is intercepted ahead of the menu, not rebound in it
+
+`QuitConfirm` asks once before quitting, ported from Anarlog because Cmd-Q sits
+next to Cmd-W and Cmd-Tab and the cost of hitting it by accident here is a
+meeting that stops recording mid-sentence.
+
+It works with a **local event monitor**, which runs before `NSApplication`
+dispatches the event and therefore before the main menu matches its key
+equivalents. Returning nil means the Quit item never sees the keystroke, so
+`MainMenu` needs no change and there is no second Quit action to keep in
+agreement with the first. Nothing else is ever swallowed: only Command and Q
+with no other modifier held.
+
+Three consequences, all measured on the running app with `LISTEN_DEBUG=1`,
+which traces the state machine because an event monitor otherwise leaves nothing
+behind to inspect:
+
+1. **The first keydown is swallowed, so the matching keyup may never arrive.**
+   The state can still be `held` when the second press lands, so a second press
+   confirms from either state rather than only from `armed`.
+2. **The status bar item's Quit is not intercepted.** Menu tracking runs its own
+   event loop and does not go through `sendEvent`, so Cmd-Q with that menu open
+   quits at once, as does clicking either Quit item. That is deliberate:
+   reaching for a menu item is already a decision, and it means there is always
+   an unconfirmed way out, so no hidden override keystroke is needed.
+3. **Quitting still goes through `applicationWillTerminate`**, which stops
+   capture, so a confirmed quit mid-meeting finalises the WAV headers and leaves
+   the recording in staging for `adoptStaged()` to promote at the next launch.
+   The prompt says so on its second line rather than leaving it to be found out.
+
+Synthesised keystrokes are a flaky way to test this: two `System Events`
+keystrokes 0.4 s apart delivered only one press on the first attempt, which
+looks exactly like the confirm step not working. The trace is what tells the two
+apart.
+
 ### The sidebar width fought the split view
 
 The first library window was a bare `NSSplitView` with

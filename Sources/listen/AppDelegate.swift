@@ -33,6 +33,12 @@ final class App: NSObject, NSApplicationDelegate {
         // Cmd-C does nothing in a text field.
         MainMenu.install()
 
+        // And then Cmd-Q asks before it quits. Installed after the menu on
+        // purpose: it intercepts the keystroke ahead of the Quit item rather
+        // than replacing it, so the menu has to exist first for there to be
+        // anything to intercept.
+        QuitConfirm.shared.install()
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(
             systemSymbolName: "waveform", accessibilityDescription: "Listen")

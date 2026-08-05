@@ -635,6 +635,9 @@ final class MeetingsPane: Pane {
 final class ModelsPane: Pane {
     private var labels: [String: NSTextField] = [:]
     private var diarizerNote: NSTextField?
+    private var getButton: NSButton?
+    private var progress: NSProgressIndicator?
+    private var progressNote: NSTextField?
 
     override func build() {
         heading("Speech model")
@@ -659,6 +662,32 @@ final class ModelsPane: Pane {
             labels[choice.id] = status
         }
 
+        // The button this pane did not have. Without it, a Mac whose weights
+        // went away showed "not downloaded" and offered nothing: the only way
+        // to ask for the fetch was setup's model step, which is behind About,
+        // Run setup again, and nothing here said so.
+        getButton = button("Download") { [weak self] in
+            guard let self else { return }
+            if ModelDownload.shared.isDownloading {
+                ModelDownload.shared.cancel()
+            } else {
+                ModelDownload.shared.start(Settings.model)
+            }
+            self.refresh()
+        }
+
+        let bar = NSProgressIndicator()
+        bar.isIndeterminate = false
+        bar.minValue = 0
+        bar.maxValue = 1
+        bar.controlSize = .small
+        bar.isHidden = true
+        stack.addArrangedSubview(bar)
+        widthCapped(bar)
+        progress = bar
+
+        progressNote = note("")
+
         note("v2 is the default because it is English-only and therefore cannot decode "
              + "your speech as another language. v3 covers 25 European languages but will "
              + "sometimes misidentify a short clip, and there is no language picker "
@@ -667,6 +696,10 @@ final class ModelsPane: Pane {
         separator()
         heading("Speaker recognition")
         diarizerNote = note("")
+
+        // Follow a download this pane did not start, including the implicit
+        // one a recording triggers.
+        ModelDownload.shared.onChange = { [weak self] in self?.refresh() }
     }
 
     override func refresh() {
@@ -685,6 +718,30 @@ final class ModelsPane: Pane {
             }
             labels[choice.id]?.stringValue = text
         }
+
+        let status = ModelDownload.shared.status
+        let chosen = Settings.model
+        getButton?.isHidden = chosen.isDownloaded && !status.isBusy
+        getButton?.title = status.isBusy
+            ? "Cancel"
+            : "Download \(chosen.title) (\(ModelChoice.humanBytes(chosen.approxBytes)))"
+
+        if let fraction = status.fraction {
+            progress?.isHidden = false
+            progress?.doubleValue = fraction
+        } else {
+            progress?.isHidden = !status.isBusy
+            progress?.doubleValue = 0
+        }
+
+        // Only speak when there is something to say. A permanent "ready" under
+        // a model that is plainly on disk is noise.
+        if case .ready = status {
+            progressNote?.stringValue = ""
+        } else {
+            progressNote?.stringValue = status.summary
+        }
+
         diarizerNote?.stringValue = Diarizer.isDownloaded
             ? "Diarization models are on disk. They are separate from Parakeet and are "
               + "not shared with Speak."

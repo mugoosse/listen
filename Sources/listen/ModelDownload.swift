@@ -1,0 +1,126 @@
+import AppKit
+
+/// Fetching the speech model deliberately, rather than as a side effect.
+///
+/// **Why this exists at all.** A missing model was never a silent failure:
+/// `ASR.load` calls `resolveOrDownloadModel`, so a recording whose model is
+/// absent downloads it and then transcribes. But the only way to *ask* for
+/// that download was setup's model step, so somebody whose weights went away
+/// afterwards found a Models pane that told them the model was not downloaded
+/// and offered nothing to do about it. Reported in testing, in exactly those
+/// words: "I don't know what to do to actually download it."
+///
+/// Speak does not need this. It loads at launch and keeps one `Transcriber`
+/// warm, so its AppDelegate owns the answer to "what is the model doing".
+/// Listen loads inside a transcription job, through an `ASR` built per run, so
+/// before the first recording nobody owns that question. This is that owner.
+@MainActor
+final class ModelDownload {
+    static let shared = ModelDownload()
+
+    private(set) var status: ModelStatus = .idle {
+        didSet { onChange?() }
+    }
+
+    /// Called on the main thread whenever `status` changes, so a pane can
+    /// follow a download it did not start.
+    var onChange: (() -> Void)?
+
+    private var task: Task<Void, Never>?
+    private var watch: Timer?
+    /// Holds the last real reading through a stall.
+    ///
+    /// Deliberately not a running maximum, which sounds equivalent and is not:
+    /// seeded with a stale value it can never come down, which is how an
+    /// abandoned temp file froze Speak's display for the rest of a download.
+    private var lastBytes: Int64 = 0
+
+    var isDownloading: Bool { status.isBusy }
+
+    /// Fetch `choice`, reporting progress. Safe to call when it is already on
+    /// disk: the library returns from a populated cache without touching the
+    /// network, which is also what makes this usable as a "verify" button.
+    func start(_ choice: ModelChoice) {
+        guard !status.isBusy else { return }
+        lastBytes = 0
+
+        if choice.isDownloaded {
+            status = .loading
+        } else {
+            status = .downloading(total: choice.approxBytes, received: nil, fraction: nil)
+            startWatch(choice)
+        }
+
+        task = Task { [weak self] in
+            do {
+                // ASR.load is the one path that fetches, so the button and a
+                // recording take the same route. A second implementation here
+                // would be a second thing to keep in agreement with it.
+                try await ASR().load(choice)
+                guard !Task.isCancelled else { return }
+                self?.finish(.ready)
+            } catch {
+                guard !Task.isCancelled else { return }
+                log("model download failed: \(error)")
+                self?.finish(.failed(ModelStatus.describe(error)))
+            }
+        }
+    }
+
+    /// Stop and forget. Switching models mid-download has to cancel, or the
+    /// bytes somebody just declined keep arriving anyway.
+    func cancel() {
+        task?.cancel()
+        task = nil
+        stopWatch()
+        lastBytes = 0
+        status = .idle
+    }
+
+    private func finish(_ next: ModelStatus) {
+        stopWatch()
+        task = nil
+        status = next
+    }
+
+    /// Poll the transfer once a second.
+    ///
+    /// A timer rather than the library's progress handler, because that
+    /// handler cannot see this transfer at all. See `ModelChoice.inFlightBytes`
+    /// for the measurement.
+    ///
+    /// `.common` mode, not the default: a menu or a resize puts the run loop
+    /// into event tracking, and a timer scheduled the usual way stops firing
+    /// for exactly as long as somebody is looking at the thing it updates.
+    private func startWatch(_ choice: ModelChoice) {
+        stopWatch()
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            // Synchronously, not `Task { @MainActor in }`. A timer on
+            // RunLoop.main already fires on the main thread, and that hop
+            // re-enters through the main dispatch queue, which does not drain
+            // during a tracking loop, undoing `.common` above.
+            MainActor.assumeIsolated {
+                guard let self, case .downloading = self.status else { return }
+                if choice.isDownloaded {
+                    self.status = .loading
+                    return
+                }
+                var bytes = choice.bytesOnDisk
+                if bytes == 0 { bytes = self.lastBytes }
+                self.lastBytes = bytes
+                let fraction = choice.approxBytes > 0
+                    ? min(1.0, Double(bytes) / Double(choice.approxBytes))
+                    : nil
+                self.status = .downloading(
+                    total: choice.approxBytes, received: bytes, fraction: fraction)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watch = timer
+    }
+
+    private func stopWatch() {
+        watch?.invalidate()
+        watch = nil
+    }
+}

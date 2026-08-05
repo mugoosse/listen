@@ -146,6 +146,55 @@ struct ModelChoice {
         return total
     }
 
+    /// How far a download has got, for a progress bar.
+    ///
+    /// A maximum rather than a sum, unlike `bytesUsed`: this follows one
+    /// download through two locations, the hub cache while fetching and
+    /// mlx-audio's copy once it is unpacked there, so the larger reading is
+    /// the truthful one.
+    var bytesOnDisk: Int64 {
+        max(size(of: downloadDirectory), size(of: cacheDirectory))
+            + Self.inFlightBytes()
+    }
+
+    /// Bytes of a download still streaming into the temp directory.
+    ///
+    /// **This is the only place the transfer is observable, and the obvious
+    /// alternative does not work.** The library exposes a `Progress` and
+    /// samples it every 100 ms, but on this transport the large file's bytes
+    /// never reach it, so it sits at 0% for the whole download and then jumps
+    /// to done. Ported from Speak, where it was measured: `URLSession` writes
+    /// to `CFNetworkDownload_XXXXXX.tmp` and moves the finished file into the
+    /// cache only at the end, so the destination stays flat at a megabyte of
+    /// JSON throughout while the temp file went 969 MB, 1001 MB, 1076 MB over
+    /// six seconds.
+    ///
+    /// The most recently written file, not the largest. A cancelled download
+    /// leaves its temp file behind at whatever size it reached, and taking the
+    /// largest latches onto exactly that: in Speak, cancelling at 58% pinned
+    /// the display to 1.42 GB while the real transfer climbed from zero
+    /// underneath it, invisible until it passed the abandoned file. The active
+    /// download is the one being written, so mtime identifies it and size does
+    /// not.
+    static func inFlightBytes() -> Int64 {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: tmp, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
+        else { return 0 }
+
+        var newest = Date().addingTimeInterval(-10)
+        var bytes: Int64 = 0
+        for url in entries where url.lastPathComponent.hasPrefix("CFNetworkDownload") {
+            guard let v = try? url.resourceValues(
+                forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                  let modified = v.contentModificationDate, modified > newest
+            else { continue }
+            newest = modified
+            bytes = Int64(v.fileSize ?? 0)
+        }
+        return bytes
+    }
+
     /// Complete enough to skip the download. The margin covers small
     /// differences in what the library actually fetches.
     ///
@@ -175,6 +224,73 @@ struct ModelChoice {
     /// "2.3 GB", written the way the rest of macOS writes it.
     static func humanBytes(_ n: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+    }
+}
+
+/// What the speech model is doing, so a screen can say something specific
+/// rather than leaving somebody watching nothing for ten minutes.
+///
+/// Ported from Speak. Listen needs it for a reason Speak does not have: Speak
+/// loads its model at launch and keeps it warm, so there is always something
+/// to ask. Listen loads inside a transcription job, so before the first
+/// recording there is no owner of this question at all, and the Models pane
+/// could only report what was already on disk.
+enum ModelStatus {
+    case idle
+    /// `fraction` is nil until the first reading, and stays nil for the whole
+    /// download if nothing usable ever arrives. See `inFlightBytes`.
+    case downloading(total: Int64, received: Int64?, fraction: Double?)
+    case loading
+    case ready
+    case failed(String)
+
+    var isBusy: Bool {
+        switch self {
+        case .downloading, .loading: return true
+        case .idle, .ready, .failed: return false
+        }
+    }
+
+    var fraction: Double? {
+        if case .downloading(_, _, let f) = self { return f }
+        return nil
+    }
+
+    var summary: String {
+        switch self {
+        case .downloading(let total, let received, let fraction):
+            let f = ByteCountFormatter()
+            f.countStyle = .file
+            f.allowsNonnumericFormatting = false
+            guard let fraction, let received else {
+                // The first second, before a measurement exists. Say what is
+                // coming and nothing else: a percentage here would be a guess.
+                return "downloading… \(f.string(fromByteCount: total))"
+            }
+            let pct = Int((fraction * 100).rounded())
+            return "downloading… \(pct)% · \(f.string(fromByteCount: received))"
+                 + " of \(f.string(fromByteCount: total))"
+        case .idle:    return ""
+        case .loading: return "loading the model…"
+        case .ready:   return "ready"
+        case .failed(let why): return why
+        }
+    }
+
+    /// Turns library errors into something somebody can act on.
+    static func describe(_ error: Error) -> String {
+        let raw = "\(error)"
+        if raw.contains("offline") || raw.contains("network")
+            || raw.contains("NSURLError") || raw.contains("Internet") {
+            return "no internet connection, so the model cannot be downloaded"
+        }
+        if raw.contains("401") || raw.contains("404") || raw.contains("Not Found") {
+            return "model not found on Hugging Face"
+        }
+        if raw.contains("No space") || raw.contains("ENOSPC") {
+            return "not enough disk space for the model"
+        }
+        return "could not download the model"
     }
 }
 

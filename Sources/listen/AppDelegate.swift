@@ -180,6 +180,27 @@ final class App: NSObject, NSApplicationDelegate {
                          action: #selector(startRecording), keyEquivalent: "").target = self
         }
 
+        // Said here because this is the menu recording starts from, and it is
+        // the last moment it costs nothing to know.
+        //
+        // A missing model never loses a meeting: ASR.load fetches it and the
+        // transcript arrives late rather than not at all. But "late" is a
+        // 2.5 GB download standing between a finished call and its transcript,
+        // discovered afterwards, and the pane that reports it is three clicks
+        // away in Settings. Not a dialog: detection starts recordings on its
+        // own, and a modal in front of somebody joining a call is worse than
+        // the wait it warns about.
+        if !Settings.model.isDownloaded {
+            menu.addItem(.separator())
+            let size = ModelChoice.humanBytes(Settings.model.approxBytes)
+            let warn = menu.addItem(
+                withTitle: "Speech model not downloaded (\(size))",
+                action: #selector(openModelSettings), keyEquivalent: "")
+            warn.target = self
+            menu.addItem(withTitle: "Recordings are kept and transcribed once it is",
+                         action: nil, keyEquivalent: "").isEnabled = false
+        }
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "Open Listen", action: #selector(openLibrary),
                      keyEquivalent: "o").target = self
@@ -367,6 +388,12 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         LibraryWindow.shared.showSettings()
+    }
+
+    /// Straight to the pane that can do something about it, rather than to
+    /// Settings in general with the user to find it.
+    @objc private func openModelSettings() {
+        LibraryWindow.shared.showSettings(.models)
     }
 
     @objc private func revealLibrary() {

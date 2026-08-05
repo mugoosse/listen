@@ -773,7 +773,7 @@ final class PermissionsPane: Pane {
         // first request there is no switch in System Settings to send anyone
         // to, and a button that opens an empty pane is worse than no button.
         calendarButton = button("Allow calendar access") { [weak self] in
-            if Permissions.calendarNotDetermined {
+            if Permissions.calendarAction == .canAsk {
                 Permissions.requestCalendar { _ in self?.refresh() }
             } else {
                 Permissions.openCalendarSettings()
@@ -804,9 +804,9 @@ final class PermissionsPane: Pane {
                   + "same permission a process tap needs."
         }
 
-        calendarButton?.title = Permissions.calendarNotDetermined
-            ? "Allow calendar access" : "Open System Settings"
-        if Permissions.calendar {
+        switch Permissions.calendarAction {
+        case .granted:
+            calendarButton?.title = "Open System Settings"
             // The count, not just "granted". A grant that reaches an empty
             // calendar store looks identical to a working one from here, and
             // that is the failure this row exists to make visible.
@@ -814,11 +814,20 @@ final class PermissionsPane: Pane {
             calendarLabel?.stringValue = count == 0
                 ? "Granted, but there are no calendars on this Mac to read."
                 : "Granted. Reading \(count) calendar\(count == 1 ? "" : "s")."
-        } else if Permissions.calendarDenied {
-            calendarLabel?.stringValue = "Denied. Recordings keep the name you give "
-                + "them, and speakers are named by hand."
-        } else {
+        case .canAsk:
+            calendarButton?.title = "Allow calendar access"
             calendarLabel?.stringValue = "Not granted yet."
+        case .settingsOnly:
+            calendarButton?.title = "Open System Settings"
+            // Split from "denied", because the two look identical from here and
+            // are fixed the same way, but only one of them is a decision
+            // anybody made: a dismissed prompt records nothing, so the status
+            // still says nobody has been asked.
+            calendarLabel?.stringValue = Permissions.calendarDenied
+                ? "Denied. Recordings keep the name you give them, and speakers are "
+                  + "named by hand."
+                : "Asked, and not granted. The button below opens System Settings, "
+                  + "where Listen can be switched on under Calendars."
         }
     }
 }
@@ -826,6 +835,8 @@ final class PermissionsPane: Pane {
 // ---------------------------------------------------------------------------
 
 final class AboutPane: Pane {
+    private static let websiteURL = "https://maxgoespublic.com/"
+
     override func build() {
         // No "Listen" heading here any more: the pane draws its own section
         // name at the top, and two 22pt words above the version number read as
@@ -838,6 +849,27 @@ final class AboutPane: Pane {
         note("A local meeting recorder, transcriber and speaker labeller. Audio never "
              + "leaves this Mac. The only network connections Listen makes are "
              + "downloading models the first time and checking for updates.")
+
+        separator()
+        heading("Setup")
+        button("Run setup again…") { Onboarding.shared.restart() }
+        note("Walks through the permissions and the speech model. It changes nothing "
+             + "you have already chosen, and it is the quickest way to find out which "
+             + "part has stopped working.")
+
+        separator()
+        heading("Made by")
+        // A plain label rather than `note`, which is 11pt and secondary: a
+        // person's name is not a footnote to the credits below it. Same shape
+        // as Speak's About pane.
+        let author = NSTextField(labelWithString: "Maxime Goossens")
+        author.font = .systemFont(ofSize: 13)
+        stack.addArrangedSubview(author)
+        let site = button(Self.websiteURL) {
+            if let url = URL(string: Self.websiteURL) { NSWorkspace.shared.open(url) }
+        }
+        site.bezelStyle = .inline
+        site.controlSize = .small
 
         separator()
         heading("Built on")

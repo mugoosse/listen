@@ -43,11 +43,31 @@ final class Onboarding: NSObject, NSWindowDelegate {
     private var titleLabel: NSTextField!
     private var primary: NSButton!
     private var secondary: NSButton!
+    private var backButton: NSButton!
+    private var rail: NSStackView!
     private var lastKey = ""
     private var poll: Timer?
 
+    /// Start again from the first step.
+    ///
+    /// From the top, not from wherever the last visit ended: reaching for this
+    /// means something has stopped working, and the earlier steps are usually
+    /// where the answer is. Speak's About pane offers the same thing for the
+    /// same reason.
+    func restart() {
+        step = .welcome
+        show()
+    }
+
     func show() {
         if window == nil { build() }
+        // Restarted here, not only in `build`. Both `finish` and
+        // `windowWillClose` invalidate it, and `build` runs once for the life
+        // of the process, so running setup a second time from Settings would
+        // otherwise come back with a dead timer: permissions land
+        // asynchronously and nothing else notices them, so every pane would sit
+        // on whatever it said when it was drawn.
+        startPolling()
         render()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -78,12 +98,28 @@ final class Onboarding: NSObject, NSWindowDelegate {
         secondary = NSButton(title: "Skip", target: self, action: #selector(skip))
         secondary.bezelStyle = .rounded
 
-        let buttons = NSStackView(views: [secondary, primary])
+        // Back, so setup is something you can look around rather than a
+        // one-way corridor. Ported from Speak, where it earned its place on the
+        // model step: a multi-minute download you cannot step away from and
+        // return to is one people abandon.
+        backButton = NSButton(title: "Back", target: self, action: #selector(back))
+        backButton.bezelStyle = .rounded
+
+        // Filled behind, ringed on the current step, hollow ahead. Speak's
+        // rail, and it does two things at once: it says how much is left, and
+        // it makes Back legible as navigation rather than as undo.
+        rail = NSStackView()
+        rail.orientation = .horizontal
+        rail.spacing = 6
+        rail.alignment = .centerY
+
+        let buttons = NSStackView(views: [backButton, secondary, primary])
         buttons.orientation = .horizontal
         buttons.spacing = 10
+        buttons.alignment = .centerY
 
         let content = NSView()
-        for v in [titleLabel, body, buttons] as [NSView] {
+        for v in [titleLabel, body, rail, buttons] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -93,17 +129,37 @@ final class Onboarding: NSObject, NSWindowDelegate {
             body.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 16),
             body.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             body.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
+            // The rail is pinned to the left and the buttons to the right, as
+            // two separate views rather than as one row stretched across.
+            // Putting them in a single stack pinned on both sides would make
+            // the row's minimum width a constraint on the window, and the model
+            // step's button reads "Download Parakeet v2 (2.47 GB)": wide enough,
+            // with three buttons beside it, to push the window out. That is the
+            // same fault as the status label that could not wrap, arriving from
+            // the other direction.
+            rail.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
+            rail.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
             buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
             buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
         ])
         w.contentView = content
         window = w
 
-        // Permissions land asynchronously and there is no notification for
-        // them, so the step polls rather than trusting the last answer.
+        startPolling()
+    }
+
+    /// Permissions land asynchronously and there is no notification for them,
+    /// so the step polls rather than trusting the last answer.
+    private func startPolling() {
+        guard poll == nil else { return }
         poll = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateControls() }
         }
+    }
+
+    private func stopPolling() {
+        poll?.invalidate()
+        poll = nil
     }
 
     /// Everything that decides what the body looks like.
@@ -120,8 +176,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // the grant lands. The prompt is answered outside this window and
             // there is no notification for it, so the poll below is the only
             // thing that notices, and it only re-renders when this string
-            // changes.
+            // changes. `calendarAsked` too, because spending the one dialog a
+            // launch gets changes what the button can do without changing the
+            // authorization status at all.
             String(Permissions.calendar),
+            String(Permissions.calendarAsked),
             Settings.modelChosen ? Settings.model.id : "none",
             String(Settings.model.isDownloaded),
         ].joined(separator: "|")
@@ -175,11 +234,19 @@ final class Onboarding: NSObject, NSWindowDelegate {
                       + "Google and Microsoft calendars come through whatever you have "
                       + "already added in System Settings, so there is no account to "
                       + "make and nothing leaves this Mac.")
-            status(Permissions.calendar, "Calendar access granted",
-                   Permissions.calendarDenied
-                     ? "Denied. Recordings keep whatever name you give them."
-                     : "Not granted yet. This one is optional: everything else works "
-                       + "without it.")
+            switch Permissions.calendarAction {
+            case .granted:
+                status(true, "Calendar access granted", "")
+            case .canAsk:
+                status(false, "", "Not granted yet. This one is optional: everything "
+                       + "else works without it.")
+            case .settingsOnly:
+                // Said plainly, because the button below now goes somewhere
+                // else and a button that changes destination without saying so
+                // is worse than one that never worked.
+                status(false, "", "Not granted. This opens System Settings, where "
+                       + "Listen can be switched on under Calendars.")
+            }
 
         case .model:
             titleLabel.stringValue = "Speech model"
@@ -238,23 +305,46 @@ final class Onboarding: NSObject, NSWindowDelegate {
             return
         }
 
+        // Nothing to go back to from the first step, so the button is absent
+        // rather than present and dead.
+        backButton.isHidden = step == .welcome
+        buildRail()
+
+        // The rule for the second button, and it is one sentence: **it appears
+        // only when it does something the primary does not.**
+        //
+        // It used to appear whatever the state was, so a granted microphone
+        // step offered "Skip" and "Continue" side by side, both of which simply
+        // advanced. Two buttons doing one thing is worse than one, because it
+        // implies a difference and makes the reader look for it. Speak avoids
+        // the question by having no second button at all: its primary names the
+        // action when there is one and says Continue when there is not.
         switch step {
         case .welcome:
             primary.title = "Continue"
             secondary.isHidden = true
         case .microphone:
-            primary.title = Permissions.microphone ? "Continue" : "Allow microphone"
-            secondary.isHidden = false
+            let granted = Permissions.microphone
+            primary.title = granted ? "Continue" : "Allow microphone"
+            secondary.isHidden = granted
             secondary.title = "Skip"
         case .systemAudio:
             primary.title = "Continue"
-            secondary.isHidden = false
+            // Hidden when it is working, and also when the Mac is too old for
+            // process taps: there is nothing in System Settings that would fix
+            // macOS 14.1, so the button would be an instruction to go and fail.
+            secondary.isHidden = Permissions.systemAudio || !Permissions.systemAudioSupported
             secondary.title = "Open System Settings"
         case .calendar:
-            primary.title = Permissions.calendar ? "Continue"
-                : (Permissions.calendarDenied ? "Open System Settings"
-                                              : "Allow calendar access")
-            secondary.isHidden = false
+            // One label for both ways of getting there. The button's promise is
+            // calendar access, and the route underneath it changes: a prompt
+            // while macOS will still give one, System Settings afterwards.
+            // Renaming the button mid-step made the step look like it had
+            // changed its mind, so the route moves and the promise does not.
+            // The status line above says which one applies.
+            primary.title = Permissions.calendar ? "Continue" : "Allow calendar access"
+            primary.isEnabled = true
+            secondary.isHidden = Permissions.calendar
             // "Not now" and not "Skip". Skip is what the microphone step
             // offers, where declining costs you half of every recording; here
             // it costs a name, and the wording should not imply otherwise.
@@ -263,6 +353,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // The button is the consent. It names the model and its size, so
             // nobody can start a 2.5 GB download without having read what it
             // costs.
+            let ready = Settings.modelChosen && Settings.model.isDownloaded
             if !Settings.modelChosen {
                 primary.title = "Choose a model"
                 primary.isEnabled = false
@@ -274,7 +365,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
                     + "(\(ModelChoice.humanBytes(Settings.model.approxBytes)))"
                 primary.isEnabled = true
             }
-            secondary.isHidden = false
+            // The one step where the second button is load-bearing: with
+            // nothing chosen the primary is deliberately disabled, so this is
+            // the only way past. Once the model is on disk the primary reads
+            // Continue and "Later" would be its twin.
+            secondary.isHidden = ready
             secondary.title = "Later"
         case .done:
             primary.title = "Start using Listen"
@@ -283,7 +378,40 @@ final class Onboarding: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Filled circles behind, a ring on the current step, hollow ahead.
+    ///
+    /// Rebuilt rather than mutated: six image views is nothing, and a rail that
+    /// is rebuilt cannot hold a tint from a step somebody has since left.
+    private func buildRail() {
+        for view in rail.arrangedSubviews {
+            rail.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for s in Step.allCases {
+            let name = s.rawValue < step.rawValue ? "checkmark.circle.fill"
+                     : (s == step ? "circle.inset.filled" : "circle")
+            let dot = NSImageView(image: NSImage(
+                systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
+            dot.contentTintColor = s.rawValue <= step.rawValue
+                ? .controlAccentColor : .tertiaryLabelColor
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 13).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 13).isActive = true
+            rail.addArrangedSubview(dot)
+        }
+        // Not decoration to a screen reader: this is the only thing on the
+        // window that says how far through setup you are.
+        rail.setAccessibilityLabel(
+            "Step \(step.rawValue + 1) of \(Step.allCases.count)")
+    }
+
     // MARK: - Actions
+
+    @objc private func back() {
+        guard let previous = Step(rawValue: step.rawValue - 1) else { return }
+        step = previous
+        render()
+    }
 
     @objc private func pickModel(_ sender: NSButton) {
         guard sender.tag < ModelChoice.all.count else { return }
@@ -305,22 +433,22 @@ final class Onboarding: NSObject, NSWindowDelegate {
             }
             return
 
-        case .calendar where Permissions.calendarDenied:
-            // Already refused, so there is nothing left to prompt: macOS raises
-            // the dialog once and answers from the recorded decision after
-            // that. Pressing this again would look like a button that does
-            // nothing.
-            Permissions.openCalendarSettings()
-            return
-
         case .calendar where !Permissions.calendar:
-            Permissions.requestCalendar { _ in
-                // Re-activated for the same reason the microphone step is: the
-                // system dialog took focus, and this window floats but is not
-                // brought back on its own.
-                NSApp.activate(ignoringOtherApps: true)
-                Onboarding.shared.window?.makeKeyAndOrderFront(nil)
-                Onboarding.shared.render()
+            // The dialog is available once per launch, so which of these two
+            // is right changes under the button. Deciding here rather than in
+            // a `where` clause keeps that decision next to the one
+            // `updateControls` makes about the title.
+            if Permissions.calendarAction == .canAsk {
+                Permissions.requestCalendar { _ in
+                    // Re-activated for the same reason the microphone step is:
+                    // the system dialog took focus, and this window floats but
+                    // is not brought back on its own.
+                    NSApp.activate(ignoringOtherApps: true)
+                    Onboarding.shared.window?.makeKeyAndOrderFront(nil)
+                    Onboarding.shared.render()
+                }
+            } else {
+                Permissions.openCalendarSettings()
             }
             return
 
@@ -385,8 +513,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
     private func finish() {
         Settings.onboarded = true
-        poll?.invalidate()
-        poll = nil
+        stopPolling()
         window?.orderOut(nil)
         LibraryWindow.shared.show()
     }
@@ -396,8 +523,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
         // would show setup again on the next launch, which reads as the app
         // having forgotten.
         Settings.onboarded = true
-        poll?.invalidate()
-        poll = nil
+        stopPolling()
     }
 
     // MARK: - Building
@@ -415,9 +541,19 @@ final class Onboarding: NSObject, NSWindowDelegate {
         // a person: nothing branches on it, which is what went wrong when
         // `updateControls` scanned rendered text to decide whether to
         // re-render.
-        let label = NSTextField(labelWithString: (ok ? "✓ " : "○ ") + (ok ? good : bad))
+        //
+        // Wrapping, and capped at the same width `paragraph` uses. This was a
+        // plain `labelWithString`, which has no maximum width and no line
+        // breaking, so a status line longer than the others made the whole
+        // setup window grow sideways to fit it on one line. Every string here
+        // was short until the calendar step needed to explain itself, and a
+        // window that changes size when you press a button inside it reads as
+        // the app having lost its footing.
+        let label = NSTextField(wrappingLabelWithString:
+                                    (ok ? "✓ " : "○ ") + (ok ? good : bad))
         label.font = .systemFont(ofSize: 12)
         label.textColor = ok ? .systemGreen : .secondaryLabelColor
+        label.preferredMaxLayoutWidth = 460
         body.addArrangedSubview(label)
     }
 }

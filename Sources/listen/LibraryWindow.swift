@@ -306,17 +306,26 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     /// What the toolbar shows, which depends on the mode.
     ///
-    /// The record control is in both. Starting or stopping a meeting must never
-    /// mean leaving the screen you are on first, and it is the only place the
-    /// elapsed clock is written. The sidebar toggle is only in the library, and
-    /// the back button takes the slot it leaves.
+    /// The sidebar toggle is only in the library, and the back button takes the
+    /// slot it leaves.
+    ///
+    /// The record control is in the library always, and in settings **only
+    /// while a recording is running**. That split is the whole of it: idle, the
+    /// control means "start a new recording", which is not something a settings
+    /// screen should be offering. Running, it is not that control at all: it is
+    /// the stop button, and the only place the elapsed clock is written.
+    /// Removing it outright would mean somebody who opened Settings during a
+    /// meeting lost both the clock and the way to stop, which is the failure
+    /// this window can least afford.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         switch mode {
         case .library:
             return [.toggleSidebar, Self.newRecordingItem, .flexibleSpace,
                     Self.settingsItem, Self.actionsItem]
         case .settings:
-            return [Self.backItem, Self.newRecordingItem, .flexibleSpace]
+            return Capture.shared.isRecording
+                ? [Self.backItem, Self.newRecordingItem, .flexibleSpace]
+                : [Self.backItem, .flexibleSpace]
         }
     }
 
@@ -403,6 +412,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     /// Called by the delegate whenever capture starts or stops.
     func recordingChanged() {
+        // Settings shows the record control only while capture runs, so both
+        // edges have to swap the items. Without this, opening Settings before a
+        // meeting starts leaves no stop button and no clock for the length of
+        // it. Only in settings: the library's toolbar is the same either way,
+        // and rebuilding it would remove and re-insert five items for nothing.
+        if mode == .settings { rebuildToolbar() }
         updateRecordButton()
         recordTick?.invalidate()
         recordTick = nil

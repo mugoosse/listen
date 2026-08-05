@@ -6,5 +6,15 @@
          access unless it is requested explicitly. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- And the same for the calendar, which is a separate class of protected
+         data with a separate key. Without it the Hardened Runtime refuses the
+         request *silently*: `requestFullAccessToEvents` puts no dialog on
+         screen, never calls its completion handler, reports no error, and
+         leaves the authorization status on `notDetermined` for ever. From
+         inside the app that is indistinguishable from a button that was never
+         wired up. Measured against an ad-hoc signed probe with no Hardened
+         Runtime, which prompted correctly from the same code. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
 </dict>
 </plist>

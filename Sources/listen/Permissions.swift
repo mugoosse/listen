@@ -89,11 +89,37 @@ enum Permissions {
         return status == .denied || status == .restricted || status == .writeOnly
     }
 
-    /// True before anyone has been asked, so the pane can offer to ask rather
-    /// than sending someone to System Settings for a switch that is not there
-    /// yet. macOS only lists an app under Calendars once it has requested.
-    static var calendarNotDetermined: Bool {
-        EKEventStore.authorizationStatus(for: .event) == .notDetermined
+    /// Whether this process has already put the calendar dialog on screen.
+    ///
+    /// A dialog that is dismissed rather than answered records **nothing**, so
+    /// the status stays `notDetermined`, which is exactly the state a button
+    /// reading "Allow calendar access" is offered from. Without this flag that
+    /// button goes on offering a prompt that may not come back, and a button
+    /// that does nothing is the worst thing on a permissions screen.
+    ///
+    /// Deliberately conservative rather than precise: routing to System
+    /// Settings always works, so being wrong here costs an extra click, while
+    /// the other way round costs a dead button. It is **not** a claim about how
+    /// often macOS is willing to prompt. The first version of this comment made
+    /// that claim, from a diagnosis that turned out to be wrong: the real cause
+    /// of the missing dialog was the Hardened Runtime refusing the request for
+    /// want of `com.apple.security.personal-information.calendars`, which is
+    /// now in `Listen.entitlements`.
+    private(set) static var calendarAsked = false
+
+    /// What the calendar button can usefully do right now.
+    ///
+    /// One derivation, because onboarding and the Settings pane both draw this
+    /// button and a second copy of the rule is a second thing to keep true.
+    enum CalendarAction { case granted, canAsk, settingsOnly }
+
+    static var calendarAction: CalendarAction {
+        if calendar { return .granted }
+        // `calendarDenied` catches a refusal recorded in an earlier launch;
+        // `calendarAsked` catches one dismissed in this one, which records
+        // nothing at all.
+        if calendarDenied || calendarAsked { return .settingsOnly }
+        return .canAsk
     }
 
     /// Ask for calendar access.
@@ -107,6 +133,10 @@ enum Permissions {
     /// than left to a `DispatchQueue.main.async` inside. EventKit calls back on
     /// an arbitrary queue and every caller here is a view that has to redraw.
     static func requestCalendar(_ done: @escaping @MainActor (Bool) -> Void) {
+        // Set before the call and never cleared. The dialog is spent from this
+        // moment whatever happens next, including the case where the user
+        // dismisses it and the completion below never runs at all.
+        calendarAsked = true
         MeetingCalendar.store.requestFullAccessToEvents { granted, error in
             if let error { log("calendar access failed: \(error.localizedDescription)") }
             Task { @MainActor in done(granted) }

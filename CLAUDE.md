@@ -288,6 +288,68 @@ and not `com.google.Chrome.helper.renderer`. Without it the prompt names
 something unrecognisable, and worse, the skip list stores a per-renderer
 identifier that skips nothing the next time.
 
+### The recording in progress is not in the library
+
+It is in `staging/`, and `Recording.all()` lists `recordings/`, so for the whole
+length of a meeting the sidebar knew nothing about the meeting. Pressing Record
+changed the toolbar button and nothing else: no row, no selection, nothing to
+click. A list that looks identical before and after you press Record is
+indistinguishable from a Record button that does not work, which is the one
+doubt this app cannot afford.
+
+`SidebarViewController.reload()` therefore prepends `Capture.shared.current`,
+`LibraryWindow.recordingChanged()` rebuilds the list on both edges of capture
+and selects the new row **once**, and the per-second tick that advances the
+toolbar clock also re-renders that one row. One row and not `reloadData()`: a
+full reload every second cancels a drag, fights the scroller and rebuilds every
+cell in the library to advance one number.
+
+Three consequences, all of which were bugs first:
+
+1. **`Capture.stop()` re-reads `metadata.json` from disk.** It used to save the
+   copy taken at `start()`, which was correct only while nothing could edit a
+   recording that was still running. Now the row is selectable and the title is
+   editable, so renaming a meeting while it records and then stopping wrote the
+   hour-old copy back over it and the name was silently gone.
+2. **The sidebar reads the live recording from disk too**, for the same reason:
+   `Capture.current` holds the metadata as it was an hour ago.
+3. **No player and no waveform while it records.** Both tracks exist and are
+   growing, so a mixdown built now is of half a meeting, and `Waveform` would
+   cache that half against a key that is only its format version. The pane says
+   what is happening instead.
+
+`SidebarViewController.reload()` calls `loadViewIfNeeded()` first. The list is
+now rebuilt whenever capture changes, and capture can change before the window
+has ever been shown, because `rebuildMenu()` runs at launch. `table` is created
+in `loadView`, so without it the first reload is a nil unwrap.
+
+### A recording nobody named is called "Untitled"
+
+The default was "Recording, 5 Aug 2026 at 14:31", which repeats the day heading
+and the time already printed on the same row, and makes an unnamed recording
+look like a named one. The placeholder is stored rather than left blank so the
+CLI, the MCP server and an export all have something to print, and
+`Recording.isUntitled` is the one place that knows the string.
+
+The detail pane shows it as an actual `placeholderString` with an empty field
+behind it, so clicking the title gives you somewhere to type rather than a word
+to delete first, and clearing the field un-names the recording rather than
+being refused. `exportName` puts the date back for a filename, because a folder
+of `Untitled.md`, `Untitled 2.md` is a folder nobody can read.
+
+### A text field does not stop editing because you clicked away
+
+Clicking the title, then clicking the transcript, left the caret blinking in the
+heading. Nothing was broken: `NSView` does not accept first responder, so a
+click on a plain view goes nowhere and the field keeps focus. Only a control
+takes it away, which is why clicking the sidebar table always worked and
+everything else did not.
+
+`DetailView.mouseDown` ends editing, and catches every click that no subview
+claimed, because `NSView.mouseDown` forwards up the responder chain. Clicks that
+*are* claimed do not arrive there, so the play button, the waveform, a turn and
+a speaker name each call `endEditingTitle()` themselves.
+
 ### The transcription queue has no database
 
 A recording whose audio exists and whose transcript does not **is** pending.

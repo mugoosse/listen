@@ -30,6 +30,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private var recordItem: NSToolbarItem?
     private var recordTick: Timer?
 
+    /// The recording whose row was selected when capture started, so it is
+    /// selected once rather than on every state change.
+    private var selectedLive: String?
+
     /// The toolbar's record control, which is also the stop control.
     ///
     /// It used to be a fixed pencil icon that silently changed meaning: the
@@ -187,11 +191,35 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         updateRecordButton()
         recordTick?.invalidate()
         recordTick = nil
-        guard Capture.shared.isRecording else { return }
+
+        // The list has to be rebuilt on both edges. Starting adds the row for
+        // the recording in progress, which lives in staging and is therefore
+        // invisible to `Recording.all()`; stopping promotes it into the library
+        // under the same id, so the row stays where it was rather than
+        // disappearing and coming back.
+        reload()
+
+        guard let live = Capture.shared.current else {
+            selectedLive = nil
+            return
+        }
+        // Select it, once, when it starts. The recording somebody just began is
+        // the one they are looking at, and leaving the selection on whatever
+        // they were reading means hunting for a row that was not there a second
+        // ago. Once, because re-selecting on every tick would fight anyone who
+        // clicked away to read something while the meeting runs.
+        if selectedLive != live.id {
+            selectedLive = live.id
+            sidebar.select(live.id)
+        }
+
         // Once a second, because the button shows seconds. The floating panel
         // ticks twice a second for its own clock; this one does not need to.
         recordTick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateRecordButton() }
+            Task { @MainActor in
+                self?.updateRecordButton()
+                self?.sidebar.tickLive()
+            }
         }
     }
 
@@ -291,8 +319,7 @@ extension LibraryWindow: NSMenuDelegate {
     @objc func exportSelected() {
         guard let recording = selected else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = recording.metadata.title
-            .replacingOccurrences(of: "/", with: "-") + ".md"
+        panel.nameFieldStringValue = recording.exportName + ".md"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }

@@ -203,7 +203,11 @@ final class DetailView: NSView {
             return
         }
 
-        titleLabel.stringValue = recording.metadata.title
+        // An unnamed recording shows the placeholder as a placeholder rather
+        // than as its name, so clicking the title gives an empty field to type
+        // into instead of a word to delete first.
+        titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
+        titleLabel.placeholderString = Metadata.untitled
         subtitleLabel.stringValue = [recording.when, recording.lengthText]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
@@ -217,7 +221,11 @@ final class DetailView: NSView {
                                     from: recording.storedTranscript?.segments ?? [])
         renderTurns()
 
-        let hasAudio = !recording.waveformSources.isEmpty
+        // No player while it is being recorded. The tracks exist and are
+        // growing, so a mixdown made now would be of half a meeting and the
+        // waveform cache would keep that half for ever: the cache is keyed on
+        // its format version, not on how long the audio was when it was drawn.
+        let hasAudio = !recording.isLive && !recording.waveformSources.isEmpty
         setChromeHidden(false)
         playerCard.isHidden = !hasAudio
         length = recording.metadata.duration
@@ -229,11 +237,13 @@ final class DetailView: NSView {
 
         if turns.isEmpty {
             empty.isHidden = false
-            empty.stringValue = recording.hasTranscript
-                ? "This recording has no speech in it."
-                : (Queue.shared.isQueued(recording.id)
-                    ? "Transcribing. This stays here if you quit."
-                    : "Not transcribed yet.")
+            empty.stringValue = recording.isLive
+                ? "Recording. The transcript appears when you stop."
+                : (recording.hasTranscript
+                    ? "This recording has no speech in it."
+                    : (Queue.shared.isQueued(recording.id)
+                        ? "Transcribing. This stays here if you quit."
+                        : "Not transcribed yet."))
         } else {
             empty.isHidden = true
         }
@@ -252,8 +262,14 @@ final class DetailView: NSView {
         for (index, turn) in turns.enumerated() {
             let view = TurnView(turn: turn,
                                 sentences: index < sentences.count ? sentences[index] : [])
-            view.onSeek = { [weak self] in self?.seek(to: turn.start, playing: true) }
-            view.onSpeaker = { [weak self] in self?.editSpeaker(turn.speaker) }
+            view.onSeek = { [weak self] in
+                self?.endEditingTitle()
+                self?.seek(to: turn.start, playing: true)
+            }
+            view.onSpeaker = { [weak self] in
+                self?.endEditingTitle()
+                self?.editSpeaker(turn.speaker)
+            }
             stack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                         constant: -20).isActive = true
@@ -359,6 +375,9 @@ final class DetailView: NSView {
     }
 
     @objc private func togglePlay() {
+        // A button click never reaches `mouseDown` below, so the controls that
+        // do claim their click each have to let the title go themselves.
+        endEditingTitle()
         if let player, player.isPlaying {
             player.pause()
             setPlaying(false)
@@ -395,6 +414,7 @@ final class DetailView: NSView {
     /// Dragging through a meeting to find a moment is a way of reading it, not
     /// of listening to it, so scrubbing a paused recording leaves it paused.
     private func scrub(to fraction: Double) {
+        endEditingTitle()
         guard length > 0 else { return }
         follows = true
         seek(to: fraction * length, playing: player?.isPlaying ?? false)
@@ -615,13 +635,12 @@ extension DetailView: NSTextFieldDelegate {
     /// so the key is unchanged and the existing tools keep reading it.
     func controlTextDidEndEditing(_ note: Notification) {
         guard var current = recording else { return }
-        let name = titleLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            // An empty title would leave a row with nothing to click. Put the
-            // old one back rather than inventing a placeholder.
-            titleLabel.stringValue = current.metadata.title
-            return
-        }
+        let typed = titleLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Clearing the field un-names the recording rather than leaving a row
+        // with nothing to click: the placeholder goes back on disk, which is
+        // the same state it was in before anyone named it.
+        let name = typed.isEmpty ? Metadata.untitled : typed
+        titleLabel.stringValue = typed
         guard name != current.metadata.title else { return }
         current.metadata.title = name
         try? current.save()
@@ -632,6 +651,26 @@ extension DetailView: NSTextFieldDelegate {
     func beginEditingTitle() {
         window?.makeFirstResponder(titleLabel)
         titleLabel.currentEditor()?.selectAll(nil)
+    }
+
+    /// Give up the title field, wherever the click landed.
+    ///
+    /// A text field does not stop editing because the user clicked something
+    /// that is not a control: `NSView` does not accept first responder, so the
+    /// click goes nowhere and the caret stays blinking in a heading nobody is
+    /// typing in any more. Clicking the transcript, the player or the empty
+    /// space around them now commits the name, which is what clicking away
+    /// means everywhere else.
+    func endEditingTitle() {
+        guard titleLabel.currentEditor() != nil else { return }
+        window?.makeFirstResponder(nil)
+    }
+
+    /// Clicks that no subview claimed arrive here through the responder chain,
+    /// which is every part of this pane that is not a button or a link.
+    override func mouseDown(with event: NSEvent) {
+        endEditingTitle()
+        super.mouseDown(with: event)
     }
 }
 

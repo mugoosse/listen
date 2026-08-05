@@ -27,6 +27,15 @@ struct Metadata: Codable {
 
     var stateValue: State { State(rawValue: state) ?? .pending }
 
+    /// What a recording is called until somebody names it.
+    ///
+    /// Stored rather than left empty, so every reader outside this app, the
+    /// CLI, the MCP server, an export, has a string to print instead of a
+    /// blank. It used to be "Recording, 5 Aug 2026 at 14:31", which repeated
+    /// the day heading and the time already printed on the same row and made an
+    /// unnamed recording look named.
+    static let untitled = "Untitled"
+
     static func makeID(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd-HHmmss"

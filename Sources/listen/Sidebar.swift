@@ -76,11 +76,31 @@ final class SidebarViewController: NSViewController {
     // MARK: - Data
 
     func reload() {
+        // The list is rebuilt whenever capture changes, and capture can change
+        // before the window has ever been shown: the menu bar is built at
+        // launch and a recording can be running by then. `table` is created in
+        // `loadView`, so without this the first reload is a nil unwrap.
+        loadViewIfNeeded()
         let keepID = selectedRecording?.id
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
 
-        let matching = Recording.all().filter { recording in
+        // The recording being made now is in staging, not the library, so
+        // `Recording.all()` cannot see it. It is listed anyway, from the first
+        // second: pressing Record and having the list stay exactly as it was is
+        // indistinguishable from pressing Record and nothing happening, and the
+        // one thing this app cannot afford is doubt about whether it is
+        // recording.
+        // Read from disk rather than using the copy `Capture` took when it
+        // started: the row has to show a title changed since, and the folder is
+        // the truth about a recording here as everywhere else.
+        let live = Capture.shared.current.map { Recording.load($0.folder) ?? $0 }
+        let everything = (live.map { [$0] } ?? []) + Recording.all()
+
+        let matching = everything.filter { recording in
             guard !q.isEmpty else { return true }
+            // Never filtered out. A search left in the field from ten minutes
+            // ago is not a reason to hide the meeting being recorded now.
+            if recording.id == live?.id { return true }
             if recording.metadata.title.lowercased().contains(q) { return true }
             // Search the transcript too, which is the reason anyone searches a
             // meeting library: you remember what was said, not what the
@@ -118,11 +138,7 @@ final class SidebarViewController: NSViewController {
     }
 
     private static func heading(for recording: Recording) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let date = parser.date(from: recording.metadata.recorded_at) else {
-            return "Earlier"
-        }
+        guard let date = recording.date else { return "Earlier" }
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
@@ -141,6 +157,42 @@ final class SidebarViewController: NSViewController {
     private func recording(at row: Int) -> Recording? {
         guard row >= 0, row < rows.count, case .recording(let r) = rows[row] else { return nil }
         return r
+    }
+
+    private func row(for id: String) -> Int? {
+        rows.firstIndex {
+            if case .recording(let r) = $0 { return r.id == id }
+            return false
+        }
+    }
+
+    /// Select a recording by id, if the list has it.
+    func select(_ id: String) {
+        guard let row = row(for: id), table.selectedRow != row else { return }
+        table.selectRowIndexes([row], byExtendingSelection: false)
+        table.scrollRowToVisible(row)
+        // `selectRowIndexes` posts the selection notification, which is what
+        // normally updates the pane. Doing it again here rather than trusting
+        // that: a selection the user did not make must reach the detail pane,
+        // and the cost of it arriving twice is a redraw.
+        if selectedRecording?.id != id {
+            selectedRecording = recording(at: row)
+            onSelect?(selectedRecording)
+        }
+    }
+
+    /// Redraw the row of the recording in progress, for its clock.
+    ///
+    /// One row, not the whole table: a reload every second would cancel a
+    /// drag, fight the scroller and rebuild every cell in the library to
+    /// advance one number.
+    func tickLive() {
+        guard let id = Capture.shared.current?.id, let row = row(for: id),
+              let recording = recording(at: row),
+              let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false)
+                  as? RecordingCell
+        else { return }
+        cell.configure(recording)
     }
 
     func focusSearch() {
@@ -262,18 +314,27 @@ final class RecordingCell: NSView {
 
     func configure(_ recording: Recording) {
         title.stringValue = recording.metadata.title
-        subtitle.stringValue = [recording.clockTime, recording.lengthText,
-                                recording.stateText]
+        // An untitled recording says so in grey, so a list of them reads as a
+        // list of things waiting for a name rather than as a list of things
+        // that happen to share one.
+        title.textColor = recording.isUntitled ? .secondaryLabelColor : .labelColor
+        // The length of a live recording comes from the recorder, not the
+        // file: `metadata.duration` is written when capture stops.
+        let live = recording.isLive
+        let length = live ? Recording.length(Capture.shared.elapsed) : recording.lengthText
+        subtitle.stringValue = [recording.clockTime, length, recording.stateText]
             .filter { !$0.isEmpty }.joined(separator: " · ")
+        // Red only while recording, the same rule as the toolbar button: a
+        // permanently coloured row is decoration, one that turns red is a
+        // state.
+        subtitle.textColor = live ? .systemRed : .secondaryLabelColor
     }
 }
 
 extension Recording {
     /// Just the time. The day is already the group heading above it.
     var clockTime: String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let date = parser.date(from: metadata.recorded_at) else { return "" }
+        guard let date else { return "" }
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         return f.string(from: date)

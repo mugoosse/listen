@@ -52,7 +52,7 @@ final class Capture {
 
         var recording = Recording(folder: folder, metadata: Metadata(
             id: id,
-            title: Self.defaultTitle(now),
+            title: Metadata.untitled,
             recorded_at: Metadata.iso(now),
             duration: 0,
             source: source,
@@ -94,7 +94,12 @@ final class Capture {
     /// until it is confirmed.
     @discardableResult
     func stop() -> Recording? {
-        guard var recording = current else { return nil }
+        guard let started = current else { return nil }
+        // Re-read the metadata rather than saving the copy taken at `start`.
+        // The recording is listed and selectable while it runs, so its title
+        // may have been changed since, and writing an hour-old copy back over
+        // it would silently undo the rename at the moment capture stops.
+        var recording = Recording.load(started.folder) ?? started
         // Read the durations *before* stopping. Both recorders close and
         // release their writer in `stop()`, and the duration comes from the
         // writer, so asking afterwards records every meeting as zero seconds
@@ -128,13 +133,6 @@ final class Capture {
         try recording.delete()
         trace("discarded \(recording.id)")
         onChange?()
-    }
-
-    private static func defaultTitle(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return "Recording, " + f.string(from: date)
     }
 }
 

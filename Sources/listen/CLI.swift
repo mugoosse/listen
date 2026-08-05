@@ -12,7 +12,7 @@ enum CLI {
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
-        "import", "enroll", "sources", "people", "rename", "me",
+        "import", "enroll", "sources", "dictionary", "people", "rename", "me", "edit",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -70,6 +70,10 @@ enum CLI {
             calibrate()
         case "sources":
             sources()
+        case "dictionary":
+            dictionary(rest)
+        case "edit":
+            edit(rest)
         case "mcp":
             MCP.serve()
         default:
@@ -136,6 +140,291 @@ enum CLI {
         exit(0)
     }
 
+    // MARK: - Correcting a transcript
+
+    /// `listen edit <id> "<old sentence>" "<new sentence>"`.
+    ///
+    /// The same `TranscriptEditor.retext` the transcript pane's right-click
+    /// menu uses, for the reason `listen label` exists: with no test target, a
+    /// command that drives the exact code path the window drives is the only
+    /// verification the write path gets.
+    ///
+    /// Matched on the old text rather than on a segment number, because a
+    /// number is not something anybody has. It is also the identity the write
+    /// itself checks, so the command cannot ask for an edit the editor would
+    /// then refuse for a different reason than the one reported here.
+    private static func edit(_ args: [String]) -> Never {
+        guard args.count >= 3 else {
+            fail("edit needs a recording, the sentence as it stands, and the replacement. "
+                 + "Quote both.")
+        }
+        guard let recording = Recording.find(args[0]) else {
+            fail("no recording `\(args[0])`.")
+        }
+        guard let transcript = recording.storedTranscript else {
+            fail("\(recording.id) has no transcript to edit yet.")
+        }
+
+        let was = args[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = args[2].trimmingCharacters(in: .whitespacesAndNewlines)
+        let hits = transcript.segments.indices.filter {
+            transcript.segments[$0].text
+                .trimmingCharacters(in: .whitespacesAndNewlines) == was
+        }
+        guard !hits.isEmpty else {
+            fail("no sentence in \(recording.id) reads exactly `\(was)`. "
+                 + "`listen show \(recording.id)` prints them.")
+        }
+        // Ambiguity is reported rather than resolved. Picking the first of four
+        // identical sentences would be a guess about which one the user meant,
+        // and a wrong guess edits a different minute of the meeting.
+        guard hits.count == 1 else {
+            fail("\(hits.count) sentences read exactly that. Edit it in the window, "
+                 + "where each one is in its own paragraph.")
+        }
+
+        guard TranscriptEditor.apply(.retext(segment: hits[0], was: was, to: now),
+                                     to: recording) else {
+            fail(now.isEmpty ? "a sentence cannot be emptied."
+                             : "nothing to change: it already reads that way.")
+        }
+        log("\(recording.id): sentence \(hits[0]) rewritten")
+        print(now)
+        exit(0)
+    }
+
+    // MARK: - Dictionary
+
+    /// `listen dictionary <sub>`: the user's own terms and corrections.
+    ///
+    /// The same file and the same code the Dictionary pane uses, for the reason
+    /// `listen label` exists: a second implementation agrees with the first
+    /// right up until it does not, and there is no test target to catch the day
+    /// it stops.
+    private static func dictionary(_ args: [String]) -> Never {
+        let rest = Array(args.dropFirst())
+        switch args.first ?? "list" {
+        case "list":   dictionaryList()
+        case "add":    dictionaryAdd(rest)
+        case "remove": dictionaryRemove(rest)
+        case "test":   dictionaryTest(rest)
+        case "import": dictionaryImport(rest)
+        case "export": dictionaryExport(rest)
+        default:
+            fail("unknown dictionary subcommand `\(args[0])`. Try `listen help`.")
+        }
+    }
+
+    /// Every entry, and how often each has rewritten a transcript.
+    ///
+    /// The counts are the point. A dictionary applied at transcription time
+    /// edits recordings nobody has read yet, so the list is only trustworthy
+    /// next to the evidence of what it has done.
+    private static func dictionaryList() -> Never {
+        let entries = CustomDictionary.load()
+        guard !entries.isEmpty else {
+            log("the dictionary is empty. `listen dictionary add <term>` starts one.")
+            exit(0)
+        }
+
+        var totals: [String: Int] = [:]
+        for recording in Recording.all() {
+            guard let counts = recording.storedTranscript?.dictionary else { continue }
+            CustomDictionary.combine(counts, into: &totals)
+        }
+
+        let width = entries.map { $0.text.count + $0.replacement.count }.max() ?? 0
+        for kind in [CustomDictionary.Kind.term, .correction] {
+            let group = entries.filter { $0.kind == kind }
+            guard !group.isEmpty else { continue }
+            print(kind == .term ? "terms" : "corrections")
+            for entry in group {
+                let subject = entry.kind == .term
+                    ? entry.text
+                    : "\(entry.text) -> \(entry.replacement)"
+                var notes: [String] = []
+                if !entry.enabled { notes.append("off") }
+                if entry.caseSensitive, entry.kind == .correction { notes.append("case") }
+                // A term too short to be matched by sound is stored and does
+                // nothing at all, which from the outside looks exactly like the
+                // feature being broken.
+                if entry.kind == .term, !CustomDictionary.eligible(entry.text) {
+                    notes.append("too short to match")
+                }
+                if let n = totals[entry.countKey] { notes.append("fired \(n)") }
+                print("  " + subject.padding(toLength: max(width + 4, subject.count + 2),
+                                             withPad: " ", startingAt: 0)
+                      + notes.joined(separator: ", "))
+            }
+        }
+
+        let fired = totals.values.reduce(0, +)
+        print("")
+        log(fired == 0
+            ? "no transcript has been rewritten by these rules yet. Only recordings "
+              + "transcribed since you added them are counted."
+            : "\(fired) replacement(s) across the library.")
+        exit(0)
+    }
+
+    /// `listen dictionary add <term>` or `add <text> <replacement>`.
+    ///
+    /// Which kind it is comes from whether a replacement was given, which is the
+    /// same rule `CustomDictionary.decode` uses for a file with no `kind` in it.
+    /// Two commands would have been a third place for the two to disagree.
+    private static func dictionaryAdd(_ args: [String]) -> Never {
+        var caseSensitive = false
+        var words: [String] = []
+        for arg in args {
+            if arg == "--case-sensitive" { caseSensitive = true }
+            else if arg.hasPrefix("-") { fail("unknown option `\(arg)`. Try `listen help`.") }
+            else { words.append(arg) }
+        }
+        guard let text = words.first,
+              !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+            fail("add needs a term, or a text and its replacement.")
+        }
+        guard words.count <= 2 else {
+            fail("add takes a term, or a text and its replacement. Quote anything with "
+                 + "spaces in it.")
+        }
+
+        let replacement = words.count == 2 ? words[1] : ""
+        let kind: CustomDictionary.Kind = replacement.isEmpty ? .term : .correction
+        var entries = CustomDictionary.load()
+        let result = CustomDictionary.merge(
+            [CustomDictionary.Entry(kind: kind, text: text, replacement: replacement,
+                                    caseSensitive: caseSensitive)],
+            into: entries)
+        guard !result.added.isEmpty else {
+            fail("`\(text)` is already in the dictionary as a \(kind.rawValue).")
+        }
+        entries.append(contentsOf: result.added)
+        CustomDictionary.save(entries)
+
+        log("added \(kind.rawValue) `\(text)`"
+            + (replacement.isEmpty ? "" : " -> `\(replacement)`"))
+        if kind == .term, !CustomDictionary.eligible(text) {
+            log("it will do nothing as it stands: a term needs five letters, or eight "
+                + "across a phrase, to be matched by sound. Add it as a correction "
+                + "instead if you know exactly what comes out wrong.")
+        }
+        if kind == .term, caseSensitive {
+            log("--case-sensitive applies to corrections only, and is ignored here.")
+        }
+        log("it applies to recordings transcribed from now on, not to transcripts you "
+            + "already have.")
+        exit(0)
+    }
+
+    private static func dictionaryRemove(_ args: [String]) -> Never {
+        guard let text = args.first else { fail("remove needs the text of an entry.") }
+        var entries = CustomDictionary.load()
+        let before = entries.count
+        entries.removeAll { $0.text.caseInsensitiveCompare(text) == .orderedSame }
+        guard entries.count < before else {
+            fail("no entry matching `\(text)`. `listen dictionary list` shows them all.")
+        }
+        CustomDictionary.save(entries)
+        let gone = before - entries.count
+        log("removed \(gone) \(gone == 1 ? "entry" : "entries") matching `\(text)`")
+        exit(0)
+    }
+
+    /// `listen dictionary test <sentence>`: what the rules would do to a line.
+    ///
+    /// The escape hatch the sounds-like half needs. Whether "Gusens" becomes
+    /// "Goossens" depends on a consonant code and on the system word list, so
+    /// nobody can predict it by reading their own rule, and the alternative to
+    /// trying it here is finding out an hour later on a real meeting.
+    private static func dictionaryTest(_ args: [String]) -> Never {
+        let input = args.joined(separator: " ")
+        guard !input.trimmingCharacters(in: .whitespaces).isEmpty else {
+            fail("test needs a sentence. Quote it.")
+        }
+        let entries = CustomDictionary.load()
+        guard !entries.isEmpty else { fail("the dictionary is empty.") }
+
+        let applied = CustomDictionary.apply(to: input, entries: entries)
+        // The rewritten line on stdout so it can be piped or diffed; which rules
+        // fired on stderr, because it is commentary on the answer.
+        print(applied.text)
+        if applied.fired.isEmpty {
+            log("no rule matched.")
+        } else {
+            for (key, n) in applied.fired.sorted(by: { $0.key < $1.key }) {
+                log("\(key) fired \(n) time(s)")
+            }
+        }
+        exit(0)
+    }
+
+    /// Merge a file in, keeping what is already here.
+    ///
+    /// Merging rather than replacing, because replacing is one mistyped path
+    /// away from destroying a list somebody built up over months.
+    private static func dictionaryImport(_ args: [String]) -> Never {
+        let url: URL
+        var source = ""
+        if args.first == "--from-speak" {
+            guard CustomDictionary.speakDictionaryExists else {
+                // The path and the link together: the file may be missing
+                // because Speak is not installed, or because it is and has no
+                // dictionary yet, and those are different things to do next.
+                fail("Speak has no dictionary on this Mac "
+                     + "(\(CustomDictionary.speakFile.path)). "
+                     + "Speak is at https://mugoosse.github.io/speak/")
+            }
+            url = CustomDictionary.speakFile
+            source = "Speak's dictionary"
+        } else {
+            guard let path = args.first, !path.hasPrefix("-") else {
+                fail("import needs a path, or --from-speak.")
+            }
+            url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            source = url.lastPathComponent
+        }
+
+        guard let data = try? Data(contentsOf: url),
+              let incoming = CustomDictionary.decode(data) else {
+            fail("\(source) is not a dictionary file Listen understands. It reads its own "
+                 + "exports, Speak's, and TypeWhisper's.")
+        }
+
+        var entries = CustomDictionary.load()
+        let result = CustomDictionary.merge(incoming, into: entries)
+        entries.append(contentsOf: result.added)
+        CustomDictionary.save(entries)
+
+        let terms = result.added.filter { $0.kind == .term }.count
+        log("imported \(terms) term(s) and \(result.added.count - terms) correction(s)"
+            + (result.duplicates > 0
+               ? ", skipped \(result.duplicates) already in the dictionary" : ""))
+        exit(0)
+    }
+
+    /// Write the list out in the shape Speak's own import reads, so the
+    /// dictionary travels both ways.
+    private static func dictionaryExport(_ args: [String]) -> Never {
+        let entries = CustomDictionary.load()
+        guard let data = CustomDictionary.encode(entries) else {
+            fail("could not encode the dictionary.")
+        }
+        guard let path = args.first else {
+            print(String(data: data, encoding: .utf8) ?? "")
+            exit(0)
+        }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            fail("could not write \(url.path): \(error.localizedDescription)")
+        }
+        log("wrote \(entries.count) \(entries.count == 1 ? "entry" : "entries") "
+            + "to \(url.path)")
+        exit(0)
+    }
+
     private static var version: String {
         // Resolved through AppInfo rather than Bundle.main, because the
         // installed command is a symlink and Bundle.main follows the path it
@@ -155,14 +444,26 @@ enum CLI {
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
+      edit <id> <old> <new>      correct one sentence of a transcript
       people [<name>]            who is in the library, or where one person is
       rename <name> <new name>   rename one person in every recording
       me [<name> | --clear]      what the microphone track is called on screen
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
+      dictionary <sub>           your own terms and corrections
       calibrate                  voiceprint threshold report
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server, read-only
+
+    dictionary subcommands:
+      list                       every entry, with what each has changed
+      add <term>                 a word to spell right, matched by sound
+      add <text> <replacement>   an exact replacement
+      remove <text>              drop the entry matching that text
+      test <sentence>            what the dictionary would do to a line
+      import <path>              merge a file in, keeping what is here
+      import --from-speak        merge Speak's dictionary in
+      export [<path>]            write the list out, stdout by default
 
     import options:
       --dry-run                  list what would be imported, copy nothing

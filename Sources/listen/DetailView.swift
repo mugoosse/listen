@@ -64,12 +64,11 @@ final class DetailView: NSView {
     private var follows = true
     private var scrollingProgrammatically = false
 
-    /// Whether the transcript follows the playhead. Turned off the moment the
-    /// user scrolls, because scrolling away during playback is a decision, and
-    /// dragging somebody back to the playhead every two seconds makes the
-    /// transcript unreadable while it plays.
-    private var follows = true
-    private var scrollingProgrammatically = false
+    /// The turn with a sentence open for editing, if any.
+    ///
+    /// Held weakly and cleared on every re-render, because the view it points at
+    /// is thrown away and rebuilt whenever the transcript changes.
+    private weak var editingTurn: TurnView?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -106,12 +105,12 @@ final class DetailView: NSView {
         // it has to let the title field go itself. Everything else in this pane
         // that claims a click does the same.
         chips.onName = { [weak self] speaker in
-            self?.endEditingTitle()
+            self?.endEditing()
             self?.editSpeaker(speaker)
         }
         chips.onPerson = { [weak self] speaker, anchor, rect in
             guard let self else { return }
-            self.endEditingTitle()
+            self.endEditing()
             PersonPopover.show(speaker, from: anchor, rect: rect) { [weak self] in
                 guard let self, let id = self.recording?.id,
                       let updated = Recording.find(id) else { return }
@@ -315,26 +314,45 @@ final class DetailView: NSView {
         chipsHeight.constant = collapsed ? 0 : 24
     }
 
-
-    private func renderTurns() {
+    private func renderTurns(scrollToTop: Bool = true) {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         turnViews = []
+        editingTurn = nil
         for (index, turn) in turns.enumerated() {
             let view = TurnView(turn: turn,
                                 sentences: index < sentences.count ? sentences[index] : [])
             view.onSeek = { [weak self] in
-                self?.endEditingTitle()
+                self?.endEditing()
                 self?.seek(to: turn.start, playing: true)
             }
             view.onSpeaker = { [weak self] in
-                self?.endEditingTitle()
+                self?.endEditing()
                 self?.editSpeaker(turn.speaker)
+            }
+            view.onEdit = { [weak self] sentence, was, text in
+                self?.applyEdit(sentence, was: was, to: text)
+            }
+            view.onEditingChanged = { [weak self] turn, editing in
+                guard let self else { return }
+                if editing {
+                    // Only one at a time. Clicking another paragraph normally
+                    // commits the first through the responder chain, but the
+                    // menu can be opened without that ever happening.
+                    if let open = editingTurn, open !== turn { open.commitEditing() }
+                    editingTurn = turn
+                    endEditingTitle()
+                } else if editingTurn === turn {
+                    editingTurn = nil
+                }
             }
             stack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                         constant: -20).isActive = true
             turnViews.append(view)
         }
+        // Not after an edit. A reload that jumps to the top of an hour-long
+        // meeting loses the reader's place every time they correct a word.
+        guard scrollToTop else { return }
 
         // Open at the beginning. A freshly selected recording used to open
         // somewhere near the end of the meeting with half a paragraph cut off
@@ -436,8 +454,8 @@ final class DetailView: NSView {
 
     @objc private func togglePlay() {
         // A button click never reaches `mouseDown` below, so the controls that
-        // do claim their click each have to let the title go themselves.
-        endEditingTitle()
+        // do claim their click each have to let the fields go themselves.
+        endEditing()
         if let player, player.isPlaying {
             player.pause()
             setPlaying(false)
@@ -474,7 +492,7 @@ final class DetailView: NSView {
     /// Dragging through a meeting to find a moment is a way of reading it, not
     /// of listening to it, so scrubbing a paused recording leaves it paused.
     private func scrub(to fraction: Double) {
-        endEditingTitle()
+        endEditing()
         guard length > 0 else { return }
         follows = true
         seek(to: fraction * length, playing: player?.isPlaying ?? false)
@@ -574,6 +592,126 @@ final class DetailView: NSView {
             LibraryWindow.shared.reload()
         }
     }
+
+    // MARK: - Correcting the transcript
+
+    /// Write one edited sentence back to the segment it came from.
+    ///
+    /// To the *segment*, not to the turn. A turn is a fold over segments and
+    /// `TranscriptEditor` rebuilds `turns.json` from them on every speaker
+    /// change, so a correction written to the paragraph would survive until the
+    /// next rename and then vanish with nothing to explain it.
+    private func applyEdit(_ sentence: Merge.Sentence, was: String, to text: String) {
+        guard let recording else { return }
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = was.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard typed != before else { return }
+
+        guard TranscriptEditor.apply(
+            .retext(segment: sentence.index, was: before, to: typed), to: recording) else {
+            // Refused: either the field was cleared, or the transcript changed
+            // underneath and the index no longer names the sentence that was on
+            // screen. Say so rather than dropping the typing silently.
+            NSSound.beep()
+            log(typed.isEmpty
+                ? "a sentence cannot be emptied. Delete the speaker instead, or type over it."
+                : "that sentence has changed since the pane was drawn; nothing was written.")
+            return
+        }
+
+        // A targeted reload, not `show`. `show` stops playback and puts the
+        // playhead back to zero, and correcting a word is something people do
+        // while listening to it.
+        guard let updated = Recording.find(recording.id) else { return }
+        self.recording = updated
+        turns = updated.storedTurns
+        sentences = Merge.sentences(in: turns,
+                                    from: updated.storedTranscript?.segments ?? [])
+        currentTurn = nil
+        renderTurns(scrollToTop: false)
+        refresh()
+        onChanged?()
+    }
+}
+
+/// The paragraph of one turn.
+///
+/// A subclass so a right-click can be answered with the sentence it landed on.
+/// The answering is done by `TranscriptFieldEditor` rather than here: a
+/// right-click on a selectable text field installs the field editor *before*
+/// the menu is built, and hit testing then lands on that text view rather than
+/// on this field, so an override here would never run. Measured, because the
+/// opposite is the natural assumption and it is wrong.
+@MainActor
+final class TranscriptBody: NSTextField {
+    /// Where each sentence sits in this text, and which segment it is.
+    var sentences: [Merge.Sentence] = []
+    /// Chosen "Edit Sentence" on one of them.
+    var onEdit: ((Merge.Sentence) -> Void)?
+
+    func sentence(at index: Int) -> Merge.Sentence? {
+        if let hit = sentences.first(where: { NSLocationInRange(index, $0.range) }) {
+            return hit
+        }
+        // An insertion point at the very end of the paragraph is one past every
+        // range. Refusing there would make the end of a turn, which is where a
+        // trailing mistranscription usually is, the one place you cannot edit.
+        return sentences.last.flatMap { index == NSMaxRange($0.range) ? $0 : nil }
+    }
+}
+
+/// The field editor for a transcript paragraph, which exists to put "Edit
+/// Sentence" at the top of the menu the user already gets.
+///
+/// It asks AppKit which character is under the pointer rather than rebuilding a
+/// layout manager to work it out. The field editor is AppKit's own layout of
+/// this exact string at this exact width, so its answer cannot disagree with
+/// what is on screen; a second layout manager here would differ from it by the
+/// cell's insets, which stays invisible until a click near a sentence boundary
+/// quietly picks the neighbour.
+///
+/// Installed by `LibraryWindow.windowWillReturnFieldEditor(_:to:)`, and only for
+/// `TranscriptBody`. Everything else in the window keeps the standard one.
+@MainActor
+final class TranscriptFieldEditor: NSTextView {
+    /// The sentence the open menu refers to. One menu is open at a time, so one
+    /// slot is enough, and it is cleared as soon as it is used.
+    private var pending: (TranscriptBody, Merge.Sentence)?
+
+    /// A field editor has to say it is one. Made here rather than by an `init`
+    /// override so the class inherits `NSTextView`'s initialisers untouched.
+    static func make() -> TranscriptFieldEditor {
+        let editor = TranscriptFieldEditor(frame: .zero, textContainer: nil)
+        editor.isFieldEditor = true
+        return editor
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        // Built on top of the standard menu rather than replacing it. Look Up,
+        // Copy and the rest are why anyone right-clicks a transcript today, and
+        // taking them away to add one item would be a poor trade.
+        let standard = super.menu(for: event)
+        guard let body = delegate as? TranscriptBody,
+              let sentence = body.sentence(
+                at: characterIndexForInsertion(at: convert(event.locationInWindow,
+                                                           from: nil)))
+        else { return standard }
+
+        let menu = standard ?? NSMenu()
+        let item = NSMenuItem(title: "Edit Sentence",
+                              action: #selector(editSentence), keyEquivalent: "")
+        item.target = self
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        pending = (body, sentence)
+        return menu
+    }
+
+    @objc private func editSentence() {
+        guard let (body, sentence) = pending else { return }
+        pending = nil
+        body.onEdit?(sentence)
+    }
 }
 
 /// One speaker turn in the transcript.
@@ -581,10 +719,32 @@ final class DetailView: NSView {
 final class TurnView: NSView {
     private let speakerButton = NSButton()
     private let timeLabel = NSTextField(labelWithString: "")
-    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
+    private let bodyLabel = TranscriptBody(wrappingLabelWithString: "")
+
+    /// The body region: the paragraph, or the three pieces it becomes while one
+    /// sentence inside it is being edited.
+    ///
+    /// A stack rather than an overlay on the sentence itself. A sentence in a
+    /// wrapped paragraph is not a rectangle: it starts mid-line and ends
+    /// mid-line, so a field placed over it is either the wrong shape or covers
+    /// its neighbours. Splitting the paragraph into what comes before, the
+    /// sentence, and what comes after keeps every word on screen and leaves no
+    /// doubt about which part is being edited.
+    private let body = NSStackView()
+    private var editField: NSTextField?
+    private var editing: Merge.Sentence?
 
     var onSeek: (() -> Void)?
     var onSpeaker: (() -> Void)?
+    /// A sentence was committed: which one, what it used to say, what it says
+    /// now. The old text travels with it so the write can refuse if the
+    /// transcript moved underneath.
+    var onEdit: ((Merge.Sentence, String, String) -> Void)?
+    /// Editing started or stopped, so the pane can end it from elsewhere.
+    var onEditingChanged: ((TurnView, Bool) -> Void)?
+
+    /// True while a sentence in this turn is being edited.
+    var isEditing: Bool { editing != nil }
 
     /// Where each sentence sits in the body text, for the playhead.
     private let sentences: [Merge.Sentence]
@@ -608,8 +768,11 @@ final class TurnView: NSView {
     /// Highlight the sentence containing `time`, or none.
     ///
     /// Called twenty times a second while playing, so it does nothing at all
-    /// unless the sentence changed.
+    /// unless the sentence changed, and nothing at all while a sentence here is
+    /// being edited: the paragraph is not on screen then, and restyling it
+    /// would only be work nobody can see.
     func highlight(_ time: TimeInterval?) {
+        guard editing == nil else { return }
         let index = time.flatMap { now in
             sentences.firstIndex { now >= $0.start && now < $0.end }
         }
@@ -659,8 +822,14 @@ final class TurnView: NSView {
         bodyLabel.attributedStringValue = base
         bodyLabel.font = .systemFont(ofSize: 13)
         bodyLabel.textColor = .labelColor
+        bodyLabel.sentences = sentences
+        bodyLabel.onEdit = { [weak self] in self?.beginEditing($0) }
 
-        for v in [speakerButton, timeLabel, bodyLabel] {
+        body.orientation = .vertical
+        body.alignment = .leading
+        body.spacing = 6
+
+        for v in [speakerButton, timeLabel, body] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -670,11 +839,12 @@ final class TurnView: NSView {
             timeLabel.centerYAnchor.constraint(equalTo: speakerButton.centerYAnchor),
             timeLabel.leadingAnchor.constraint(equalTo: speakerButton.trailingAnchor,
                                                constant: 8),
-            bodyLabel.topAnchor.constraint(equalTo: speakerButton.bottomAnchor, constant: 3),
-            bodyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            bodyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            bodyLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            body.topAnchor.constraint(equalTo: speakerButton.bottomAnchor, constant: 3),
+            body.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            body.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            body.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
+        fill(with: [bodyLabel])
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(bodyTapped))
         bodyLabel.addGestureRecognizer(click)
@@ -684,6 +854,122 @@ final class TurnView: NSView {
 
     @objc private func speakerTapped() { onSpeaker?() }
     @objc private func bodyTapped() { onSeek?() }
+
+    // MARK: - Editing a sentence
+
+    /// Put `views` in the body, each as wide as the body itself.
+    ///
+    /// The width has to be said out loud. A vertical `NSStackView` sizes an
+    /// arranged subview to what it asks for, and a wrapping label with no
+    /// definite width asks for one long line, so without this the paragraph
+    /// stops wrapping the moment it goes into the stack.
+    private func fill(with views: [NSView]) {
+        for view in body.arrangedSubviews { view.removeFromSuperview() }
+        for view in views {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            body.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        }
+    }
+
+    /// The part of the paragraph either side of the sentence being edited.
+    private func context(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 13)
+        // Dimmed, so which of the three pieces is live needs no explaining.
+        label.textColor = .secondaryLabelColor
+        label.isSelectable = false
+        return label
+    }
+
+    func beginEditing(_ sentence: Merge.Sentence) {
+        guard editing == nil else { return }
+        let whole = base.string as NSString
+        guard NSMaxRange(sentence.range) <= whole.length else { return }
+        editing = sentence
+
+        let before = whole.substring(to: sentence.range.location)
+        let after = whole.substring(from: NSMaxRange(sentence.range))
+
+        let field = NSTextField(string: whole.substring(with: sentence.range))
+        field.font = .systemFont(ofSize: 13)
+        field.delegate = self
+        field.usesSingleLineMode = false
+        field.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 0
+        field.cell?.wraps = true
+        field.cell?.isScrollable = false
+        editField = field
+
+        var pieces: [NSView] = []
+        if !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pieces.append(context(before))
+        }
+        pieces.append(field)
+        if !after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pieces.append(context(after))
+        }
+        fill(with: pieces)
+
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+        onEditingChanged?(self, true)
+    }
+
+    /// Take what is in the field and hand it up. Returns false if nothing was
+    /// being edited, which is what makes this safe to call from anywhere.
+    @discardableResult
+    func commitEditing() -> Bool {
+        guard let sentence = editing, let field = editField else { return false }
+        let whole = base.string as NSString
+        let was = whole.substring(with: sentence.range)
+        let typed = field.stringValue
+        // Torn down before the callback, so the re-entrant
+        // `controlTextDidEndEditing` that removing the field provokes finds
+        // nothing left to commit.
+        stopEditing()
+        onEdit?(sentence, was, typed)
+        return true
+    }
+
+    func cancelEditing() {
+        guard editing != nil else { return }
+        stopEditing()
+    }
+
+    private func stopEditing() {
+        guard editing != nil else { return }
+        editing = nil
+        editField = nil
+        fill(with: [bodyLabel])
+        // The highlight was frozen while the field was up, so let the next
+        // playhead tick reapply it rather than leaving a stale one.
+        highlighted = nil
+        onEditingChanged?(self, false)
+    }
+}
+
+extension TurnView: NSTextFieldDelegate {
+    /// Clicking away commits, which is what clicking away means everywhere else
+    /// in this window.
+    func controlTextDidEndEditing(_ note: Notification) { commitEditing() }
+
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            // Return commits rather than adding a line. A transcript sentence
+            // has no line breaks in it, and the field is only multi-line so a
+            // long one wraps instead of scrolling sideways.
+            commitEditing()
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            cancelEditing()
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // MARK: - Renaming
@@ -726,10 +1012,21 @@ extension DetailView: NSTextFieldDelegate {
         window?.makeFirstResponder(nil)
     }
 
+    /// Give up whichever field is open: the title, or a sentence.
+    ///
+    /// The two have the same problem and therefore the same answer. Neither
+    /// stops editing because the user clicked something that is not a control,
+    /// so every control in this pane that swallows its own click has to say
+    /// so, and `mouseDown` catches the rest.
+    func endEditing() {
+        endEditingTitle()
+        editingTurn?.commitEditing()
+    }
+
     /// Clicks that no subview claimed arrive here through the responder chain,
     /// which is every part of this pane that is not a button or a link.
     override func mouseDown(with event: NSEvent) {
-        endEditingTitle()
+        endEditing()
         super.mouseDown(with: event)
     }
 }

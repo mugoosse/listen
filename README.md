@@ -43,7 +43,7 @@ Or download the DMG from
 
 The speech model is about 2.5 GB and downloads on first run, after you press
 the button that says so. **If you already use
-[Speak](https://github.com/mugoosse/speak), it is already on your disk** and
+[Speak](https://mugoosse.github.io/speak/), it is already on your disk** and
 Listen will find it: both resolve the same Hugging Face cache, so whichever
 downloaded first paid for both.
 
@@ -91,6 +91,53 @@ these two things wrong often enough to need them:
 Both write a one-time backup of the pipeline's own output before the first
 edit. Renaming never re-transcribes.
 
+### Correcting the transcript
+
+Right-click the sentence that came out wrong and choose **Edit Sentence**. The
+paragraph splits around it, you type, and clicking away saves. Escape leaves it
+as it was.
+
+One sentence at a time, because that is the unit the transcript is actually made
+of: the correction goes back to the sentence the model produced, so its place on
+the clock and its highlight while the recording plays both survive. The
+surrounding paragraph stays on screen, dimmed, so you can see what you are
+correcting it against.
+
+Nothing re-transcribes, and the one-time backup of the model's own output is the
+same one speaker edits write.
+
+### Your own vocabulary
+
+Settings, Dictionary. Speech models get the same proper nouns wrong the same
+way every time, and a meeting is mostly proper nouns, so the list is worth
+building once.
+
+- A **term** is a word Listen should know: a name, a product, a piece of jargon.
+  Anything that sounds like one and is not a word in its own right becomes it,
+  so "Gusens" comes out as "Goossens". A single word needs five letters and is
+  never swapped for a real English word, which is what keeps "Codex" from
+  rewriting "codes". A phrase needs every word to match by sound in order, which
+  is how "Claude Code" catches "Cloud coat".
+- A **correction** is an exact replacement, for a mishearing that sounds nothing
+  like the word you meant. The longest match wins, so a rule for a full name
+  beats one for the first name.
+
+It is applied once, when a meeting is transcribed, to what is written to the
+library. Adding a rule does not touch transcripts you already have, and
+re-transcribing applies the list as it stands then.
+
+Because it edits an archive rather than something you are watching, every
+transcript records which rules rewrote it and how often, and the pane totals
+that across the library under **What it changed**. **Try it** runs your rules
+over a line you type, which is the way to find out what a term does before it
+does it to a meeting.
+
+If you use [Speak](https://mugoosse.github.io/speak/), it keeps its own list and
+one press copies it over. The file is not shared, deliberately: two apps
+rewriting one document whole means the loser of a race loses entries. Export
+writes the file Speak's own import reads, so the list travels back the other way
+too, and imports from TypeWhisper are understood as well.
+
 ## The command line
 
 Install it from Settings, Developers. It is the same binary as the app,
@@ -103,12 +150,25 @@ listen list [--limit N] [--json]  recordings as a table
 listen show <id>                  metadata and transcript
 listen export <id> [--format]     write a transcript out
 listen label <id> <speaker> ...   name, merge or discard a speaker
+listen dictionary <sub>           your own terms and corrections
 listen calibrate                  voiceprint threshold report
 listen mcp                        stdio MCP server, read-only
 ```
 
 `listen transcribe some.wav` needs no permissions at all, which makes it the
-fastest way to tell a model problem apart from a recording problem.
+fastest way to tell a model problem apart from a recording problem. It prints
+what the model actually said: the dictionary applies to what goes into the
+library and nothing else, so this command cannot be quietly editing its own
+output.
+
+```
+listen dictionary list            every entry, and what each has changed
+listen dictionary add <term>      a word to spell right, matched by sound
+listen dictionary add <a> <b>     an exact replacement
+listen dictionary test "<line>"   what your rules would do to a sentence
+listen dictionary import --from-speak
+listen dictionary export [<path>]
+```
 
 ## MCP
 
@@ -145,6 +205,9 @@ transcript.json    segments with speakers
 turns.json         condensed per-speaker turns
 embeddings.json    one voiceprint per speaker
 ```
+
+`dictionary.json` sits beside the recordings rather than inside one, because
+it is about the library as a whole.
 
 One folder per recording, and no database anywhere. The folders *are* the
 library and the `embeddings.json` files *are* the voice bank, which means

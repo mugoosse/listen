@@ -236,6 +236,16 @@ enum Merge {
         var end: Double
         /// A UTF-16 range into the turn's text, which is what AppKit wants.
         var range: NSRange
+        /// Which stored segment this is, as an index into the array passed to
+        /// `sentences(in:from:)`.
+        ///
+        /// This is what makes a sentence editable. A turn is a fold over
+        /// segments and nothing records the reverse, so without the index an
+        /// edit made on screen could only be written back to `turns.json`, which
+        /// `TranscriptEditor` rebuilds from the segments on the next speaker
+        /// change. The correction would survive until somebody renamed a
+        /// speaker and then vanish, with nothing to explain it.
+        var index: Int
     }
 
     /// Find each sentence inside the turn that contains it.
@@ -269,6 +279,10 @@ enum Merge {
                 if segment.end < turn.start - 0.001 { index += 1; continue }
                 guard segment.speaker == turn.speaker,
                       segment.start <= turn.end + 0.001 else { break }
+                // Taken before the cursor moves on. This is the number an edit
+                // is written back to, so it has to be this segment's own and not
+                // the next one's.
+                let position = index
                 index += 1
 
                 let body = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -276,7 +290,8 @@ enum Merge {
                 let rest = NSRange(location: cursor, length: text.length - cursor)
                 let found = text.range(of: body, options: [.literal], range: rest)
                 guard found.location != NSNotFound else { continue }
-                out[t].append(Sentence(start: segment.start, end: segment.end, range: found))
+                out[t].append(Sentence(start: segment.start, end: segment.end,
+                                       range: found, index: position))
                 cursor = found.location + found.length
             }
         }

@@ -5,9 +5,11 @@ fully local. Read `README.md` for user-facing behaviour and `SPEC.md` for the
 brief. This file is about working on the code without re-learning things the
 hard way.
 
-Speak (`../speak`) is the template. Its `CLAUDE.md` is a list of traps already
-paid for and most of them still apply here; this file records the ones that are
-Listen's own.
+Speak (`../speak`, https://mugoosse.github.io/speak/) is the template. Its
+`CLAUDE.md` is a list of traps already paid for and most of them still apply
+here; this file records the ones that are Listen's own. Anywhere Speak is named
+in user-facing copy it gets that link, because a reader who does not have it
+cannot act on the sentence otherwise.
 
 ## Build and run
 
@@ -210,6 +212,162 @@ minute files. That is not yet enough evidence to delete it, because none of
 that is real meeting audio with crosstalk and silence. Keep watching the
 counts; when there is a real corpus behind the number, either delete the rules
 and say so in the commit, or record why they stayed.
+
+### A sentence is edited, and a segment is what gets written
+
+Right-click a sentence in the transcript, choose Edit Sentence, correct it, click
+away. What lands on disk is one `LabelledSegment`, not the paragraph.
+
+That is the whole design and it is not a detail. A turn is a fold over segments
+(`Merge.turns`), nothing records the reverse, and `TranscriptEditor` rebuilds
+`turns.json` from the segments on every speaker change. A correction written to
+the paragraph would therefore survive until the next rename and then vanish, with
+nothing on screen to explain where it went.
+
+So `Merge.Sentence` carries `index`, the position of the segment it came from,
+and `TranscriptEditor.retext` writes there. Sentence level rather than paragraph
+level because `Merge.sentences` already locates every ASR sentence inside its
+turn: the mapping is one to one, no diff is needed, and the timings and the
+playhead highlight come through untouched.
+
+`retext` is a **compare-and-swap**, not an index write. The index comes from a
+pane rendered at some earlier moment and `.discard` removes segments, so an index
+taken before one runs names a different sentence afterwards. The old text travels
+with the edit and the write is refused if it no longer matches, rather than
+applied to whatever moved into that slot. Both sides are trimmed, because the
+window's copy is the substring `Merge.sentences` found in the turn and that
+search uses the *trimmed* segment text: an imported transcript with surrounding
+whitespace would otherwise fail the check and refuse every edit silently.
+
+`change` therefore takes a closure returning `Bool`. A refused edit must not
+leave a `.raw.json.bak` and a rewritten `turns.json` behind it.
+
+#### The right-click never reaches the text field
+
+This one is worth knowing before trying to do it another way. A selectable
+`NSTextField` installs its **field editor on `rightMouseDown`**, before the
+contextual menu is built, so hit testing lands on that `NSTextView` and an
+override of `menu(for:)` on the field itself is never called. Measured directly,
+because the opposite is the natural assumption:
+
+    hitTest, unfocused:  TranscriptBody
+    after rightMouseDown, currentEditor: NSTextView
+    hitTest, focused:    NSTextView
+
+So the menu is built by `TranscriptFieldEditor`, a field editor handed out by
+`LibraryWindow.windowWillReturnFieldEditor(_:to:)` for `TranscriptBody` clients
+and nothing else. That also settles how a click becomes a character: the field
+editor is AppKit's own layout of that exact string at that exact width, so
+`characterIndexForInsertion(at:)` cannot disagree with what is on screen. A
+layout manager rebuilt on the side would differ by the cell's insets, which stays
+invisible until a click near a sentence boundary quietly picks the neighbour.
+
+The item is inserted at the top of `super.menu(for:)` rather than replacing it.
+Look Up and Copy are why anybody right-clicks a transcript today.
+
+#### The paragraph splits in three while one sentence is edited
+
+Not an overlay on the sentence. A sentence in a wrapped paragraph starts mid-line
+and ends mid-line, so it is not a rectangle and a field placed over it is either
+the wrong shape or covers its neighbours. `TurnView` swaps its body for
+`[before, field, after]` in a stack, with the two context labels dimmed. Every
+word stays on screen and there is no doubt which part is live.
+
+The width has to be stated: a vertical `NSStackView` sizes an arranged subview to
+what it asks for, and a wrapping label with no definite width asks for one long
+line, so `fill(with:)` pins each piece to the stack's width or the paragraph
+stops wrapping the moment it goes in.
+
+Two consequences that were nearly bugs:
+
+1. **`highlight` no-ops while editing.** It runs twenty times a second and
+   rewrites the paragraph's attributed string, which is not on screen then.
+2. **`applyEdit` reloads rather than calling `show`.** `show` stops playback and
+   puts the playhead back to zero, and correcting a word is something people do
+   while listening to it. `renderTurns(scrollToTop:)` exists for the same reason:
+   a reload that jumps to the top of an hour-long meeting loses the reader's
+   place after every correction.
+
+Clicking away commits, which needed the same fix the title field needed:
+`NSView` does not accept first responder, so `DetailView.endEditing()` now lets
+go of both fields and every control that swallows its own click calls it.
+
+`listen edit <id> "<old>" "<new>"` drives the same `TranscriptEditor.retext`, for
+the reason `listen label` exists. It matches on the old text rather than a
+segment number, because a number is not something anybody has, and it refuses
+rather than guesses when two sentences read the same. The window can edit those
+two separately: `Merge.sentences` carries a cursor forward, so the first
+occurrence in the turn maps to the first segment.
+
+### The dictionary rewrites the library, and only the library
+
+`CustomDictionary` is ported from Speak, where the rules were tuned. Speak has
+three mechanisms; Listen has two, because the third is a spelling hint in the
+polishing model's prompt and there is no polishing model here. What is left is
+pure text: a **term** matched by sound, and a **correction** matched exactly.
+
+The rule for where it applies is one sentence with no exceptions: **the
+dictionary rewrites what goes into the library**. So it runs in `Pipeline.run`
+and nowhere else. A bare `listen transcribe some.wav` prints what the model
+actually said, because that command exists to separate a model problem from a
+capture problem and a dictionary quietly editing its output would make it lie.
+`listen dictionary test "<sentence>"` is how a rule is checked without a
+recording, and it is not a nicety: whether "Gusens" becomes "Goossens" depends
+on a consonant code and on `/usr/share/dict/words`, so nobody can predict it by
+reading their own rule.
+
+Applied **after** `Merge.clean`, deliberately. The cleanup counts exist to
+answer whether Parakeet needs the Whisper-era repetition rules at all, and that
+is only answerable against Parakeet's own output. Measuring it after the
+dictionary had rewritten the text would count rules firing on words the model
+never produced.
+
+Per segment rather than over the whole transcript joined up: a segment is one
+ASR sentence, so every real term sits inside one, and the alternative means
+splitting the result back apart against text whose length changed.
+
+**Everything is counted, and that is the load-bearing part.** Speak's transcript
+is text you are about to paste and can see; Listen's is an archive of a meeting
+nobody may read for a week. A bad rule here rewrites recordings quietly and the
+only surviving evidence is the audio. So `apply` returns how often each rule
+fired, `Pipeline` totals it into `StoredTranscript.dictionary`, and both the
+Dictionary pane and `listen dictionary list` report it. Same arrangement as
+`cleanup`, same reason: a rule nobody can measure is a rule nobody can argue
+about. Unlike the cleanup counts it is logged to stderr rather than hidden
+behind `LISTEN_DEBUG`, because cleanup is the app tidying up after the model and
+this is the user's own list rewriting their own meeting.
+
+#### Adding a field to `StoredTranscript` needs `init(from:)` by hand
+
+Swift's synthesized decoder throws `keyNotFound` on a missing key **even when
+the property has a default value**. Adding `dictionary` to the struct alone
+would therefore have made every `transcript.json` written before it fail to
+decode, and that failure is silent in the worst possible way: `storedTranscript`
+returns nil on a decode error, so the whole library would have gone on looking
+untranscribed with the transcripts still sitting on disk. Measured both ways on
+a real 709-segment transcript: the synthesized decoder fails, the hand-written
+`init(from:)` with `decodeIfPresent` reads it. The custom init lives in an
+extension so the memberwise init survives.
+
+#### Two dictionaries, not one shared file
+
+Speak's is at `~/Library/Application Support/speak/dictionary.json` and Listen's
+is beside its recordings. Sharing one file would save maintaining two lists of
+the same people's names, and it would mean two apps rewriting a document that is
+written whole every time, where the loser of a race loses entries rather than
+getting a merge. Import and export carry the list across instead: `encode`
+deliberately writes **Speak's** shape, and `decode` is deliberately liberal
+(Speak's, a bare array, TypeWhisper's key names), so the two apps read each
+other's exports and the trip works in both directions. `listen dictionary import
+--from-speak`, and the Speak section of the pane, are the one-press version.
+
+Measured: importing Speak's real dictionary brought over 5 terms and 35
+corrections and skipped 3 already present.
+
+A term too short to be matched by sound is stored and does nothing, which from
+the outside is indistinguishable from the feature being broken. `eligible` is
+therefore public, the pane greys those rows, and `listen dictionary add` says so
+on the way in.
 
 ### A person is a name string, and that is the whole identity model
 

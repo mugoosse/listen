@@ -664,28 +664,50 @@ final class TranscriptBody: NSTextField {
         return sentences.last.flatMap { index == NSMaxRange($0.range) ? $0 : nil }
     }
 
+    /// The click this paragraph last reported, so it is reported once.
+    ///
+    /// The first click on a paragraph runs **both** `mouseDown` overrides: this
+    /// field's, and the field editor's from inside the tracking loop `super`
+    /// starts. Every click after that runs only the editor's, because the editor
+    /// is installed by then and hit testing lands on it. Measured:
+    ///
+    ///     click 1  hitTest -> Editor   ran -> Body.mouseDown + Editor.mouseDown
+    ///     click 2  hitTest -> Editor   ran -> Editor.mouseDown
+    ///
+    /// Both paths therefore call `report`, and the timestamp keeps the first
+    /// click from seeking twice. Handling it in this class alone was the bug:
+    /// the first click on a paragraph played from the right sentence and every
+    /// later one in the same paragraph did nothing at all.
+    private var reported: TimeInterval = -1
+
     /// Play from the sentence that was clicked, not from the top of the turn.
     ///
     /// A turn can run for minutes, so "clicking a turn plays from there" was
     /// only true of its first word: clicking the third sentence of a paragraph
     /// started the recording several minutes before the words under the pointer.
     ///
-    /// After `super`, deliberately. The tracking loop inside it installs the
-    /// field editor and returns on mouse up, so by this line there is always an
-    /// editor to ask, and asking it is the only accurate way: a layout manager
-    /// rebuilt here to answer the same question agreed with AppKit on 341 of
-    /// 1026 sampled points, off by as much as 65 characters, because it cannot
-    /// see the cell's own insets. Measured rather than assumed, since the
-    /// reconstruction looks exact when you write it.
+    /// The editor is what is asked, because it is the only accurate answer: a
+    /// layout manager rebuilt here to work out the same thing agreed with AppKit
+    /// on 341 of 1026 sampled points, off by as much as 65 characters, because
+    /// it cannot see the cell's own insets. Measured rather than assumed, since
+    /// the reconstruction looks exact when you write it.
     ///
     /// A drag that selected something is not a click. Copying a quote out of a
     /// transcript should not move the playhead.
-    override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        guard let editor = currentEditor() as? NSTextView,
-              editor.selectedRange().length == 0 else { return }
+    func report(_ event: NSEvent, from editor: NSTextView) {
+        guard event.timestamp != reported else { return }
+        reported = event.timestamp
+        guard editor.selectedRange().length == 0 else { return }
         let point = editor.convert(event.locationInWindow, from: nil)
         onClick?(sentence(at: editor.characterIndexForInsertion(at: point)))
+    }
+
+    /// After `super`: the tracking loop inside it installs the field editor and
+    /// returns on mouse up, so by this line there is one to ask.
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        guard let editor = currentEditor() as? NSTextView else { return }
+        report(event, from: editor)
     }
 
     /// An arrow, not an I-beam.
@@ -701,6 +723,17 @@ final class TranscriptBody: NSTextField {
 
     override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 }
+
+/// AppKit sets a field editor's delegate to the field it is editing, so this
+/// conformance states a fact rather than an intention. No methods: it exists so
+/// `delegate as? TranscriptBody` inside `TranscriptFieldEditor` is a cast
+/// between related types.
+///
+/// Without it the compiler warns that the cast "always fails", and both things
+/// that depend on it, the Edit Sentence menu and clicking a sentence to play it,
+/// were working only because the optimiser had not yet taken the invitation to
+/// fold them to nil.
+extension TranscriptBody: NSTextViewDelegate {}
 
 /// The field editor for a transcript paragraph, which exists to put "Edit
 /// Sentence" at the top of the menu the user already gets.
@@ -769,6 +802,17 @@ final class TranscriptFieldEditor: NSTextView {
         guard let (body, sentence) = pending else { return }
         pending = nil
         body.onEdit?(sentence)
+    }
+
+    /// Every click after the first one on a paragraph arrives here rather than
+    /// at the field, because the editor is installed by then and hit testing
+    /// lands on it. Without this, only the first click in a paragraph played
+    /// from the sentence under the pointer. `report` is idempotent per event, so
+    /// the first click, which runs both overrides, still seeks once.
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        guard let body = delegate as? TranscriptBody else { return }
+        body.report(event, from: self)
     }
 
     /// The editor covers the paragraph once it is installed, so it has to answer

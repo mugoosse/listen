@@ -4,9 +4,9 @@ import AppKit
 /// The right-hand pane: player on top, transcript below as speaker-grouped
 /// turns.
 ///
-/// Clicking a turn seeks. Clicking a speaker name opens the labelling
-/// affordance. The playhead highlights the turn being spoken, which is what
-/// makes this readable while listening rather than instead of listening.
+/// Clicking a sentence plays from it. Clicking a speaker name opens the
+/// labelling affordance. The playhead highlights the turn being spoken, which is
+/// what makes this readable while listening rather than instead of listening.
 @MainActor
 final class DetailView: NSView {
     fileprivate var recording: Recording?
@@ -321,9 +321,12 @@ final class DetailView: NSView {
         for (index, turn) in turns.enumerated() {
             let view = TurnView(turn: turn,
                                 sentences: index < sentences.count ? sentences[index] : [])
-            view.onSeek = { [weak self] in
+            view.onSeek = { [weak self] sentence in
                 self?.endEditing()
-                self?.seek(to: turn.start, playing: true)
+                // The sentence that was clicked, falling back to the turn for a
+                // click that landed between sentences or on an imported
+                // transcript whose segments could not be located in their turn.
+                self?.seek(to: sentence?.start ?? turn.start, playing: true)
             }
             view.onSpeaker = { [weak self] in
                 self?.endEditing()
@@ -648,6 +651,8 @@ final class TranscriptBody: NSTextField {
     var sentences: [Merge.Sentence] = []
     /// Chosen "Edit Sentence" on one of them.
     var onEdit: ((Merge.Sentence) -> Void)?
+    /// Clicked, on the sentence under the pointer, or nil if it landed on none.
+    var onClick: ((Merge.Sentence?) -> Void)?
 
     func sentence(at index: Int) -> Merge.Sentence? {
         if let hit = sentences.first(where: { NSLocationInRange(index, $0.range) }) {
@@ -658,6 +663,43 @@ final class TranscriptBody: NSTextField {
         // trailing mistranscription usually is, the one place you cannot edit.
         return sentences.last.flatMap { index == NSMaxRange($0.range) ? $0 : nil }
     }
+
+    /// Play from the sentence that was clicked, not from the top of the turn.
+    ///
+    /// A turn can run for minutes, so "clicking a turn plays from there" was
+    /// only true of its first word: clicking the third sentence of a paragraph
+    /// started the recording several minutes before the words under the pointer.
+    ///
+    /// After `super`, deliberately. The tracking loop inside it installs the
+    /// field editor and returns on mouse up, so by this line there is always an
+    /// editor to ask, and asking it is the only accurate way: a layout manager
+    /// rebuilt here to answer the same question agreed with AppKit on 341 of
+    /// 1026 sampled points, off by as much as 65 characters, because it cannot
+    /// see the cell's own insets. Measured rather than assumed, since the
+    /// reconstruction looks exact when you write it.
+    ///
+    /// A drag that selected something is not a click. Copying a quote out of a
+    /// transcript should not move the playhead.
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        guard let editor = currentEditor() as? NSTextView,
+              editor.selectedRange().length == 0 else { return }
+        let point = editor.convert(event.locationInWindow, from: nil)
+        onClick?(sentence(at: editor.characterIndexForInsertion(at: point)))
+    }
+
+    /// An arrow, not an I-beam.
+    ///
+    /// The field is selectable, so AppKit offers the text cursor, and that reads
+    /// as an invitation to type in something that is not editable. The primary
+    /// gesture here is a click that plays from a word, which is an arrow's job.
+    /// Both hooks, because a text view answers the cursor with tracking areas
+    /// and a plain view answers it with cursor rects, and this is both at once.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 }
 
 /// The field editor for a transcript paragraph, which exists to put "Edit
@@ -728,6 +770,14 @@ final class TranscriptFieldEditor: NSTextView {
         pending = nil
         body.onEdit?(sentence)
     }
+
+    /// The editor covers the paragraph once it is installed, so it has to answer
+    /// the cursor the same way the paragraph does. See `TranscriptBody`.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 }
 
 /// One speaker turn in the transcript.
@@ -750,7 +800,8 @@ final class TurnView: NSView {
     private var editField: NSTextField?
     private var editing: Merge.Sentence?
 
-    var onSeek: (() -> Void)?
+    /// Clicked, carrying the sentence under the pointer when there was one.
+    var onSeek: ((Merge.Sentence?) -> Void)?
     var onSpeaker: (() -> Void)?
     /// A sentence was committed: which one, what it used to say, what it says
     /// now. The old text travels with it so the write can refuse if the
@@ -876,14 +927,15 @@ final class TurnView: NSView {
         ])
         fill(with: [bodyLabel])
 
-        let click = NSClickGestureRecognizer(target: self, action: #selector(bodyTapped))
-        bodyLabel.addGestureRecognizer(click)
+        // No click gesture recogniser: `TranscriptBody.mouseDown` does this,
+        // because only it runs late enough to have a field editor to ask which
+        // word was under the pointer.
+        bodyLabel.onClick = { [weak self] sentence in self?.onSeek?(sentence) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func speakerTapped() { onSpeaker?() }
-    @objc private func bodyTapped() { onSeek?() }
 
     // MARK: - Editing a sentence
 

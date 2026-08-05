@@ -307,4 +307,14 @@ follows [AudioTee](https://github.com/makeusabrew/audiotee).
 
 ## Licence
 
-MIT.
+Copyright (C) 2026 Maxime Goossens.
+
+Listen is free software under the [GNU Affero General Public License v3.0](LICENSE).
+You may use, study, modify and redistribute it, and any distributed derivative
+must also be AGPL 3.0 and ship its source.
+
+The licence is deliberate rather than incidental. The claim this app makes is
+that your audio never leaves your Mac, and a privacy claim nobody can check is
+a marketing sentence. Being able to read the code, and to see
+[`InternetAccessPolicy.plist`](InternetAccessPolicy.plist) name the only two
+hosts it ever talks to, is the evidence.

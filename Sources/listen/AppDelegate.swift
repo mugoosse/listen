@@ -58,6 +58,9 @@ final class App: NSObject, NSApplicationDelegate {
         let detector = MeetingDetector.shared
         detector.onMeetingStarted = { [weak self] in self?.meetingStarted($0) }
         detector.onMeetingEnded = { [weak self] in self?.meetingEnded() }
+        // A recording started by hand before the call was joined has no app on
+        // it. `noteApp` writes the first one seen and ignores every poll after.
+        detector.onCallersSeen = { if let first = $0.first { Capture.shared.noteApp(first) } }
         indicator.onYes = { [weak self] in self?.answerMeeting(.yes) }
         indicator.onNo = { [weak self] in self?.answerMeeting(.no) }
         indicator.onNeverFor = { [weak self] in self?.answerMeeting(.never) }
@@ -262,7 +265,10 @@ final class App: NSObject, NSApplicationDelegate {
         // joining meant it, and restarting would cut the meeting in two.
         guard !Capture.shared.isRecording else { return }
         do {
-            _ = try Capture.shared.start(source: bundleID)
+            // `source` is how the recording was started and `app_bundle_id` is
+            // what it is of. They used to be one field, which meant the app was
+            // on disk under a name that said provenance, and nothing read it.
+            _ = try Capture.shared.start(source: "detected", app: bundleID)
         } catch {
             // Logged, not alerted. A detected meeting is not something the user
             // asked for at this moment, and a modal in front of the call they

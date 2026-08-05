@@ -848,6 +848,8 @@ enum CLI {
     import options:
       --dry-run                  list what would be imported, copy nothing
       --replace                  re-import recordings already in the library
+      --apps-only                attach which app the call was in to recordings
+                                 already imported, and change nothing else
 
     label options:
       <name>                     name the speaker
@@ -1008,8 +1010,8 @@ enum CLI {
         guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
 
         print(recording.metadata.title)
-        print(recording.when + (recording.lengthText.isEmpty
-                                ? "" : " · " + recording.lengthText))
+        print([recording.when, recording.lengthText, recording.appLabel ?? ""]
+                .filter { !$0.isEmpty }.joined(separator: " · "))
         let speakers = recording.speakers
         if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
         print("")
@@ -1384,10 +1386,12 @@ enum CLI {
         var path: String?
         var dryRun = false
         var replace = false
+        var appsOnly = false
         for arg in args {
             switch arg {
             case "--dry-run": dryRun = true
             case "--replace": replace = true
+            case "--apps-only": appsOnly = true
             case let other where other.hasPrefix("-"):
                 fail("unknown option `\(other)`. Try `listen help`.")
             default:
@@ -1403,6 +1407,25 @@ enum CLI {
         let candidates = LegacyImport.scan(root)
         guard !candidates.isEmpty else {
             fail("nothing importable under \(root.path). Expected a recordings/ folder.")
+        }
+
+        // Backfill only. Recordings imported before Listen recorded which app
+        // the call was in still have it in the legacy folder and nowhere else,
+        // and that is most of the library. Prints without `--apply` for the
+        // reason `calendar backfill` does: this rewrites recordings nobody
+        // asked it to touch.
+        if appsOnly {
+            let changed = LegacyImport.backfillApps(candidates, apply: !dryRun)
+            guard !changed.isEmpty else {
+                log("every imported recording already knows which app it was in.")
+                exit(0)
+            }
+            for (id, app) in changed {
+                print("\(dryRun ? "would set" : "set") \(id)  \(app)")
+            }
+            log("\(dryRun ? "would attach" : "attached") the app to \(changed.count) recording(s)"
+                + (dryRun ? ". Run without --dry-run to write." : ""))
+            exit(0)
         }
 
         let withTranscript = candidates.filter(\.hasTranscript)

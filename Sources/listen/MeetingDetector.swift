@@ -28,6 +28,17 @@ final class MeetingDetector {
     /// Reported when everything that was on a call has stopped.
     var onMeetingEnded: (() -> Void)?
 
+    /// Every poll that finds anything on a call, whether or not a recording is
+    /// already running and whether or not the app is skipped.
+    ///
+    /// This is how a recording started by hand *before* joining learns which
+    /// app it is of: `Capture` samples the callers once at `start`, which is
+    /// empty for anybody who presses Record and then opens the meeting link,
+    /// and this fills it in on the next poll. The skip list is deliberately not
+    /// applied: it says which app never to *ask* about, and the app a call is
+    /// in is a fact about the recording rather than a question being put.
+    var onCallersSeen: (([String]) -> Void)?
+
     private var pollTask: Task<Void, Never>?
     /// True while something is on a call, so the start is reported on the edge
     /// rather than every three seconds.
@@ -114,6 +125,8 @@ final class MeetingDetector {
     // -----------------------------------------------------------------------
 
     private func evaluate(_ callers: [String]) {
+        if !callers.isEmpty { onCallersSeen?(callers) }
+
         // Clear the suppression against the unfiltered set, so an app leaving
         // the call really does re-arm it.
         if let s = suppressed, !callers.contains(s) { suppressed = nil }
@@ -266,22 +279,48 @@ final class MeetingDetector {
 // ---------------------------------------------------------------------------
 
 /// Bundle identifiers as people recognise them.
+///
+/// **Both lookups are cached, and that is not premature.** Each one is a
+/// Launch Services query plus a filesystem read, and they are now on the path
+/// of a sidebar row: the list is rebuilt on every keystroke of the search
+/// field and the row of a running recording re-renders once a second, so an
+/// uncached `display` is a disk touch per row per keystroke for the whole
+/// length of a meeting. The cache is never invalidated, because the answer is
+/// the app's name and icon, which do not change while the app is installed.
+/// Written from the main thread only, like `MenuBarIcon`'s.
 enum AppNames {
+    /// Nil for an app that is not installed, which is a fact worth caching:
+    /// `installedName` is what lets a caller with a stored name of its own
+    /// prefer that over an identifier printed as though it were a name.
+    private static var names: [String: String?] = [:]
+    private static var icons: [String: NSImage?] = [:]
+
+    /// The app's real name, or nil when it is not on this Mac any more.
+    static func installedName(_ bundleID: String) -> String? {
+        if let cached = names[bundleID] { return cached }
+        let resolved = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map {
+                FileManager.default.displayName(atPath: $0.path)
+                    .replacingOccurrences(of: ".app", with: "")
+            }
+        names[bundleID] = resolved
+        return resolved
+    }
+
     /// "Zoom" rather than "us.zoom.xos".
     ///
     /// Falls back to the identifier rather than to something friendlier when
     /// the app cannot be found, because an uninstalled app in the skip list
     /// still has to be identifiable enough to remove.
     static func display(_ bundleID: String) -> String {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        else { return bundleID }
-        return FileManager.default.displayName(atPath: url.path)
-            .replacingOccurrences(of: ".app", with: "")
+        installedName(bundleID) ?? bundleID
     }
 
     static func icon(_ bundleID: String) -> NSImage? {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        else { return nil }
-        return NSWorkspace.shared.icon(forFile: url.path)
+        if let cached = icons[bundleID] { return cached }
+        let image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map { NSWorkspace.shared.icon(forFile: $0.path) }
+        icons[bundleID] = image
+        return image
     }
 }

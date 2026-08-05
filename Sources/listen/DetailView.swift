@@ -268,7 +268,14 @@ final class DetailView: NSView {
         // into instead of a word to delete first.
         titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
         titleLabel.placeholderString = Metadata.untitled
-        subtitleLabel.stringValue = [recording.when, recording.lengthText]
+        // The app goes here rather than in the title. Blackbox names a
+        // recording after the app it was in, which is where the imported
+        // library's "2607-17-Google Chrome" comes from; doing that in Listen
+        // would break calendar naming outright, because `isUntitled` is the
+        // literal placeholder and a recording called "Google Chrome" is one
+        // the calendar will never name.
+        subtitleLabel.stringValue = [recording.when, recording.lengthText,
+                                     recording.appLabel ?? ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
         // Who is in this recording, above the player. Collapsed to nothing when

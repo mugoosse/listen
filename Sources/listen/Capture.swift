@@ -41,7 +41,7 @@ final class Capture {
     /// first minute of the meeting, and that minute is where people say who
     /// they are.
     @discardableResult
-    func start(source: String = "manual") throws -> Recording {
+    func start(source: String = "manual", app: String? = nil) throws -> Recording {
         if let current { return current }
         try Library.prepare()
 
@@ -50,13 +50,29 @@ final class Capture {
         let folder = Library.staging.appendingPathComponent(id)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
+        // Which app the call is in. Detection hands it over when it started
+        // this recording; every other way in has to ask, and asking walks the
+        // whole audio process list. That is why the detector's own poll runs
+        // off the main actor, but this is one read at the moment somebody
+        // pressed Record rather than one every three seconds for an hour.
+        //
+        // Empty for anybody who presses Record before joining, which is why
+        // `noteApp` exists.
+        let bundleID = app ?? MeetingDetector.activeCallers().first
+
         var recording = Recording(folder: folder, metadata: Metadata(
             id: id,
             title: Metadata.untitled,
             recorded_at: Metadata.iso(now),
             duration: 0,
             source: source,
-            state: Metadata.State.unconfirmed.rawValue))
+            state: Metadata.State.unconfirmed.rawValue,
+            app_bundle_id: bundleID,
+            // `installedName` rather than `display`: the fallback in `display`
+            // is the identifier itself, and storing that would leave a name
+            // field holding `com.google.Chrome` for ever, which reads as a name
+            // everywhere it is printed.
+            app_name: bundleID.flatMap(AppNames.installedName)))
         try recording.save()
 
         // Named from the calendar here rather than only at the end, so the row
@@ -96,6 +112,30 @@ final class Capture {
         trace("capture started \(id), mic=\(mic.isRecording) system=\(system.isRecording)")
         onChange?()
         return recording
+    }
+
+    /// Something is on a call while this recording runs, so name it.
+    ///
+    /// For the meeting joined *after* Record was pressed, which is the ordinary
+    /// order for anybody who starts the recorder and then opens the link. It
+    /// writes once and never again: the first app seen is the one the recording
+    /// is of, and letting a later poll overwrite it would rename the recording
+    /// after whatever made noise last.
+    func noteApp(_ bundleID: String) {
+        guard let started = current, started.appBundleID == nil else { return }
+        // Re-read for the reason `stop` does: the recording is listed and its
+        // title is editable while it runs, so writing back the copy taken at
+        // `start` would undo a rename made during the call.
+        guard var recording = Recording.load(started.folder) else { return }
+        guard recording.appBundleID == nil else { return }
+        recording.metadata.app_bundle_id = bundleID
+        recording.metadata.app_name = AppNames.installedName(bundleID)
+        try? recording.save()
+        current = recording
+        trace("capture \(recording.id) is in \(AppNames.display(bundleID))")
+        // The sidebar row shows the app's icon, and the row for a recording in
+        // progress is already on screen by now.
+        onChange?()
     }
 
     /// Stop both tracks and finalise the folder. The recording stays in staging

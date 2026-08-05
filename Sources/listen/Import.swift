@@ -37,6 +37,10 @@ enum LegacyImport {
         var turns: [Turn]
         /// Legacy speaker letter to human name, where one was given.
         var names: [String: String]
+        /// The app the call was in. The legacy recorder wrote both, and every
+        /// one of the recordings in the real library has them.
+        var appBundleID: String?
+        var appName: String?
 
         var hasTranscript: Bool { !turns.isEmpty }
         var namedCount: Int { names.count }
@@ -85,6 +89,8 @@ enum LegacyImport {
 
         var title = id
         var recordedAt = ""
+        var appBundleID: String?
+        var appName: String?
         if let data = try? Data(contentsOf: folder.appendingPathComponent("metadata.json")),
            let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             // Verbatim. Some are real titles ("Catchup with Mauro") and some
@@ -93,6 +99,11 @@ enum LegacyImport {
             // useless ones, and renaming is a click now.
             title = meta["title"] as? String ?? id
             recordedAt = meta["createdAt"] as? String ?? ""
+            // The app comes across as a field of its own, which is the point:
+            // in the legacy library it was folded into the title, so the ones
+            // somebody had actually named ("Call with Nadia") lost it entirely.
+            appBundleID = meta["perAppBundleID"] as? String
+            appName = meta["appName"] as? String
         }
 
         var names: [String: String] = [:]
@@ -151,7 +162,8 @@ enum LegacyImport {
 
         return Candidate(id: id, folder: folder, title: title, recordedAt: recordedAt,
                          duration: duration, audio: audio, segments: segments,
-                         turns: turns, names: names)
+                         turns: turns, names: names,
+                         appBundleID: appBundleID, appName: appName)
     }
 
     /// The id encodes the time it was recorded, so a missing `createdAt` is
@@ -214,7 +226,9 @@ enum LegacyImport {
                         recorded_at: candidate.recordedAt,
                         duration: candidate.duration,
                         source: "imported",
-                        state: Metadata.State.pending.rawValue))
+                        state: Metadata.State.pending.rawValue,
+                        app_bundle_id: candidate.appBundleID,
+                        app_name: candidate.appName))
                 // The legacy recorder wrote both sides into one file as two
                 // tracks: a stereo one for what the Mac was playing and a mono
                 // one for the microphone. Split, an imported recording is the
@@ -270,5 +284,38 @@ enum LegacyImport {
             }
         }
         return outcome
+    }
+
+    // MARK: - Backfill
+
+    /// Attach the app to recordings that were imported before the field
+    /// existed.
+    ///
+    /// Most of the real library came from the legacy pipeline, so without this
+    /// the app is missing from nearly every row and the feature looks broken
+    /// rather than new. The legacy folder is the only place that fact survives:
+    /// the import copied everything else and dropped this one.
+    ///
+    /// Three rules, all of them the ones `listen calendar backfill` follows:
+    /// it prints without `apply` and changes nothing, it only ever fills a
+    /// field that is empty, and it touches nothing else in the metadata. A
+    /// recording whose app was learned some other way is a decision, and this
+    /// is not allowed to overwrite one.
+    @discardableResult
+    static func backfillApps(_ candidates: [Candidate], apply: Bool) -> [(String, String)] {
+        var changed: [(String, String)] = []
+        let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for recording in Recording.all() {
+            guard recording.appBundleID == nil,
+                  let candidate = byID[recording.id],
+                  let bundleID = candidate.appBundleID else { continue }
+            changed.append((recording.id, candidate.appName ?? bundleID))
+            guard apply else { continue }
+            var updated = recording
+            updated.metadata.app_bundle_id = bundleID
+            updated.metadata.app_name = candidate.appName
+            try? updated.save()
+        }
+        return changed
     }
 }

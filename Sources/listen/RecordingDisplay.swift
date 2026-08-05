@@ -28,6 +28,20 @@ extension Recording {
     /// A recording nobody has named yet.
     var isUntitled: Bool { metadata.title == Metadata.untitled }
 
+    /// The app the call was in, as somebody reads it. Nil when nothing was on
+    /// a call, which is most recordings made by pressing Record in a quiet
+    /// room, and every one imported from a recorder that did not note it.
+    ///
+    /// The live lookup wins over the stored name, so an app that has been
+    /// renamed on disk is called what it is called now. The stored name is the
+    /// fallback and it is why it is stored: an uninstalled app resolves to
+    /// nothing, and printing the identifier as though it were a name is worse
+    /// than printing the name it had when the recording was made.
+    var appLabel: String? {
+        guard let id = appBundleID else { return metadata.app_name }
+        return AppNames.installedName(id) ?? metadata.app_name ?? id
+    }
+
     /// A filename stem for export. An untitled recording is dated, because a
     /// folder of `Untitled.md`, `Untitled 2.md` is a folder nobody can read.
     var exportName: String {

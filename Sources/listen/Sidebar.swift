@@ -38,13 +38,22 @@ final class SidebarViewController: NSViewController {
     /// one thing you reach for least, so it belongs at the bottom out of the
     /// way. A toolbar gives both the same weight and puts them equally far from
     /// what they act on.
-    /// Where a row's content starts, matching the recording titles below.
+    /// Where a row's content starts, matching the app icons below.
     ///
-    /// An inset table indents its rows and `RecordingCell` insets its title
-    /// inside that. Measured against the result rather than added up from the
-    /// two constants: at 18 the row's icon sat four points left of every title
-    /// in the list, which is exactly close enough to look like a mistake rather
-    /// than a margin.
+    /// An inset table indents its rows and `RecordingCell` insets its own
+    /// content inside that. Measured against the result rather than added up
+    /// from the two constants: at 18 this row's icon sat four points left of
+    /// everything under it, which is exactly close enough to look like a
+    /// mistake rather than a margin.
+    ///
+    /// It used to line up with the recording *titles*, because there was
+    /// nothing else in the list to line up with. Now that a recording carries
+    /// its app's icon, the sidebar has two columns and not three: this row's
+    /// icon over the app icons, this row's label over the titles. Measured off
+    /// the screen after the change, in points from the same edge: icon ink at
+    /// 33 (New Recording), 32 (Settings, a narrower glyph in the same box) and
+    /// 34 (an app icon, which fills its box); text ink at 56 and 58. What is
+    /// left is the glyphs' own side bearings.
     private static let rowInset: CGFloat = 22
 
     /// Where a row's *background* starts: level with the search field, so the
@@ -458,7 +467,11 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             label.translatesAutoresizingMaskIntoConstraints = false
             holder.addSubview(label)
             NSLayoutConstraint.activate([
-                label.leadingAnchor.constraint(equalTo: holder.leadingAnchor, constant: 4),
+                // Level with the icon column below it, not four points inside
+                // it. A day heading, an app icon and New Recording's dot now
+                // share one edge, and every title in the list shares the next.
+                label.leadingAnchor.constraint(equalTo: holder.leadingAnchor,
+                                               constant: RecordingCell.textInset),
                 label.bottomAnchor.constraint(equalTo: holder.bottomAnchor, constant: -4),
             ])
             return holder
@@ -496,6 +509,29 @@ final class RecordingCell: NSView {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
 
+    /// The app the call was in, as its icon.
+    ///
+    /// An icon rather than a fourth fact in the subtitle, which already reads
+    /// `18:04 · 33:12 · recording` inside a 280 point sidebar and truncates
+    /// before it gets to a fifth word. The icon costs no text width, and it is
+    /// the one thing on the row somebody recognises without reading.
+    private let appIcon = NSImageView()
+
+    /// The icon column, and the text column after it, are the sidebar's and not
+    /// this cell's.
+    ///
+    /// `SidebarViewController.rowInset` puts New Recording's icon 22 points in,
+    /// measured against what is under it, and `SidebarRow` puts its label
+    /// 16 + 8 after that. A row that reserves the
+    /// same 16 and then uses a gap of its own invention lands two points off
+    /// every other label in the list, which is the width that reads as a
+    /// mistake rather than as a margin. So: same icon, same gap, one column.
+    private static let icon: CGFloat = 16
+    private static let gap: CGFloat = 8
+    /// The cell's own inset, inside the inset table's. 8 + 14 is the 22 above.
+    /// The day headings are laid out against this too, so the two cannot part.
+    static let textInset: CGFloat = 8
+
     /// Monospaced digits, so a counting clock does not shuffle the words after
     /// it. Named because `configure` writes an attributed string, which carries
     /// its own font rather than taking the field's.
@@ -510,17 +546,41 @@ final class RecordingCell: NSView {
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
 
-        for v in [title, subtitle] {
+        for v in [title, subtitle, appIcon] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+
+        // The two lines are centred as one block rather than pinned to the top
+        // of the row. Pinned, a 52 point row put 8 above the title and 13 under
+        // the subtitle, so every row in the list sat slightly high inside its
+        // own selection. A guide rather than a stack view because a vertical
+        // `NSStackView` sizes an arranged subview to what it asks for, and a
+        // label that truncates asks for its whole string.
+        let block = NSLayoutGuide()
+        addLayoutGuide(block)
+
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            appIcon.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                             constant: Self.textInset),
+            appIcon.widthAnchor.constraint(equalToConstant: Self.icon),
+            appIcon.heightAnchor.constraint(equalToConstant: Self.icon),
+            // Centred on both lines, not on the title. On the title's line it
+            // reads as punctuation attached to the name; on the block it reads
+            // as the row's own mark, which is what it is.
+            appIcon.centerYAnchor.constraint(equalTo: block.centerYAnchor),
+
+            title.leadingAnchor.constraint(equalTo: appIcon.trailingAnchor,
+                                           constant: Self.gap),
+            title.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                            constant: -Self.textInset),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+
+            block.topAnchor.constraint(equalTo: title.topAnchor),
+            block.bottomAnchor.constraint(equalTo: subtitle.bottomAnchor),
+            block.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -528,6 +588,15 @@ final class RecordingCell: NSView {
 
     func configure(_ recording: Recording) {
         title.stringValue = recording.metadata.title
+        // The column is reserved whether or not there is an icon to put in it,
+        // so every title in the list starts at the same place. Indenting only
+        // the rows that have one gives the list a ragged left edge that moves
+        // as you scroll, which is worse than an empty square: a recording made
+        // in a quiet room, and one made on a call, are the same kind of thing.
+        // Cells are reused, so this is written every time.
+        appIcon.image = recording.appBundleID.flatMap(AppNames.icon)
+        // The name is not on the row, so the icon has to answer for itself.
+        appIcon.toolTip = recording.appLabel
         // An untitled recording says so in grey, so a list of them reads as a
         // list of things waiting for a name rather than as a list of things
         // that happen to share one.

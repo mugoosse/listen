@@ -539,6 +539,59 @@ it cannot tell "not set yet" from "turned off on purpose": a default of true
 would be inexpressible, and anyone who turned detection off would have it
 switched back on for them.
 
+#### The app the call was in is a field, and never the title
+
+Blackbox names the recording after it (`title: titlePrefix + appName`), which is
+where the imported library's `2607-17-Google Chrome` comes from. Listen must not:
+`Recording.isUntitled` is the literal string `Untitled`, and it is the gate on
+calendar naming and on the grey placeholder in the detail pane. A recording
+called "Google Chrome" is one the calendar will never name, so copying Blackbox
+here would have switched off a feature two screens away.
+
+So `Metadata.app_bundle_id` and `app_name`, shown in the detail subtitle, in
+`listen show`, and as the app's **icon** in the sidebar row. An icon there
+because that subtitle is already `18:04 · 33:12 · recording` inside a 280 point
+sidebar and a fourth fact truncates.
+
+Both fields, for the reason `calendar_people` is a snapshot: the identifier is
+the stable fact, but `AppNames.display` resolves through `NSWorkspace` and an
+uninstalled app resolves to nothing, so the fallback is the name it had at the
+time rather than `net.whatsapp.WhatsApp` printed as though it were a name.
+`AppNames` caches both lookups now: each is a Launch Services query plus a
+filesystem read, and they are on the path of a sidebar rebuilt on every keystroke
+of the search field.
+
+Where the identifier comes from, per path:
+
+| started by | source of the app |
+|---|---|
+| detection | the bundle id that fired it, already in hand |
+| Record, or `listen record` | `MeetingDetector.activeCallers().first`, one HAL read |
+| joined *after* Record | `Capture.noteApp`, from the detector's next poll |
+| imported | `perAppBundleID` and `appName` from the legacy `metadata.json` |
+
+`noteApp` writes once and never again. The first app seen is the one the
+recording is of, and letting a later poll overwrite it renames the recording
+after whatever made noise last. The poll that feeds it deliberately ignores the
+skip list: that list says which app never to *ask* about, and the app a call is
+in is a fact rather than a question being put.
+
+**Detection used to write the bundle id into `source`**, which is otherwise
+provenance (`manual`, `cli`, `imported`), and nothing ever read it. `source` is
+now `detected` and the id has its own field, but recordings made before that are
+on disk saying `source: "com.google.Chrome"`. `Recording.appBundleID` derives
+across both rather than a migration pass rewriting every file to tidy a field
+nothing had read, which is the same choice as `effectiveState`. A bundle
+identifier has a dot in it and none of the four provenance words does.
+
+`listen import <path> --apps-only` backfills the recordings imported before the
+field existed, prints without writing under `--dry-run`, and fills only what is
+empty. Measured on the real library: 35 recordings gained an app, and with the
+`source` derivation covering the thirty-sixth, every recording now shows one. `avconferenced` is in there and has no
+icon, because it is a daemon rather than an app: the row shows the name in the
+detail pane and no icon in the list, which is the right answer rather than a
+missing one.
+
 ### The calendar needs no account, because macOS already has one
 
 Anarlog supports three providers two ways. Apple Calendar is local EventKit and

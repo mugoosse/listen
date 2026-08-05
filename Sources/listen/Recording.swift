@@ -32,8 +32,29 @@ struct Metadata: Codable {
     /// folder and the files in it are the truth.
     var calendar_people: [CalendarPerson]?
 
-    // Both calendar fields are `Optional`, and that is what makes them safe to
-    // add to a struct with 47 files already on disk.
+    /// The app the call was in, as Core Audio reported it.
+    ///
+    /// The identifier is the stable fact and the name is what a person reads,
+    /// the same split as `Me` and `Speaker A`. It is stored with the parent
+    /// resolved (`com.google.Chrome`, never `…helper.renderer`), because a
+    /// per-renderer identifier is unrecognisable and matches nothing later.
+    ///
+    /// `nil` means nobody was on a call when capture began and none was seen
+    /// while it ran, which is the ordinary state of a recording made by
+    /// pressing Record in a quiet room.
+    var app_bundle_id: String?
+
+    /// What that app was called at the time, snapshotted.
+    ///
+    /// Kept beside the identifier for the reason `calendar_people` is a
+    /// snapshot: `AppNames.display` resolves through `NSWorkspace`, so an app
+    /// that has since been uninstalled resolves to nothing and the subtitle
+    /// would read `net.whatsapp.WhatsApp` instead of "WhatsApp". Display
+    /// prefers the live lookup and falls back to this.
+    var app_name: String?
+
+    // The calendar and app fields are all `Optional`, and that is what makes
+    // them safe to add to a struct with 47 files already on disk.
     //
     // The trap recorded against `StoredTranscript` is that Swift's synthesized
     // decoder throws `keyNotFound` on a missing key *even when the property has
@@ -104,6 +125,22 @@ struct Recording {
     var metadataURL: URL { folder.appendingPathComponent("metadata.json") }
 
     var hasTranscript: Bool { FileManager.default.fileExists(atPath: transcriptURL.path) }
+
+    /// Which app the call was in, including the recordings made before there
+    /// was a field for it.
+    ///
+    /// Detection used to pass the bundle identifier in as the `source`, so
+    /// recordings on disk say `source: "com.google.Chrome"` where a newer one
+    /// says `source: "detected"` with the identifier in its own field. Derived
+    /// here rather than repaired by a migration pass, for the reason
+    /// `effectiveState` is derived: a rewrite of every metadata file to fix a
+    /// field nothing had ever read is a lot of risk to buy tidiness, and the
+    /// old shape is unambiguous. A bundle identifier has a dot in it and none
+    /// of the four provenance words does.
+    var appBundleID: String? {
+        if let stored = metadata.app_bundle_id { return stored }
+        return metadata.source.contains(".") ? metadata.source : nil
+    }
 
     /// Every track that exists, for whatever wants to read audio.
     var tracks: [URL] {

@@ -22,5 +22,11 @@ sparkle_private_key.txt
 # local test helpers, not part of the app
 scratch-*
 
+# Personal working notes, drafts and planning. Never part of the app, and a
+# directory rather than a list of filenames on purpose: a name has to be added
+# to a tracked file before it is ignored, so ignoring by name publishes the
+# name of every document somebody wanted kept out. Put anything in here.
+.local/
+
 # CodeGraph index: regenerate with /index, not source
 .codegraph/

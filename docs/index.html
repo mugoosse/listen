@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Listen: local meeting transcription for macOS</title>
 <meta name="description" content="Records your meetings, writes them down and works out who said what. Entirely on your Mac. No bot, no account, no upload.">
+<link rel="icon" href="icon.png">
 <meta property="og:title" content="Listen">
 <meta property="og:description" content="Local meeting transcription for macOS. No bot, no account, no upload.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://mugoosse.github.io/listen/icon.png">
 <style>
 :root {
   --ink:        #0d0d0c;
@@ -16,7 +18,7 @@
   --text:       #f2f2f0;
   --grey:       #a0a09d;
   --grey-dim:   #6d6d6a;
-  --mint:       #9bdcb0;
+  --blue:       #5c7cff;
 }
 * { box-sizing: border-box; }
 body {
@@ -29,10 +31,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
-header { padding: 96px 0 64px; }
+header { padding: 84px 0 64px; }
+.icon { width: 104px; height: 104px; margin: 0 0 22px; }
 h1 { font-size: 40px; margin: 0 0 12px; letter-spacing: -0.02em; }
 .tagline { color: var(--grey); font-size: 17px; margin: 0 0 8px; }
-.claim { color: var(--mint); margin: 0 0 36px; }
+.claim { color: var(--blue); margin: 0 0 36px; }
 .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
 a.button {
   display: inline-block; padding: 10px 18px; border: 1px solid var(--line);
@@ -40,7 +43,7 @@ a.button {
   background: var(--ink-raised);
 }
 a.button:hover { border-color: var(--grey-dim); }
-a.button.primary { background: var(--mint); color: var(--ink); border-color: var(--mint); }
+a.button.primary { background: var(--blue); color: var(--ink); border-color: var(--blue); }
 section { padding: 40px 0; border-top: 1px solid var(--line); }
 h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
 h3 { font-size: 15px; margin: 28px 0 6px; }
@@ -67,12 +70,12 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 <div class="wrap">
 
 <header>
+  <img class="icon" src="icon.png" alt="Listen app icon">
   <h1>Listen</h1>
   <p class="tagline">Records your meetings, writes them down, and works out who said what.</p>
   <p class="claim">Entirely on your Mac. No bot, no account, nothing uploaded.</p>
   <div class="buttons">
     <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
-    <a class="button" href="https://github.com/mugoosse/listen">Source</a>
   </div>
 </header>
 
@@ -102,17 +105,6 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
   <p>Name someone once and Listen suggests them the next time it hears them.
   Suggestions are ranked and never applied on their own, so the transcript
   never quietly claims somebody said something.</p>
-</section>
-
-<section>
-  <h2>Install</h2>
-  <pre><code>brew install --cask mugoosse/tap/listen</code></pre>
-  <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
-  below that Listen records your microphone only.</p>
-  <p>The speech model is about 2.5 GB and downloads on first run, after you
-  press the button that says so. If you already use
-  <a href="https://github.com/mugoosse/speak">Speak</a> it is already on your
-  disk, and Listen will find it rather than fetching it twice.</p>
 </section>
 
 <section>
@@ -152,11 +144,30 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
   24 hours.</p>
 </section>
 
+<section>
+  <h2>Its companion</h2>
+  <p class="lead">For the thought you want to get down before the meeting,
+  there is <a href="https://mugoosse.github.io/speak/">Speak</a>. It turns your
+  voice into text in any Mac app, privately and without an account.</p>
+</section>
+
+<section id="install">
+  <h2>Other ways to install</h2>
+  <p>Prefer Homebrew?</p>
+  <pre><code>brew install --cask mugoosse/tap/listen</code></pre>
+  <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
+  below that Listen records your microphone only.</p>
+  <p>The speech model is about 2.5 GB and downloads on first run, after you
+  press the button that says so. If you already use Speak it is already on your
+  disk, and Listen will find it rather than fetching it twice.</p>
+</section>
+
 <footer>
-  <p><a href="https://github.com/mugoosse/listen/blob/main/LICENSE">AGPL 3.0</a>
-  licensed, so you can check every claim on this page against the source.
-  Built on Parakeet by NVIDIA, MLX by Apple, FluidAudio and
-  Sparkle. <a href="https://github.com/mugoosse/listen">github.com/mugoosse/listen</a></p>
+  <p>Made by <a href="https://maxgoespublic.com/">Maxime Goossens</a>.
+  <a href="https://github.com/mugoosse/listen">Source</a> ·
+  <a href="https://github.com/mugoosse/listen/blob/main/LICENSE">AGPL 3.0</a> ·
+  <a href="#install">Homebrew</a></p>
+  <p>Built on Parakeet by NVIDIA, MLX by Apple, FluidAudio and Sparkle.</p>
 </footer>
 
 </div>

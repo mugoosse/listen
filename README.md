@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="110" alt="Listen" src="Assets/icon.png" />
+</p>
+
 # Listen
 
 A meeting recorder, transcriber and speaker labeller for macOS that runs
@@ -9,6 +13,11 @@ week name themselves after the first time.
 
 No meeting bot. No calendar invite. No account. Your audio never leaves the
 machine.
+
+Listen is the blue half of the Good Pair: a listening monkey with its hands
+behind its ears. In the menu bar, it uses the Good Pair's square listening
+seal, carrying 聞 (hear): a quiet nod to the three wise monkeys' Japanese
+roots that remains clear at 16 points.
 
 ## What it does
 

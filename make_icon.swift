@@ -1,73 +1,52 @@
 #!/usr/bin/env swift
 //
-// Draws Assets/Listen.icns.
+// Generates the README preview and Listen.icns from icon-master.png.
 //
-// The artwork is drawn rather than loaded from a master PNG, so there is no
-// binary asset to keep in the repository and no scale factor to get wrong.
+// The approved artwork includes a dark canvas around the icon shape. Keeping
+// that source intact lets this script apply the standard macOS transparent
+// corners and optical padding for every consumer.
 //
 // Run: swift make_icon.swift
 
 import AppKit
 
-// macOS icon geometry: the rounded square sits inside the canvas with about
-// 10% breathing room, and its corner radius is ~22.4% of the square's side.
-// Getting these wrong is what makes an icon look subtly the wrong size next to
-// every other one in the Dock.
-let CONTENT_INSET = 0.094
-let CORNER_RATIO = 0.224
+let contentInset = 0.094
+let cornerRatio = 0.224
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let assets = root.appendingPathComponent("Assets")
-try? FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+let masterURL = assets.appendingPathComponent("icon-master.png")
 
-/// One icon at one pixel size.
-///
-/// Everything is expressed as a fraction of `size` so the same code draws the
-/// 16-point and the 1024-point version without a separate set of numbers.
+guard let master = NSImage(contentsOf: masterURL) else {
+    FileHandle.standardError.write(
+        "could not read Assets/icon-master.png\n".data(using: .utf8)!)
+    exit(1)
+}
+
 func drawIcon(size: Int) -> NSBitmapImageRep {
-    let s = CGFloat(size)
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)!
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    let ctx = NSGraphicsContext.current!.cgContext
+    ctx.setShouldAntialias(true)
+    ctx.interpolationQuality = .high
+    ctx.clear(CGRect(x: 0, y: 0, width: size, height: size))
 
-    let inset = s * CONTENT_INSET
-    let square = NSRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
-    let radius = square.width * CORNER_RATIO
-    let squircle = NSBezierPath(roundedRect: square, xRadius: radius, yRadius: radius)
-
-    // A single deep gradient rather than anything busy. At 16 points most of an
-    // icon is gone, so the shape has to survive on silhouette and contrast.
-    let background = NSGradient(colors: [
-        NSColor(calibratedRed: 0.09, green: 0.09, blue: 0.11, alpha: 1),
-        NSColor(calibratedRed: 0.16, green: 0.17, blue: 0.20, alpha: 1),
-    ])!
-    squircle.addClip()
-    background.draw(in: square, angle: -90)
-
-    // A waveform: five bars, symmetric, tallest in the middle. It reads as
-    // sound at any size, and unlike a microphone it does not suggest that this
-    // app only records you.
-    let mint = NSColor(calibratedRed: 0.61, green: 0.86, blue: 0.69, alpha: 1)
-    mint.setFill()
-
-    let heights: [CGFloat] = [0.26, 0.52, 0.78, 0.52, 0.26]
-    let barWidth = square.width * 0.088
-    let gap = square.width * 0.062
-    let total = barWidth * CGFloat(heights.count) + gap * CGFloat(heights.count - 1)
-    var x = square.midX - total / 2
-
-    for height in heights {
-        let h = square.height * height
-        let bar = NSRect(x: x, y: square.midY - h / 2, width: barWidth, height: h)
-        // Rounded caps, because square ends look broken at small sizes where
-        // antialiasing is doing most of the work.
-        NSBezierPath(roundedRect: bar, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
-        x += barWidth + gap
-    }
+    let s = Double(size)
+    let inset = (s * contentInset).rounded()
+    let side = s - inset * 2
+    let square = NSRect(x: inset, y: inset, width: side, height: side)
+    let body = NSBezierPath(roundedRect: square,
+                            xRadius: side * cornerRatio,
+                            yRadius: side * cornerRatio)
+    body.addClip()
+    master.draw(in: square, from: .zero, operation: .copy, fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high])
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
@@ -77,28 +56,29 @@ let iconset = assets.appendingPathComponent("Listen.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
-// The (point size, scale) pairs iconutil expects. Missing one makes the icon
-// blurry at exactly the size that was left out, which is easy to miss because
-// it is usually the one you are not looking at.
 let variants: [(Int, Int)] = [
-    (16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
-    (256, 1), (256, 2), (512, 1), (512, 2),
+    (16, 1), (16, 2), (32, 1), (32, 2), (128, 1),
+    (128, 2), (256, 1), (256, 2), (512, 1), (512, 2),
 ]
 
 for (points, scale) in variants {
     let pixels = points * scale
     let rep = drawIcon(size: pixels)
-    guard let png = rep.representation(using: .png, properties: [:]) else { continue }
+    guard let png = rep.representation(using: .png, properties: [:]) else {
+        FileHandle.standardError.write("failed to encode \(pixels)px\n".data(using: .utf8)!)
+        exit(1)
+    }
     let name = scale == 1 ? "icon_\(points)x\(points).png" : "icon_\(points)x\(points)@2x.png"
     try png.write(to: iconset.appendingPathComponent(name))
 }
 
-// A plain PNG too, for the README and the landing page.
-if let png = drawIcon(size: 512).representation(using: .png, properties: [:]) {
-    try png.write(to: assets.appendingPathComponent("icon.png"))
+let preview = drawIcon(size: 512)
+guard let previewPNG = preview.representation(using: .png, properties: [:]) else {
+    FileHandle.standardError.write("failed to encode README preview\n".data(using: .utf8)!)
+    exit(1)
 }
+try previewPNG.write(to: assets.appendingPathComponent("icon.png"))
 
-// iconutil does the .icns packing; there is no public API for it.
 let task = Process()
 task.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 task.arguments = ["-c", "icns", iconset.path,
@@ -107,6 +87,9 @@ try task.run()
 task.waitUntilExit()
 try? FileManager.default.removeItem(at: iconset)
 
-print(task.terminationStatus == 0
-      ? "wrote Assets/Listen.icns and Assets/icon.png"
-      : "iconutil failed with status \(task.terminationStatus)")
+guard task.terminationStatus == 0 else {
+    FileHandle.standardError.write("iconutil failed\n".data(using: .utf8)!)
+    exit(1)
+}
+
+print("wrote Assets/icon.png and Assets/Listen.icns")

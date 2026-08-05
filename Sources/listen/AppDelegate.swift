@@ -40,9 +40,8 @@ final class App: NSObject, NSApplicationDelegate {
         QuitConfirm.shared.install()
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(
-            systemSymbolName: "waveform", accessibilityDescription: "Listen")
-        item.button?.image?.isTemplate = true
+        item.button?.image = MenuBarIcon.ready.image
+        item.button?.toolTip = "Listen"
         status = item
         rebuildMenu()
 
@@ -162,10 +161,8 @@ final class App: NSObject, NSApplicationDelegate {
             .target = self
         status?.menu = menu
 
-        status?.button?.image = NSImage(
-            systemSymbolName: recording ? "waveform.circle.fill" : "waveform",
-            accessibilityDescription: recording ? "Listen, recording" : "Listen")
-        status?.button?.image?.isTemplate = true
+        status?.button?.image = (recording ? MenuBarIcon.recording : .ready).image
+        status?.button?.toolTip = recording ? "Listen, recording" : "Listen"
         // The window says so too. The menu bar item is 16 points wide and may
         // be behind the notch, so it cannot be the only place that reports it.
         LibraryWindow.shared.recordingChanged()

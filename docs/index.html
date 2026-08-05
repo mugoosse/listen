@@ -52,6 +52,23 @@ a.button {
 a.button:hover { border-color: var(--grey-dim); }
 a.button.primary { background: var(--blue); color: var(--ink); border-color: var(--blue); }
 .under-button { font-size: 13px; margin: 14px 0 0; color: var(--grey); }
+/* Shown only when the page is confident this is an Intel Mac, so it starts
+   hidden and stays hidden for everybody else, including anyone with
+   JavaScript off. The line under the button is the fallback and says the same
+   thing quietly. */
+.chipcheck {
+  max-width: 460px; margin: 28px 0 0; padding: 18px 20px;
+  background: var(--ink-raised); border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* The `hidden` attribute is a user-agent style, so any author rule setting
+   `display` beats it, and `.buttons` is a flex container. Stated explicitly
+   rather than relying on that not being true. */
+.chipcheck[hidden], .buttons[hidden], .under-button[hidden] { display: none; }
+.chipcheck p { font-size: 13.5px; line-height: 1.6; margin: 0 0 10px; }
+.chipcheck p:last-child { margin-bottom: 0; }
+.chipcheck b { color: var(--text); font-weight: 600; }
+.chipcheck a { color: var(--blue); }
 section { padding: 40px 0; border-top: 1px solid var(--line); }
 h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
 h3 { font-size: 15px; margin: 28px 0 6px; }
@@ -82,10 +99,21 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
   <h1>Listen</h1>
   <p class="tagline">Turns your meetings into text and works out who said what.</p>
   <p class="claim">Entirely on your Mac. No bot, no account, nothing uploaded.</p>
-  <div class="buttons">
+  <div class="buttons" id="buttons">
     <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
   </div>
-  <p class="under-button">For Apple silicon Macs (M1 or later).</p>
+  <p class="under-button" id="under-button">For Apple silicon Macs (M1 or later).</p>
+
+  <div class="chipcheck" id="chipcheck" hidden>
+    <p><b>This looks like an Intel Mac, and Listen will not run on it.</b></p>
+    <p>Listen transcribes on your own machine, and that needs the Neural
+    Engine Apple introduced with the M1 in late 2020. There is no Intel
+    version, and there is no version that would work.</p>
+    <p>Open the Apple menu and choose About This Mac. If it says <b>Chip</b>
+    rather than <b>Processor</b>, this guess is wrong and you can
+    <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">download
+    Listen</a> as normal.</p>
+  </div>
 </header>
 
 <section>
@@ -180,5 +208,68 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 </footer>
 
 </div>
+
+<script>
+  // Tell an Intel visitor here, because nothing downstream can.
+  //
+  // The binary is arm64 only, so an Intel Mac fails at launch with a system
+  // error, after the download and, for anyone who got that far in setup,
+  // 2.5 GB of weights. The app cannot start far enough to explain itself, so
+  // this page is the last place the sentence can be said.
+  //
+  // Every branch fails open. Anything unavailable, unreadable or unrecognised
+  // leaves the page exactly as it shipped, because the two errors do not cost
+  // the same: missing an Intel Mac costs what this page already cost, while a
+  // wrong guess turns away somebody whose Mac works perfectly. That is also
+  // why the download link survives inside the notice rather than the notice
+  // replacing it.
+  (function () {
+    var notice = document.getElementById('chipcheck');
+    if (!notice) return;
+
+    // Safari reports "MacIntel" on every Mac, Apple silicon included, so this
+    // establishes "a Mac" and says nothing at all about the chip. It is here
+    // so a Windows visitor with an Intel GPU is not told about their Intel Mac.
+    if (!/Mac/.test(navigator.platform || '') &&
+        !/Mac OS X/.test(navigator.userAgent || '')) return;
+
+    var renderer;
+    try {
+      var gl = document.createElement('canvas').getContext('webgl');
+      if (!gl) return;
+      var info = gl.getExtension('WEBGL_debug_renderer_info');
+      if (!info) return;
+      renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || '');
+    } catch (e) {
+      return;
+    }
+
+    // The renderer string is the only signal, and a second one was tried and
+    // deleted on measurement. `WEBGL_compressed_texture_s3tc` is widely
+    // described as a desktop-GPU format Apple's own GPUs do not implement,
+    // which would have corroborated this from a second direction. Measured on
+    // an M4 Max in Chrome, both it and `_srgb` are **present**, so it says
+    // "true" on the machines it was supposed to rule out. Requiring it bought
+    // no accuracy and could only ever suppress a correct warning, so it is
+    // gone. Do not add it back without measuring it again.
+    //
+    // Nothing else is available to cross-check with. `navigator.platform` is
+    // "MacIntel" and the user agent says "Intel Mac OS X 10_15_7" on that same
+    // M4 Max, which is why neither can be read as saying anything about a chip.
+
+    // Any mention of Apple counts as Apple silicon: Safari reports "Apple GPU"
+    // and Chrome reports "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro,
+    // ...)". Reading this generously is the cheap direction to be wrong in.
+    if (!renderer || /apple/i.test(renderer)) return;
+    if (!/intel|iris|radeon|amd|nvidia|geforce/i.test(renderer)) return;
+
+    notice.hidden = false;
+    var buttons = document.getElementById('buttons');
+    var under = document.getElementById('under-button');
+    if (buttons) buttons.hidden = true;
+    if (under) under.hidden = true;
+  })();
+</script>
+
 </body>
 </html>

@@ -176,15 +176,25 @@ release. Then verify before pushing, because a wrong hash there is an install
 that fails for everyone and nothing local would have caught it:
 
 ```sh
-cp Casks/listen.rb "$(brew --repository)/Library/Taps/mugoosse/homebrew-tap/Casks/listen.rb"
+TAP="$(brew --repository)/Library/Taps/mugoosse/homebrew-tap"
+cp Casks/listen.rb "$TAP/Casks/listen.rb"
 brew style mugoosse/tap/listen && brew audit --cask --strict mugoosse/tap/listen
 brew fetch --cask mugoosse/tap/listen        # downloads and checks the pinned hash
-rm -f "$(brew --repository)/Library/Taps/mugoosse/homebrew-tap/Casks/listen.rb"
+git -C "$TAP" checkout -- Casks/listen.rb 2>/dev/null || rm -f "$TAP/Casks/listen.rb"
+git -C "$TAP" status --short                 # must be empty
 ```
 
-Remove that copy afterwards. It is untracked in the tapped clone, and `brew
-update` refuses to pull over an untracked file, so leaving it there breaks the
-user's next update.
+**Put the tapped clone back, and do not assume which way.** That last line is
+two cases and picking one is wrong half the time. Before the cask has ever been
+pushed, the copy is untracked there and has to be deleted, because `brew update`
+refuses to pull over an untracked file. Once it has been pushed and any `brew
+update` has run, the file is tracked, and deleting it stages a deletion of
+somebody's tap. `git checkout --` restores the tracked copy and fails harmlessly
+when there is nothing to restore, which is why it is tried first. Measured both
+ways: the 0.1.0 run left it untracked, the 0.1.1 run found it tracked.
+
+Check the status line is empty either way. A dirty tapped clone is a broken
+`brew update` for the user, and nothing else reports it.
 
 Commit as `listen 0.2.0`, matching the tap's history. Ask before pushing the
 tap: it is a public repository and a separate one from the release.

@@ -31,8 +31,21 @@ final class WaveformView: NSView {
     }
     private var drawn: Double = -1
 
-    /// Total length, for the hover readout only.
+    /// Total length. The hover readout, and the clock the speaker spans are
+    /// read against.
     var duration: Double = 0
+
+    /// Who is talking when, so the played part can be drawn in their colours
+    /// rather than in one accent.
+    ///
+    /// The turns of the transcript, unchanged: nothing here re-derives them, so
+    /// a bar cannot claim a speaker the paragraph below it does not. Empty for
+    /// a recording with no transcript yet, which keeps the single accent fill
+    /// the player has always had rather than colouring an hour of audio after a
+    /// speaker nobody has identified.
+    var spans: [(start: Double, end: Double, speaker: String)] = [] {
+        didSet { needsDisplay = true }
+    }
 
     /// Fires continuously while scrubbing, with a fraction of the whole.
     var onScrub: ((Double) -> Void)?
@@ -101,29 +114,34 @@ final class WaveformView: NSView {
         let minimum: CGFloat = 2
         let usable = bounds.height - minimum
 
+        var rects: [NSRect] = []
         let path = NSBezierPath()
         for (i, value) in bars.enumerated() {
             let x = CGFloat(i) * pitch
             guard x < bounds.width else { break }
             let height = minimum + CGFloat(value) * usable
-            path.appendRoundedRect(NSRect(x: x, y: middle - height / 2,
-                                          width: barWidth, height: height),
-                                   xRadius: 1, yRadius: 1)
+            let rect = NSRect(x: x, y: middle - height / 2,
+                              width: barWidth, height: height)
+            rects.append(rect)
+            path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
         }
 
         NSColor.tertiaryLabelColor.setFill()
         path.fill()
 
-        // The played part, drawn by clipping the same shape rather than
-        // building a second one, so the two halves cannot disagree about where
-        // a bar ends.
+        // The played part, drawn by clipping the same shapes rather than
+        // building new ones, so the two halves cannot disagree about where a bar
+        // ends and the bar under the playhead is filled exactly as far as the
+        // playhead has reached.
         let played = bounds.width * CGFloat(min(max(progress, 0), 1))
         if played > 0 {
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: NSRect(x: 0, y: 0, width: played, height: bounds.height))
                 .setClip()
-            NSColor.controlAccentColor.setFill()
-            path.fill()
+            for (colour, run) in runs(in: rects, upTo: played) {
+                colour.setFill()
+                run.fill()
+            }
             NSGraphicsContext.restoreGraphicsState()
         }
 
@@ -136,6 +154,57 @@ final class WaveformView: NSView {
             NSColor.labelColor.withAlphaComponent(0.25).setFill()
             NSRect(x: hover - 0.5, y: 0, width: 1, height: bounds.height).fill()
         }
+    }
+
+    /// The played bars grouped into stretches of one colour, in order.
+    ///
+    /// One path per stretch rather than one per bar: a two-person meeting is a
+    /// few hundred bars and a few dozen stretches, and setting a fill colour per
+    /// bar is the expensive half of drawing this at twenty frames a second.
+    ///
+    /// Called from `draw`, which is where a mixed colour has to be made: the
+    /// appearance is current there, so the bars follow light and dark exactly as
+    /// the names above them do.
+    private func runs(in rects: [NSRect], upTo played: CGFloat) -> [(NSColor, NSBezierPath)] {
+        let accent = NSColor.controlAccentColor
+        guard !spans.isEmpty, duration > 0, bounds.width > 0 else {
+            let path = NSBezierPath()
+            for rect in rects where rect.minX < played {
+                path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
+            }
+            return [(accent, path)]
+        }
+
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        var inks: [String: NSColor] = [:]
+        var out: [(NSColor, NSBezierPath)] = []
+        var current: (colour: NSColor, path: NSBezierPath)?
+        // The spans are in order and so are the bars, so this walks both once
+        // rather than searching the turns for every bar.
+        var cursor = 0
+
+        for rect in rects where rect.minX < played {
+            let time = Double(rect.midX / bounds.width) * duration
+            while cursor < spans.count, spans[cursor].end <= time { cursor += 1 }
+            // Nobody is talking between two turns, and a silence is not a person.
+            // The same grey an unnamed speaker gets, which is the point: it says
+            // played, and it says nothing about who.
+            let speaker = cursor < spans.count && spans[cursor].start <= time
+                ? spans[cursor].speaker : ""
+            let colour = inks[speaker] ?? {
+                let ink = SpeakerColour.ink(for: speaker, on: .window, dark: dark)
+                inks[speaker] = ink
+                return ink
+            }()
+
+            if current?.colour != colour {
+                if let current { out.append((current.colour, current.path)) }
+                current = (colour, NSBezierPath())
+            }
+            current?.path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
+        }
+        if let current { out.append((current.colour, current.path)) }
+        return out
     }
 
     // MARK: - Scrubbing

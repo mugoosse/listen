@@ -30,8 +30,40 @@ enum SpeakerColour {
     /// across recordings that the label does not carry, and grey is what says
     /// "not named yet" without a word. The discs use `colour(for:)` instead,
     /// because a disc with no fill is not a disc.
+    /// Empty is colourless too, which is how a pill that stands for nobody asks
+    /// for the placeholder grey: `isPlaceholder` says false for "", because a
+    /// speaker with no label is not a case the transcript can produce.
     static func tint(for label: String) -> NSColor? {
-        VoiceBank.isPlaceholder(label) ? nil : colour(for: label)
+        label.isEmpty || VoiceBank.isPlaceholder(label) ? nil : colour(for: label)
+    }
+
+    /// What the colour is being drawn on, which decides how far the ink is
+    /// pushed away from it.
+    enum Ground {
+        /// A wash of the speaker's own colour, as under a chip.
+        case wash
+        /// The window, as behind a name or a waveform bar.
+        case window
+    }
+
+    /// The colour a speaker's name is written in.
+    ///
+    /// A mix is resolved the moment it is made, so this has to be called with
+    /// the drawing appearance current: inside `draw`, or inside
+    /// `performAsCurrentDrawingAppearance`. The waveform asks for this rather
+    /// than mixing its own, because a bar that is nearly the colour of the name
+    /// above it is worse than one that is plainly a different colour.
+    static func ink(for label: String, on ground: Ground, dark: Bool) -> NSColor {
+        // The palette colour itself is too light on its own wash in a light
+        // appearance (systemTeal and systemOrange are the worst of it) and a
+        // touch too saturated in a dark one. On the window it starts further
+        // away and is pushed less: mixing a name as hard as a chip's ink turns
+        // the palette pastel and stops telling two people apart.
+        guard let tint = tint(for: label) else { return .secondaryLabelColor }
+        let mix: CGFloat = ground == .wash ? (dark ? 0.30 : 0.35)
+                                           : (dark ? 0.12 : 0.25)
+        return (dark ? tint.blended(withFraction: mix, of: .white)
+                     : tint.blended(withFraction: mix, of: .black)) ?? tint
     }
 }
 
@@ -72,7 +104,7 @@ final class SpeakerPill: NSButton {
     /// an appearance change: a `cgColor` in a layer is a resolved colour and
     /// does not follow light and dark on its own, unlike everything AppKit draws
     /// on our behalf.
-    private var tint: NSColor?
+    private var label = ""
     private var text = ""
     private let style: Style
 
@@ -95,7 +127,7 @@ final class SpeakerPill: NSButton {
     /// share to the name and the pill must not go looking for a colour for
     /// "Daniel Andrade · 39%".
     func show(_ label: String, title: String? = nil) {
-        tint = SpeakerColour.tint(for: label)
+        self.label = label
         text = title ?? SpeakerName.display(label)
         applyTint()
     }
@@ -104,7 +136,7 @@ final class SpeakerPill: NSButton {
     /// The overflow chip is a count rather than a person, and giving it a
     /// person's colour would be the one pill in the row whose colour is a lie.
     func showPlain(_ title: String) {
-        tint = nil
+        label = ""
         text = title
         applyTint()
     }
@@ -131,20 +163,9 @@ final class SpeakerPill: NSButton {
         // window's rather than this view's.
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-
-            // The palette colour itself is too light on its own wash in a light
-            // appearance (systemTeal and systemOrange are the worst of it) and a
-            // touch too saturated in a dark one, so the ink is pushed away from
-            // whatever is behind it. A name has the window behind it rather than
-            // a wash of itself, which is further away to start with, so it is
-            // pushed less: mixing a name as hard as a chip's ink turns the
-            // palette pastel and stops telling two people apart.
-            let mix: CGFloat = style == .chip ? (dark ? 0.30 : 0.35)
-                                              : (dark ? 0.12 : 0.25)
-            let ink = tint.map {
-                (dark ? $0.blended(withFraction: mix, of: .white)
-                      : $0.blended(withFraction: mix, of: .black)) ?? $0
-            } ?? .secondaryLabelColor
+            let ink = SpeakerColour.ink(for: label,
+                                        on: style == .chip ? .wash : .window,
+                                        dark: dark)
 
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = style == .chip ? .center : .left
@@ -155,7 +176,8 @@ final class SpeakerPill: NSButton {
                              .foregroundColor: ink,
                              .paragraphStyle: paragraph])
 
-            let wash = tint?.withAlphaComponent(dark ? 0.22 : 0.14)
+            let wash = SpeakerColour.tint(for: label)?
+                .withAlphaComponent(dark ? 0.22 : 0.14)
                 ?? NSColor.labelColor.withAlphaComponent(dark ? 0.11 : 0.07)
             layer?.backgroundColor = style == .chip ? wash.cgColor : nil
         }

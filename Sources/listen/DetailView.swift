@@ -407,6 +407,11 @@ final class DetailView: NSView {
 
     private func loadWaveform(_ recording: Recording) {
         waveform.peaks = []
+        // The same turns the transcript below is built from, so a coloured bar
+        // and the paragraph it belongs to cannot name different people. Set
+        // before the audio arrives: `spans` is read against `duration`, and both
+        // are in place by the first draw that has bars to colour.
+        waveform.spans = turns.map { ($0.start, $0.end, $0.speaker) }
         waveformToken += 1
         let token = waveformToken
         let target = recording

@@ -148,23 +148,31 @@ Two lines change per release, the version and the sha256 of the versioned DMG,
 so this cannot happen until the DMG exists. The hash is already in
 `dist/SHA256SUMS.txt`; take it from there rather than recomputing it.
 
-The workflow is the intended route and **it fails today**, because it needs a
-`HOMEBREW_TAP_TOKEN` secret that is not set and exits on its first step.
-Nothing is half-written when it does. So check before dispatching, rather than
-reporting a dispatch that is already dead:
+The workflow is the route. It needs `HOMEBREW_TAP_TOKEN`, which is set, though
+it is a token with an expiry rather than a permanent fact, so check before
+dispatching rather than reporting a dispatch that is already dead:
 
 ```sh
 gh secret list | grep HOMEBREW_TAP_TOKEN
-```
-
-If it is there, dispatch and say so:
-
-```sh
 gh workflow run homebrew-tap.yml -f tag=v0.2.0
 ```
 
-If it is not, edit the cask directly. The tap is cloned at
-`../homebrew-tap`, and `Casks/listen.rb` is the file:
+**Watch the run rather than assuming it worked**, and read what it actually
+did. It verifies the download against `SHA256SUMS.txt` and asserts the cask
+edit landed, so a green run means something; but the useful line is whether it
+opened a pull request or found nothing to do, and only one of those is right
+after a version bump:
+
+```sh
+gh run watch <id> --exit-status
+gh pr list --repo mugoosse/homebrew-tap
+```
+
+It opens a pull request, so **the cask is not updated until that is merged**.
+Say so in step 8 with the link. Do not merge it without asking.
+
+If the token has expired, or the run fails, edit the cask directly instead. The
+tap is cloned at `../homebrew-tap`, and `Casks/listen.rb` is the file:
 
 ```sh
 grep "Listen-0.2.0.dmg" dist/SHA256SUMS.txt

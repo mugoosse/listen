@@ -135,7 +135,7 @@ Delete it once it is in the password manager.
 | `NOTARY_TEAM_ID` | 10-character team identifier | no |
 | `NOTARY_PASSWORD` | app-specific password | no |
 | `SPARKLE_PRIVATE_KEY` | the EdDSA private key, for signing the appcast | yes |
-| `HOMEBREW_TAP_TOKEN` | fine-grained PAT, contents and pull-requests write on the tap | no |
+| `HOMEBREW_TAP_TOKEN` | fine-grained PAT, contents and pull-requests write on the tap | yes |
 
 ```sh
 gh secret set SPARKLE_PRIVATE_KEY --repo mugoosse/listen < sparkle_private_key.txt
@@ -143,9 +143,25 @@ gh secret set SPARKLE_PRIVATE_KEY --repo mugoosse/listen < sparkle_private_key.t
 
 `HOMEBREW_TAP_TOKEN` is the one the cask step needs, and the default
 `GITHUB_TOKEN` cannot stand in for it because it cannot reach another
-repository. It is not set, so `homebrew-tap.yml` fails on its first step by
-design rather than half-updating the tap. Until it is, the cask is two lines
-edited by hand; see Homebrew at the end of this file.
+repository. It is named `listen-homebrew-tap` in GitHub's fine-grained token
+list, scoped to `mugoosse/homebrew-tap` alone with contents and pull requests
+write, and to nothing else. Listen's own repository is deliberately not in its
+list: the workflow already has `GITHUB_TOKEN` for that.
+
+It expires. When it does, `homebrew-tap.yml` fails on its first step rather
+than half-updating the tap, which costs one cask bump by hand and nothing else.
+Nothing about cutting a release, notarizing or Sparkle depends on it.
+
+**Speak gets its own token, not a copy of this one.** The reasoning is not the
+Sparkle-key one, and it is worth not mistaking them: two Sparkle keys separate
+genuinely different blast radii, whereas two tap tokens would carry identical
+permissions on the same repository, so separating them changes what a leak
+reaches not at all. The case is operational. `mugoosse` is a user account
+rather than an organization, so there is no shared secret store: sharing means
+pasting one value into two repository secrets, which still costs two writes on
+rotation and additionally couples revocation, so that revoking Listen's breaks
+Speak's. Separate tokens also let GitHub's last-used column say which workflow
+used one.
 
 Without them the build still runs and produces artifacts, unsigned and
 unpublished, so a fork can build with no setup at all.
@@ -236,10 +252,28 @@ has already written into `dist/SHA256SUMS.txt`.
 gh workflow run homebrew-tap.yml -f tag=v1.0.1
 ```
 
-**That dispatch fails today**, and it is worth knowing why before reading the
-run log. It needs `HOMEBREW_TAP_TOKEN`, which is not set, so it exits on its
-first step. Nothing is half-written when it does. Until the secret exists, bump
-the cask by hand in a clone of the tap:
+It opens a pull request on the tap rather than pushing, so the cask is reviewed
+before it is the thing `brew install` hands people. Verified end to end against
+`v0.1.1`, where the correct answer was to do nothing: it downloaded the DMG,
+matched it against `SHA256SUMS.txt`, found the cask already correct and opened
+no pull request.
+
+Two things it now refuses, both found by reading it rather than by being bitten:
+
+1. **A `sed` that did not do what it was told.** If the cask's format moves,
+   the `sha256` line still matches while `version` does not, and the old
+   version committed that: `version "0.1.1"` pinned to a different release's
+   hash, which is an install that fails its checksum for everybody. It now
+   asserts both lines hold what it just wrote, before the no-change check,
+   which also catches both patterns missing, where an untouched file is
+   indistinguishable from "already up to date" and exited 0.
+2. **A download it has not checked.** Hashing whatever arrived is
+   self-consistent by construction, so a truncated or substituted file produces
+   a hash matching itself perfectly and pins the wrong bytes. It cross-checks
+   against the `SHA256SUMS.txt` published in the release.
+
+If the token has expired, the dispatch exits on its first step and half-writes
+nothing. Bump the cask by hand in a clone of the tap:
 
 ```sh
 grep Listen-1.0.1.dmg dist/SHA256SUMS.txt        # the hash to paste

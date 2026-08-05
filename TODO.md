@@ -19,7 +19,7 @@ second Mac.
 | 6 | Voiceprints | done, thresholds measured on real recordings |
 | 7 | Settings, onboarding, permissions | done, onboarding still unrun on a clean account |
 | 8 | CLI install, MCP | done |
-| 9 | Release pipeline | 0.1.0 and 0.1.1 published, notarized, stapled, tapped |
+| 9 | Release pipeline | done: 0.2.0 out, and an update proven installing |
 
 ## Blocking decisions
 
@@ -72,13 +72,17 @@ on upstream.
 - **Whether the Whisper-era cleanup is needed at all** (SPEC 4.4 step 4). It
   has fired *never* so far. Counters are in place; delete it and say so once
   there is real meeting audio behind the number.
-- **A Sparkle update installing.** The feed is signed and verified against the
-  key the bundle ships: `sign_update --verify --account listen` accepts it, and
-  the same check under the default `ed25519` account rejects it, which is the
-  exact failure the separate account exists to prevent.
-  Two releases now exist, 0.1.0 at `CFBundleVersion` 44 and 0.1.1 at 49, so
-  this is testable for the first time. Any Mac still holding 0.1.0 is where to
-  do it, and there is one.
+- ~~A Sparkle update installing.~~ **Done, on a second Mac, 0.1.1 at build 49
+  to 0.2.0 at 55.** Offered against the installed version, release notes
+  rendered in the pane rather than the blank box 0.1.0 shipped, and Install
+  and Relaunch came back reporting 0.2.0/55.
+  The install is the half that counts. Fetching and parsing the appcast only
+  proves the feed is reachable; Sparkle checks the EdDSA signature on the
+  downloaded archive afterwards, so a feed signed with Speak's key would have
+  offered the update exactly like this one and failed at that step. It did not.
+  This was the last thing here that could not have been fixed afterwards: every
+  installed copy only accepts what the key it shipped with signs, so a broken
+  channel would have meant reaching every user by hand.
 
 ## UI feedback, round one
 
@@ -103,7 +107,11 @@ Still worth doing on the list:
 - [ ] The list groups by day but shows no relative heading beyond a week
       ("3 February" rather than "February"). Fine for now, worth revisiting
       with a real library in it.
-- [ ] No empty state when the library has nothing in it at all.
+- [ ] No empty state when the library has nothing in it at all. **Seen for real
+      now**, on a second Mac with no recordings on it, and it is worse than this
+      line suggests: the pane is a plain void beside a sidebar holding only New
+      Recording and Settings. It is also the first thing every new user sees,
+      which makes it the highest-value item on this list rather than the last.
 
 ## Legacy import
 

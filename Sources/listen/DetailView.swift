@@ -27,6 +27,7 @@ final class DetailView: NSView {
     private let stack = NSStackView()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "")
+    private let emptyIcon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
 
     /// Fires when this pane changes something the list also shows.
     var onChanged: (() -> Void)?
@@ -168,7 +169,7 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
-        for v in [titleLabel, subtitleLabel, chips, playerCard, scroll, empty] {
+        for v in [titleLabel, subtitleLabel, chips, playerCard, scroll, empty, emptyIcon] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -219,6 +220,8 @@ final class DetailView: NSView {
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
+            emptyIcon.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
         ])
     }
 
@@ -247,9 +250,18 @@ final class DetailView: NSView {
         guard let recording else {
             setChromeHidden(true)
             empty.isHidden = false
-            empty.stringValue = "Select a recording."
+            let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
+            // The character welcomes a new library. In a library that already
+            // has recordings, it would only turn a simple selection prompt into
+            // decoration and make the detail pane feel less calm.
+            emptyIcon.isHidden = !libraryIsEmpty
+            empty.stringValue = libraryIsEmpty
+                ? "No recordings yet. Start a new recording from the sidebar."
+                : "Select a recording."
             return
         }
+
+        emptyIcon.isHidden = true
 
         // An unnamed recording shows the placeholder as a placeholder rather
         // than as its name, so clicking the title gives an empty field to type

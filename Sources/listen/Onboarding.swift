@@ -192,7 +192,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
         switch step {
         case .welcome:
-            titleLabel.stringValue = "Listen"
+            titleLabel.stringValue = "Welcome to Listen"
+            body.addArrangedSubview(BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot"))
             paragraph("Listen records your meetings, writes them down, and works out "
                       + "who said what. All of it happens on this Mac.")
             paragraph("Nothing is uploaded. The only time Listen uses the network is to "
@@ -274,6 +275,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
         case .done:
             titleLabel.stringValue = "You are set"
+            body.addArrangedSubview(BrandIcon.view(size: 44, accessibilityLabel: "Listen is ready"))
             // Said here rather than left to be discovered, because it is on
             // without being asked for. An app that records a call you did not
             // tell it about is only acceptable if it told you it would.

@@ -51,6 +51,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private var sidebarWasCollapsed = false
 
     private static let newRecordingItem = NSToolbarItem.Identifier("newRecording")
+    private static let brandItem = NSToolbarItem.Identifier("listenBrand")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
     private static let settingsItem = NSToolbarItem.Identifier("openSettings")
     private static let peopleItem = NSToolbarItem.Identifier("openPeople")
@@ -93,6 +94,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         b.toolTip = "Back to the library (Esc)"
         b.sizeToFit()
         return b
+    }()
+
+    /// A calm masthead for the sidebar, not a new action. The toolbar's items
+    /// before `sidebarTrackingSeparator` belong to the sidebar, which lets the
+    /// name and coloured mascot use the otherwise empty title-bar space without
+    /// competing with the meeting actions on the right.
+    private lazy var brandMark: NSStackView = {
+        let icon = BrandIcon.view(size: 28, accessibilityLabel: "Listen mascot")
+        let name = NSTextField(labelWithString: "Listen")
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.lineBreakMode = .byClipping
+
+        let mark = NSStackView(views: [icon, name])
+        mark.orientation = .horizontal
+        mark.alignment = .centerY
+        mark.spacing = 8
+        mark.setAccessibilityLabel("Listen")
+        mark.frame = NSRect(x: 0, y: 0, width: 92, height: 28)
+        return mark
     }()
 
     // MARK: - Showing
@@ -398,7 +418,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // sidebar beside the traffic lights rather than at the left edge of
             // the content, and it is the only way to reach that region: items
             // before it belong to the sidebar, items after it to the content.
-            var items: [NSToolbarItem.Identifier] = [.toggleSidebar,
+            // The masthead anchors the left edge of the sidebar. Its collapse
+            // control belongs at the other edge, next to the divider: that
+            // makes the title read as identity and the glyph read as utility,
+            // rather than leaving two unrelated icons in a row.
+            var items: [NSToolbarItem.Identifier] = [Self.brandItem, .flexibleSpace,
+                                                     .toggleSidebar,
                                                      .sidebarTrackingSeparator]
             if Capture.shared.isRecording { items.append(Self.newRecordingItem) }
             // The actions menu stays whether or not anything is selected, and
@@ -450,6 +475,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch id {
+        case Self.brandItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Listen"
+            item.view = brandMark
+            item.minSize = NSSize(width: 92, height: 28)
+            item.maxSize = NSSize(width: 92, height: 28)
+            return item
+
         case Self.settingsItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Settings"

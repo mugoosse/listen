@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="110" alt="Listen" src="Assets/icon.png" />
+  <img width="110" alt="Listen blue monkey app icon" src="Assets/icon.png" />
 </p>
 
 # Listen
@@ -46,14 +46,19 @@ roots that remains clear at 16 points.
 Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2; on
 14.0 and 14.1 Listen records your microphone only.
 
-## Install
+## Download
+
+**[Download Listen for macOS](https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg)**
+
+Open the downloaded file and drag **Listen** to Applications.
+
+### Other ways to install
+
+Prefer Homebrew?
 
 ```sh
 brew install --cask mugoosse/tap/listen
 ```
-
-Or download the DMG from
-[the latest release](https://github.com/mugoosse/listen/releases/latest).
 
 The speech model is about 2.5 GB and downloads on first run, after you press
 the button that says so. **If you already use

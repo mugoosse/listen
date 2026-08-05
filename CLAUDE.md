@@ -211,6 +211,109 @@ that is real meeting audio with crosstalk and silence. Keep watching the
 counts; when there is a real corpus behind the number, either delete the rules
 and say so in the commit, or record why they stayed.
 
+### A person is a name string, and that is the whole identity model
+
+`People` groups the library by the label written in the transcripts. Nothing
+cleverer, and deliberately not the voiceprints: those rank a voice against the
+bank, and SPEC's own rule is that a suggestion is never applied on its own, so
+two recordings hold the same person exactly when somebody said so by naming them
+the same thing.
+
+Placeholders are therefore never people. `A` in one meeting has nothing to do
+with `A` in another, so `People.all` filters them out while `People.speakers`
+keeps them: they really are in *this* recording, and the chip is how one gets
+named. The same split as `VoiceBank.named`, for the same reason.
+
+There is no index and no cache, for the reason there is no job table. Every call
+re-reads `turns.json`, which is what the sidebar's transcript search already did
+on every keystroke. If a library ever grows big enough for that to hurt, the fix
+is a cache keyed on the file's modification date, not a database.
+
+### Renaming somebody everywhere is the first edit that touches many recordings
+
+`People.rename` loops and calls `TranscriptEditor.apply(.rename:)` per
+recording, which is the same path the sheet and `listen label` take. It has to
+be: that one function rewrites `transcript.json`, rebuilds `turns.json`, moves
+the voiceprint with the name, and re-derives the state. Anything that
+reimplemented one of those four here would be a fourth writer of the same files.
+
+Three things it refuses, each because the failure is silent otherwise:
+
+1. **A name that looks like a placeholder.** Renaming somebody to "A" puts every
+   recording back into needs-labelling and drops them out of the voice bank,
+   which reads as the rename having quietly failed.
+2. **`Me` as a target.** The microphone track is you by construction rather than
+   by name. Folding somebody into yourself in one recording is the existing
+   per-recording Merge, which is a transcript edit and stays one.
+3. Nothing at all when the name is unchanged, so a stray Return costs no writes.
+
+Collisions are counted **before** the fact and said out loud. Renaming Sarah to
+Anna where a recording already has an Anna merges two people there, `Merge.turns`
+condenses their now-adjacent turns into one, and the result looks exactly as
+though it had always been that way. `VoiceBank.rename` keeps whichever
+voiceprint was built from more speech, because `isEvidence` is a threshold in
+seconds and keeping the shorter one can drop a usable identity below it.
+
+### `Me` stays `Me` on disk, whatever you call yourself
+
+`Settings.userName` is a preference and `SpeakerName.display` resolves it on the
+way to the screen. The transcripts keep saying `Me`. This is the same rule as
+`Speaker A`: the label is the stable fact, and the interface is where it is made
+legible.
+
+Writing the chosen name into transcripts instead fails three ways that only
+appear later. Recordings made before the name was set would keep saying `Me`
+while later ones said "Emily". Changing your mind would not reach the history.
+And `Me` would stop being a stable key, which `VoiceBank.isPlaceholder` and
+`Enroll` both use to know which voice is the user's without being told.
+
+The consequence is that two people can display the same name, and this library
+really does contain that case: 19 recordings with `Me` and 8 with a hand-labelled
+`Emily` from the import. They stay two people. `listen people` prints the disk
+label after the name whenever the two differ (`Emily (Me)`), the popover says
+"You, on the microphone track", and choosing a name that already exists says so
+rather than merging anything.
+
+### The CLI wrote its preferences into the wrong domain
+
+`UserDefaults.standard` is the app's own domain only while the process is
+bundled. Run through the installed symlink there is no `Info.plist` above the
+executable, `Bundle.main.bundleIdentifier` is nil, and the standard domain
+becomes one named after the process. Measured: `listen me "Symlink Test"`
+printed the new name, `defaults read com.mgo.listen userName` said the pair did
+not exist, and the app went on showing `Me`. A setting that reports success and
+reaches nothing is the worst shape this bug can take.
+
+Reads had the same fault the other way round: `listen sources` answered
+"detection is on" from the default rather than from the preference, however the
+app was actually configured.
+
+`Settings.defaults` resolves it the way `AppInfo` resolves the version, from the
+`Info.plist` beside the real binary, and **every** preference goes through it
+including `microphoneUID`. One storage rule with no exceptions, because the
+exception is what this bug was.
+
+### `NSPopover` and the row of chips
+
+Two rules, both learned by measurement, both invisible from the code:
+
+1. **A popover closes when its positioning view leaves the window.** The chips
+   are rebuilt by `configure` on every reload of the pane, so a popover anchored
+   to a chip is anchored to something with a lifetime shorter than itself.
+   `SpeakerChips` therefore hands out the *row* as the anchor and the chip's
+   rectangle within it.
+2. **A popover that does not fit is closed, not moved.** The chips sit near the
+   top of the window, so `preferredEdge: .maxY` asks for 362 points of popover
+   in the hundred points between the row and the menu bar. It opened and closed
+   inside the same `show(relativeTo:)` call, reporting `isShown == false`
+   immediately afterwards with a close reason of "standard" and no other
+   symptom. `.minY` is downward in an unflipped view, which is where the room
+   is.
+
+It is also shown on the next runloop turn rather than inline, because a popover
+put up from inside a control's own action arrives while the mouse event is still
+being dispatched.
+
 ### Listen is not `LSUIElement`, and Speak is
 
 This is the one place the Speak template was deliberately reversed. Speak is a

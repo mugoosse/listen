@@ -207,4 +207,9 @@ enum AppInfo {
 
     static var version: String? { infoPlist?["CFBundleShortVersionString"] as? String }
     static var build: String? { infoPlist?["CFBundleVersion"] as? String }
+
+    /// The app's identifier, resolved the same way as the version, so it is
+    /// still right when the process was launched through the installed
+    /// symlink. `Settings` needs it to find the preferences the app reads.
+    static var bundleID: String? { infoPlist?["CFBundleIdentifier"] as? String }
 }

@@ -133,8 +133,16 @@ enum VoiceBank {
     /// transcript says "Anna", and the next recording gets no suggestion.
     static func rename(_ speaker: String, to name: String, in recording: Recording) {
         var bank = recording.voiceprints
-        guard let print = bank.removeValue(forKey: speaker) else { return }
-        bank[name] = print
+        guard let moving = bank.removeValue(forKey: speaker) else { return }
+        // Renaming into a name this recording already has merges two speakers,
+        // so one person ends up with two voiceprints. Keep whichever was built
+        // from more speech: `isEvidence` is a threshold in seconds, and keeping
+        // the shorter one can drop a usable identity below it.
+        if let existing = bank[name], existing.speech > moving.speech {
+            bank[name] = existing
+        } else {
+            bank[name] = moving
+        }
         write(bank, to: recording)
     }
 

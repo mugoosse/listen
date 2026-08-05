@@ -108,10 +108,13 @@ extension Settings {
     /// want: change it in Sound settings and Listen follows.
     static var microphoneUID: String? {
         get {
-            let v = UserDefaults.standard.string(forKey: micKey)
+            // `Settings.defaults`, not `UserDefaults.standard`: `listen record`
+            // has to read the same microphone the window chose, and through the
+            // installed symlink the standard domain is not the app's.
+            let v = defaults.string(forKey: micKey)
             return (v?.isEmpty ?? true) ? nil : v
         }
-        set { UserDefaults.standard.set(newValue ?? "", forKey: micKey) }
+        set { defaults.set(newValue ?? "", forKey: micKey) }
     }
 
     /// The device to record from, falling back to the system default when the

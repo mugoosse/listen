@@ -183,6 +183,31 @@ struct ModelChoice {
 // ---------------------------------------------------------------------------
 
 enum Settings {
+    /// Where preferences are stored, which is not always `standard`.
+    ///
+    /// `UserDefaults.standard` is the app's own domain only while the process
+    /// is bundled. Run through the installed symlink there is no `Info.plist`
+    /// above the executable, `Bundle.main.bundleIdentifier` is nil, and the
+    /// standard domain becomes one named after the process. Measured: `listen
+    /// me "Symlink Test"` printed the new name, `defaults read com.mgo.listen
+    /// userName` said the pair did not exist, and the app went on showing "Me".
+    /// A setting that reports success and reaches nothing is the worst shape
+    /// this bug can take.
+    ///
+    /// Reads had the same fault the other way round: `listen sources` answered
+    /// "detection is on" from the default rather than from the preference,
+    /// however the app was actually configured.
+    ///
+    /// This is the `Bundle.main` trap in `AppInfo`, one layer down, and it is
+    /// resolved the same way: from the `Info.plist` beside the real binary.
+    static let defaults: UserDefaults = {
+        if Bundle.main.bundleIdentifier != nil { return .standard }
+        guard let id = AppInfo.bundleID, let suite = UserDefaults(suiteName: id) else {
+            return .standard
+        }
+        return suite
+    }()
+
     private static let modelKey = "modelID"
 
     /// The chosen model, or the default when nothing has been chosen.
@@ -192,12 +217,12 @@ enum Settings {
     /// a button that says what it will cost, and a `choice` that always returns
     /// v2 cannot express "not yet asked".
     static var model: ModelChoice {
-        get { ModelChoice.named(UserDefaults.standard.string(forKey: modelKey) ?? "")
+        get { ModelChoice.named(defaults.string(forKey: modelKey) ?? "")
                 ?? ModelChoice.fallback }
-        set { UserDefaults.standard.set(newValue.id, forKey: modelKey) }
+        set { defaults.set(newValue.id, forKey: modelKey) }
     }
 
-    static var modelChosen: Bool { UserDefaults.standard.string(forKey: modelKey) != nil }
+    static var modelChosen: Bool { defaults.string(forKey: modelKey) != nil }
 
     static var activeRepo: String { model.repo }
 }
@@ -230,8 +255,8 @@ extension Settings {
     private static let onboardedKey = "onboarded"
 
     static var startAtLoginDefaultApplied: Bool {
-        get { UserDefaults.standard.bool(forKey: startAtLoginAppliedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: startAtLoginAppliedKey) }
+        get { defaults.bool(forKey: startAtLoginAppliedKey) }
+        set { defaults.set(newValue, forKey: startAtLoginAppliedKey) }
     }
 
     /// Watch for a call starting and record it, asking as it goes.
@@ -255,8 +280,8 @@ extension Settings {
     /// express and would silently re-enable detection for anyone who turned it
     /// off.
     static var autoDetectMeetings: Bool {
-        get { UserDefaults.standard.object(forKey: autoDetectKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: autoDetectKey) }
+        get { defaults.object(forKey: autoDetectKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: autoDetectKey) }
     }
 
     /// Apps that never count as a meeting.
@@ -271,8 +296,8 @@ extension Settings {
     /// cannot hold a `Set` and an unordered array would rewrite the plist on
     /// every launch.
     static var skippedBundleIDs: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: skippedKey) ?? []) }
-        set { UserDefaults.standard.set(newValue.sorted(), forKey: skippedKey) }
+        get { Set(defaults.stringArray(forKey: skippedKey) ?? []) }
+        set { defaults.set(newValue.sorted(), forKey: skippedKey) }
     }
 
     static func skip(_ bundleID: String) {
@@ -287,9 +312,45 @@ extension Settings {
     /// fresh install is distinguishable from someone who finished setup and
     /// then turned everything off.
     static var onboarded: Bool {
-        get { UserDefaults.standard.bool(forKey: onboardedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: onboardedKey) }
+        get { defaults.bool(forKey: onboardedKey) }
+        set { defaults.set(newValue, forKey: onboardedKey) }
     }
 
-    static var isFirstRun: Bool { UserDefaults.standard.object(forKey: onboardedKey) == nil }
+    static var isFirstRun: Bool { defaults.object(forKey: onboardedKey) == nil }
+
+    private static let userNameKey = "userName"
+
+    /// What the microphone track is called on screen.
+    ///
+    /// A preference and not a transcript edit, which is the whole design: the
+    /// transcripts keep saying `Me` and `SpeakerName.display` resolves it here,
+    /// so choosing a name applies to every recording ever made and changing it
+    /// again costs nothing. See `SpeakerName.you` for why the other way round
+    /// is worse.
+    ///
+    /// nil until somebody chooses, and nil again when they clear the field.
+    /// Empty is stored as absent rather than as "", so a cleared field shows
+    /// `Me` rather than a nameless chip.
+    static var userName: String? {
+        get {
+            let stored = defaults.string(forKey: userNameKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let stored, !stored.isEmpty else { return nil }
+            return stored
+        }
+        set {
+            let trimmed = newValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, !trimmed.isEmpty {
+                defaults.set(trimmed, forKey: userNameKey)
+            } else {
+                defaults.removeObject(forKey: userNameKey)
+            }
+        }
+    }
+
+    /// Offered in the field, never applied on its own.
+    ///
+    /// The Mac account name is often a login handle or a formal full name, and
+    /// a name nobody chose turning up in transcripts is worse than `Me`.
+    static var suggestedUserName: String { NSFullUserName() }
 }

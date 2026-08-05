@@ -12,7 +12,7 @@ enum CLI {
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
-        "import", "enroll", "sources",
+        "import", "enroll", "sources", "people", "rename", "me",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -50,6 +50,12 @@ enum CLI {
             export(rest)
         case "label":
             label(rest)
+        case "people":
+            people(rest)
+        case "rename":
+            renamePerson(rest)
+        case "me":
+            me(rest)
         case "import":
             await importLegacy(rest)
         case "enroll":
@@ -149,6 +155,9 @@ enum CLI {
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
+      people [<name>]            who is in the library, or where one person is
+      rename <name> <new name>   rename one person in every recording
+      me [<name> | --clear]      what the microphone track is called on screen
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       calibrate                  voiceprint threshold report
@@ -366,12 +375,20 @@ enum CLI {
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             print(String(data: (try? enc.encode(turns)) ?? Data(), encoding: .utf8) ?? "[]")
         case "txt":
-            for t in turns { print("[\(TranscriptFormat.stamp(t.start))] \(t.speaker): \(t.text)") }
+            // The written-out forms are for reading, so they say "Speaker A"
+            // and whatever the user calls themselves, the same as the window's
+            // own export. `show` and `label` keep the on-disk labels, because
+            // those are the strings you pass back in.
+            for t in turns {
+                print("[\(TranscriptFormat.stamp(t.start))] "
+                      + "\(SpeakerName.display(t.speaker)): \(t.text)")
+            }
         default:
             print("# \(recording.metadata.title)\n")
             print("\(recording.when)\n")
             for t in turns {
-                print("**\(t.speaker)** · \(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
+                print("**\(SpeakerName.display(t.speaker))** · "
+                      + "\(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
             }
         }
         exit(0)
@@ -416,6 +433,120 @@ enum CLI {
         guard let updated = Recording.find(recording.id) else { exit(0) }
         log("speakers now: \(updated.speakers.joined(separator: ", "))")
         log("state: \(updated.metadata.state)")
+        exit(0)
+    }
+
+    // MARK: - People
+
+    /// `listen people [<name>]`: who is in the library, or where one person is.
+    private static func people(_ args: [String]) -> Never {
+        var name: String?
+        for arg in args {
+            guard !arg.hasPrefix("-") else {
+                fail("unknown option `\(arg)`. Try `listen help`.")
+            }
+            // Joined rather than refused, so an unquoted `listen people Anna
+            // Chen` finds her instead of complaining about the surname.
+            name = [name, arg].compactMap { $0 }.joined(separator: " ")
+        }
+
+        if let name {
+            guard let person = People.findByDisplayName(name) else {
+                fail("nobody called `\(name)`. `listen people` lists everyone.")
+            }
+            print("\(person.display)  \(person.summary)")
+            for recording in person.recordings {
+                print("  \(recording.id)  \(recording.metadata.title)")
+            }
+            exit(0)
+        }
+
+        let everyone = People.all()
+        guard !everyone.isEmpty else {
+            log("nobody is named yet. `listen label <id> <speaker> <name>` names one.")
+            exit(0)
+        }
+        // The on-disk label follows the name whenever the two differ, which is
+        // only you and only once you have chosen a name. Without it a library
+        // that already knows an "Emily" by name shows two identical rows.
+        let labelled = everyone.map {
+            ($0.display + ($0.display == $0.label ? "" : " (\($0.label))"), $0.summary)
+        }
+        let width = labelled.map(\.0.count).max() ?? 0
+        for (name, summary) in labelled {
+            print(name.padding(toLength: width, withPad: " ", startingAt: 0) + "  " + summary)
+        }
+        exit(0)
+    }
+
+    /// `listen rename <name> <new name>`: one person, everywhere at once.
+    ///
+    /// The window's own path, through `People.rename` and therefore through
+    /// `TranscriptEditor`, for the same reason `listen label` exists: this is
+    /// the only operation in the app that edits many recordings at once, and it
+    /// must not be a second implementation of the one that edits one.
+    private static func renamePerson(_ args: [String]) -> Never {
+        guard args.count >= 2 else {
+            fail("rename needs a person and a new name. Try `listen help`.")
+        }
+        guard let person = People.findByDisplayName(args[0]) else {
+            fail("nobody called `\(args[0])`. `listen people` lists everyone.")
+        }
+        if person.isYou {
+            fail("`\(SpeakerName.you)` is the microphone track rather than a name. "
+                 + "`listen me <name>` sets what you are called.")
+        }
+        let name = args.dropFirst().joined(separator: " ")
+        if let problem = People.check(name) { fail(problem.localizedDescription) }
+
+        // Said before it happens, not after: nothing in the result would show
+        // that two people had become one.
+        let collisions = People.collisions(renaming: person.label, to: name)
+        if !collisions.isEmpty {
+            log("\(collisions.count) recording(s) already have a \(name). "
+                + "The two become one person there.")
+        }
+
+        let changed = People.rename(person.label, to: name)
+        guard !changed.isEmpty else { fail("nothing was changed.") }
+        print("renamed \(person.display) to \(name) in \(changed.count) recording(s)")
+        for id in changed { print("  \(id)") }
+        exit(0)
+    }
+
+    /// `listen me [<name> | --clear]`: what the microphone track is called.
+    ///
+    /// A preference, not an edit. The transcripts keep saying `Me` and this is
+    /// resolved on the way to the screen, so it applies to every recording ever
+    /// made and changing it again costs nothing.
+    private static func me(_ args: [String]) -> Never {
+        guard let first = args.first else {
+            print(Settings.userName ?? SpeakerName.you)
+            if Settings.userName == nil {
+                log("the microphone track is shown as `\(SpeakerName.you)`. "
+                    + "`listen me <name>` changes that.")
+            }
+            exit(0)
+        }
+        if first == "--clear" {
+            Settings.userName = nil
+            print(SpeakerName.you)
+            exit(0)
+        }
+        guard !first.hasPrefix("-") else {
+            fail("unknown option `\(first)`. Try `listen help`.")
+        }
+        let chosen = args.joined(separator: " ")
+        Settings.userName = chosen
+        print(SpeakerName.display(SpeakerName.you))
+        // Both can exist: an imported recording was labelled with your name by
+        // hand, and the microphone track is `Me`. They stay two people, and the
+        // list is unreadable if nobody says why there are two of you in it.
+        if let other = People.find(chosen), !other.isYou {
+            log("there is already a \(chosen) in the library (\(other.summary)), "
+                + "named by hand rather than recorded on your microphone. "
+                + "They stay separate.")
+        }
         exit(0)
     }
 

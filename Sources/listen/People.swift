@@ -1,0 +1,183 @@
+import Foundation
+
+/// One person, across the whole library.
+///
+/// The join key is the label written in the transcripts, and nothing cleverer.
+/// Voiceprints rank a voice against the bank; they never decide identity. Two
+/// recordings hold the same person when somebody said so by naming them the
+/// same thing, which is a decision a human made, and a cosine score is not.
+///
+/// Placeholders are therefore never people. `A` in one meeting has nothing to
+/// do with `A` in another, and grouping them would manufacture a person out of
+/// two strangers who happened to be listed second.
+struct Person {
+    /// As written on disk. `Me` for the user, whatever they are called on
+    /// screen.
+    let label: String
+    /// Every recording they appear in, newest first.
+    let recordings: [Recording]
+    /// Seconds of transcript attributed to them, summed over all of them.
+    let seconds: Double
+
+    var isYou: Bool { label == SpeakerName.you }
+    var display: String { SpeakerName.display(label) }
+    var lastSeen: Date? { recordings.compactMap(\.date).max() }
+
+    /// "7 recordings · 3h 12m", for a header that has to say how much is behind
+    /// a name before anyone spends a click on it.
+    var summary: String {
+        let count = recordings.count == 1 ? "1 recording" : "\(recordings.count) recordings"
+        let time = Recording.length(seconds)
+        return time.isEmpty ? count : count + " · " + time
+    }
+}
+
+/// Who is in the library, and renaming them everywhere at once.
+///
+/// No index and no cache, for the same reason there is no job table: the
+/// transcripts are the truth, and anything derived from them that lives
+/// somewhere else is something that can be wrong. Every call here re-reads
+/// `turns.json`, which is what the sidebar's transcript search already does on
+/// every keystroke. If a library ever grows big enough for that to hurt, the
+/// fix is a cache keyed on the file's modification date, not a database.
+enum People {
+
+    // MARK: - Reading
+
+    /// Talk time per speaker in one recording, longest first.
+    ///
+    /// Placeholders are included: they are really in this recording, and the
+    /// chip that shows one is how it gets named. It is only *across* recordings
+    /// that they mean nothing.
+    static func speakers(in recording: Recording) -> [(label: String, seconds: Double)] {
+        var seconds: [String: Double] = [:]
+        var order: [String] = []
+        for turn in recording.storedTurns {
+            if seconds[turn.speaker] == nil { order.append(turn.speaker) }
+            seconds[turn.speaker, default: 0] += max(0, turn.end - turn.start)
+        }
+        // First appearance breaks ties, so a meeting where two people said one
+        // word each is listed in the order it happened rather than at random.
+        return order.map { (label: $0, seconds: seconds[$0] ?? 0) }
+            .sorted { $0.seconds > $1.seconds }
+    }
+
+    /// Everybody the library has a name for, most recordings first.
+    static func all(in library: [Recording] = Recording.all()) -> [Person] {
+        var recordings: [String: [Recording]] = [:]
+        var seconds: [String: Double] = [:]
+        for recording in library {
+            for (label, spoken) in speakers(in: recording)
+            where !VoiceBank.isPlaceholder(label) {
+                recordings[label, default: []].append(recording)
+                seconds[label, default: 0] += spoken
+            }
+        }
+        return recordings.map {
+            Person(label: $0.key, recordings: $0.value, seconds: seconds[$0.key] ?? 0)
+        }
+        .sorted {
+            if $0.recordings.count != $1.recordings.count {
+                return $0.recordings.count > $1.recordings.count
+            }
+            if $0.seconds != $1.seconds { return $0.seconds > $1.seconds }
+            return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+
+    /// One person by their on-disk label, or nil if nobody is called that.
+    static func find(_ label: String, in library: [Recording] = Recording.all()) -> Person? {
+        let matching = library.filter { $0.speakers.contains(label) }
+        guard !matching.isEmpty else { return nil }
+        let total = matching.reduce(0.0) { sum, recording in
+            sum + (speakers(in: recording).first { $0.label == label }?.seconds ?? 0)
+        }
+        return Person(label: label, recordings: matching, seconds: total)
+    }
+
+    /// The same lookup by what is on screen rather than what is on disk, so
+    /// `listen people Emily` finds you when that is what you renamed `Me` to.
+    static func findByDisplayName(_ name: String,
+                                  in library: [Recording] = Recording.all()) -> Person? {
+        if let exact = find(name, in: library) { return exact }
+        if SpeakerName.display(SpeakerName.you).localizedCaseInsensitiveCompare(name)
+            == .orderedSame {
+            return find(SpeakerName.you, in: library)
+        }
+        guard let label = all(in: library).first(where: {
+            $0.label.localizedCaseInsensitiveCompare(name) == .orderedSame
+        })?.label else { return nil }
+        return find(label, in: library)
+    }
+
+    // MARK: - Renaming everywhere
+
+    /// Why a name cannot be used for everybody at once.
+    enum RenameProblem: LocalizedError {
+        case empty
+        case looksLikePlaceholder(String)
+        case isYou
+
+        var errorDescription: String? {
+            switch self {
+            case .empty:
+                return "A person needs a name."
+            case .looksLikePlaceholder(let name):
+                return "\"\(name)\" is how unnamed speakers are written, so a person "
+                    + "called that would read as one nobody has labelled yet."
+            case .isYou:
+                return "\(SpeakerName.you) is the microphone track, which is you by "
+                    + "construction rather than by name. To fold somebody into "
+                    + "yourself in one recording, use Merge in that transcript."
+            }
+        }
+    }
+
+    /// Check a new name before anything is written.
+    static func check(_ name: String) -> RenameProblem? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .empty }
+        // Renaming somebody to "A" would put the recording back into
+        // needs-labelling and drop them out of the voice bank, which looks like
+        // the rename having silently failed.
+        if VoiceBank.isPlaceholder(trimmed) { return .looksLikePlaceholder(trimmed) }
+        if trimmed == SpeakerName.you { return .isYou }
+        return nil
+    }
+
+    /// Recordings that already have somebody called `name`, where renaming
+    /// `label` into it merges the two.
+    ///
+    /// Worth counting before the fact rather than after: nothing about the
+    /// result would show that two people became one, and the transcript would
+    /// simply look as though it had always been that way.
+    static func collisions(renaming label: String, to name: String,
+                           in library: [Recording] = Recording.all()) -> [Recording] {
+        library.filter { $0.speakers.contains(label) && $0.speakers.contains(name) }
+    }
+
+    /// Rename one person in every recording they appear in.
+    ///
+    /// Each recording goes through `TranscriptEditor`, which is the same path
+    /// the per-recording sheet and `listen label` take, so this cannot come
+    /// apart from them: it moves the voiceprint with the name, rebuilds
+    /// `turns.json`, and re-derives the recording's state. Anything that
+    /// re-implemented one of those three here would be a fourth writer of the
+    /// same files.
+    ///
+    /// Returns the ids it changed, so the caller can say how many rather than
+    /// claiming success over a library it did not touch.
+    @discardableResult
+    static func rename(_ label: String, to name: String,
+                       in library: [Recording] = Recording.all()) -> [String] {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard check(trimmed) == nil, trimmed != label else { return [] }
+        var changed: [String] = []
+        for recording in library where recording.speakers.contains(label) {
+            if TranscriptEditor.apply(.rename(label, to: trimmed), to: recording) {
+                changed.append(recording.id)
+            }
+        }
+        return changed
+    }
+}

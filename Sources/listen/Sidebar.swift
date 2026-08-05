@@ -22,6 +22,18 @@ final class SidebarViewController: NSViewController {
     private var rows: [Row] = []
     private var query = ""
 
+    /// Show only the recordings one person is in, by their on-disk label.
+    ///
+    /// Set from a person's popover rather than from anything in this list. The
+    /// day-grouped list is the library and this is a lens over it, so it is
+    /// always visibly on and one click from off: a filter you cannot see is a
+    /// library with recordings missing from it.
+    private var speakerFilter: String?
+    private var filterBar: NSView!
+    private var filterButton: NSButton!
+    private var filterHeight: NSLayoutConstraint!
+    private var filterTop: NSLayoutConstraint!
+
     var onSelect: ((Recording?) -> Void)?
     var onRenamed: (() -> Void)?
 
@@ -55,8 +67,30 @@ final class SidebarViewController: NSViewController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
+        // One control, not a label with a close button beside it: the whole
+        // pill turns the filter off, so there is no small target to hit.
+        filterButton = NSButton(title: "", target: self, action: #selector(clearSpeakerFilter))
+        filterButton.bezelStyle = .inline
+        filterButton.font = .systemFont(ofSize: 11, weight: .medium)
+        filterButton.image = NSImage(systemSymbolName: "xmark",
+                                     accessibilityDescription: "Show everything")
+        filterButton.imagePosition = .imageTrailing
+        filterButton.toolTip = "Show every recording again"
+        filterButton.translatesAutoresizingMaskIntoConstraints = false
+        filterBar = NSView()
+        filterBar.translatesAutoresizingMaskIntoConstraints = false
+        filterBar.addSubview(filterButton)
+        filterBar.isHidden = true
+
         container.addSubview(searchField)
+        container.addSubview(filterBar)
         container.addSubview(scroll)
+        filterHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
+        // Collapses to nothing, spacing included. A hidden view keeps its
+        // frame, so an unfiltered list would otherwise sit six points lower
+        // than it did before this row existed.
+        filterTop = filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor,
+                                                   constant: 0)
         NSLayoutConstraint.activate([
             // Clear of the traffic lights, which sit over the content because
             // the window uses a transparent full-size title bar.
@@ -65,7 +99,14 @@ final class SidebarViewController: NSViewController {
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                                   constant: -10),
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            filterTop,
+            filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            filterBar.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor,
+                                                constant: -10),
+            filterHeight,
+            filterButton.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor),
+            filterButton.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -97,10 +138,15 @@ final class SidebarViewController: NSViewController {
         let everything = (live.map { [$0] } ?? []) + Recording.all()
 
         let matching = everything.filter { recording in
-            guard !q.isEmpty else { return true }
             // Never filtered out. A search left in the field from ten minutes
-            // ago is not a reason to hide the meeting being recorded now.
+            // ago is not a reason to hide the meeting being recorded now, and
+            // neither is a speaker filter it cannot match: a recording still
+            // being made has no transcript to have speakers in.
             if recording.id == live?.id { return true }
+            if let speakerFilter, !recording.speakers.contains(speakerFilter) {
+                return false
+            }
+            guard !q.isEmpty else { return true }
             if recording.metadata.title.lowercased().contains(q) { return true }
             // Search the transcript too, which is the reason anyone searches a
             // meeting library: you remember what was said, not what the
@@ -166,9 +212,12 @@ final class SidebarViewController: NSViewController {
         }
     }
 
-    /// Select a recording by id, if the list has it.
-    func select(_ id: String) {
-        guard let row = row(for: id), table.selectedRow != row else { return }
+    /// Select a recording by id. False when the list does not have it, which
+    /// is how the caller finds out that a filter is in the way.
+    @discardableResult
+    func select(_ id: String) -> Bool {
+        guard let row = row(for: id) else { return false }
+        guard table.selectedRow != row else { return true }
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
         // `selectRowIndexes` posts the selection notification, which is what
@@ -179,6 +228,32 @@ final class SidebarViewController: NSViewController {
             selectedRecording = recording(at: row)
             onSelect?(selectedRecording)
         }
+        return true
+    }
+
+    /// Show only the recordings one person is in. nil is the whole library.
+    func filter(bySpeaker label: String?) {
+        loadViewIfNeeded()
+        speakerFilter = label
+        if let label {
+            filterButton.title = "Only " + SpeakerName.display(label) + " "
+        }
+        filterBar.isHidden = label == nil
+        filterHeight.constant = label == nil ? 0 : 22
+        filterTop.constant = label == nil ? 0 : 6
+        reload()
+    }
+
+    /// Drop everything narrowing the list, for when something outside it needs
+    /// a recording the filters are hiding.
+    func clearFilters() {
+        searchField.stringValue = ""
+        query = ""
+        filter(bySpeaker: nil)
+    }
+
+    @objc private func clearSpeakerFilter() {
+        filter(bySpeaker: nil)
     }
 
     /// Redraw the row of the recording in progress, for its clock.

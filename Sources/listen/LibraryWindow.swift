@@ -129,6 +129,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     var selected: Recording? { sidebar.selectedRecording }
 
+    /// Select a recording from somewhere that is not the list, which today
+    /// means from a person's popover.
+    func reveal(_ id: String) {
+        show()
+        guard !sidebar.select(id) else { return }
+        // A search or a speaker filter can be hiding it, and selecting nothing
+        // looks exactly like a click that missed. The click already said which
+        // recording to look at, so the filter is what gives way.
+        sidebar.clearFilters()
+        sidebar.select(id)
+    }
+
+    /// Show only the recordings one person is in. nil is the whole library.
+    func filter(bySpeaker label: String?) {
+        show()
+        sidebar.filter(bySpeaker: label)
+    }
+
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -358,7 +376,20 @@ extension LibraryWindow: NSMenuDelegate {
 /// for a "needs labelling" state in the list: an unnamed speaker is legible on
 /// its own, and a filter tab for it was solving a problem the wording caused.
 enum SpeakerName {
+    /// The label the pipeline writes for the microphone track.
+    ///
+    /// It stays `Me` on disk however the user chooses to be shown, which is the
+    /// same rule as `A` and `B`: the label is the stable fact and this is where
+    /// it is made legible. Writing the chosen name into the transcripts instead
+    /// would fail in three ways that only appear later. Recordings made before
+    /// the name was set would keep saying `Me` while later ones said "Emily".
+    /// Changing your mind would not reach the history. And `Me` would stop
+    /// being a stable key, which `VoiceBank.isPlaceholder` and `Enroll` both
+    /// rely on to know which voice is the user's without being told.
+    static let you = "Me"
+
     static func display(_ label: String) -> String {
-        VoiceBank.isPlaceholder(label) ? "Speaker \(label)" : label
+        if label == you { return Settings.userName ?? you }
+        return VoiceBank.isPlaceholder(label) ? "Speaker \(label)" : label
     }
 }

@@ -19,6 +19,7 @@ final class DetailView: NSView {
     /// typing.
     let titleLabel = NSTextField(string: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
+    private let chips = SpeakerChips()
     private let playerCard = NSView()
     private let playButton = NSButton()
     private let waveform = WaveformView()
@@ -49,6 +50,19 @@ final class DetailView: NSView {
     /// per recording, and without this the last one to finish wins rather than
     /// the one that is selected.
     private var waveformToken = 0
+
+    /// The speaker row's two collapsible dimensions, kept so a recording with
+    /// no transcript closes the gap entirely rather than showing an empty band
+    /// where the chips would be.
+    private var chipsTop: NSLayoutConstraint!
+    private var chipsHeight: NSLayoutConstraint!
+
+    /// Whether the transcript follows the playhead. Turned off the moment the
+    /// user scrolls, because scrolling away during playback is a decision, and
+    /// dragging somebody back to the playhead every two seconds makes the
+    /// transcript unreadable while it plays.
+    private var follows = true
+    private var scrollingProgrammatically = false
 
     /// Whether the transcript follows the playhead. Turned off the moment the
     /// user scrolls, because scrolling away during playback is a decision, and
@@ -87,6 +101,24 @@ final class DetailView: NSView {
         playButton.toolTip = "Play"
 
         waveform.onScrub = { [weak self] fraction in self?.scrub(to: fraction) }
+
+        // A chip is a control, so its click never reaches `mouseDown` below and
+        // it has to let the title field go itself. Everything else in this pane
+        // that claims a click does the same.
+        chips.onName = { [weak self] speaker in
+            self?.endEditingTitle()
+            self?.editSpeaker(speaker)
+        }
+        chips.onPerson = { [weak self] speaker, anchor, rect in
+            guard let self else { return }
+            self.endEditingTitle()
+            PersonPopover.show(speaker, from: anchor, rect: rect) { [weak self] in
+                guard let self, let id = self.recording?.id,
+                      let updated = Recording.find(id) else { return }
+                self.show(updated)
+                LibraryWindow.shared.reload()
+            }
+        }
 
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
@@ -131,10 +163,21 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
-        for v in [titleLabel, subtitleLabel, playerCard, scroll, empty] {
+        for v in [titleLabel, subtitleLabel, chips, playerCard, scroll, empty] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+
+        chipsTop = chips.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor,
+                                              constant: 10)
+        chipsHeight = chips.heightAnchor.constraint(equalToConstant: 24)
+
+        NSLayoutConstraint.activate([
+            chipsTop,
+            chipsHeight,
+            chips.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            chips.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+        ])
 
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 38),
@@ -143,7 +186,7 @@ final class DetailView: NSView {
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
 
-            playerCard.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 14),
+            playerCard.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 14),
             playerCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             playerCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             playerCard.heightAnchor.constraint(equalToConstant: 58),
@@ -211,6 +254,12 @@ final class DetailView: NSView {
         subtitleLabel.stringValue = [recording.when, recording.lengthText]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
+        // Who is in this recording, above the player. Collapsed to nothing when
+        // there is no transcript to have speakers in, so a live or untranscribed
+        // recording keeps the layout it had before this row existed.
+        chips.configure(recording)
+        setChipsCollapsed(chips.isEmpty)
+
         turns = recording.storedTurns
         // The sentence spans come from `transcript.json`, which keeps one row
         // per ASR sentence, while the paragraphs come from `turns.json`. Both
@@ -254,7 +303,18 @@ final class DetailView: NSView {
         subtitleLabel.isHidden = hidden
         playerCard.isHidden = hidden
         scroll.isHidden = hidden
+        if hidden { setChipsCollapsed(true) }
     }
+
+    /// A hidden view still occupies its frame, so the row's height and the
+    /// space above it both have to go: leaving them would open a 34 point gap
+    /// under the date of every recording that has no speakers yet.
+    private func setChipsCollapsed(_ collapsed: Bool) {
+        chips.isHidden = collapsed
+        chipsTop.constant = collapsed ? 0 : 10
+        chipsHeight.constant = collapsed ? 0 : 24
+    }
+
 
     private func renderTurns() {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }

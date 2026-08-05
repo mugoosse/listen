@@ -389,22 +389,26 @@ final class SidebarViewController: NSViewController {
         return button
     }
 
-    /// What the Record row says, which is also the only clock on screen while
-    /// the sidebar is what you are looking at.
+    /// The Record row while a meeting is running: the same words, greyed.
     ///
-    /// Red only while recording. A permanently coloured row is decoration; one
-    /// that turns red is a state.
-    func setRecording(_ recording: Bool, elapsed: TimeInterval) {
+    /// It used to become a red Stop row with a clock in it, which put the
+    /// elapsed time on screen three times at once and a second stop control
+    /// beside the one in the toolbar. A row that changes its verb, its icon and
+    /// its colour is also a row you have to read before you can trust what
+    /// pressing it does.
+    ///
+    /// Disabled says the one thing that is true and is not said anywhere else:
+    /// there is no second recording to start. Stopping is the toolbar's, on the
+    /// meeting you have open, and the menu bar's from anywhere.
+    func setRecording(_ recording: Bool) {
         loadViewIfNeeded()
-        newButton.title = recording ? "Stop  " + Recording.length(elapsed)
-                                    : "New Recording"
-        newButton.image = NSImage(
-            systemSymbolName: recording ? "stop.fill" : "record.circle",
-            accessibilityDescription: recording ? "Stop recording" : "Start recording")
-        // Red only while recording. A permanently coloured row is decoration;
-        // one that turns red is a state, which is the same rule the toolbar
-        // control follows.
-        newButton.contentTintColor = recording ? .systemRed : .labelColor
+        newButton.isEnabled = !recording
+        // A greyed control with no reason beside it is the shape people read as
+        // broken, and the reason is not guessable from a row that says the same
+        // thing it always says.
+        newButton.toolTip = recording
+            ? "Already recording. Stop it from the toolbar or the menu bar."
+            : "Record this Mac's audio and your microphone"
     }
 
     @objc private func newRecording() { onNewRecording?() }
@@ -492,11 +496,17 @@ final class RecordingCell: NSView {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
 
+    /// Monospaced digits, so a counting clock does not shuffle the words after
+    /// it. Named because `configure` writes an attributed string, which carries
+    /// its own font rather than taking the field's.
+    private static let subtitleFont =
+        NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         title.font = .systemFont(ofSize: 13, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
-        subtitle.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        subtitle.font = Self.subtitleFont
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
 
@@ -526,12 +536,30 @@ final class RecordingCell: NSView {
         // file: `metadata.duration` is written when capture stops.
         let live = recording.isLive
         let length = live ? Recording.length(Capture.shared.elapsed) : recording.lengthText
-        subtitle.stringValue = [recording.clockTime, length, recording.stateText]
-            .filter { !$0.isEmpty }.joined(separator: " · ")
-        // Red only while recording, the same rule as the toolbar button: a
-        // permanently coloured row is decoration, one that turns red is a
-        // state.
-        subtitle.textColor = live ? .systemRed : .secondaryLabelColor
+        let facts = [recording.clockTime, length].filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        let state = recording.stateText
+
+        // Red on the state word alone, and not on the line. The time and the
+        // length are the same facts every other row prints, and colouring them
+        // says the clock is the alarming part rather than what it is reporting.
+        // The same rule as before, applied to less: a permanently coloured row
+        // is decoration, one word that turns red is a state.
+        //
+        // The font travels with every run: an attributed string is the whole
+        // description of what is drawn, so the monospaced digits set on the
+        // field once are not inherited by anything set this way. Without it the
+        // clock changes width as it counts.
+        func run(_ text: String, _ colour: NSColor) -> NSAttributedString {
+            NSAttributedString(string: text, attributes: [.foregroundColor: colour,
+                                                          .font: Self.subtitleFont])
+        }
+        let line = NSMutableAttributedString(attributedString: run(facts, .secondaryLabelColor))
+        if !state.isEmpty {
+            if !facts.isEmpty { line.append(run(" · ", .secondaryLabelColor)) }
+            line.append(run(state, live ? .systemRed : .secondaryLabelColor))
+        }
+        subtitle.attributedStringValue = line
     }
 }
 
@@ -662,6 +690,20 @@ final class SidebarRow: NSView {
         }
     }
 
+    /// Whether the row answers. A disabled row keeps its words and dims, which
+    /// is the one shape on this platform that reads as "not now" rather than as
+    /// something having gone wrong.
+    var isEnabled = true {
+        didSet {
+            guard isEnabled != oldValue else { return }
+            alphaValue = isEnabled ? 1 : 0.4
+            // Or the highlight from the last hover stays painted under a row
+            // that no longer responds to the pointer.
+            hovering = false
+            pressed = false
+        }
+    }
+
     private var hovering = false { didSet { restyle() } }
     private var pressed = false { didSet { restyle() } }
 
@@ -721,12 +763,13 @@ final class SidebarRow: NSView {
             owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseEntered(with event: NSEvent) { hovering = isEnabled }
     override func mouseExited(with event: NSEvent) { hovering = false }
-    override func mouseDown(with event: NSEvent) { pressed = true }
+    override func mouseDown(with event: NSEvent) { pressed = isEnabled }
 
     override func mouseUp(with event: NSEvent) {
         pressed = false
+        guard isEnabled else { return }
         // Only when the pointer is still on the row, which is what letting go
         // somewhere else means everywhere on this platform.
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }

@@ -60,6 +60,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     private var recordItem: NSToolbarItem?
     private var recordTick: Timer?
+    /// Built once and kept: see `recordingActionsMenu`. A stored property
+    /// rather than a `lazy var` because the menu is built in an extension.
+    fileprivate var actionsMenu: NSMenu?
 
     /// The recording whose row was selected when capture started, so it is
     /// selected once rather than on every state change.
@@ -209,8 +212,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         split = controller
 
         sidebar.onSelect = { [weak self] recording in
-            self?.detail.show(recording)
-            self?.window?.toolbar?.validateVisibleItems()
+            guard let self else { return }
+            self.detail.show(recording)
+            // The stop control stands in for People and Actions while the
+            // recording in progress is the one on screen, so during a meeting a
+            // change of selection changes which items belong. Only during one:
+            // otherwise this is five items removed and re-inserted on every
+            // click in the list.
+            if Capture.shared.isRecording { self.rebuildToolbar() }
+            self.window?.toolbar?.validateVisibleItems()
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         detail.onChanged = { [weak self] in self?.reload() }
@@ -366,6 +376,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// and the File menu greys out rather than acting on a row nobody can see.
     var selected: Recording? { mode == .library ? sidebar.selectedRecording : nil }
 
+    /// Whether the recording in progress is the one on screen.
+    ///
+    /// What the toolbar's stop control is conditioned on in the library. The
+    /// clock is written in the row for the recording in progress either way, so
+    /// a stop button on some other meeting's transcript is a second clock about
+    /// a recording you are not looking at.
+    private var isShowingLive: Bool {
+        guard let live = Capture.shared.current else { return false }
+        return selected?.id == live.id
+    }
+
     /// Select a recording from somewhere that is not the list, which today
     /// means from a person's popover.
     func reveal(_ id: String) {
@@ -397,14 +418,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// The sidebar toggle is only in the library, and the back button takes the
     /// slot it leaves.
     ///
-    /// The record control is in the library always, and in settings **only
-    /// while a recording is running**. That split is the whole of it: idle, the
-    /// control means "start a new recording", which is not something a settings
-    /// screen should be offering. Running, it is not that control at all: it is
-    /// the stop button, and the only place the elapsed clock is written.
-    /// Removing it outright would mean somebody who opened Settings during a
-    /// meeting lost both the clock and the way to stop, which is the failure
-    /// this window can least afford.
+    /// The record control appears **only while a recording is running**, and in
+    /// the library only while that recording is the one on screen. Idle, the
+    /// control would mean "start a new recording", which the sidebar's own row
+    /// already offers. Running, it is not that control at all: it is the stop
+    /// button and the clock.
+    ///
+    /// Settings and People keep it whenever capture runs, unconditionally,
+    /// because neither has the sidebar's Stop row beside it. Removing it there
+    /// would mean somebody who opened Settings during a meeting lost both the
+    /// clock and the way to stop, which is the failure this window can least
+    /// afford.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         switch mode {
         case .library:
@@ -424,15 +448,26 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // rather than leaving two unrelated icons in a row.
             var items: [NSToolbarItem.Identifier] = [Self.brandItem, .flexibleSpace,
                                                      .toggleSidebar,
-                                                     .sidebarTrackingSeparator]
-            if Capture.shared.isRecording { items.append(Self.newRecordingItem) }
-            // The actions menu stays whether or not anything is selected, and
-            // says "No recording selected" when nothing is, which is what the
-            // person page's menu does with no person. A control that appears
-            // and disappears as you click around the list is harder to find
-            // than one that is always in the same place and tells you why it
-            // is empty.
-            items.append(contentsOf: [.flexibleSpace, Self.peopleItem, Self.actionsItem])
+                                                     .sidebarTrackingSeparator,
+                                                     .flexibleSpace]
+            if isShowingLive {
+                // The stop control takes the place of People and Actions rather
+                // than sitting at the leading edge of the content, where it was
+                // a third clock over the meeting's own title and a fourth
+                // control on a screen that has nothing to act on yet: a
+                // recording in progress has no transcript to export and no
+                // speakers to open. On the meeting you are watching, stopping
+                // it is the only verb there is.
+                items.append(Self.newRecordingItem)
+            } else {
+                // The actions menu stays whether or not anything is selected,
+                // and says "No recording selected" when nothing is, which is
+                // what the person page's menu does with no person. A control
+                // that appears and disappears as you click around the list is
+                // harder to find than one that is always in the same place and
+                // tells you why it is empty.
+                items.append(contentsOf: [Self.peopleItem, Self.actionsItem])
+            }
             return items
         case .settings:
             // No back item: the way out is a row at the top of the section
@@ -535,17 +570,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             return item
 
         case Self.actionsItem:
-            // A menu rather than a row of buttons. Everything in it acts on
-            // the selected recording, and most of it is rare or destructive,
-            // which is not what a toolbar button is for.
-            let menu = NSMenu()
-            menu.delegate = self
             let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = "Actions"
             item.toolTip = "Actions for this recording"
             item.image = NSImage(systemSymbolName: "ellipsis",
                                  accessibilityDescription: "Actions")
-            item.menu = menu
+            item.menu = recordingActionsMenu
             item.showsIndicator = false
             return item
 
@@ -572,12 +602,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     /// Called by the delegate whenever capture starts or stops.
     func recordingChanged() {
-        // Settings shows the record control only while capture runs, so both
-        // edges have to swap the items. Without this, opening Settings before a
-        // meeting starts leaves no stop button and no clock for the length of
-        // it. Only in settings: the library's toolbar is the same either way,
-        // and rebuilding it would remove and re-insert five items for nothing.
-        if mode == .settings { rebuildToolbar() }
         updateRecordButton()
         recordTick?.invalidate()
         recordTick = nil
@@ -589,32 +613,42 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // disappearing and coming back.
         reload()
 
-        guard let live = Capture.shared.current else {
+        if let live = Capture.shared.current {
+            // Select it, once, when it starts. The recording somebody just began
+            // is the one they are looking at, and leaving the selection on
+            // whatever they were reading means hunting for a row that was not
+            // there a second ago. Once, because re-selecting on every tick would
+            // fight anyone who clicked away to read something while the meeting
+            // runs.
+            if selectedLive != live.id {
+                selectedLive = live.id
+                sidebar.select(live.id)
+            }
+
+            // Once a second, because the button shows seconds. The floating
+            // panel ticks twice a second for its own clock; this one does not
+            // need to.
+            recordTick = Timer.scheduledTimer(withTimeInterval: 1,
+                                              repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.updateRecordButton()
+                    self?.sidebar.tickLive()
+                }
+            }
+        } else {
             selectedLive = nil
-            return
-        }
-        // Select it, once, when it starts. The recording somebody just began is
-        // the one they are looking at, and leaving the selection on whatever
-        // they were reading means hunting for a row that was not there a second
-        // ago. Once, because re-selecting on every tick would fight anyone who
-        // clicked away to read something while the meeting runs.
-        if selectedLive != live.id {
-            selectedLive = live.id
-            sidebar.select(live.id)
         }
 
-        // Once a second, because the button shows seconds. The floating panel
-        // ticks twice a second for its own clock; this one does not need to.
-        recordTick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateRecordButton()
-                self?.sidebar.tickLive()
-            }
-        }
+        // Last, and after the selection: every mode swaps items on both edges of
+        // capture, and in the library which items belong depends on whether the
+        // recording that just started is the one on screen. Rebuilding before
+        // selecting it would ask that question of the previous selection and
+        // leave the stop control out for the length of the meeting.
+        rebuildToolbar()
     }
 
     private func updateRecordButton() {
-        sidebar.setRecording(Capture.shared.isRecording, elapsed: Capture.shared.elapsed)
+        sidebar.setRecording(Capture.shared.isRecording)
         let recording = Capture.shared.isRecording
         let symbol = recording ? "stop.fill" : "record.circle"
         recordButton.image = NSImage(
@@ -750,8 +784,35 @@ final class LibrarySplitViewController: NSSplitViewController, NSMenuItemValidat
 // MARK: - The actions menu
 
 extension LibraryWindow: NSMenuDelegate {
+    /// The recording's actions, as a menu the toolbar owns.
+    ///
+    /// A menu rather than a row of buttons. Everything in it acts on the
+    /// selected recording, and most of it is rare or destructive, which is not
+    /// what a toolbar button is for.
+    ///
+    /// Kept rather than built per toolbar item so `menuNeedsUpdate` can tell it
+    /// apart from the sidebar's contextual menu, which shares this delegate.
+    var recordingActionsMenu: NSMenu {
+        if let built = actionsMenu { return built }
+        let menu = NSMenu()
+        menu.delegate = self
+        actionsMenu = menu
+        return menu
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        // A pull-down menu takes its **first** item as the button's own title
+        // and never shows it, so the toolbar's copy needs something expendable
+        // there. Measured on the shipped build: with a recording selected the
+        // menu opened on Transcribe Again and Export was simply gone, and with
+        // nothing selected the one "No recording selected" item was eaten
+        // whole, leaving an empty menu, which AppKit does not put up at all.
+        // Pressing the ellipsis then does nothing and reports nothing.
+        //
+        // Only the toolbar's. The sidebar's right-click menu shares this
+        // delegate and shows every item it is handed, blank one included.
+        if menu === actionsMenu { menu.addItem(NSMenuItem()) }
         guard let recording = selected else {
             menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
                 .isEnabled = false

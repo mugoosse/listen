@@ -472,6 +472,31 @@ It is also shown on the next runloop turn rather than inline, because a popover
 put up from inside a control's own action arrives while the mouse event is still
 being dispatched.
 
+### An `NSMenuToolbarItem` eats the first item of its menu
+
+A pull-down takes item 0 as the button's own title and never draws it, and both
+ellipsis menus in this window were built without knowing that. Measured on the
+shipped 0.1.0 build by opening each one and reading it off the screen:
+
+| menu | built | shown |
+|---|---|---|
+| recording, one selected | Export…, sep, Transcribe Again, Rename…, sep, Show in Finder, sep, Delete | Transcribe Again, Rename…, Show in Finder, Delete |
+| recording, none selected | No recording selected | *nothing at all* |
+| person | placeholder, Edit, Merge…, sep, Delete | Edit, Merge…, Delete |
+
+So Export was missing for as long as the toolbar menu has existed, and the empty
+case was worse than missing: one disabled item is the whole menu, AppKit does not
+put up an empty menu, and pressing the button therefore did nothing and reported
+nothing. `PersonPane` had already paid for this once ("Edit Contact was eaten and
+the menu opened on Merge"), which is why its `menuNeedsUpdate` starts with a bare
+`NSMenuItem()`.
+
+`LibraryWindow` now does the same, but **only for the toolbar's menu**. The
+sidebar's right-click menu shares that delegate and is an ordinary contextual
+menu, which shows every item it is handed, blank one included. Hence
+`recordingActionsMenu` is built once and kept: the identity check is what tells
+the two callers apart.
+
 ### Listen is not `LSUIElement`, and Speak is
 
 This is the one place the Speak template was deliberately reversed. Speak is a
@@ -802,6 +827,53 @@ Three consequences, all of which were bugs first:
 now rebuilt whenever capture changes, and capture can change before the window
 has ever been shown, because `rebuildMenu()` runs at launch. `table` is created
 in `loadView`, so without it the first reload is a nil unwrap.
+
+#### One elapsed clock per screen, and the row is the one that always counts
+
+Once the recording in progress had a row, the library counted the same seconds in
+three places at once: the sidebar's Stop row, that row, and a toolbar button
+sitting over the meeting's own title. Three copies of one number is not three
+times the reassurance, it is a screen where nothing looks like the source.
+
+The row keeps its clock, because it is the one place that is always on screen and
+is about that recording rather than about the app. The toolbar's stop control
+appears **only while the recording in progress is the one selected**, and takes
+the place of People and Actions rather than the leading edge of the content: a
+running recording has no transcript to export and no speakers to open, so on that
+one screen stopping it is the only verb there is.
+
+The sidebar's row stops being a control at all. It used to become a red Stop row
+with a clock in it; it now keeps the words "New Recording" and greys, because the
+only thing true of it during a meeting that is not said anywhere else is that
+there is no second recording to start. A row that swaps its verb, its icon and
+its colour is a row you have to read before you can trust what pressing it does,
+and there were already two stop controls on screen. `SidebarRow.isEnabled` dims
+the whole row and stops the hover and the action; the tooltip says where stopping
+lives, because a greyed control with no reason beside it is the shape people read
+as broken.
+
+Red is on the state word alone, not on the line. `18:04 · 0:09 · recording` puts
+the same clock and time every other row prints in the same colour every other row
+prints them in, and colours the one word that is not. Colouring the line said the
+clock was the alarming part rather than what it was reporting. `configure` builds
+an attributed string for this, and each run has to carry the font: the monospaced
+digits set on the field are not inherited, and without them the clock changes
+width as it counts.
+
+Two consequences:
+
+1. **The toolbar is rebuilt on selection changes, but only during capture.**
+   Which items belong now depends on what is selected. Outside a meeting that
+   question has one answer, and rebuilding anyway is five items removed and
+   re-inserted on every click in the list.
+2. **`recordingChanged()` rebuilds last.** It selects the recording that just
+   started, and `isShowingLive` is asked of the selection, so rebuilding before
+   that leaves the stop control out for the length of the meeting.
+
+Settings and People keep the stop control unconditionally while capture runs, and
+so does the menu bar item. Those are now the only two ways to stop a meeting you
+are not looking at, which is the trade this makes: one control on the screen that
+is about that recording, rather than one on every screen.
 
 ### A recording nobody named is called "Untitled"
 

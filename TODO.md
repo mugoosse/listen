@@ -3,7 +3,8 @@
 Where the project is, what is left, and what needs a decision. Update this in
 the same commit as the work it describes.
 
-Last updated: Sparkle keypair generated and the update channel wired end to end.
+Last updated: 0.1.0 and 0.1.1 published, and Gatekeeper measured clean on a
+second Mac.
 
 ## Milestones
 
@@ -16,9 +17,9 @@ Last updated: Sparkle keypair generated and the update channel wired end to end.
 | 4 | Library and UI | done, being revised (see UI below) |
 | 5 | Speaker labelling | done |
 | 6 | Voiceprints | done, thresholds measured on real recordings |
-| 7 | Settings, onboarding, permissions | done, never tested on a clean account |
+| 7 | Settings, onboarding, permissions | done, onboarding still unrun on a clean account |
 | 8 | CLI install, MCP | done |
-| 9 | Release pipeline | built and keyed, nothing published |
+| 9 | Release pipeline | 0.1.0 and 0.1.1 published, notarized, stapled, tapped |
 
 ## Blocking decisions
 
@@ -51,9 +52,17 @@ on upstream.
 
 ## Not yet verified
 
-- **First run on a clean account.** Onboarding, both permission prompts and the
-  model download have never been exercised on a machine that has not run
-  Listen. SPEC 7 asks for exactly this.
+- **Onboarding on a clean account.** Narrowed, not closed, by a run on a second
+  Mac that had never seen Listen. Downloaded through Chrome, so quarantine was
+  really set (`0381;…;Chrome;…`) and Gatekeeper really was consulted: the DMG
+  opened with **no dialog**, the app launched with none either, the designated
+  requirement came back anchored on `subject.OU = BUZ45YDWYN` with no `cdhash`,
+  and `transcribe` returned the sentence verbatim.
+  What that run did not cover is most of what SPEC 7 asks for. The model was
+  already in `~/.cache/huggingface` on that machine, so the 2.5 GB first-run
+  download is still unexercised, and the app was driven from the command line,
+  so onboarding and both permission prompts have still never run anywhere that
+  had not already granted them.
 - **Process tap over a real hour** (SPEC 10.3). Tested to 90 seconds with no
   leaks. Sleep, display change, device unplug and a call switching from Meet to
   a phone call are all untested.
@@ -63,10 +72,13 @@ on upstream.
 - **Whether the Whisper-era cleanup is needed at all** (SPEC 4.4 step 4). It
   has fired *never* so far. Counters are in place; delete it and say so once
   there is real meeting audio behind the number.
-- **A Sparkle update installing.** The keypair exists and the feed is signed
-  and verified against it (`sign_update --verify --account listen`), but no
-  build has ever updated to another build. That needs two published releases,
-  so it cannot be checked until after the first one.
+- **A Sparkle update installing.** The feed is signed and verified against the
+  key the bundle ships: `sign_update --verify --account listen` accepts it, and
+  the same check under the default `ed25519` account rejects it, which is the
+  exact failure the separate account exists to prevent.
+  Two releases now exist, 0.1.0 at `CFBundleVersion` 44 and 0.1.1 at 49, so
+  this is testable for the first time. Any Mac still holding 0.1.0 is where to
+  do it, and there is one.
 
 ## UI feedback, round one
 

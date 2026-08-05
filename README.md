@@ -215,7 +215,7 @@ started 3 Aug 2026 at 16:00
 →   -1m  Emily Carter and Ryan Mitchell
     Google / Home · 16:00 · 2 invited
     https://us02web.zoom.us/j/00000000000
-    · Maxime Goossens <emily.carter@example.com>  [you]
+    · Emily Carter <emily.carter@example.com>  [you]
     · Ryan Mitchell <ryan.mitchell@example.org>  [organizer]
 ```
 

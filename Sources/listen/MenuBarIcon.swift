@@ -11,7 +11,9 @@ enum MenuBarIcon: Hashable {
 
     var image: NSImage { Self.mascot(side: Self.side) }
 
-    private static let side: CGFloat = 16
+    /// 24 points gives the 48/64-pixel visible mark a roughly 18-point
+    /// footprint, matching the stature of the surrounding menu-bar apps.
+    private static let side: CGFloat = 24
     private static var cache: [CGFloat: NSImage] = [:]
 
     private static func mascot(side: CGFloat) -> NSImage {

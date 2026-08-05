@@ -45,6 +45,9 @@ done
 if [ -f "$ROOT/Assets/Listen.icns" ]; then
     cp "$ROOT/Assets/Listen.icns" "$APP/Contents/Resources/Listen.icns"
 fi
+if [ -f "$ROOT/Assets/MenuBarTemplate.png" ]; then
+    cp "$ROOT/Assets/MenuBarTemplate.png" "$APP/Contents/Resources/MenuBarTemplate.png"
+fi
 
 # A machine-readable statement of every outbound connection, read by firewall
 # tools such as Little Snitch. Listen claims audio never leaves the machine,

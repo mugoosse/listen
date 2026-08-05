@@ -56,7 +56,14 @@ final class HoverRow: NSView {
         let alpha: CGFloat = pressed ? 0.26 : (hovering ? 0.16 : 0)
         layer?.backgroundColor = alpha == 0
             ? NSColor.clear.cgColor
-            : NSColor.quaternaryLabelColor.withAlphaComponent(alpha).cgColor
+            : hoverTint(alpha).cgColor
+    }
+
+    /// A `CGColor` is a snapshot of whatever it was resolved from, so switching
+    /// the Mac between light and dark leaves the last one behind.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyle()
     }
 
     override func updateTrackingAreas() {
@@ -64,7 +71,7 @@ final class HoverRow: NSView {
         for area in trackingAreas { removeTrackingArea(area) }
         addTrackingArea(NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self))
     }
 
@@ -124,6 +131,7 @@ final class PeopleNav: NSViewController {
     var onSelect: ((Person) -> Void)?
 
     private(set) var selected: Person?
+    private var hover: TableHover!
 
     override func loadView() {
         let container = NSView()
@@ -173,7 +181,18 @@ final class PeopleNav: NSViewController {
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        hover = TableHover(table, name: "people")
         view = container
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        hover.start()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        hover.stop()
     }
 
     func reload() {
@@ -227,6 +246,10 @@ final class PeopleNav: NSViewController {
 extension PeopleNav: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { people.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        HoverRowView()
+    }
+
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?,
                    row: Int) -> NSView? {
         let cell = PersonCell()
@@ -235,7 +258,6 @@ extension PeopleNav: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        table.restyleHoverCells()
         guard table.selectedRow >= 0, table.selectedRow < people.count else { return }
         selected = people[table.selectedRow]
         onSelect?(people[table.selectedRow])
@@ -244,7 +266,7 @@ extension PeopleNav: NSTableViewDataSource, NSTableViewDelegate {
 
 /// One roster row: who, and how much of the library they are in.
 @MainActor
-final class PersonCell: HoverCell {
+final class PersonCell: NSView {
     private let disc = InitialsDisc()
     private let name = NSTextField(labelWithString: "")
     private let badge = NSTextField(labelWithString: "You")
@@ -290,7 +312,6 @@ final class PersonCell: HoverCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ person: Person) {
-        restyle()
         disc.show(person)
         name.stringValue = person.display
         badge.isHidden = !person.isYou

@@ -66,6 +66,7 @@ final class SidebarViewController: NSViewController {
     var onRenamed: (() -> Void)?
 
     private(set) var selectedRecording: Recording?
+    private var hover: TableHover!
 
     override func loadView() {
         let container = NSView()
@@ -189,7 +190,18 @@ final class SidebarViewController: NSViewController {
                                                    constant: -14),
             settingsButton.heightAnchor.constraint(equalToConstant: 32),
         ])
+        hover = TableHover(table, name: "sidebar")
         view = container
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        hover.start()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        hover.stop()
     }
 
     // MARK: - Data
@@ -410,6 +422,12 @@ final class SidebarViewController: NSViewController {
 extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        // Day headings are not rows anybody can act on, so they do not light up.
+        if case .header = rows[row] { return nil }
+        return HoverRowView()
+    }
+
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
         if case .header = rows[row] { return true }
         return false
@@ -450,10 +468,6 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         selectedRecording = recording(at: table.selectedRow)
-        // A cell is not told that the selection moved, and the pointer can be
-        // resting on the row that just became selected, so the hover would stay
-        // drawn on top of it.
-        table.restyleHoverCells()
         onSelect?(selectedRecording)
     }
 }
@@ -474,7 +488,7 @@ extension SidebarViewController: NSMenuDelegate {
 
 /// One row: title, when, how long, and what is happening to it.
 @MainActor
-final class RecordingCell: HoverCell {
+final class RecordingCell: NSView {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
 
@@ -503,7 +517,6 @@ final class RecordingCell: HoverCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ recording: Recording) {
-        restyle()
         title.stringValue = recording.metadata.title
         // An untitled recording says so in grey, so a list of them reads as a
         // list of things waiting for a name rather than as a list of things
@@ -522,70 +535,95 @@ final class RecordingCell: HoverCell {
     }
 }
 
-/// A table cell that lights up under the pointer.
+/// A table row that lights up under the pointer, and paints its own selection.
 ///
-/// `NSTableView` has no hover state of its own, so the recording list looked
-/// inert next to the rows above and below it, which do respond. The highlight
-/// is the same weight as `SidebarRow`'s, and it defers to the selection: a
-/// selected row is already painted, and drawing over it would only muddy the
-/// colour the table chose.
+/// **Both are drawn here, and that is the point.** The hover used to be a
+/// background on the cell, which sits inside the row view, so it was a
+/// different width from the selection AppKit draws on the row itself: two
+/// highlights for the same list, neither lining up with the other. Drawing both
+/// in the row view gives them one geometry by construction.
+///
+/// The two point vertical inset is what keeps neighbours apart. Filling the row
+/// makes a hovered row and the selected row above it into one continuous block,
+/// which reads as a single tall selection rather than as two states.
 @MainActor
-class HoverCell: NSView {
-    private var hovering = false { didSet { restyle() } }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.cornerRadius = 6
+final class HoverRowView: NSTableRowView {
+    var hovering = false {
+        didSet { if hovering != oldValue { needsDisplay = true } }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    /// Matches the inset `NSTableView` style, which is what the rest of this
+    /// sidebar is laid out against.
+    private static let sideInset: CGFloat = 10
+    private static let gap: CGFloat = 2
+    private static let radius: CGFloat = 8
 
-    /// Reconsider the highlight. Called by the table when the selection moves,
-    /// because a cell is never told, and by `configure` because a reused cell
-    /// arrives carrying the state of the row it used to be.
-    func restyle() {
-        let selected = (superview as? NSTableRowView)?.isSelected ?? false
-        layer?.backgroundColor = hovering && !selected
-            ? NSColor.quaternaryLabelColor.withAlphaComponent(0.14).cgColor
-            : NSColor.clear.cgColor
+    private var highlightRect: NSRect {
+        bounds.insetBy(dx: Self.sideInset, dy: Self.gap)
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self))
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none, isSelected else { return }
+        // Emphasized is the accent colour, which is the window being key; the
+        // unemphasized grey is what AppKit uses when it is not, and copying
+        // both is what keeps a background window's list from shouting.
+        (isEmphasized ? NSColor.controlAccentColor
+                      : NSColor.unemphasizedSelectedContentBackgroundColor).setFill()
+        NSBezierPath(roundedRect: highlightRect,
+                     xRadius: Self.radius, yRadius: Self.radius).fill()
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard hovering, !isSelected else { return }
+        hoverTint(0.14).setFill()
+        NSBezierPath(roundedRect: highlightRect,
+                     xRadius: Self.radius, yRadius: Self.radius).fill()
+    }
+
+    /// A reused row arrives carrying the last row's hover.
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hovering = false
+    }
 }
 
-extension NSTableView {
-    /// Let every visible cell reconsider its hover.
+extension NSView {
+    /// The grey a row is tinted with under the pointer, resolved against the
+    /// window's light or dark appearance rather than the view's own.
+    ///
+    /// **A sidebar's descendants draw in a *vibrant* appearance, where the label
+    /// colours mean something else.** Measured on this machine, in dark mode:
+    ///
+    ///     darkAqua      quaternaryLabelColor  white 1.0  alpha 0.098
+    ///     vibrantDark   quaternaryLabelColor  grey 0.137 alpha 1.0
+    ///
+    /// Vibrancy blends its version rather than compositing it, so used as a
+    /// plain alpha fill inside the sidebar it is dark grey at 14% over a dark
+    /// background, which is no change to any pixel. That was this bug: the
+    /// highlight really was drawn, on the right rectangle, on every pointer
+    /// move, and nothing appeared. Three fixes to the *tracking* went in before
+    /// anybody looked at the colour, because a hover that never draws and a
+    /// hover that draws nothing are the same screenshot.
+    ///
+    /// It also explains the cell-based version this replaced, which worked: it
+    /// set `layer.backgroundColor`, and `NSColor.cgColor` resolves against
+    /// whatever appearance is current at that moment. Called from
+    /// `mouseEntered` that is the window's `darkAqua`, never the `vibrantDark`
+    /// a `draw(_:)` would have installed. So the same expression was correct
+    /// there and invisible here, which is why moving the highlight from the
+    /// cell to the row view appeared to break the tracking.
+    ///
+    /// `bestMatch` is what maps back: `vibrantDark` to `darkAqua`, verified
+    /// rather than assumed. White and black are stated outright because that is
+    /// exactly what `quaternaryLabelColor.withAlphaComponent` resolves to in
+    /// the two non-vibrant appearances, and the alpha is being replaced anyway.
     @MainActor
-    func restyleHoverCells() {
-        let visible = rows(in: visibleRect)
-        guard visible.length > 0 else { return }
-        for row in visible.lowerBound..<(visible.lowerBound + visible.length) {
-            (view(atColumn: 0, row: row, makeIfNecessary: false) as? HoverCell)?.restyle()
-        }
+    func hoverTint(_ alpha: CGFloat) -> NSColor {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return (dark ? NSColor.white : NSColor.black).withAlphaComponent(alpha)
     }
 }
-
-extension Recording {
-    /// Just the time. The day is already the group heading above it.
-    var clockTime: String {
-        guard let date else { return "" }
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f.string(from: date)
-    }
-}
-
 
 /// A sidebar row that lights up under the pointer.
 ///
@@ -661,7 +699,14 @@ final class SidebarRow: NSView {
         let alpha: CGFloat = pressed ? 0.26 : (hovering ? 0.16 : 0)
         layer?.backgroundColor = alpha == 0
             ? NSColor.clear.cgColor
-            : NSColor.quaternaryLabelColor.withAlphaComponent(alpha).cgColor
+            : hoverTint(alpha).cgColor
+    }
+
+    /// A `CGColor` is a snapshot of whatever it was resolved from, so switching
+    /// the Mac between light and dark leaves the last one behind.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyle()
     }
 
     /// Rebuilt on every layout, because a tracking area holds the rectangle it
@@ -672,7 +717,7 @@ final class SidebarRow: NSView {
         for area in trackingAreas { removeTrackingArea(area) }
         addTrackingArea(NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self))
     }
 
@@ -686,5 +731,83 @@ final class SidebarRow: NSView {
         // somewhere else means everywhere on this platform.
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         NSApp.sendAction(action, to: target, from: self)
+    }
+}
+
+extension Recording {
+    /// Just the time. The day is already the group heading above it.
+    var clockTime: String {
+        guard let date else { return "" }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
+    }
+}
+
+/// Which row the pointer is over, followed from the window's mouse events.
+///
+/// A monitor rather than a tracking area, because the row that lights up and
+/// the cell the pointer is actually over are two different views and this way
+/// nothing has to forward between them. It needs `acceptsMouseMovedEvents` on
+/// the window, which is off by default.
+///
+/// **Measured, and worth keeping in mind before it is rewritten again**: the
+/// monitor is armed, the events arrive, the point converts, and the right row
+/// view is found on every move. Two earlier tracking-area versions were
+/// abandoned on the theory that they were not firing, when the state they set
+/// was reaching the row view and the highlight was being painted in a colour
+/// that changed no pixels. See `hoverTint` above. The tracking was never the
+/// bug, so a fourth mechanism would not have been either.
+@MainActor
+final class TableHover {
+    private weak var table: NSTableView?
+    private var monitor: Any?
+    private let name: String
+
+    init(_ table: NSTableView, name: String) {
+        self.table = table
+        self.name = name
+    }
+
+    func start() {
+        guard monitor == nil else { return }
+        table?.window?.acceptsMouseMovedEvents = true
+        // A pointer monitor leaves nothing behind to inspect, and this hover was
+        // rebuilt three times against the wrong suspect. The trace says whether
+        // it was ever armed, which is the first thing to rule out next time.
+        trace("\(name): hover armed, window=\(table?.window != nil)")
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.mouseMoved, .mouseExited, .scrollWheel]) { [weak self] event in
+                self?.update(event)
+                return event
+            }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        clear()
+    }
+
+    private func update(_ event: NSEvent) {
+        guard let table, table.window === event.window else { clear(); return }
+        let point = table.convert(event.locationInWindow, from: nil)
+        let hovered = table.bounds.contains(point) ? table.row(at: point) : -1
+        let visible = table.rows(in: table.visibleRect)
+        guard visible.length > 0 else { return }
+        for row in visible.lowerBound..<(visible.lowerBound + visible.length) {
+            (table.rowView(atRow: row, makeIfNecessary: false) as? HoverRowView)?
+                .hovering = row == hovered
+        }
+    }
+
+    private func clear() {
+        guard let table else { return }
+        let visible = table.rows(in: table.visibleRect)
+        guard visible.length > 0 else { return }
+        for row in visible.lowerBound..<(visible.lowerBound + visible.length) {
+            (table.rowView(atRow: row, makeIfNecessary: false) as? HoverRowView)?
+                .hovering = false
+        }
     }
 }

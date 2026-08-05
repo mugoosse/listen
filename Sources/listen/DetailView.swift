@@ -838,6 +838,20 @@ final class TurnView: NSView {
         bodyLabel.attributedStringValue = base
         bodyLabel.font = .systemFont(ofSize: 13)
         bodyLabel.textColor = .labelColor
+        // Not so anybody can change the font: this field is not editable. It
+        // makes `NSTextFieldCell` round-trip its value as an *attributed*
+        // string. A right-click installs a field editor, and when that editor
+        // leaves the cell writes what it held back into the label, which for a
+        // plain-text cell means the paragraph style is dropped. Measured on the
+        // same wiring the app uses, right-clicking once and dismissing:
+        //
+        //     default                          lineSpacing 2.0 -> 0.0
+        //     editor.isRichText = true         lineSpacing 2.0 -> 0.0
+        //     allowsEditingTextAttributes      lineSpacing 2.0 -> 2.0
+        //
+        // So the paragraph quietly re-flowed tighter after the first
+        // right-click and stayed that way until the pane was rebuilt.
+        bodyLabel.allowsEditingTextAttributes = true
         bodyLabel.sentences = sentences
         bodyLabel.onEdit = { [weak self] in self?.beginEditing($0) }
 

@@ -22,18 +22,11 @@ DIR="${1:-/tmp/listen-demo}"
 rm -rf "$DIR"
 mkdir -p "$DIR/recordings" "$DIR/notes"
 
-# The voices are macOS's own, so no human was recorded to make these files.
-say_wav() {
-    voice="$1"; text="$2"; out="$3"
-    say -v "$voice" -o "$TMP/say.aiff" "$text"
-    afconvert -f WAVE -d LEI16@16000 -c 1 "$TMP/say.aiff" "$out"
-}
-
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 python3 - "$DIR" <<'PY'
-import json, os, subprocess, sys, tempfile
+import json, math, os, subprocess, sys, tempfile, wave
 from datetime import datetime, timedelta, timezone
 
 root = sys.argv[1]
@@ -106,33 +99,62 @@ for index, (title, app, days_ago, minutes, casts) in enumerate(MEETINGS):
     mine, theirs, lines = casts[0]
     other_voice = VOICES["default"][index % len(VOICES["default"])]
 
-    # Two tracks, as a real recording has: the microphone is the user and the
-    # system track is everyone else. Both are synthesised speech.
-    mine_text = " ".join(lines[0::2])
-    their_text = " ".join(lines[1::2])
-    wav(VOICES["Me"], mine_text, os.path.join(folder, "mic.wav"))
-    wav(other_voice, their_text, os.path.join(folder, "system.wav"))
+    # Render every sentence by itself, then place it on its track at exactly
+    # the timestamp written into the transcript. Concatenating all of the
+    # user's sentences into mic.wav and all of the other person's sentences
+    # into system.wav makes both sides talk across one another on playback.
+    # The silence is part of the demo data, not an optional visual flourish.
+    utterances = []
+    with tempfile.TemporaryDirectory() as audio_tmp:
+        for i, line in enumerate(lines):
+            speaker = "Me" if i % 2 == 0 else theirs
+            voice = VOICES["Me"] if speaker == "Me" else other_voice
+            path = os.path.join(audio_tmp, "%02d.wav" % i)
+            wav(voice, line, path)
+            with wave.open(path, "rb") as source:
+                if (source.getnchannels(), source.getsampwidth(), source.getframerate()) != (1, 2, 16000):
+                    raise RuntimeError("demo speech must be 16 kHz mono PCM")
+                utterances.append((speaker, line, source.readframes(source.getnframes())))
 
+    rate = 16000
+    gap_frames = int(0.6 * rate)
+    clock_frames = 2 * rate
     segments, turns = [], []
-    clock = 2.0
-    for i, line in enumerate(lines):
-        speaker = "Me" if i % 2 == 0 else theirs
-        length = max(2.5, len(line) * 0.062)
-        segments.append({"start": round(clock, 2), "end": round(clock + length, 2),
+    tracks = {"Me": [], theirs: []}
+    for speaker, line, audio in utterances:
+        frames = len(audio) // 2
+        start = clock_frames / rate
+        end = (clock_frames + frames) / rate
+        segments.append({"start": round(start, 2), "end": round(end, 2),
                          "speaker": speaker, "text": line})
-        turns.append({"start": round(clock, 2), "end": round(clock + length, 2),
+        turns.append({"start": round(start, 2), "end": round(end, 2),
                       "speaker": speaker, "text": line})
-        clock += length + 0.6
+        tracks[speaker].append((clock_frames, audio))
+        clock_frames += frames + gap_frames
+
+    total_frames = int(math.ceil(clock_frames))
+    for speaker, path in (("Me", "mic.wav"), (theirs, "system.wav")):
+        track = bytearray(total_frames * 2)
+        for start_frame, audio in tracks[speaker]:
+            start_byte = start_frame * 2
+            track[start_byte:start_byte + len(audio)] = audio
+        with wave.open(os.path.join(folder, path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes(track)
+
+    duration = total_frames / rate
 
     json.dump({
         "id": rid, "title": title,
         "recorded_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "duration": round(minutes * 60 + 13.0, 2),
+        "duration": round(duration, 2),
         "source": "detected", "state": "done",
         "app_bundle_id": app,
     }, open(os.path.join(folder, "metadata.json"), "w"), indent=1, sort_keys=True)
 
-    json.dump({"segments": segments, "duration": round(minutes * 60 + 13.0, 2),
+    json.dump({"segments": segments, "duration": round(duration, 2),
                "model": "mlx-community/parakeet-tdt-0.6b-v2",
                "wordLevel": False, "cleanup": {}, "dictionary": {}},
               open(os.path.join(folder, "transcript.json"), "w"), indent=1, sort_keys=True)

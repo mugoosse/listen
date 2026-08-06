@@ -52,6 +52,16 @@ enum SpeakerPicker {
 
 /// One candidate, from wherever it came.
 private struct Candidate {
+    /// What gets written into the transcript.
+    ///
+    /// Apart from the user this is the same string as `name`. The microphone
+    /// track is `Me` on disk however you have chosen to be shown, so the two
+    /// have to be carried separately or the row that reads "Maxime" writes a
+    /// second person called Maxime beside the `Me` who is already you. This
+    /// library holds that exact case from the import and it is not one to add
+    /// to.
+    var label: String
+    /// What the row reads.
     var name: String
     /// The address that asserts *which* attendee this is, when the candidate
     /// came from an invitation. Picking the row claims it for that name.
@@ -190,30 +200,36 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
         for match in VoiceBank.suggestions(for: speaker, in: recording)
         where !taken.contains(match.name) {
-            out.append(Candidate(name: match.name, email: nil,
+            out.append(Candidate(label: match.name,
+                                 name: SpeakerName.display(match.name), email: nil,
                                  detail: "\(Int(match.score * 100))% match"
                                      + (match.recordings > 1
                                         ? " · \(match.recordings) recordings" : ""),
                                  section: "Sounds like"))
         }
 
-        let named = Set(out.map(\.name))
+        let named = Set(out.map(\.label))
         for person in (recording.metadata.calendar_people ?? [])
         where !person.is_me {
             guard let name = person.bestName, !taken.contains(name),
                   !named.contains(name) else { continue }
-            out.append(Candidate(name: name, email: person.email,
+            out.append(Candidate(label: name, name: name, email: person.email,
                                  detail: [person.email,
                                           person.is_organizer ? "organizer" : nil]
                                      .compactMap { $0 }.joined(separator: " · "),
                                  section: "In the invitation"))
         }
 
-        let offered = Set(out.map(\.name))
+        // You are in this list, unless you are already in this recording, and
+        // `taken` is what says so: the microphone track is on disk as `Me`, so
+        // the ordinary "anybody already accounted for" rule covers it. What
+        // this replaced was an explicit `!person.isYou`, which left an imported
+        // mix-only recording, the one kind with no microphone side, unable to
+        // say that a speaker was you at all.
+        let offered = Set(out.map(\.label))
         for person in People.roster()
-        where !person.isYou && !taken.contains(person.label)
-            && !offered.contains(person.label) {
-            out.append(Candidate(name: person.display, email: nil,
+        where !taken.contains(person.label) && !offered.contains(person.label) {
+            out.append(Candidate(label: person.label, name: person.display, email: nil,
                                  detail: person.summary, section: "People"))
         }
         return out
@@ -267,7 +283,10 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
     private func addRow(for candidate: Candidate) {
         let disc = InitialsDisc(size: 22)
-        disc.show(Person(label: candidate.name, recordings: [], seconds: 0))
+        // The label, not the name: the disc takes its colour from the string on
+        // disk, so passing the display name gives you a different colour here
+        // from the one your chip has two inches above.
+        disc.show(Person(label: candidate.label, recordings: [], seconds: 0))
         let name = NSTextField(labelWithString: candidate.name)
         name.font = .systemFont(ofSize: 13)
         let detail = NSTextField(labelWithString: candidate.detail)
@@ -291,7 +310,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // you can pick rather than as a paragraph about them.
         let row = HoverRow(content: content, target: self, action: #selector(pick(_:)),
                            inset: 4, height: 34)
-        row.identifier = NSUserInterfaceItemIdentifier(candidate.name)
+        row.identifier = NSUserInterfaceItemIdentifier(candidate.label)
         // Added and constrained in that order: a constraint between two views
         // with no common ancestor throws rather than laying out badly.
         rows.addArrangedSubview(row)
@@ -301,9 +320,9 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     // MARK: - Choosing
 
     @objc private func pick(_ sender: NSView) {
-        guard let name = sender.identifier?.rawValue else { return }
-        let email = candidates.first { $0.name == name }?.email
-        apply(name: name, email: email)
+        guard let label = sender.identifier?.rawValue else { return }
+        let email = candidates.first { $0.label == label }?.email
+        apply(label: label, email: email)
     }
 
     @objc private func commitTyped() {
@@ -314,16 +333,33 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         let match = candidates.first {
             $0.name.localizedCaseInsensitiveCompare(typed) == .orderedSame
         }
-        apply(name: match?.name ?? typed, email: match?.email)
+        apply(label: match?.label ?? Self.label(for: typed), email: match?.email)
     }
 
-    private func apply(name: String, email: String?) {
-        guard let problem = People.check(name) else {
-            TranscriptEditor.apply(.rename(speaker, to: name), to: recording)
+    /// The string to write for a name somebody typed.
+    ///
+    /// Your own name resolves back to `Me`. `SpeakerName.display` turns that
+    /// label into the name you chose everywhere it is read, so typing that name
+    /// in means the microphone track; taking it literally would file a second
+    /// person under a name that already appears in the roster, and the two
+    /// would never merge because nothing on disk says they are the same. Same
+    /// accept-what-they-meant rule as `People.findByDisplayName`.
+    private static func label(for typed: String) -> String {
+        typed.localizedCaseInsensitiveCompare(SpeakerName.display(SpeakerName.you))
+            == .orderedSame ? SpeakerName.you : typed
+    }
+
+    private func apply(label: String, email: String?) {
+        // `People.checkSpeaker` and not `People.check`: this writes one label
+        // onto one speaker in one transcript, where `Me` is a legitimate answer
+        // and the library-wide rename's refusal of it is not. See the comment
+        // on `checkSpeaker`.
+        guard let problem = People.checkSpeaker(label, in: recording) else {
+            TranscriptEditor.apply(.rename(speaker, to: label), to: recording)
             // The address, only when a row carrying one was picked. Typing a
             // name freehand asserts nothing about who was on the invitation,
             // which is the standard the book already holds.
-            if let email { ContactBook.link(email, to: name) }
+            if let email { ContactBook.link(email, to: label) }
             done()
             return
         }

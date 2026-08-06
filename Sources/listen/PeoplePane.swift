@@ -634,6 +634,21 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         notesScroll.heightAnchor.constraint(equalToConstant: 76).isActive = true
         add(notesScroll, width: true)
 
+        // Tab walks the form. **A key view loop is built from a nib, and there
+        // is no nib here**, so with these links unset `nextValidKeyView` is nil
+        // and Tab in the first name field does nothing whatsoever: every field
+        // has to be clicked, in a form whose first two are a first name and a
+        // last name sitting side by side. The loop closes back to `first`
+        // rather than dead-ending, which is also what makes Shift-Tab work.
+        //
+        // `notes` is a text view and keeps Tab for itself, inserting a tab the
+        // way a multi-line field is supposed to. It is last in the order for
+        // that reason as much as for its place on screen.
+        first.nextKeyView = last
+        last.nextKeyView = emails
+        emails.nextKeyView = notes
+        notes.nextKeyView = first
+
         // Says what it will cost before it is pressed. The name is the one
         // field here that rewrites transcripts, and the count is the part
         // nobody can guess.
@@ -928,22 +943,31 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         alert.runModal()
     }
 
+    /// Ask only about the half of a rename that is not already on screen.
+    ///
+    /// **The plain confirmation is gone.** It restated, after the click, what
+    /// the line directly above Save states before it: how many transcripts get
+    /// rewritten and that the voiceprint travels with the name. A second
+    /// statement of a fact somebody has just read and acted on is not a safety
+    /// step, it is a click, and it is the same argument that removed the
+    /// keep-this-recording panel: a question asked away from the moment it
+    /// belongs to gets answered without being read.
+    ///
+    /// A collision is different, and it is the reason this function still
+    /// exists. Renaming Sarah to Anna where a recording already has an Anna
+    /// merges two people there, `Merge.turns` condenses their now-adjacent
+    /// turns, and the result looks exactly as though it had always been that
+    /// way. Nothing on the pane says it and nothing afterwards shows it.
     private func confirm(renaming person: Person, to name: String) -> Bool {
         let collisions = People.collisions(renaming: person.label, to: name)
-        let count = person.recordings.count
+        guard !collisions.isEmpty else { return true }
         let alert = NSAlert()
-        alert.messageText = "Rename \(person.display) to \(name) in "
-            + (count == 1 ? "1 recording?" : "\(count) recordings?")
-        var body = "Every transcript with \(person.display) in it is rewritten, and "
-            + "their voiceprint moves with the name so the next recording still "
-            + "recognises them. This cannot be undone from here."
-        if !collisions.isEmpty {
-            body += "\n\n"
-                + (collisions.count == 1 ? "One of them" : "\(collisions.count) of them")
-                + " already has somebody called \(name), and the two become one "
-                + "person there."
-        }
-        alert.informativeText = body
+        alert.messageText = (collisions.count == 1
+            ? "One recording already has" : "\(collisions.count) recordings already have")
+            + " somebody called \(name)."
+        alert.informativeText = "There, \(person.display) and \(name) become one person, "
+            + "and their turns are condensed as though they always had been. "
+            + "This cannot be undone from here."
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

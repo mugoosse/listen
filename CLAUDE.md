@@ -668,6 +668,26 @@ though it had always been that way. `VoiceBank.rename` keeps whichever
 voiceprint was built from more speech, because `isEvidence` is a threshold in
 seconds and keeping the shorter one can drop a usable identity below it.
 
+#### Only the collision is worth an alert, and the rest was noise
+
+`PeoplePane` and `PersonPopover` both put up a "Rename X to Y in N recordings?"
+panel after Save. Both editors already carry the line *Renaming rewrites the
+transcript in N recordings and moves their voiceprint with the name*, directly
+above the button. So the panel restated, after the click, the sentence somebody
+had just read and acted on, which is not a safety step but a click. It is the
+argument that removed the keep-this-recording panel wearing different clothes: a
+question asked away from the moment it belongs to gets answered without being
+read.
+
+What `confirm` still exists for is the half that is **not** on screen. Renaming
+Sarah to Anna where a recording already has an Anna merges two people there,
+`Merge.turns` condenses their now-adjacent turns, and the result looks exactly
+as though it had always been that way. Nothing on the pane says it and nothing
+afterwards shows it, so that one asks and says only that. Verified by driving
+the real window: an ordinary rename saves silently and the transcript is
+rewritten; a colliding one still puts up "One recording already has somebody
+called Quinn."
+
 ### `Me` stays `Me` on disk, whatever you call yourself
 
 `Settings.userName` is a preference and `SpeakerName.display` resolves it on the
@@ -687,6 +707,45 @@ really does contain that case: 19 recordings with `Me` and 8 with a hand-labelle
 label after the name whenever the two differ (`Emily (Me)`), the popover says
 "You, on the microphone track", and choosing a name that already exists says so
 rather than merging anything.
+
+#### The window refused a label the CLI had always accepted
+
+`SpeakerPicker.apply` guarded on `People.check`, which is the **library-wide**
+rename's rule and refuses `Me` outright, with "To fold somebody into yourself in
+one recording, use Merge in that transcript." Applied to one speaker in one
+transcript, two of its three rules survive the trip and that one does not.
+
+The case that breaks it is the imported library, which is most of this one. A
+legacy recording is a single mixed track, so `Pipeline` labels nobody `Me`
+there, so there is no microphone side to Merge into and the advice points at a
+button with nothing to offer. Renaming the speaker is the only route, and
+`listen label <id> A Me` has always taken it. So the window and the CLI
+disagreed about a rule that is supposed to have one owner, which is the failure
+`listen label` exists to catch, and what found it was somebody picking a name
+**the app itself had just suggested at 85%**: the voice bank offers `Me` in
+Sounds like, and then the guard one layer down refused it.
+
+`People.checkSpeaker(_:in:)` is the per-recording rule. It keeps empty and
+placeholder, and replaces the blanket refusal with the one thing that is
+actually true per recording: you can only be one speaker in it, so `Me` is
+refused only where a microphone track is already present, and there Merge is
+the button at the bottom of the same popover. Both halves verified by driving
+the real picker: on the mix-only import it wrote `Me` and moved the voiceprint
+with it; on a recording that already had one it said so and wrote nothing.
+
+Two things came with it, because the same bug had a display half:
+
+1. **`Candidate` carries a `label` and a `name`.** The Sounds like row read
+   `Me`, the raw label, while every chip two inches above said "Maxime". Now it
+   reads the display name and writes the label, and the initials disc takes its
+   colour from the label so it matches the chip.
+2. **Typing your own display name resolves back to `Me`.** Without it, "Maxime"
+   typed into the field files a second person under a name already in the
+   roster, and nothing on disk says the two are the same. Same
+   accept-what-they-meant rule as `People.findByDisplayName`. The People
+   section also stopped filtering `!person.isYou`: `taken` already excludes you
+   wherever the microphone track is present, so the explicit test only ever
+   removed you from the one kind of recording that needs you.
 
 ### The CLI wrote its preferences into the wrong domain
 
@@ -1135,6 +1194,29 @@ fixed in `CalendarEvent.init`:
    exactly the question the contact book exists to let somebody answer once.
 2. **An entry with no name and no address at all**, which became a button
    reading "(unnamed)". Dropped.
+
+#### `bestName` read the snapshot before the book, so a rename never reached it
+
+`calendar_people` is frozen at the minute the recording was matched, on purpose:
+an event can be edited or deleted and the library has to keep answering. The
+contact book is the opposite, the one place a human has said which person an
+address belongs to, and `People.rename` moves the entry with the name. So the
+book has to be asked **first**, and it was asked last.
+
+The symptom is a name that has been correct everywhere else for days. Rename
+Justadecisionpod to Joshua Daniels, every transcript is rewritten, the chips say
+Joshua Daniels, and the speaker picker's In the invitation row still offers
+Justadecisionpod, which if picked recreates the person who was just renamed.
+Reported that way round, and reproducible: the snapshot on disk holds only
+`justadecisionpod@gmail.com` with no name at all, so `bestName` fell through to
+`ContactBook.suggestedName`, whose whole job is deriving a word from an address.
+
+Order is now book, then the calendar's own name field, then `suggestedName`,
+which stays last because it is the weakest by construction. The comment in
+`SpeakerSheet` had said "the contact book first" since before any of this; it
+was describing the intent rather than the code. Verified with
+`listen calendar match`, which now prints `Joshua Daniels
+<justadecisionpod@gmail.com>` for the same recording.
 
 #### The contact book is a second route to the identity Listen already has
 
@@ -1725,6 +1807,39 @@ There is no test target, matching Speak. Verification is manual through the CLI
 plus debug tracing. If you add one, note that MLX needs the Metal toolchain, so
 tests must run through `xcodebuild`, not `swift test`.
 
+### Driving the built app against a scratch library, without wrecking the real one
+
+`LISTEN_LIBRARY` points the app somewhere else, and a scratch library needs only
+the sidecars: copy `metadata.json`, `transcript.json`, `turns.json` and
+`embeddings.json` out of a recording and leave the WAVs behind. Everything about
+speakers, people and notes works on that; only playback and Transcribe Again do
+not, and `Recording.hasAudio` already says so.
+
+**Launch the binary, never `open`.** Two traps stack, and together they cost a
+real scare:
+
+1. `open -na Listen.app` resolves through Launch Services, which prefers
+   `/Applications/Listen.app` over the one in the working directory. The build
+   under test is not the app that starts.
+2. A Launch Services start inherits no shell environment, so `LISTEN_LIBRARY`
+   is dropped and it opens the **real** library, where it adopts staged
+   recordings, sweeps staging and resumes the queue.
+
+So `LISTEN_LIBRARY=… ./Listen.app/Contents/MacOS/Listen` directly, in the
+background, and check the pid is the one you meant before touching anything.
+
+Drive it with `AXUIElementCreateApplication(pid)` and nothing else, for the
+reason recorded against the popover crash. Useful shapes: press the status
+menu's Recent row to open a recording without hunting the sidebar table, set
+`kAXSelectedRowsAttribute` on a table to select a person, and read
+`AXFocusedUIElement` after a synthesised Tab to check a key view loop.
+
+One gap to know about: `HoverRow` is a plain `NSView` with a target and action,
+so every popover list row in this app is invisible to accessibility. A row
+cannot be pressed through AX, and the way in is the text field beside it. That
+is worth fixing on its own account, and until it is, a test that "clicks a
+suggestion" is really testing the typed path.
+
 ### Voiceprint thresholds were re-derived, and the old ones would have been wrong
 
 `listen calibrate` on 12 named voiceprints across 4 people (12 same-person and
@@ -2299,6 +2414,30 @@ menu items with key equivalents rather than by the fields. This surfaced as
 The Edit menu items target `nil` on purpose, so they travel the responder chain
 and land on whatever has focus.
 
+#### An app with no nib has no key view loop either, and that one is quieter
+
+The same absence, one layer down, and it took longer to notice because nothing
+looks broken. AppKit builds the Tab order from a nib; every view here is built
+in code, so `nextKeyView` is nil everywhere and `nextValidKeyView` finds
+nothing. Tab does not beep, does not move and does not report anything: the
+caret simply stays where it is.
+
+Reported against the person editor, which is the worst place for it, because its
+first two fields are a first name and a last name **side by side** and typing
+one then reaching for Tab is what anybody does. `PeoplePane.renderEditor` and
+`PersonPopover.buildEditor` now state the chain, first to last to email to
+notes, closing back to the first so Shift-Tab works too. Verified by reading
+`AXFocusedUIElement` after each synthesised Tab: `Edgar`, then the empty
+surname, then email, then the notes text area.
+
+`notes` is an `NSTextView` and keeps Tab for itself, inserting a tab the way a
+multi-line field is supposed to. It is last in the order for that reason as much
+as for its place on screen.
+
+Worth knowing for the next form: this is not specific to these two panes. Any
+programmatically built stack of fields in this app has the same gap until
+somebody says otherwise.
+
 ### Cmd-Q is intercepted ahead of the menu, not rebound in it
 
 `QuitConfirm` asks once before quitting, ported from Anarlog because Cmd-Q sits
@@ -2574,6 +2713,41 @@ everyone-track: diarize it whole, discover every speaker, and label nobody
 in a mixed track that is not true of anybody, so applying it would attach the
 user's name to whoever happened to be first.
 
+#### Re-transcribing an import swaps Whisper for Parakeet, and v2 has no Dutch
+
+The trap that makes "just Transcribe Again on the imports" look obviously right
+and be catastrophic on half of them. **A legacy transcript was produced by
+Whisper, which is multilingual. Parakeet v2 is English only.** Nothing in the
+window says so at the moment somebody presses the button, and the result is not
+an error, it is a plausible English transcript of a Dutch conversation.
+
+Measured over the 07-13 group, where the legacy text is the same calls in Dutch:
+
+| recording | before | after, v2 |
+|---|---|---|
+| `2026-07-13-184129-4F3D` | 100 turns, 1289 words | 24 turns, 403 words, **-69%** |
+| `2026-07-13-183719-8160` | 68 turns, 415 words | 1 turn, 97 words, **-77%** |
+| `2026-07-13-182440-779C` | 13 turns, 152 words | 9 turns, 61 words, **-60%** |
+
+And what survives is worse than the count suggests, because it is confident
+nonsense rather than gaps:
+
+    before   A   Hello? Hello. Have you had the Zandelion?
+             A   Where's on top of the team? Have you FaceTimed? Have you seen the kids?
+    after    A   Yes, Erisander Leinhardt? Ah, okay. And the kinches aren't in the kindergarten
+             Me  Wow, could you not say button on Sidaki boot trap? Couldn't buttrap a bit or boot.
+
+Not an audio problem: both split tracks peak near 1.0 with a p99 of 0.21 and
+0.34, and 55% of samples above the noise floor. The same operation on an
+**English** import is fine, measured on `2026-07-03-170153-CBDE`: 2723 words to
+2764, **+2%**, with `Me` correctly separated onto the mic track for the first
+time.
+
+So the rule is: **check the language before re-transcribing an import**, and use
+`--model v3` where it is not English. Dutch is one of v3's 25. Nothing enforces
+this yet, and the Models pane's "English only" line is two screens away from
+Transcribe Again, which is where it is needed.
+
 ### The legacy m4a holds two tracks, and everything reads only the first
 
 This one cost the most to find, because every symptom pointed elsewhere.
@@ -2630,6 +2804,45 @@ toward a threshold too high to be useful.
 The thresholds are now 0.47 and 0.57, one third and two thirds across the real
 gap. The lesson generalises past this feature: synthetic audio is fine for
 checking that a pipeline runs, and worthless for choosing a threshold.
+
+#### A suggestion is scored against the worst print, not the best evidence
+
+Reported as "it says 60% and it is right, why so low". Measured on the real
+library, and the number is doing three things at once that are worth keeping
+apart.
+
+**It is a cosine similarity printed as a percentage**, which invites being read
+as a confidence and is not one. Real same-person pairs run 0.668 to 0.901; real
+different-person pairs top out at 0.371. 0.603 is past `strongThreshold`, and
+the runner-up for that speaker was 0.231, a gap of 0.372 that is wider than the
+entire different-person range. `SpeakerPicker` prints `Int(score * 100)` and
+nothing beside it says any of that.
+
+**`suggestions` takes the max over a person's prints and does not pool them.**
+One embedding per person per recording, no centroid.
+
+**And the person had exactly one print.** Five recordings of the same voice, one
+of them labelled. Worse, the labelled one is the outlier of its own cluster:
+
+| voiceprint | vs the new speaker |
+|---|---|
+| 2026-07-16 `A`, unnamed | +0.867 |
+| 2026-07-09 `A`, unnamed | +0.691 |
+| 2026-07-02 `B`, unnamed | +0.667 |
+| 2026-07-30, the only one named | **+0.603** |
+
+It scores 0.49 to 0.61 against the other three, which score 0.61 to 0.71 against
+each other. Not crosstalk from the microphone track, checked: -0.095 against the
+user's own print from that recording. Just a worse day for that voice.
+
+So the app compared against the single least representative recording it had,
+because that was the only one anybody had named. Three levers, in order of size:
+labelling the other four costs nothing and takes the score to 0.867; pooling the
+prints into a centroid gives **+0.828** here and is robust to one bad print in a
+way `max` is not; and offering the unnamed speakers that match a name somebody
+has just applied would have surfaced those four without being asked. None of
+them is implemented yet. The measurement is here so the next person does not
+re-derive it.
 
 ### A silent track must not cost a transcript
 

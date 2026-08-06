@@ -145,6 +145,7 @@ enum People {
         case empty
         case looksLikePlaceholder(String)
         case isYou
+        case recordingHasYou
 
         var errorDescription: String? {
             switch self {
@@ -157,6 +158,9 @@ enum People {
                 return "\(SpeakerName.you) is the microphone track, which is you by "
                     + "construction rather than by name. To fold somebody into "
                     + "yourself in one recording, use Merge in that transcript."
+            case .recordingHasYou:
+                return "This recording already has a microphone track, which is you. "
+                    + "Use Merge to fold this speaker into it."
             }
         }
     }
@@ -170,6 +174,36 @@ enum People {
         // the rename having silently failed.
         if VoiceBank.isPlaceholder(trimmed) { return .looksLikePlaceholder(trimmed) }
         if trimmed == SpeakerName.you { return .isYou }
+        return nil
+    }
+
+    /// The same question about one speaker in one recording, which is a
+    /// different question.
+    ///
+    /// **`check` refuses `Me` and this must not**, and the reason is the whole
+    /// of why there are two functions. There, the name is being applied to
+    /// everybody called something across the library, and folding another
+    /// person into yourself everywhere at once is not an edit anybody means.
+    /// Here it is a label on one speaker in one transcript, and for a mix-only
+    /// imported recording it is the **only** way to say "that speaker is me":
+    /// the legacy recorder produced one track, so `Pipeline` labels nobody `Me`
+    /// there and there is no microphone side to Merge into. The advice
+    /// `.isYou` gives points at a button that has nothing to offer.
+    ///
+    /// `listen label <id> A Me` has always allowed this. The window refused it,
+    /// which is exactly the two-implementations-of-one-rule failure the CLI
+    /// exists to catch, and it took a user picking a name the app itself had
+    /// just suggested at 85% to find.
+    static func checkSpeaker(_ name: String, in recording: Recording) -> RenameProblem? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .empty }
+        if VoiceBank.isPlaceholder(trimmed) { return .looksLikePlaceholder(trimmed) }
+        // You can only be one speaker in a recording. Where the microphone
+        // track is already here, this is a merge, and the button that says so
+        // is at the bottom of the same popover.
+        if trimmed == SpeakerName.you, recording.speakers.contains(SpeakerName.you) {
+            return .recordingHasYou
+        }
         return nil
     }
 

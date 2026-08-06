@@ -264,10 +264,24 @@ struct CalendarPerson: Codable, Equatable {
     var is_me: Bool
     var is_organizer: Bool
 
-    /// What to call them before anybody has said. Nil when there is nothing to
-    /// go on, which measurement says never happens: every entry carried either
-    /// a name or an address.
+    /// What to call them, best evidence first. Nil when there is nothing to go
+    /// on, which measurement says never happens: every entry carried either a
+    /// name or an address.
+    ///
+    /// **The book comes first, and it used to come last.** `calendar_people` is
+    /// a snapshot taken when the recording was matched, so the name in it is
+    /// frozen at that moment; the book is the one place a human has said who an
+    /// address belongs to, and `People.rename` moves the entry with the name.
+    /// Reading the snapshot first meant renaming somebody left the invitation
+    /// row in the speaker picker still offering their old name, days after every
+    /// transcript had been rewritten, and picking it would have created the old
+    /// person over again.
+    ///
+    /// `suggestedName` stays last, because it is the weakest of the three by
+    /// construction: it derives a name from the address itself, which is how
+    /// `justadecisionpod@gmail.com` becomes "Justadecisionpod".
     var bestName: String? {
+        if let email, let known = ContactBook.name(for: email) { return known }
         if let name, !name.isEmpty, !Self.looksLikeAnEmail(name) { return name }
         guard let email else { return nil }
         return ContactBook.suggestedName(from: email)

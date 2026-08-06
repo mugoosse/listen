@@ -420,6 +420,14 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
             notesScroll.heightAnchor.constraint(equalToConstant: 76),
         ])
 
+        // Tab walks the form, for the reason `PeoplePane.renderEditor` records:
+        // a key view loop comes from a nib and there is no nib, so unset these
+        // links mean Tab does nothing at all.
+        first.nextKeyView = last
+        last.nextKeyView = emails
+        emails.nextKeyView = notes
+        notes.nextKeyView = first
+
         // Says what it will cost before it is pressed. Renaming somebody is the
         // one edit here that rewrites transcripts, and the count is the part
         // nobody can guess.
@@ -503,23 +511,22 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
         alert.runModal()
     }
 
-    /// Say how much this touches before touching it.
+    /// Ask only about the half of a rename that is not already on screen.
+    ///
+    /// `PeoplePane.confirm` carries the argument, and this card has the same
+    /// line above the same Save button, so it makes the same trade: the count
+    /// and the voiceprint are stated before the click and not repeated after
+    /// it, and a rename that silently merges two people still asks.
     private static func confirm(renaming person: Person, to name: String) -> Bool {
         let collisions = People.collisions(renaming: person.label, to: name)
-        let count = person.recordings.count
+        guard !collisions.isEmpty else { return true }
         let alert = NSAlert()
-        alert.messageText = "Rename \(person.display) to \(name) in "
-            + (count == 1 ? "1 recording?" : "\(count) recordings?")
-        var body = "Every transcript with \(person.display) in it is rewritten, and "
-            + "their voiceprint moves with the name so the next recording still "
-            + "recognises them. This cannot be undone from here."
-        if !collisions.isEmpty {
-            body += "\n\n"
-                + (collisions.count == 1 ? "One of them" : "\(collisions.count) of them")
-                + " already has somebody called \(name), and the two become one "
-                + "person there."
-        }
-        alert.informativeText = body
+        alert.messageText = (collisions.count == 1
+            ? "One recording already has" : "\(collisions.count) recordings already have")
+            + " somebody called \(name)."
+        alert.informativeText = "There, \(person.display) and \(name) become one person, "
+            + "and their turns are condensed as though they always had been. "
+            + "This cannot be undone from here."
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

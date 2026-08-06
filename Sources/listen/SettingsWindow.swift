@@ -1161,12 +1161,12 @@ final class DevelopersPane: Pane {
         note("`listen mcp` serves the library to an agent over stdio. No port, and "
              + "the app does not need to be running. Paste this into your MCP "
              + "client configuration.\n\n"
-             + "Notes are the only thing an agent can write. It can add, rewrite "
-             + "and delete the notes it wrote; it can read the notes you type "
-             + "yourself and not change them; and it cannot rename a speaker, "
-             + "correct a transcript or delete a meeting. It also reads your "
-             + "transcripts, so if the agent runs in the cloud, that text leaves "
-             + "this Mac.")
+             + "Notes and tags are the only things an agent can write. It can "
+             + "add, rewrite and delete the notes it wrote, and tag and untag a "
+             + "meeting; it can read the notes you type yourself and not change "
+             + "them; and it cannot rename a speaker, correct a transcript, "
+             + "retitle a meeting or delete one. It also reads your transcripts, "
+             + "so if the agent runs in the cloud, that text leaves this Mac.")
 
         let field = NSTextView()
         field.string = MCPConfig.json

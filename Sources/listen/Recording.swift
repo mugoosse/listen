@@ -53,8 +53,25 @@ struct Metadata: Codable {
     /// prefers the live lookup and falls back to this.
     var app_name: String?
 
-    // The calendar and app fields are all `Optional`, and that is what makes
-    // them safe to add to a struct with 47 files already on disk.
+    /// What this recording is about, in the user's own words.
+    ///
+    /// The user's own classification and nothing derived: a recruiter screen, a
+    /// hiring manager chat and a referral catch-up share no words, no attendee
+    /// and no week, so free text, a person and a date range between them cannot
+    /// name "the job hunt calls". A tag is how a question says what it is about.
+    ///
+    /// Held here rather than in a library-level file, which is the opposite of
+    /// the call `Notes` made and for the reason `Notes` gives: a note can be
+    /// about four meetings and outlive all of them, and a tag is a claim about
+    /// this one recording with no meaning apart from it. So deleting a
+    /// recording takes its tags with it and strands nothing.
+    ///
+    /// Sorted case-insensitively on the way in, so the row of pills is stable
+    /// and the file diffs cleanly. `Tags` owns every write.
+    var tags: [String]?
+
+    // The calendar, app and tag fields are all `Optional`, and that is what
+    // makes them safe to add to a struct with 47 files already on disk.
     //
     // The trap recorded against `StoredTranscript` is that Swift's synthesized
     // decoder throws `keyNotFound` on a missing key *even when the property has

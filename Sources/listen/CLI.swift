@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts", "notes",
+        "calendar", "contacts", "notes", "tags",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -83,6 +83,8 @@ enum CLI {
             dictionary(rest)
         case "notes":
             notes(rest)
+        case "tags":
+            tags(rest)
         case "edit":
             edit(rest)
         case "mcp":
@@ -552,6 +554,127 @@ enum CLI {
         }
         log("\(recording.id): sentence \(hits[0]) rewritten")
         print(now)
+        exit(0)
+    }
+
+    // MARK: - Tags
+
+    /// `listen tags <sub>`: what the recordings are about.
+    ///
+    /// The same `Tags` the detail pane's strip and the MCP tools go through, for
+    /// the reason `listen dictionary` shares the Dictionary pane's file: a
+    /// second implementation agrees with the first right up until it does not,
+    /// and there is no test target to catch the day it stops.
+    private static func tags(_ args: [String]) -> Never {
+        let rest = Array(args.dropFirst())
+        switch args.first ?? "list" {
+        case "list":   tagsList()
+        case "add":    tagsAdd(rest)
+        case "remove": tagsRemove(rest)
+        case "rename": tagsRename(rest)
+        case "delete": tagsDelete(rest)
+        default:
+            fail("unknown tags subcommand `\(args[0])`. Try `listen help`.")
+        }
+    }
+
+    /// Every tag in the library, with how many recordings carry it.
+    private static func tagsList() -> Never {
+        let all = Tags.all()
+        guard !all.isEmpty else {
+            log("no tags yet. `listen tags add <id> <tag>` starts one.")
+            exit(0)
+        }
+        // Pad to the widest name, which is the table style everywhere here.
+        let width = all.map(\.name.count).max() ?? 0
+        for tag in all {
+            print(tag.name.padding(toLength: width, withPad: " ", startingAt: 0)
+                  + "  \(tag.count)")
+        }
+        exit(0)
+    }
+
+    /// The recording and the tags a subcommand was given, or a refusal.
+    private static func tagged(_ args: [String], verb: String) -> (Recording, [String]) {
+        guard let id = args.first else {
+            fail("\(verb) needs a recording id and at least one tag.")
+        }
+        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        let names = Array(args.dropFirst())
+        guard !names.isEmpty else {
+            fail("\(verb) needs at least one tag. Give them one at a time, "
+                 + "quoting any with a space in.")
+        }
+        return (recording, names)
+    }
+
+    private static func tagsAdd(_ args: [String]) -> Never {
+        let (recording, names) = tagged(args, verb: "add")
+        let before = Tags.of(recording)
+        do {
+            let after = try Tags.add(names, to: recording)
+            print(after.joined(separator: ", "))
+            let added = after.filter { name in !before.contains(name) }
+            log(added.isEmpty
+                ? "already tagged. Nothing changed."
+                : "added \(added.joined(separator: ", ")) to \(recording.id).")
+        } catch {
+            fail(error.localizedDescription)
+        }
+        exit(0)
+    }
+
+    private static func tagsRemove(_ args: [String]) -> Never {
+        let (recording, names) = tagged(args, verb: "remove")
+        let before = Tags.of(recording)
+        do {
+            let after = try Tags.remove(names, from: recording)
+            if !after.isEmpty { print(after.joined(separator: ", ")) }
+            let gone = before.filter { name in !after.contains(name) }
+            log(gone.isEmpty
+                ? "not tagged with that. Nothing changed."
+                : "removed \(gone.joined(separator: ", ")) from \(recording.id).")
+        } catch {
+            fail(error.localizedDescription)
+        }
+        exit(0)
+    }
+
+    private static func tagsRename(_ args: [String]) -> Never {
+        guard args.count >= 2 else {
+            fail("rename takes the tag and its new name. Quote either if it has "
+                 + "a space in.")
+        }
+        let old = args[0]
+        let new = args[1]
+        guard Tags.find(old) != nil else {
+            fail("no recording is tagged `\(old)`. `listen tags` lists them.")
+        }
+        do {
+            let changed = try Tags.rename(old, to: new)
+            log(changed.isEmpty
+                ? "nothing changed."
+                : "renamed in \(changed.count) recording\(changed.count == 1 ? "" : "s").")
+        } catch {
+            fail(error.localizedDescription)
+        }
+        exit(0)
+    }
+
+    /// Take a tag off everything.
+    ///
+    /// Not a delete of anything: a tag has no existence apart from the
+    /// recordings carrying it, so there is nothing else for this to mean.
+    private static func tagsDelete(_ args: [String]) -> Never {
+        guard let name = args.first, args.count == 1 else {
+            fail("delete takes one tag. Quote it if it has a space in.")
+        }
+        guard let tag = Tags.find(name) else {
+            fail("no recording is tagged `\(name)`. `listen tags` lists them.")
+        }
+        let changed = Tags.delete(tag.name)
+        log("took `\(tag.name)` off \(changed.count) "
+            + "recording\(changed.count == 1 ? "" : "s").")
         exit(0)
     }
 
@@ -1043,7 +1166,8 @@ enum CLI {
 
       transcribe <file|id>       transcribe a file, or a whole recording
       record [--seconds N]       capture until stopped, or for N seconds
-      list [--limit N] [--json]  recordings as a table
+      list [--limit N] [--tag T]
+                                 recordings as a table. --json for the metadata.
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
@@ -1057,12 +1181,13 @@ enum CLI {
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       dictionary <sub>           your own terms and corrections
       notes <sub>                the note artifacts, one or many recordings each
+      tags <sub>                 what the recordings are about, in your words
       calendar <sub>             the calendars on this Mac, and what they name
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
       sources                    what meeting detection sees, run during a call
-      mcp                        stdio MCP server. Notes are the only thing
-                                 an agent can write.
+      mcp                        stdio MCP server. Notes and tags are the only
+                                 things an agent can write.
 
     calendar subcommands:
       status                     access, calendars and today. The default.
@@ -1111,6 +1236,21 @@ enum CLI {
 
     Notes live in the library rather than inside a recording folder, so a note
     can be about several meetings and deleting one meeting does not delete it.
+
+    tags subcommands:
+      list                       every tag, with how many recordings. The default.
+      add <id> <tag>…            tag a recording
+      remove <id> <tag>…         take tags off a recording
+      rename <tag> <new name>    rename one tag in every recording
+      delete <tag>               take one tag off everything
+
+    A tag is free text, so quote any with a space in: `listen tags add <id>
+    "job hunt"`. Tags are given one at a time rather than comma-separated, and
+    `listen list --tag` repeats the same way; several tags mean all of them.
+
+    A tag lives on the recording, so deleting a meeting takes its tags with it,
+    and a tag nothing carries stops existing. That is the opposite of a note,
+    and both are on purpose.
 
     import options:
       --dry-run                  list what would be imported, copy nothing
@@ -1238,12 +1378,18 @@ enum CLI {
 
     // MARK: - Library
 
-    /// `listen list [--limit N] [--json]`.
+    /// `listen list [--limit N] [--tag <name>] [--json]`.
     private static func list(_ args: [String]) -> Never {
         var limit = Int.max
         var asJSON = false
+        var filter = RecordingFilter()
         var i = 0
         while i < args.count {
+            func value(_ flag: String) -> String {
+                i += 1
+                guard i < args.count else { fail("\(flag) needs a value.") }
+                return args[i]
+            }
             switch args[i] {
             case "--limit":
                 i += 1
@@ -1251,13 +1397,24 @@ enum CLI {
                     fail("--limit needs a positive number")
                 }
                 limit = n
+            // Repeatable rather than comma-separated, which is this CLI's rule
+            // and is also why `Tags.check` refuses a comma in a tag: neither
+            // half of that can quietly change meaning later.
+            case "--tag": filter.tags.append(value("--tag"))
             case "--json": asJSON = true
             default: fail("unknown option `\(args[i])`. Try `listen help`.")
             }
             i += 1
         }
 
-        let recordings = Array(Recording.all().prefix(limit))
+        for name in filter.tags where Tags.find(name) == nil {
+            // An empty result is indistinguishable from a typo, and a tag is
+            // something the user invented rather than something with a fixed
+            // vocabulary to check against.
+            log("nothing is tagged `\(name)`. `listen tags` lists them.")
+        }
+
+        let recordings = Array(filter.apply(to: Recording.all()).prefix(limit))
         if asJSON {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1267,7 +1424,12 @@ enum CLI {
         }
 
         guard !recordings.isEmpty else {
-            log("no recordings yet. `listen record` makes one.")
+            // "no recordings yet" is a lie when a filter is what emptied the
+            // list, and it is the kind of lie that sends somebody looking for a
+            // library that is sitting right there.
+            log(filter.isEmpty
+                ? "no recordings yet. `listen record` makes one."
+                : "no recordings match. `listen list` shows all of them.")
             exit(0)
         }
         // Pad to the widest id so the columns line up without a table library.
@@ -1290,6 +1452,8 @@ enum CLI {
                 .filter { !$0.isEmpty }.joined(separator: " · "))
         let speakers = recording.speakers
         if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
+        let tags = Tags.of(recording)
+        if !tags.isEmpty { print("tags: " + tags.joined(separator: ", ")) }
         print("")
 
         let turns = recording.storedTurns

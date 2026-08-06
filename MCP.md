@@ -41,7 +41,7 @@ hermes -p career mcp add listen --command /usr/local/bin/listen --args mcp
 If you reach Hermes through its messaging gateway rather than a terminal, that is
 a long-running process and wants `hermes gateway restart`.
 
-Enable all ten tools rather than picking a subset. Hermes writes the chosen names
+Enable all thirteen tools rather than picking a subset. Hermes writes the chosen names
 into the config as an `include` list, which freezes the surface: a tool added in
 a later version of Listen would then be missing until you re-ran
 `hermes mcp configure`. The one destructive tool, `delete_note`, already refuses
@@ -68,18 +68,30 @@ binary, which is why the installed command is a symlink rather than a copy.
 | `get_transcript` | the speaker turns, paginated |
 | `search_transcripts` | which turns anywhere contain a phrase |
 | `list_people` | everyone the voice bank knows, and how much they talk |
+| `list_tags` | every tag you have used, and how many recordings carries it |
+| `add_tags` | tag a recording. Adds to what it has rather than replacing it. |
+| `remove_tags` | take tags off a recording |
 | `list_notes` | the notes on one recording, or all of them, without their text |
 | `read_note` | one note in full |
 | `write_note` | add a note. Markdown body, free-text title, one or more recordings |
 | `edit_note` | rewrite one, refused if it changed since you read it |
 | `delete_note` | remove one |
 
-`list_recordings` takes `query`, `person`, `after`, `before`, `limit` and
+`list_recordings` takes `query`, `person`, `tags`, `after`, `before`, `limit` and
 `offset`. They combine with AND:
 
 ```json
 {"person": "Edgar", "after": "2026-07-01", "before": "2026-07-31"}
 ```
+
+`tags` is a list, and a recording has to carry all of them. It is usually the
+right way to name a subject, because the meetings that belong to one rarely
+share a word: a recruiter screen, a hiring manager chat and a referral catch-up
+have no phrase, no attendee and no week in common, and `{"tags": ["job hunt"]}`
+finds all three.
+
+The names are invented by the user rather than drawn from a fixed list, so call
+`list_tags` first instead of guessing. Matching ignores case.
 
 `after` and `before` take `YYYY-MM-DD` or a full ISO 8601 timestamp. A bare day
 covers the whole of it, so `before: "2026-07-14"` includes everything recorded
@@ -101,8 +113,8 @@ one row where the two differ.
 Transcripts are long and there is no summary layer, so the tools are shaped to
 be walked from cheap to expensive rather than read whole:
 
-1. `list_people` or `list_recordings` with `person` and a date range. Metadata
-   only, no transcript is read.
+1. `list_tags`, `list_people`, or `list_recordings` with `tags`, `person` and a
+   date range. Metadata only, no transcript is read.
 2. `get_recording` on the shortlist, to see who is in each and how long it ran.
 3. `list_notes` and `read_note` on the ones that look promising. A note is a few
    hundred tokens against a transcript's several thousand, and your own note on

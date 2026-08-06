@@ -468,6 +468,163 @@ the outside is indistinguishable from the feature being broken. `eligible` is
 therefore public, the pane greys those rows, and `listen dictionary add` says so
 on the way in.
 
+### A tag is a name string, and the vocabulary is derived
+
+`People`'s rule applied to subjects instead of speakers. `Tags.all()` groups the
+library by the strings in `metadata.tags`; there is no `tags.json`, no create
+step and nothing to keep in agreement with the recordings. **A tag nothing
+carries does not exist**, so there is no orphan row and no tidying pass, and
+`listen tags delete` is not a delete of anything: it takes the tag off every
+recording, which is the whole of what deleting one can mean.
+
+It exists because the three filters that were here could not name a subject. A
+recruiter screen, a hiring manager chat and a referral catch-up share no word,
+no attendee and no week, so free text, a person and a date range between them
+cannot answer "the job hunt calls". A tag is how a question says what it is
+about, which is also why an agent may write one.
+
+#### It lives on the recording, which is the opposite of the call `Notes` made
+
+Deliberately, and the two arguments are the same argument pointing different
+ways. A note moved out of the recording folder because a synthesis of four
+meetings has four bad homes and no good one, and must survive one of them being
+deleted. A tag is a claim about **one** recording with no meaning apart from it,
+so it belongs in that folder and goes when the folder goes.
+
+`var tags: [String]?`, and `Optional` is load-bearing for the reason recorded
+against `Metadata.calendar_event_id`: the synthesized decoder throws
+`keyNotFound` on a missing key even where the property has a default, and
+`Recording.load` swallows decode errors with `try?`, so a non-optional
+`[String] = []` would have made every recording already on disk vanish from
+`all()` with nothing anywhere reporting it. Measured before writing a single
+tag: `listen list` and `listen list --json` both returned 41 over a library
+where no file had the key.
+
+An empty list is written as **nil, not `[]`**, so taking the last tag off leaves
+a file indistinguishable from one written before the field existed. Two ways to
+spell "no tags" is one more than the number of things it can mean.
+
+#### Case is kept and matched loosely, and the library's spelling wins
+
+`Tags.canonical` trims, collapses internal whitespace and strips a leading `#`,
+because people type `#job hunt` and because `job  hunt` and `job hunt` are
+indistinguishable in a pill. `Tags.matches` is `SpeakerName.matches`'s rule:
+case-insensitive, so a filter cannot silently return nothing.
+
+The part that is not obvious is that **`add` adopts the spelling already in the
+library**. Typing `Job Hunt` onto a library holding `job hunt` files it under
+the one that is there. Without it the list grows a second row that reads as an
+exact duplicate of the first and neither one has all the recordings, which is
+the failure a derived vocabulary is otherwise wide open to.
+
+A comma is refused rather than escaped. No tag has one today, and forbidding it
+now is what keeps a comma-separated form from ever being ambiguous; repeating a
+flag rather than splitting on commas is already this CLI's rule, and this is the
+other half of it. 40 characters, because a pill must never be the widest thing
+in the header.
+
+#### The strip shares the speakers' band, and yields to them
+
+The header above the transcript was already six deep, so a seventh band for a
+feature most recordings will not use is what makes a window feel like a form.
+`TagChips` is pinned to the **trailing** edge of the chips row and grows
+leftward while the speakers grow rightward from the title, so the gap between
+them is whatever is spare rather than a constant that is wrong at one width.
+
+Three things follow, each of which was wrong once:
+
+1. **The collapse is the pane's decision, not the strip's.** `TagChips.isEmpty`
+   answers "no tags" and deliberately does not count its own `＋`. Answering
+   "not empty, I have a button" kept a 34 point row open under the date of every
+   recording in the library. `setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)`
+   is the condition, and inside it `tagChips.isHidden = collapsed` alone: when
+   the band is open for the speakers, an untagged recording still needs its `＋`.
+2. **Compression resistance is stated.** The tags yield first, because a
+   speaker truncated to "Dan…" is a person you cannot identify while a tag in
+   `+2` is one click away and still says how many. Left to the defaults the two
+   compress in whatever order the engine likes, which is the same at one width
+   and different at another.
+3. **The overflow pill goes first in the row, not last.** The row reads right to
+   left from the window's edge, so a count on the far right is the first thing
+   seen and puts the tags it stands for in the middle of the row.
+
+A recording whose band is collapsed has no `＋` at all, which is why "Tags…" is
+in `menuNeedsUpdate`: one line there gives the toolbar's ellipsis and the
+sidebar's right-click menu both, and the File menu carries the Cmd-T, because a
+key equivalent only dispatches from the main menu bar.
+
+#### The tag popover stays open, and refreshing is not `show`
+
+Two differences from `SpeakerPicker`, which it is otherwise a copy of.
+
+It does not close on a pick. Filing a meeting is rarely one tag, "job hunt" and
+"acme" arrive together, and dismissing after the first means four clicks back to
+where you already were. It is `.transient`, so clicking elsewhere still
+dismisses it, and the ticks are what says the write landed.
+
+`DetailView.refreshTags` redraws the strip and nothing else. `show(_:)` stops
+playback and puts the playhead back to zero, and tagging is something people do
+while listening, which is the argument `applyEdit` already makes next door.
+
+Everything else about it is `editSpeaker`'s: take the rect, **then** end the
+title edit, **then** anchor the popover to the pane. That order is the shipped
+0.2.0 `SIGABRT`, and `beginEditingTags` additionally has to supply a real
+rectangle when the band is collapsed, because a popover anchored to a
+zero-height rect opens and closes inside the same call reporting
+`isShown == false`.
+
+#### Lenses stack, and `RecordingFilter` is why there is not a fourth predicate
+
+The sidebar's `speakerFilter` became a list of `Lens`, drawn as a row of
+`SpeakerPill`s in the bar that used to hold one. **They are ANDed**, because
+"the calls Ryan and Emily were both in" is a question one lens cannot ask and is
+the ordinary reason to reach for this at all. So `filter(bySpeaker:)` and
+`filter(byTag:)` *add* rather than replace, the way a row of tokens behaves
+everywhere else, and replacing is dismissing the old one first. Adding the lens
+already on is a no-op, because clicking a chip twice is something people do.
+
+Three things about the row:
+
+1. **A lens looks like the chip that set it**, because it *is* one: a person's
+   takes their colour and a tag's takes the neutral wash. What this replaced was
+   a hand-built capsule copying four of `SpeakerPill`'s numbers, two of which
+   had already gone out of step with it.
+2. **No "Only" in front of a name.** With one lens it read fine; with two,
+   "Only Ryan" beside "Only Emily" claims each is the whole of the filter, which
+   is the opposite of what ANDed lenses mean.
+3. **Each pill is capped at an equal share of the row**, so a second lens
+   truncates the first rather than pushing it off the side of a 280 point
+   sidebar. The whole name stays in the tooltip.
+
+The dismiss glyph is a **character in the pill's own attributed string**, not
+the button's `image`. An `.imageTrailing` glyph is aligned to the title's
+baseline, so `xmark` sat about two points below the centre of the letters beside
+it, and every cure for that is a fight with `NSButtonCell`. A character shares
+the font, the baseline and the paragraph style, so there is nothing left to
+misalign. `imageHugsTitle` was the other half of that fight and is gone with it:
+without it, `.imageTrailing` had pinned the cross to the button's edge and given
+every spare point to the gap in the middle, measuring 11 points of margin on the
+left, 16 in the middle and 3 after the cross.
+
+`RecordingFilter` is the bigger half. The predicate that narrows the library was
+written out three times, in `Sidebar.reload`, `MCP.list_recordings` and nowhere
+in the CLI at all, and the copies had already come apart: the sidebar matched a
+speaker on the exact on-disk label while MCP went through
+`SpeakerName.matches`. Adding tags to each by hand would have made a fourth.
+
+It is a function over the list rather than a per-recording predicate **because
+the order is the point**: `person` and `query` read every `turns.json` in the
+library and the dates and tags read only the metadata in hand, so the cheap ones
+have to run first and only something seeing the whole list can arrange that.
+`Recording.speaks` and `SpeakerName.matches` moved here from `MCP.swift`, which
+is where they had been living for no reason but history.
+
+`RecordingFilter.parse` handles `tag:job hunt` by taking the longest run of
+following words that names a real tag, one word when none does, and the whole
+string when quoted. Matching against a known vocabulary is what makes a space in
+a tag unambiguous rather than clever, and it is the same accept-what-they-meant
+rule `Notes.find` uses for a slug or a title.
+
 ### A person is a name string, and that is the whole identity model
 
 `People` groups the library by the label written in the transcripts. Nothing
@@ -575,6 +732,28 @@ Three rules, all learned by measurement, all invisible from the code:
 It is also shown on the next runloop turn rather than inline, because a popover
 put up from inside a control's own action arrives while the mouse event is still
 being dispatched.
+
+#### Replacing a scroll view's clip view resets `drawsBackground`
+
+Every popover here puts its list in an `NSScrollView` with a
+`TopAlignedClipView`, and whether that list sits on the popover's material or on
+an opaque grey well came down to the order of two lines. `NSScrollView`'s setter
+reaches through to the clip view it holds **at that moment**, so
+
+```swift
+scroll.drawsBackground = false
+scroll.contentView = TopAlignedClipView()   // a fresh one, defaulting to true
+```
+
+hands back a clip view that paints `.controlBackgroundColor` over the card.
+`DetailView` and `PeoplePane` assign the clip view first and were right by
+accident; `SpeakerPicker` and `PersonPopover` were the other way round and both
+drew the well. It is invisible until the list is short enough to see through,
+which is why it shipped.
+
+Answered in `TopAlignedClipView` rather than at the four call sites: every
+caller sets `drawsBackground = false` on its scroll view, so none of them wants
+one, and overriding the property to `false` makes the ordering stop mattering.
 
 #### No window is the only thing that raises
 
@@ -1661,24 +1840,37 @@ Date bounds are applied **before** `person` and `query`, which is not cosmetic:
 those two read every `turns.json` in the library and the date bounds read only
 the metadata already in hand.
 
-### The server is no longer read-only, and notes are the entire exception
+### The server is no longer read-only, and notes and tags are the whole exception
 
 This reverses a property `CLAUDE.md`, `README.md`, `SPEC.md`, the Developers
 pane and the landing page all stated four different ways, so the reversal has to
-be as narrow as the original claim was broad. `write_note`, `edit_note` and
-`delete_note` are the whole of it. An agent still cannot rename a speaker,
-correct a sentence or delete a recording, and none of those is a missing feature
-waiting for a milestone.
+be as narrow as the original claim was broad. `write_note`, `edit_note`,
+`delete_note`, `add_tags` and `remove_tags` are the whole of it. An agent still
+cannot rename a speaker, correct a sentence, retitle a recording or delete one,
+and none of those is a missing feature waiting for a milestone.
 
 The line is between evidence and opinion. A transcript is a record of what was
-said; a note is somebody's reading of it. A wrong note is a wrong opinion sitting
-beside the recording that disproves it, and a wrong transcript edit is a fact
-that is simply gone, because the audio is an hour long and nobody re-listens.
-So anything that changes the evidence goes through a human at the window or the
-CLI, where it is visible and reversible, and everything derived from it is open.
+said; a note is somebody's reading of it and a tag is somebody's filing of it. A
+wrong note or a wrong tag is a wrong opinion sitting beside the recording that
+disproves it, and a wrong transcript edit is a fact that is simply gone, because
+the audio is an hour long and nobody re-listens. So anything that changes the
+evidence goes through a human at the window or the CLI, where it is visible and
+reversible, and everything derived from it is open.
 
-The five places that asserted read-only are all updated. If a sixth appears,
-that is the list to check.
+Tags earn the writable side for a second reason notes do not need: they are how
+a question says what it is about. "Summarise the job hunt calls" needs the job
+hunt calls to be named, and an agent that can read a tag but never write one can
+only answer questions somebody already did the filing for.
+
+**The list of places asserting read-only was five and is six.** `MCP.md` was
+missed the first time, because the original list was written from the places
+that said "read-only" and `MCP.md` says it by describing the tools. The six:
+this file, `README.md`, `SPEC.md`, `MCP.md`, the Developers pane
+(`SettingsWindow.swift`), and the `mcp` line in the CLI usage text. The landing
+page does not make the claim and never did, so it was on the list by mistake.
+Two more in code: the `MCP` file comment, and `delete_note`'s own description,
+which called itself "the only destructive tool here" and stopped being true when
+`remove_tags` arrived.
 
 **`Notes` is one owner with three callers**, which is the rule
 `TranscriptEditor` already sets: `listen notes`, the MCP tools and `DetailView`

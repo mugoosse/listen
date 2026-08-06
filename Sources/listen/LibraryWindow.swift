@@ -544,6 +544,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.filter(bySpeaker: label)
     }
 
+    /// Show only the recordings carrying one tag. nil is the whole library.
+    func filter(byTag name: String?) {
+        show()
+        sidebar.filter(byTag: name)
+    }
+
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -824,7 +830,8 @@ extension LibraryWindow: NSMenuItemValidation {
             // validated the same way.
             return selected?.hasAudio == true
         case #selector(exportSelected), #selector(revealSelected),
-             #selector(renameSelected), #selector(deleteSelected):
+             #selector(renameSelected), #selector(deleteSelected),
+             #selector(tagSelected):
             return selected != nil
         default:
             return true
@@ -949,6 +956,12 @@ extension LibraryWindow: NSMenuDelegate {
         add(menu, recording.hasTranscript ? "Transcribe Again" : "Transcribe",
             #selector(retranscribeSelected), "arrow.triangle.2.circlepath")
         add(menu, "Rename…", #selector(renameSelected), "pencil")
+        // The one way in for a recording whose band is collapsed, which is a
+        // live or untranscribed one: with no speakers and no tags there is no
+        // strip on screen to hold a `＋`. One line here gives the toolbar's
+        // ellipsis and the sidebar's right-click menu both, because they share
+        // this delegate.
+        add(menu, "Tags…", #selector(tagSelected), "number")
         menu.addItem(.separator())
         add(menu, "Show in Finder", #selector(revealSelected), "folder")
         menu.addItem(.separator())
@@ -975,6 +988,14 @@ extension LibraryWindow: NSMenuDelegate {
         // the name is. Focusing it is less surprising than a dialog asking for
         // a string with no context around it.
         detail.beginEditingTitle()
+    }
+
+    /// Tagging happens in the detail pane, beside the tags.
+    ///
+    /// Same argument as Rename, and the same funnel: `DetailView` is what knows
+    /// the three-step order a popover here has to be opened in.
+    @objc func tagSelected() {
+        detail.beginEditingTags()
     }
 
     @objc func revealSelected() {

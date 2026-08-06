@@ -63,8 +63,8 @@ Listen.app
 │                    more recordings. One per recording is the user's own.
 ├── UI               Apple Notes style: sidebar list + detail with player, transcript, notes
 ├── CLI              `listen` binary, installed on request from Settings
-└── MCP              `listen mcp`, stdio, over the same library. Notes are the
-                     only writable surface; everything else is read-only.
+└── MCP              `listen mcp`, stdio, over the same library. Notes and tags
+                     are the only writable surface; everything else is read-only.
 ```
 
 ### 3.1 Package layout
@@ -399,21 +399,25 @@ which. Show the resulting path. Never install silently on first launch.
 not need to be running; the library on disk is the source of truth. Model the
 surface on `docs/reference/mcp.mdx` in the Anarlog repo.
 
-**Notes are the only writable surface.** Everything else is read-only and
-idempotent. An agent may create, rewrite and delete a note artifact; it may not
-rename a speaker, edit a transcript or delete a recording. The transcript is
-evidence and notes are derived from it, so changing the evidence stays with a
-human, in the window or at the CLI.
+**Notes and tags are the only writable surface.** Everything else is read-only
+and idempotent. An agent may create, rewrite and delete a note artifact, and tag
+and untag a recording; it may not rename a speaker, edit a transcript, retitle a
+recording or delete one. The line is evidence against opinion: a transcript
+records what was said, while a note is a reading of it and a tag is a filing of
+it. Changing the evidence stays with a human, in the window or at the CLI.
 
 Tools:
 
 | Tool | Parameters |
 |---|---|
-| `list_recordings` | `query`, `person`, `after`, `before`, `limit` (default 20, clamp 1..200), `offset` |
-| `get_recording` | `recording_id`. Metadata, participants, speaker names, note slugs. No transcript text. |
+| `list_recordings` | `query`, `person`, `tags` (array, AND), `after`, `before`, `limit` (default 20, clamp 1..200), `offset` |
+| `get_recording` | `recording_id`. Metadata, participants, speaker names, tags, note slugs. No transcript text. |
 | `get_transcript` | `recording_id`, `offset`, `limit` (default 200, clamp 1..500), returns `pagination` with `next_offset` |
-| `search_transcripts` | `query`, `person`, `limit`. Full-text across the library, returns matching turns with recording IDs. |
+| `search_transcripts` | `query`, `person`, `tags`, `limit`. Full-text across the library, returns matching turns with recording IDs. |
 | `list_people` | Everyone in the voice bank, with recording counts. |
+| `list_tags` | Every tag, with recording counts. The vocabulary a tag filter can be asked in. |
+| `add_tags` | `recording_id`, `tags` (array). Adds rather than replaces; adopts a spelling the library already holds. |
+| `remove_tags` | `recording_id`, `tags` (array). Tags not on the recording are ignored. |
 | `list_notes` | `recording_id` optional. Provenance only, no bodies. |
 | `read_note` | `note` (slug or title), `recording_id` optional to narrow a shared title. |
 | `write_note` | `recordings` (array, at least one), `title`, `body`, `prompt`. Never overwrites; a colliding slug is numbered. |

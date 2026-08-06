@@ -27,7 +27,7 @@ the second Mac can read every meeting you have ever recorded.
 | everything else | **6.5 MB** |
 
 The audio is 99.92% of the library and **nothing reads it except playback.**
-Not the transcript, not the CLI, not a single one of the MCP server's ten tools.
+Not the transcript, not the CLI, not one of the MCP server's thirteen tools.
 So the audio stays on the Mac that recorded it, and what crosses is about 6.5 MB
 for 41 meetings, plus roughly 160 KB per new meeting.
 

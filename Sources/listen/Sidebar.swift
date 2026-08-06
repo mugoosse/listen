@@ -22,13 +22,26 @@ final class SidebarViewController: NSViewController {
     private var rows: [Row] = []
     private var query = ""
 
-    /// Show only the recordings one person is in, by their on-disk label.
+    /// What the list is narrowed to, besides the search field.
     ///
-    /// Set from a person's popover rather than from anything in this list. The
-    /// day-grouped list is the library and this is a lens over it, so it is
-    /// always visibly on and one click from off: a filter you cannot see is a
-    /// library with recordings missing from it.
-    private var speakerFilter: String?
+    /// A person comes from their popover and a tag from a pill in the
+    /// transcript's header, so neither is set from anything in this list and
+    /// both are things you arrive at holding. The day-grouped list is the
+    /// library and these are lenses over it, so they are always visibly on and
+    /// one click from off: a filter you cannot see is a library with recordings
+    /// missing from it.
+    ///
+    /// **They stack, and they are ANDed.** "The calls Ryan and Emily were both
+    /// in" is a question one lens cannot ask, and it is the ordinary reason to
+    /// reach for this at all. Setting one therefore adds rather than replaces,
+    /// which is how a row of tokens behaves everywhere else; replacing is
+    /// dismissing the old one first.
+    private enum Lens: Equatable {
+        case speaker(String)
+        case tag(String)
+    }
+
+    private var lenses: [Lens] = []
 
     /// Settings is the one row left here, at the bottom, because it is the
     /// thing you reach for least. Record was the row above the list until it
@@ -62,7 +75,16 @@ final class SidebarViewController: NSViewController {
 
     var onSettings: (() -> Void)?
     private var filterBar: NSView!
-    private var filterButton: NSButton!
+    private var filterStack: NSStackView!
+
+    private static let lensSpacing: CGFloat = 6
+
+    /// What the lens row has to share before it has been laid out once.
+    ///
+    /// The sidebar opens at 280 points and this row is inset 12 and 10, so the
+    /// first render of a lens set has this to divide up. Every render after it
+    /// measures the bar instead.
+    private static let lensRowWidth: CGFloat = 258
     private var filterHeight: NSLayoutConstraint!
     private var filterTop: NSLayoutConstraint!
 
@@ -125,28 +147,31 @@ final class SidebarViewController: NSViewController {
 
         // One control, not a label with a close button beside it: the whole
         // pill turns the filter off, so there is no small target to hit.
-        filterButton = NSButton(title: "", target: self, action: #selector(clearSpeakerFilter))
-        // A capsule in the accent colour rather than a line of text with a
-        // cross after it. It is a token saying the list is not the whole
-        // library, so it should look like the chips that put it there, and the
-        // whole capsule is the target rather than the small glyph on its end.
-        filterButton.isBordered = false
-        filterButton.wantsLayer = true
-        filterButton.layer?.cornerRadius = 11
-        filterButton.layer?.backgroundColor = Brand.accent
-            .withAlphaComponent(0.18).cgColor
-        filterButton.contentTintColor = Brand.accent
-        filterButton.font = .systemFont(ofSize: 11, weight: .semibold)
-        filterButton.image = NSImage(systemSymbolName: "xmark.circle.fill",
-                                     accessibilityDescription: "Show everything")?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
-        filterButton.imagePosition = .imageTrailing
-        filterButton.toolTip = "Show every recording again"
-        filterButton.translatesAutoresizingMaskIntoConstraints = false
-        filterButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        //
+        // **It is a `SpeakerPill`, the same class as the chips that set it.**
+        // This is a token saying the list is not the whole library, so it
+        // should look like the thing you clicked to narrow it, and the way to
+        // guarantee that is to be the same object rather than a second one
+        // drawn to match. A person's lens takes their colour and a tag's takes
+        // the neutral wash a tag pill has, so which kind of lens is on is
+        // legible before the words are read.
+        //
+        // What this replaces was a hand-built capsule: accent wash, 11 point
+        // semibold, an 11 point corner radius, and a stated width to buy the
+        // padding a borderless button has none of. Every one of those numbers
+        // was a copy of one in `SpeakerPill` that had already gone out of step
+        // with it by two points.
+        filterStack = NSStackView()
+        filterStack.orientation = .horizontal
+        filterStack.alignment = .centerY
+        filterStack.spacing = Self.lensSpacing
+        filterStack.translatesAutoresizingMaskIntoConstraints = false
         filterBar = NSView()
         filterBar.translatesAutoresizingMaskIntoConstraints = false
-        filterBar.addSubview(filterButton)
+        // Long names in a narrow sidebar are clipped rather than drawn over the
+        // list below.
+        filterBar.clipsToBounds = true
+        filterBar.addSubview(filterStack)
         filterBar.isHidden = true
 
         settingsButton = row("Settings", "gearshape", #selector(openSettings))
@@ -177,11 +202,15 @@ final class SidebarViewController: NSViewController {
                                                   constant: -10),
             filterTop,
             filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            filterBar.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor,
+            // Pinned rather than `lessThanOrEqualTo`, because the pills inside
+            // are sized against this width: with the bar free to shrink to its
+            // content there would be nothing for them to be a share of.
+            filterBar.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                                 constant: -10),
             filterHeight,
-            filterButton.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor),
-            filterButton.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            filterStack.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor),
+            filterStack.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            filterStack.trailingAnchor.constraint(lessThanOrEqualTo: filterBar.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -221,7 +250,7 @@ final class SidebarViewController: NSViewController {
         // `loadView`, so without this the first reload is a nil unwrap.
         loadViewIfNeeded()
         let keepID = selectedRecording?.id
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = query.trimmingCharacters(in: .whitespaces)
 
         // The recording being made now is in staging, not the library, so
         // `Recording.all()` cannot see it. It is listed anyway, from the first
@@ -233,24 +262,24 @@ final class SidebarViewController: NSViewController {
         // started: the row has to show a title changed since, and the folder is
         // the truth about a recording here as everywhere else.
         let live = Capture.shared.current.map { Recording.load($0.folder) ?? $0 }
-        let everything = (live.map { [$0] } ?? []) + Recording.all()
+        let library = Recording.all()
 
-        let matching = everything.filter { recording in
-            // Never filtered out. A search left in the field from ten minutes
-            // ago is not a reason to hide the meeting being recorded now, and
-            // neither is a speaker filter it cannot match: a recording still
-            // being made has no transcript to have speakers in.
-            if recording.id == live?.id { return true }
-            if let speakerFilter, !recording.speakers.contains(speakerFilter) {
-                return false
+        // `tag:` in the search field is a lens typed rather than clicked, so it
+        // is parsed against the tags that exist: see `RecordingFilter.parse`.
+        var filter = RecordingFilter.parse(q, knownTags: Tags.all(in: library).map(\.name))
+        for lens in lenses {
+            switch lens {
+            case .speaker(let label): filter.people.append(label)
+            case .tag(let name): filter.tags.append(name)
             }
-            guard !q.isEmpty else { return true }
-            if recording.metadata.title.lowercased().contains(q) { return true }
-            // Search the transcript too, which is the reason anyone searches a
-            // meeting library: you remember what was said, not what the
-            // recording was called.
-            return recording.transcriptText.lowercased().contains(q)
         }
+
+        // The recording being made now is never filtered out. A search left in
+        // the field from ten minutes ago is not a reason to hide the meeting
+        // being recorded now, and neither is a lens it cannot match: a
+        // recording still being made has no transcript to have speakers in, and
+        // its tags are the ones somebody is about to add.
+        let matching = (live.map { [$0] } ?? []) + filter.apply(to: library)
 
         rows = []
         var lastHeading: String?
@@ -334,32 +363,115 @@ final class SidebarViewController: NSViewController {
         return true
     }
 
-    /// Show only the recordings one person is in. nil is the whole library.
+    /// Also show only the recordings one person is in. nil clears every lens.
     func filter(bySpeaker label: String?) {
+        add(label.map { Lens.speaker($0) })
+    }
+
+    /// Also show only the recordings carrying one tag. nil clears every lens.
+    func filter(byTag name: String?) {
+        add(name.map { Lens.tag($0) })
+    }
+
+    /// Add a lens, or clear them all.
+    ///
+    /// Adding the one already on is a no-op rather than a duplicate: clicking a
+    /// chip twice is something people do, and two identical tokens narrowing to
+    /// the same thing is a row you have to dismiss twice.
+    private func add(_ next: Lens?) {
         loadViewIfNeeded()
-        speakerFilter = label
-        if let label {
-            // Padded with spaces, which is what a borderless button gives you
-            // instead of an inset: the capsule would otherwise be drawn tight
-            // against both ends of the text.
-            filterButton.title = "  Only " + SpeakerName.display(label) + "  "
+        guard let next else {
+            lenses = []
+            renderLenses()
+            return
         }
-        filterBar.isHidden = label == nil
-        filterHeight.constant = label == nil ? 0 : 22
-        filterTop.constant = label == nil ? 0 : 6
+        guard !lenses.contains(next) else { return }
+        lenses.append(next)
+        renderLenses()
+    }
+
+    private func renderLenses() {
+        for view in filterStack.arrangedSubviews { view.removeFromSuperview() }
+
+        // Each pill is capped at an equal share of the row, so a second lens
+        // truncates the first rather than pushing it off the side. The whole
+        // name stays in the tooltip, which is the trade the sidebar's titles
+        // already make.
+        let room = filterBar.bounds.width > 0 ? filterBar.bounds.width : Self.lensRowWidth
+        let share = (room - Self.lensSpacing * CGFloat(max(0, lenses.count - 1)))
+            / CGFloat(max(1, lenses.count))
+
+        for lens in lenses {
+            let pill = SpeakerPill()
+            pill.target = self
+            pill.action = #selector(dropLens(_:))
+            // A bare cross rather than `xmark.circle.fill`. The filled disc is a
+            // second capsule inside a capsule and draws heavier at this size
+            // than the name beside it, so the eye lands on the dismiss glyph
+            // rather than on what is being filtered. See `SpeakerPill.trailing`
+            // for why it is a character and not the button's image.
+            // No `setAccessibilityTitle` here: it replaces the title rather than
+            // adding to it, so the pill announced "Stop filtering" and stopped
+            // saying which filter. What it is stays the title and what clicking
+            // does is the tooltip, which is `AXHelp`.
+            pill.trailing = "✕"
+
+            switch lens {
+            case .speaker(let label):
+                // Their name and their colour, so the token is the chip that
+                // set it. No "Only" in front: the row is a list of filters and
+                // a second one reading "Only Emily" beside "Only Ryan" claims
+                // each is the whole of it, which is the opposite of what two
+                // ANDed lenses mean.
+                pill.show(label, title: SpeakerName.display(label))
+                pill.identifier = NSUserInterfaceItemIdentifier("speaker:" + label)
+                pill.toolTip = "Only the recordings \(SpeakerName.display(label)) is in. "
+                    + "Click to drop this filter."
+            case .tag(let name):
+                // The neutral wash a tag pill has. A tag is not somebody, so
+                // borrowing a person's colour would be the one token on screen
+                // whose colour means nothing.
+                pill.showPlain("#" + name)
+                pill.identifier = NSUserInterfaceItemIdentifier("tag:" + name)
+                pill.toolTip = "Only the recordings tagged #\(name). "
+                    + "Click to drop this filter."
+            }
+            filterStack.addArrangedSubview(pill)
+            pill.widthAnchor.constraint(lessThanOrEqualToConstant: max(44, share))
+                .isActive = true
+        }
+
+        let empty = lenses.isEmpty
+        filterBar.isHidden = empty
+        filterHeight.constant = empty ? 0 : 22
+        // 10 rather than 6. The search field is a bezelled control with its own
+        // focus ring, so six points read as the pills hanging off the bottom of
+        // it rather than as a row of their own.
+        filterTop.constant = empty ? 0 : 10
         reload()
     }
 
     /// Drop everything narrowing the list, for when something outside it needs
     /// a recording the filters are hiding.
+    ///
+    /// Every lens, and that matters: `LibraryWindow.open(recording:note:)` and
+    /// `reveal` give way to the filters to reach a recording, so one left behind
+    /// turns a note's source link into a beep.
     func clearFilters() {
         searchField.stringValue = ""
         query = ""
-        filter(bySpeaker: nil)
+        add(nil)
     }
 
-    @objc private func clearSpeakerFilter() {
-        filter(bySpeaker: nil)
+    @objc private func dropLens(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        lenses.removeAll { lens in
+            switch lens {
+            case .speaker(let label): return id == "speaker:" + label
+            case .tag(let name): return id == "tag:" + name
+            }
+        }
+        renderLenses()
     }
 
     /// Redraw the row of the recording in progress, for its clock.

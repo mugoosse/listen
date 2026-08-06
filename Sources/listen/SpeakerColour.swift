@@ -120,6 +120,26 @@ final class SpeakerPill: NSButton {
     static let height: CGFloat = 20
     private static let padding: CGFloat = 9
 
+    /// A glyph drawn after the title, or nil for a plain pill.
+    ///
+    /// The sidebar's lens is one of these with a cross on the end, so that the
+    /// token saying the list is narrowed is the same object as the chip that
+    /// narrowed it rather than a second thing drawn to look like it.
+    ///
+    /// **Text in the same run rather than the button's `image`.** An
+    /// `.imageTrailing` glyph is aligned to the title's *baseline*, so at this
+    /// size an `xmark` sat about two points below the centre of the letters
+    /// beside it, and the usual cures are all fights with `NSButtonCell`:
+    /// alignment rects, a scaling mode, or a hand-placed subview. A character
+    /// in the same attributed string shares the font, the baseline and the
+    /// paragraph style, so there is nothing left to misalign.
+    var trailing: String? {
+        didSet { applyTint() }
+    }
+
+    /// Space between the title and that glyph.
+    private static let glyphGap = "  "
+
     /// What was last shown, kept because both colours have to be mixed again on
     /// an appearance change: a `cgColor` in a layer is a resolved colour and
     /// does not follow light and dark on its own, unlike everything AppKit draws
@@ -171,6 +191,8 @@ final class SpeakerPill: NSButton {
         // paragraph under it. The height is kept either way: it is what the
         // timestamp beside the label is centred on.
         let padding = style == .chip ? Self.padding * 2 : 0
+        // `attributedTitle` already carries the trailing glyph, so it is
+        // measured with the words and there is nothing to add for it here.
         return NSSize(width: ceil(attributedTitle.size().width) + padding,
                       height: Self.height)
     }
@@ -190,11 +212,23 @@ final class SpeakerPill: NSButton {
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = style == .chip ? .center : .left
             paragraph.lineBreakMode = .byTruncatingTail
-            attributedTitle = NSAttributedString(
+            let face = font ?? .systemFont(ofSize: 12, weight: .semibold)
+            let title = NSMutableAttributedString(
                 string: text,
-                attributes: [.font: font ?? .systemFont(ofSize: 12, weight: .semibold),
+                attributes: [.font: face,
                              .foregroundColor: ink,
                              .paragraphStyle: paragraph])
+            if let trailing {
+                // Dimmer than the name. The glyph is how the token goes away,
+                // not what it says, and drawn at full weight it is what the eye
+                // lands on first.
+                title.append(NSAttributedString(
+                    string: Self.glyphGap + trailing,
+                    attributes: [.font: face,
+                                 .foregroundColor: ink.withAlphaComponent(0.55),
+                                 .paragraphStyle: paragraph]))
+            }
+            attributedTitle = title
 
             let wash = SpeakerColour.tint(for: label)?
                 .withAlphaComponent(dark ? 0.22 : 0.14)

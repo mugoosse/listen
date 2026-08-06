@@ -1,25 +1,36 @@
 import Foundation
 
-/// `listen mcp`: an MCP server over stdio, where notes are the only writable
-/// surface.
+/// `listen mcp`: an MCP server over stdio, where notes and tags are the only
+/// writable surface.
 ///
-/// Hand-rolled rather than pulled from the SDK. The surface is ten tools and
-/// two resources over files already on disk, and the official Swift SDK brings
-/// a dependency tree and a concurrency model into a binary that already carries
-/// MLX, CoreML and Sparkle. The protocol needed here is a few hundred lines of
-/// JSON-RPC with no streaming and no subscriptions.
+/// Hand-rolled rather than pulled from the SDK. The surface is thirteen tools
+/// and two resources over files already on disk, and the official Swift SDK
+/// brings a dependency tree and a concurrency model into a binary that already
+/// carries MLX, CoreML and Sparkle. The protocol needed here is a few hundred
+/// lines of JSON-RPC with no streaming and no subscriptions.
 ///
 /// **It opens no port**, and the app does not need to be running: the library on
 /// disk is the source of truth.
 ///
-/// **Everything except notes is read-only, and that is a boundary rather than a
-/// milestone.** This server used to write nothing at all. It now writes note
-/// artifacts, and nothing else: an agent can create, rewrite and delete a note,
-/// and cannot rename a speaker, correct a transcript or delete a recording. The
-/// transcript is evidence of what was said and notes are derived from it, so a
-/// wrong note is a wrong opinion and a wrong transcript edit is a lost fact.
-/// Anything that wants to change the evidence goes through a human, in the
-/// window or at the CLI where it can be seen and undone.
+/// **Everything except notes and tags is read-only, and that is a boundary
+/// rather than a milestone.** This server used to write nothing at all. It now
+/// writes note artifacts and a recording's tags, and nothing else: an agent
+/// cannot rename a speaker, correct a transcript, retitle a recording or delete
+/// one.
+///
+/// The line is between evidence and opinion. A transcript is a record of what
+/// was said; a note is somebody's reading of it and a tag is somebody's filing
+/// of it. Both are reversible, both are visible in the window the moment they
+/// are written, and a wrong one is a wrong opinion sitting beside the recording
+/// that disproves it. A wrong transcript edit is a fact that is simply gone,
+/// because the audio is an hour long and nobody re-listens. So anything that
+/// changes the evidence goes through a human, in the window or at the CLI where
+/// it can be seen and undone, and everything derived from it is open.
+///
+/// Tags earn their place on the writable side for a second reason: they are how
+/// a question says what it is about. "Summarise the job hunt calls" needs the
+/// job hunt calls to be named, and an agent that can read a tag but never write
+/// one can only ever answer questions somebody already did the filing for.
 ///
 /// Transcripts are long, so pagination is not optional, and the transcript is a
 /// separate call from the metadata so an agent can decide what it needs before
@@ -124,6 +135,15 @@ enum MCP {
                                    "description": "Only recordings this person speaks in. "
                                        + "Matches the name from list_people, and your own "
                                        + "name matches the microphone track."],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Only recordings carrying **all** of these "
+                                + "tags. A tag is the user's own filing of a meeting, "
+                                + "so this is usually the right way to name a subject "
+                                + "that no single word in the transcripts shares. Call "
+                                + "list_tags first rather than guessing at names.",
+                        ],
                         "after": ["type": "string",
                                   "description": "Only recordings on or after this date, "
                                       + "as YYYY-MM-DD or a full ISO 8601 timestamp."],
@@ -137,9 +157,9 @@ enum MCP {
             ],
             [
                 "name": "get_recording",
-                "description": "Metadata, participants, speaker names and the slugs "
-                    + "of any notes for one recording. Does not include transcript "
-                    + "text; use get_transcript.",
+                "description": "Metadata, participants, speaker names, tags and the "
+                    + "slugs of any notes for one recording. Does not include "
+                    + "transcript text; use get_transcript.",
                 "inputSchema": [
                     "type": "object",
                     "properties": ["recording_id": ["type": "string"]],
@@ -171,6 +191,14 @@ enum MCP {
                                    "description": "Only turns spoken by this person, "
                                        + "rather than every turn in a recording they "
                                        + "were in."],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Only turns from recordings carrying all "
+                                + "of these tags. Paired with person, this is the "
+                                + "whole of \"what do I keep saying across my job "
+                                + "hunt calls\" in one call.",
+                        ],
                         "limit": ["type": "integer", "description": "Default 20, max 200."],
                     ],
                     "required": ["query"],
@@ -181,6 +209,56 @@ enum MCP {
                 "description": "Everyone in the voice bank, with how many recordings "
                     + "they appear in.",
                 "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+            ],
+            [
+                "name": "list_tags",
+                "description": "Every tag in the library, with how many recordings "
+                    + "carries it, most first. A tag is the user's own filing of a "
+                    + "meeting, in their own words, so this is the vocabulary a "
+                    + "question can be asked in and there is nothing else to derive "
+                    + "it from. **Read this before filtering on tags**: the names "
+                    + "are invented rather than drawn from a fixed list, and a tag "
+                    + "nobody uses does not exist.",
+                "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+            ],
+            [
+                "name": "add_tags",
+                "description": "Tag a recording. Adds to what it already carries "
+                    + "rather than replacing it. A tag already in the library is "
+                    + "matched however it was capitalised, so reuse the exact names "
+                    + "from list_tags rather than coining a near-duplicate: "
+                    + "\"job hunt\" and \"job-hunt\" are two tags and neither has "
+                    + "all the recordings. Returns everything the recording carries "
+                    + "afterwards.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "recording_id": ["type": "string"],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Free text, up to 40 characters each, no "
+                                + "commas. A space is fine: \"job hunt\" is one tag.",
+                        ],
+                    ],
+                    "required": ["recording_id", "tags"],
+                ],
+            ],
+            [
+                "name": "remove_tags",
+                "description": "Take tags off a recording. Tags not on it are "
+                    + "ignored rather than refused. Nothing else about the recording "
+                    + "changes, and a tag that ends up on nothing simply stops "
+                    + "existing: there is no separate list to tidy. Returns what the "
+                    + "recording carries afterwards.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "recording_id": ["type": "string"],
+                        "tags": ["type": "array", "items": ["type": "string"]],
+                    ],
+                    "required": ["recording_id", "tags"],
+                ],
             ],
             [
                 "name": "list_notes",
@@ -281,9 +359,10 @@ enum MCP {
             ],
             [
                 "name": "delete_note",
-                "description": "Remove a note. This is the only destructive tool here, "
-                    + "and it reaches notes only: transcripts, speakers and recordings "
-                    + "cannot be changed through this server.",
+                "description": "Remove a note. This and remove_tags are the only "
+                    + "destructive tools here, and between them they reach notes and "
+                    + "tags only: transcripts, speakers, titles and recordings cannot "
+                    + "be changed through this server.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -298,41 +377,21 @@ enum MCP {
     private static func call(_ name: String, _ args: [String: Any]) throws -> String {
         switch name {
         case "list_recordings":
-            let query = (args["query"] as? String ?? "").lowercased()
-            let person = (args["person"] as? String ?? "")
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)
             let offset = max(0, args["offset"] as? Int ?? 0)
-            let after = try dayBound(args["after"], endOfDay: false, field: "after")
-            let before = try dayBound(args["before"], endOfDay: true, field: "before")
+            // The cheap-before-expensive ordering lives in `RecordingFilter`,
+            // which the sidebar and `listen list` go through too.
+            var filter = RecordingFilter()
+            filter.query = args["query"] as? String ?? ""
+            // Still one name over MCP. The filter takes a list because the
+            // window's lenses stack, and an agent that wants two people can
+            // already say so by intersecting two calls.
+            filter.people = [args["person"] as? String].compactMap { $0 }
+            filter.tags = try strings(args["tags"], field: "tags")
+            filter.after = try dayBound(args["after"], endOfDay: false, field: "after")
+            filter.before = try dayBound(args["before"], endOfDay: true, field: "before")
 
-            var all = Recording.all()
-            // Cheapest filters first. `query` and `person` both read every
-            // turns.json in the library, and the date bounds read nothing but
-            // the metadata already in hand, so narrowing on dates first is the
-            // difference between reading 33 transcripts and reading 3.
-            if after != nil || before != nil {
-                all = all.filter { recording in
-                    guard let at = Timestamps.parse(recording.metadata.recorded_at) else {
-                        // A recording whose timestamp will not parse is kept
-                        // rather than dropped. Being invisible to every dated
-                        // query is a worse answer than being in the wrong one,
-                        // and it would be invisible with nothing to explain it.
-                        return true
-                    }
-                    if let after, at < after { return false }
-                    if let before, at > before { return false }
-                    return true
-                }
-            }
-            if !person.isEmpty {
-                all = all.filter { $0.speaks(person) }
-            }
-            if !query.isEmpty {
-                all = all.filter {
-                    $0.metadata.title.lowercased().contains(query)
-                        || $0.transcriptText.lowercased().contains(query)
-                }
-            }
+            let all = filter.apply(to: Recording.all())
             let page = Array(all.dropFirst(offset).prefix(limit))
             return json([
                 "recordings": page.map(brief),
@@ -353,6 +412,23 @@ enum MCP {
             // before it asks for 5,000 tokens of transcript.
             out["notes"] = Notes.list(about: recording).map(\.slug)
             return json(out)
+
+        case "list_tags":
+            return json(["tags": Tags.all().map {
+                ["name": $0.name, "recordings": $0.count]
+            }])
+
+        case "add_tags":
+            let recording = try find(args)
+            let tags = try wanted(args["tags"], for: "add_tags")
+            return json(["recording_id": recording.id,
+                         "tags": try Tags.add(tags, to: recording)])
+
+        case "remove_tags":
+            let recording = try find(args)
+            let tags = try wanted(args["tags"], for: "remove_tags")
+            return json(["recording_id": recording.id,
+                         "tags": try Tags.remove(tags, from: recording)])
 
         case "get_transcript":
             let recording = try find(args)
@@ -377,8 +453,14 @@ enum MCP {
             // the one `list_recordings` answers ("was in the room"). Asking what
             // somebody said about a topic is the whole point of the pairing.
             let person = (args["person"] as? String ?? "")
+            // `tags` narrows which recordings are read at all, so it goes on the
+            // library rather than into the turn loop below. That is the same
+            // cheap-before-expensive ordering `RecordingFilter` exists for: with
+            // a tag given, this reads three transcripts instead of thirty-three.
+            var scope = RecordingFilter()
+            scope.tags = try strings(args["tags"], field: "tags")
             var hits: [[String: Any]] = []
-            for recording in Recording.all() {
+            for recording in scope.apply(to: Recording.all()) {
                 for turn in recording.storedTurns
                 where turn.text.lowercased().contains(query)
                     && (person.isEmpty || SpeakerName.matches(turn.speaker, person)) {
@@ -560,6 +642,34 @@ enum MCP {
         throw MCPError.badArguments("\(field) is required: a list of recording ids")
     }
 
+    /// The same, for an optional list that is not recording ids.
+    ///
+    /// Absent means "no constraint" rather than an error, because `tags` is a
+    /// filter on `list_recordings` and every filter there is optional. A bare
+    /// string is still refused by name, for the reason `ids` refuses one.
+    private static func strings(_ raw: Any?, field: String) throws -> [String] {
+        if raw == nil { return [] }
+        if let list = raw as? [String] { return list }
+        if let one = raw as? String {
+            throw MCPError.badArguments(
+                "\(field) is a list, not one value: [\"\(one)\"]")
+        }
+        throw MCPError.badArguments("\(field) must be a list of strings")
+    }
+
+    /// The same again where the list is the point of the call.
+    ///
+    /// An empty list is refused rather than treated as a no-op: `add_tags` with
+    /// nothing in it is a mistake somewhere upstream, and answering it with the
+    /// recording's unchanged tags would read as success.
+    private static func wanted(_ raw: Any?, for tool: String) throws -> [String] {
+        let list = try strings(raw, field: "tags")
+        guard !list.isEmpty else {
+            throw MCPError.badArguments("\(tool) needs at least one tag")
+        }
+        return list
+    }
+
     // MARK: - Resources
 
     private static var resources: [[String: Any]] {
@@ -640,13 +750,19 @@ enum MCP {
     // MARK: - Plumbing
 
     private static func brief(_ recording: Recording) -> [String: Any] {
-        [
+        var out: [String: Any] = [
             "id": recording.id,
             "title": recording.metadata.title,
             "recorded_at": recording.metadata.recorded_at,
             "duration_seconds": Int(recording.metadata.duration),
             "state": recording.metadata.state,
         ]
+        // Only when there are some. An empty array on every row of a fifty
+        // recording listing is fifty lines saying nothing, and this is the
+        // payload an agent pages through before deciding what to read.
+        let tags = Tags.of(recording)
+        if !tags.isEmpty { out["tags"] = tags }
+        return out
     }
 
     private static func pagination(total: Int, offset: Int, returned: Int) -> [String: Any] {
@@ -743,31 +859,6 @@ enum Timestamps {
     static func parseDay(_ text: String) -> Date? { day.date(from: text) }
 }
 
-extension Recording {
-    /// Does this person speak in this recording?
-    ///
-    /// Matching is on the displayed name as well as the stored label, because
-    /// the microphone track is stored as `Me` however the user chooses to be
-    /// shown. Somebody who has set their name to Maxime and asks for
-    /// `person: "Maxime"` means their own track, and matching only the disk
-    /// label would return nothing with no way to tell that from "no such
-    /// person". The same rule makes `Speaker A` findable by what the UI calls
-    /// it rather than only by `A`.
-    func speaks(_ person: String) -> Bool {
-        speakers.contains { SpeakerName.matches($0, person) }
-    }
-}
-
-extension SpeakerName {
-    /// Does a stored speaker label answer to this name?
-    ///
-    /// Case and surrounding space are ignored: an agent is passing through a
-    /// name a human typed, and refusing "edgar" for `Edgar` would be a filter
-    /// that silently returns nothing.
-    static func matches(_ label: String, _ wanted: String) -> Bool {
-        let wanted = wanted.trimmingCharacters(in: .whitespaces)
-        guard !wanted.isEmpty else { return false }
-        return label.caseInsensitiveCompare(wanted) == .orderedSame
-            || display(label).caseInsensitiveCompare(wanted) == .orderedSame
-    }
-}
+// `Recording.speaks` and `SpeakerName.matches` used to live here. They moved to
+// `RecordingFilter.swift`, which is the one owner of narrowing the library now
+// that the window, the CLI and this file all go through it.

@@ -44,10 +44,13 @@ roots that remains clear at 16 points.
   subscription and no server in the middle.
 - **Keeps your own notes**, typed during the call or after it, one per
   recording. An agent can read them and cannot change them.
+- **Tags a recording** with what it is about, in your own words, so "the job
+  hunt calls" is a thing you can ask for. Filterable in the window, at the
+  command line and over MCP.
 - **Answers to an agent** over MCP. Ask about your own meetings, and have the
   answer written back as a note, which can name several meetings at once. Notes
-  are the only thing an agent can write: it cannot rename a speaker, edit a
-  transcript or delete a recording.
+  and tags are the only things an agent can write: it cannot rename a speaker,
+  edit a transcript or delete a recording.
 
 ## Requirements
 
@@ -252,12 +255,13 @@ symlinked rather than copied, so it never falls behind the app it came from.
 ```
 listen transcribe <file|id>       transcribe a file, or a whole recording
 listen record [--seconds N]       capture until stopped, or for N seconds
-listen list [--limit N] [--json]  recordings as a table
+listen list [--limit N] [--tag T]  recordings as a table
 listen show <id>                  metadata and transcript
 listen export <id> [--format]     write a transcript out
 listen label <id> <speaker> ...   name, merge or discard a speaker
 listen dictionary <sub>           your own terms and corrections
 listen notes <sub>                the notes, one or many recordings each
+listen tags <sub>                 what the recordings are about, in your words
 listen calendar <sub>             the calendars on this Mac, and what they name
 listen contacts <sub>             which address belongs to which person
 listen calibrate                  voiceprint threshold report
@@ -305,6 +309,21 @@ listen notes write "<title>" --recording <id>    add one
 listen notes delete <slug>        remove one
 ```
 
+```
+listen tags                       every tag, and how many recordings
+listen tags add <id> "job hunt"   tag a recording
+listen tags remove <id> <tag>     take one off
+listen tags rename <tag> <new>    rename it in every recording
+listen tags delete <tag>          take it off everything
+listen list --tag "job hunt"      only those. Repeat it; several mean all.
+```
+
+A tag is free text, so quote one with a space in it. It lives on the recording,
+so deleting a meeting takes its tags with it and a tag nothing carries stops
+existing: there is no separate list to keep tidy. That is the opposite of a
+note, which lives in the library and can outlive any one meeting, and both are
+on purpose.
+
 ## MCP
 
 ```json
@@ -323,16 +342,20 @@ Settings, Developers has this ready to copy with the right path filled in.
 Opens no port, and the app does not need to be running: the library on disk is
 the source of truth.
 
-**Notes are the only thing an agent can write, and not all of them.** Everything
-else is read-only, and that is a boundary rather than a milestone. An agent can
-add, rewrite and delete the notes it wrote; it can read your own note and not
-change it; and it cannot rename a speaker, correct a transcript or delete a
-recording. The transcript is evidence of what was said and notes are derived
-from it, so a wrong note is a wrong opinion and a wrong transcript edit is a
-lost fact. Changing the evidence goes through you, in the window or at the
-command line, where you can see it and undo it.
+**Notes and tags are the only things an agent can write.** Everything else is
+read-only, and that is a boundary rather than a milestone. An agent can add,
+rewrite and delete the notes it wrote, and tag and untag a recording; it can
+read your own note and not change it; and it cannot rename a speaker, correct a
+transcript, retitle a recording or delete one.
 
-Ten tools, seven of them reads. [`MCP.md`](MCP.md) is the reference: how to
+The line is between evidence and opinion. The transcript is a record of what was
+said. A note is somebody's reading of it and a tag is somebody's filing of it,
+both reversible and both visible in the window the moment they land, so a wrong
+one is a wrong opinion sitting beside the recording that disproves it. A wrong
+transcript edit is a fact that is simply gone. Changing the evidence goes through
+you, in the window or at the command line, where you can see it and undo it.
+
+Thirteen tools, eight of them reads. [`MCP.md`](MCP.md) is the reference: how to
 connect each client, what every tool takes, and how to walk a large library
 without reading it whole.
 
@@ -341,7 +364,7 @@ without reading it whole.
 `~/Library/Application Support/Listen/recordings/<id>/`
 
 ```
-metadata.json      title, recorded_at, duration, source, state,
+metadata.json      title, recorded_at, duration, source, state, your tags,
                    and the calendar event it was matched to
 mic.wav            your track
 system.wav         everyone else

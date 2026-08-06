@@ -20,10 +20,18 @@ final class DetailView: NSView {
     let titleLabel = NSTextField(string: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let chips = SpeakerChips()
+    private let tagChips = TagChips()
     private let playerCard = NSView()
     private let playButton = NSButton()
     private let waveform = WaveformView()
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
+
+    /// What stands in for the transport when the audio is on another Mac.
+    ///
+    /// In the card rather than instead of it, so the transcript does not move
+    /// and the empty space is visibly the player's rather than a gap. See
+    /// `setPlayer`.
+    private let playerNote = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "")
@@ -186,6 +194,19 @@ final class DetailView: NSView {
             self?.editSpeaker(speaker, from: anchor, rect: rect)
         }
 
+        // Clicking a tag is a lens on the library rather than an edit, so it
+        // goes straight to the sidebar. `endEditing` first for the reason a chip
+        // needs it: a pill is a control, so its click never reaches `mouseDown`
+        // and the title field would keep the caret.
+        tagChips.onTag = { [weak self] name, _, _ in
+            self?.endEditing()
+            LibraryWindow.shared.filter(byTag: name)
+        }
+        tagChips.onAdd = { [weak self] anchor, rect in
+            self?.editTags(from: anchor, rect: rect)
+        }
+        tagChips.onChanged = { [weak self] in self?.refreshTags() }
+
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
 
@@ -235,7 +256,12 @@ final class DetailView: NSView {
         empty.preferredMaxLayoutWidth = 320
         empty.cell?.wraps = true
 
-        for v in [playButton, timeLabel, waveform] {
+        playerNote.font = .systemFont(ofSize: 12)
+        playerNote.textColor = .secondaryLabelColor
+        playerNote.lineBreakMode = .byTruncatingTail
+        playerNote.isHidden = true
+
+        for v in [playButton, timeLabel, waveform, playerNote] {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
@@ -243,7 +269,7 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             modeBar.addSubview(v)
         }
-        for v in [titleLabel, subtitleLabel, chips, playerCard, modeBar,
+        for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, empty, emptyIcon] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -274,11 +300,35 @@ final class DetailView: NSView {
         noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
         noteInfoHeight.priority = .defaultHigh
 
+        // Speakers grow rightward from the title, tags grow leftward from the
+        // window's edge, and the gap between them is whatever is spare. See
+        // `TagChips` for why they share one band rather than taking two.
+        //
+        // The tags yield first when the pane is narrowed. A speaker's name
+        // truncated to "Dan…" is a person you cannot identify; a tag that has
+        // gone into `+2` is one click away and still says how many there are.
+        // Left to the defaults the two would compress in whatever order the
+        // engine liked, which is the same at one width and different at
+        // another.
+        chips.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        tagChips.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        chips.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
         NSLayoutConstraint.activate([
             chipsTop,
             chipsHeight,
             chips.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            chips.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+            chips.trailingAnchor.constraint(lessThanOrEqualTo: tagChips.leadingAnchor,
+                                            constant: -12),
+
+            tagChips.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            tagChips.centerYAnchor.constraint(equalTo: chips.centerYAnchor),
+            tagChips.heightAnchor.constraint(equalTo: chips.heightAnchor),
+            // Never past the title's leading edge, so a recording with six tags
+            // and nobody named still starts where every other row of this
+            // header does.
+            tagChips.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor,
+                                              constant: 24),
         ])
 
         NSLayoutConstraint.activate([
@@ -292,6 +342,11 @@ final class DetailView: NSView {
             playerHeight,
             playerCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             playerCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            playerNote.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 14),
+            playerNote.trailingAnchor.constraint(lessThanOrEqualTo: playerCard.trailingAnchor,
+                                                 constant: -14),
+            playerNote.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
 
             playButton.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 10),
             playButton.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
@@ -476,6 +531,31 @@ final class DetailView: NSView {
         playerCard.isHidden = collapsed
         playerTop.constant = collapsed ? 0 : 10
         playerHeight.constant = collapsed ? 0 : 58
+    }
+
+    /// The player area has three states, and only two of them were ever built.
+    ///
+    /// Collapsing it whenever there was nothing to play was right while the only
+    /// way to have no audio was to be recording right now, which the pane says
+    /// in the transcript area anyway. Sharing a library between two Macs makes
+    /// "the transcript is here and the audio is not" the **ordinary** state of
+    /// every recording made on the other machine, and collapsed, that is a
+    /// transcript with an unexplained gap above it where the player belongs.
+    /// Measured by looking: it reads as playback being broken.
+    ///
+    /// So the card keeps its 58 points and its border and says why it is empty.
+    /// Same size and same styling deliberately: the transcript does not move
+    /// when you click between a local recording and a synced one, and the space
+    /// is visibly the player's rather than a hole in the layout.
+    ///
+    /// The wording says where the audio **is**, not that it is missing. It is
+    /// not missing, it is on the Mac that recorded it, and that is both the true
+    /// sentence and the one that tells somebody what to do about it.
+    private func setPlayer(hasAudio: Bool, hidden: Bool) {
+        setPlayerCollapsed(hidden)
+        for v in [playButton, timeLabel, waveform] as [NSView] { v.isHidden = !hasAudio }
+        playerNote.isHidden = hasAudio
+        playerNote.stringValue = "The audio for this meeting is on the Mac that recorded it."
     }
 
     @objc private func switchShowing(_ sender: NSSegmentedControl) {
@@ -825,7 +905,12 @@ final class DetailView: NSView {
     /// Put the chosen document on screen. The only place either pane is hidden.
     private func applyShowing() {
         modePicker.selectedSegment = showing == .transcript ? 0 : 1
-        setPlayerCollapsed(!hasAudio || showing == .notes)
+        // Collapsed for a note, and for a recording that is still running: that
+        // one already says so in the transcript area, and it would be wrong
+        // besides, since its audio is on *this* Mac and simply is not finished.
+        // Everything else keeps the card, with or without a transport in it.
+        setPlayer(hasAudio: hasAudio,
+                  hidden: showing == .notes || recording?.isLive == true)
         scroll.isHidden = showing != .transcript
         notesScroll.isHidden = showing != .notes
         showProvenance()
@@ -935,11 +1020,13 @@ final class DetailView: NSView {
                                      recording.appLabel ?? ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
-        // Who is in this recording, above the player. Collapsed to nothing when
-        // there is no transcript to have speakers in, so a live or untranscribed
-        // recording keeps the layout it had before this row existed.
+        // Who is in this recording and what it is about, on one line above the
+        // player. Collapsed to nothing when there is neither, so a live or
+        // untranscribed recording keeps the layout it had before this row
+        // existed.
         chips.configure(recording)
-        setChipsCollapsed(chips.isEmpty)
+        tagChips.configure(recording)
+        setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
 
         turns = recording.storedTurns
         // The sentence spans come from `transcript.json`, which keeps one row
@@ -1000,6 +1087,10 @@ final class DetailView: NSView {
         scroll.isHidden = hidden
         notesScroll.isHidden = hidden
         if hidden {
+            // `clear` and not just the collapse: the strip would otherwise keep
+            // the last recording's tags and its `＋` would offer to tag a
+            // recording that is no longer selected.
+            tagChips.clear()
             setChipsCollapsed(true)
             setModeBarCollapsed(true)
         }
@@ -1008,10 +1099,52 @@ final class DetailView: NSView {
     /// A hidden view still occupies its frame, so the row's height and the
     /// space above it both have to go: leaving them would open a 34 point gap
     /// under the date of every recording that has no speakers yet.
+    ///
+    /// Both halves of the band at once, because they are one band: see
+    /// `TagChips` for why the tags share the speakers' row.
     private func setChipsCollapsed(_ collapsed: Bool) {
         chips.isHidden = collapsed
+        // Not `|| tagChips.isEmpty`: when the band is open for the speakers, an
+        // untagged recording still needs its `＋` on screen, which is how a
+        // first tag is put on one without going to a menu.
+        tagChips.isHidden = collapsed
         chipsTop.constant = collapsed ? 0 : 10
         chipsHeight.constant = collapsed ? 0 : 24
+    }
+
+    // MARK: - Tags
+
+    /// Opening the tag popover, with the same three steps `editSpeaker` takes.
+    ///
+    /// The rect is taken while the pill is still in the window, then the title
+    /// edit is committed, then the popover is pointed at **the pane**. A
+    /// committed title reloads, a reload rebuilds the strip, and one line after
+    /// `endEditing` the button that was clicked is out of the hierarchy: a view
+    /// with no window cannot be converted from, which silently yields a nonsense
+    /// rect, and cannot position a popover, which aborts the app rather than
+    /// failing quietly. That sequence shipped once already; see `editSpeaker`.
+    private func editTags(from view: NSView, rect: NSRect) {
+        guard let recording else { return }
+        let anchor = convert(rect, from: view)
+        endEditing()
+        TagPopover.show(for: recording, from: self, rect: anchor) { [weak self] in
+            self?.refreshTags()
+        }
+    }
+
+    /// Redraw the strip after a tag changed, and nothing else.
+    ///
+    /// Not `show(_:)`, which stops playback and puts the playhead back to zero.
+    /// Filing a meeting is something people do while listening to it, which is
+    /// the argument `applyEdit` already makes for reloading in place rather than
+    /// re-showing. The sidebar is told because a tag can be the lens the list is
+    /// currently under, so the row may belong somewhere else now.
+    func refreshTags() {
+        guard let recording, let updated = Recording.find(recording.id) else { return }
+        self.recording = updated
+        tagChips.configure(updated)
+        setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
+        LibraryWindow.shared.reload()
     }
 
     private func renderTurns(scrollToTop: Bool = true) {
@@ -1885,6 +2018,22 @@ extension DetailView: NSTextFieldDelegate, NSTextViewDelegate {
         titleLabel.currentEditor()?.selectAll(nil)
     }
 
+    /// Open the tag popover from a menu, where there is no pill to point at.
+    ///
+    /// The strip's own frame when there is one, and the trailing end of the
+    /// subtitle when the band is collapsed, which is a live or untranscribed
+    /// recording. It has to be somewhere real: a popover anchored to a
+    /// zero-height rect opens and closes in the same call, reporting
+    /// `isShown == false` immediately afterwards with nothing else to say so.
+    func beginEditingTags() {
+        guard recording != nil else { return }
+        let rect = tagChips.isHidden || tagChips.bounds.height < 1
+            ? NSRect(x: bounds.maxX - 44, y: subtitleLabel.frame.minY - 4,
+                     width: 20, height: 20)
+            : tagChips.frame
+        editTags(from: self, rect: rect)
+    }
+
     /// Give up the title field, wherever the click landed.
     ///
     /// A text field does not stop editing because the user clicked something
@@ -1965,6 +2114,11 @@ final class DetailViewController: NSViewController {
         detail.beginEditingTitle()
     }
 
+    func beginEditingTags() {
+        loadViewIfNeeded()
+        detail.beginEditingTags()
+    }
+
     func stopPlayback() { detail.stopPlayback() }
 
     func showNote(_ slug: String?) {
@@ -2010,4 +2164,24 @@ final class PassthroughLabel: NSTextField {
 /// height.
 final class TopAlignedClipView: NSClipView {
     override var isFlipped: Bool { true }
+
+    /// **Never draws a background, and that is here rather than at the call
+    /// sites.**
+    ///
+    /// `NSScrollView.drawsBackground = false` reaches through to the clip view
+    /// it holds *at that moment*, so whether it sticks depends on the order two
+    /// lines are written in. Of the four places that install one of these, two
+    /// assign the clip view first and were right by accident, and two set the
+    /// flag first and then handed back a fresh clip view carrying its own
+    /// default of `true`. Those two are both popovers, and both painted
+    /// `.controlBackgroundColor` over the popover's material: the list read as
+    /// a sunken grey well inside the card rather than as part of it, and it
+    /// only showed when the list was short enough to see through.
+    ///
+    /// Every caller sets `drawsBackground = false` on the scroll view, so none
+    /// of them wants one. Answering it here makes the ordering stop mattering.
+    override var drawsBackground: Bool {
+        get { false }
+        set {}
+    }
 }

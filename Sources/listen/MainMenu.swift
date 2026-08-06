@@ -72,6 +72,11 @@ enum MainMenu {
         menu.addItem(.separator())
         add(menu, "Rename", #selector(LibraryWindow.renameSelected))
             .target = LibraryWindow.shared
+        // The keyboard way in, and the only one: a key equivalent is dispatched
+        // from the main menu bar, so the copies of this item in the toolbar's
+        // ellipsis and the sidebar's right-click menu cannot carry one.
+        add(menu, "Tags…", #selector(LibraryWindow.tagSelected), "t")
+            .target = LibraryWindow.shared
         add(menu, "Transcribe Again", #selector(LibraryWindow.retranscribeSelected))
             .target = LibraryWindow.shared
         menu.addItem(.separator())

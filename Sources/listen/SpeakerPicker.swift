@@ -142,13 +142,19 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // The two repairs, at the bottom and small. Diarization invents a
         // speaker over silence and splits one person into two, so both are
         // needed often enough to stay; neither is what this popover is for.
-        let merge = small("Merge…", #selector(mergeSpeaker))
+        //
+        // No trailing ellipsis on either. The convention says one when a
+        // control opens something that asks for more, and both of these do, but
+        // in a popover that is *already* the thing asking, two dotted verbs at
+        // the foot of a list read as unfinished rather than as considerate. The
+        // tooltips say what each one means, which the dots never did.
+        let merge = small("Merge", #selector(mergeSpeaker))
         merge.toolTip = "This speaker is really one of the others in this recording"
-        let discard = small("Discard…", #selector(discardSpeaker))
+        let discard = small("Discard", #selector(discardSpeaker))
         discard.toolTip = "There is no person here, only noise the diarizer split off"
         let footer = NSStackView(views: [merge, discard])
         footer.orientation = .horizontal
-        footer.spacing = 6
+        footer.spacing = 8
         stack.addArrangedSubview(footer)
 
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -369,10 +375,34 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         done()
     }
 
+    /// A capsule at the foot of the popover.
+    ///
+    /// **The width is stated, because an `.inline` bezel has no content inset
+    /// to set.** AppKit draws one of these tight around its title, which reads
+    /// as cramped beside the popover's own 14 point margins and the 34 point
+    /// rows above it. Padding the title with spaces is the usual way out and it
+    /// is not precise: a space is about three and a half points at this size,
+    /// so the padding comes in steps of that and changes with the font.
+    /// Measuring the string and adding a margin either side is what
+    /// `SpeakerPill` already does, and it says what it means.
+    ///
+    /// `.regular` rather than `.small`: these are the only two controls at the
+    /// bottom of the card, and a smaller-than-standard control is for a place
+    /// that is short of room.
+    private static let footerPadding: CGFloat = 18
+    private static let footerHeight: CGFloat = 28
+
     private func small(_ title: String, _ action: Selector) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.bezelStyle = .inline
-        b.controlSize = .small
+        b.controlSize = .regular
+        b.translatesAutoresizingMaskIntoConstraints = false
+        let font = b.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let text = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        NSLayoutConstraint.activate([
+            b.widthAnchor.constraint(equalToConstant: text + Self.footerPadding * 2),
+            b.heightAnchor.constraint(equalToConstant: Self.footerHeight),
+        ])
         return b
     }
 }

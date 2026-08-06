@@ -104,7 +104,11 @@ enum TranscriptEditor {
         var proposed = transcript.segments
         guard mutate(&proposed) else { return false }
 
-        let backup = recording.folder.appendingPathComponent("\(recording.id).raw.json.bak")
+        // The path lives on `Recording` because this is no longer the only
+        // reader: whether a backup exists is how `hasHumanEdits` knows somebody
+        // has corrected a sentence, which is what makes transcribing again ask
+        // before it throws the corrections away.
+        let backup = recording.rawBackupURL
         if !FileManager.default.fileExists(atPath: backup.path) {
             try? FileManager.default.copyItem(at: recording.transcriptURL, to: backup)
         }

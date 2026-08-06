@@ -32,11 +32,24 @@ func trace(_ s: @autoclosure () -> String) {
 /// language at all. Whether v3 is worth shipping for meeting audio is an open
 /// question: its misdetection problem is a short-clip problem, and a meeting is
 /// not short. Measure before deciding (SPEC section 10.4).
+///
+/// The choice is per recording as well as app-wide (`Metadata.asr_model`),
+/// because the default is right for the language somebody usually meets in and
+/// wrong for the one call that was not. v2 on a Dutch meeting does not fail: it
+/// decodes Dutch as English and writes fluent nonsense, so the model is the
+/// only lever there is and the recording has to remember which one it wants.
 struct ModelChoice {
     let id: String
     let title: String
     /// What the model is good and bad at, without its size.
     let blurb: String
+    /// Which languages it can read, and nothing else.
+    ///
+    /// Separate from `blurb` rather than cut out of it, for the menu on
+    /// Transcribe Again. The rest of the blurb is a caveat about short clips,
+    /// which is true and belongs in Settings, and which is misleading at the
+    /// moment somebody is re-transcribing a meeting: a meeting is not short.
+    let coverage: String
     let repo: String
     /// Named in full, and empty unless the coverage is a real question. "25
     /// languages" is a claim nobody can check from the outside, and the
@@ -50,10 +63,12 @@ struct ModelChoice {
     static let all: [ModelChoice] = [
         .init(id: "v2", title: "Parakeet v2",
               blurb: "English only · most accurate",
+              coverage: "English only",
               repo: "mlx-community/parakeet-tdt-0.6b-v2",
               approxBytes: 2_471_601_146),
         .init(id: "v3", title: "Parakeet v3",
               blurb: "25 languages · may misdetect short clips",
+              coverage: "25 languages",
               repo: "mlx-community/parakeet-tdt-0.6b-v3",
               // The model card's 25, alphabetically rather than in its own
               // order: this list is read to answer "is mine here?", and that
@@ -72,6 +87,13 @@ struct ModelChoice {
     static let fallback = all[0]
 
     static func named(_ id: String) -> ModelChoice? { all.first { $0.id == id } }
+
+    /// The model a transcript says produced it.
+    ///
+    /// `StoredTranscript.model` is the repo string rather than an id, because it
+    /// records what actually ran rather than what was asked for. Nil for a
+    /// legacy import, whose transcripts name a model this app has never had.
+    static func forRepo(_ repo: String) -> ModelChoice? { all.first { $0.repo == repo } }
 
     /// Where the Hugging Face client keeps its cache, resolved the way the
     /// client resolves it.

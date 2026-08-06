@@ -70,8 +70,27 @@ struct Metadata: Codable {
     /// and the file diffs cleanly. `Tags` owns every write.
     var tags: [String]?
 
-    // The calendar, app and tag fields are all `Optional`, and that is what
-    // makes them safe to add to a struct with 47 files already on disk.
+    /// Which speech model to transcribe this one recording with.
+    ///
+    /// A `ModelChoice.id`, and `nil` means the app default, which is every
+    /// recording on disk before this field existed and every new one.
+    ///
+    /// It lives on the recording rather than on the queue job, and that is the
+    /// whole design. The queue has no job table: `Queue.resume()` rebuilds it at
+    /// launch from "audio exists and a transcript does not". A choice carried
+    /// only by the running job would be lost to a quit or a crash, and the
+    /// relaunch would re-run a Dutch meeting on the English-only model and write
+    /// the same confident gibberish a second time, with nothing anywhere saying
+    /// why. The file system already carries every other fact the queue needs.
+    ///
+    /// The id and not the repo string, because the id is what `Settings` stores
+    /// and what `--model` already takes. An id no longer in `ModelChoice.all`
+    /// resolves to nil and falls back to the default, which is what
+    /// `Settings.model` does with the same kind of stale value.
+    var asr_model: String?
+
+    // The calendar, app, tag and model fields are all `Optional`, and that is
+    // what makes them safe to add to a struct with 47 files already on disk.
     //
     // The trap recorded against `StoredTranscript` is that Swift's synthesized
     // decoder throws `keyNotFound` on a missing key *even when the property has
@@ -140,8 +159,28 @@ struct Recording {
     var turnsURL: URL { folder.appendingPathComponent("turns.json") }
     var embeddingsURL: URL { folder.appendingPathComponent("embeddings.json") }
     var metadataURL: URL { folder.appendingPathComponent("metadata.json") }
+    /// What the pipeline wrote, kept once before the first edit to it.
+    var rawBackupURL: URL { folder.appendingPathComponent("\(id).raw.json.bak") }
 
     var hasTranscript: Bool { FileManager.default.fileExists(atPath: transcriptURL.path) }
+
+    /// Whether somebody has been through this transcript by hand.
+    ///
+    /// Two things count, and they are the two that transcribing again destroys:
+    /// a speaker named something other than a placeholder letter or the
+    /// microphone's own `Me`, and the backup `TranscriptEditor` takes once
+    /// before the first sentence edit.
+    ///
+    /// `Me` does not count because the pipeline writes it, not a person, and a
+    /// placeholder does not count because nobody chose it either. Counting
+    /// either would ask for confirmation on every recording in the library,
+    /// which is the same as asking on none of them.
+    var hasHumanEdits: Bool {
+        if FileManager.default.fileExists(atPath: rawBackupURL.path) { return true }
+        return storedTurns.contains {
+            !VoiceBank.isPlaceholder($0.speaker) && $0.speaker != Pipeline.userLabel
+        }
+    }
 
     /// Which app the call was in, including the recordings made before there
     /// was a field for it.
@@ -157,6 +196,15 @@ struct Recording {
     var appBundleID: String? {
         if let stored = metadata.app_bundle_id { return stored }
         return metadata.source.contains(".") ? metadata.source : nil
+    }
+
+    /// The model the next run will use: this recording's own, or the default.
+    ///
+    /// The one place that rule is written. `Pipeline` takes the choice as an
+    /// argument rather than reading `Settings` itself, so a caller can never
+    /// transcribe with one model while the library records another.
+    var asrModel: ModelChoice {
+        ModelChoice.named(metadata.asr_model ?? "") ?? Settings.model
     }
 
     /// Every track that exists, for whatever wants to read audio.

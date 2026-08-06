@@ -158,6 +158,29 @@ correcting it against.
 Nothing re-transcribes, and the one-time backup of the model's own output is the
 same one speaker edits write.
 
+### A meeting that was not in English
+
+Parakeet v2 is the default and it only reads English. Handed a call in another
+language it does not fail or say anything: it writes fluent English sentences
+that nobody said. Parakeet v3 reads 25 languages and works out which one it is
+hearing.
+
+The detail pane says which model made the transcript you are looking at, beside
+the date and the length. To change it, open the **…** menu and hover
+**Transcribe Again**: the models are listed there, with a tick on the one that
+produced what is on screen, and the download size on any that is not on your
+disk yet. The choice stays with that recording, so a later re-run uses it too.
+
+Transcribing again replaces the transcript, so the speaker names and any
+sentences you corrected go with it. Listen asks first when there is something
+there to lose. To change the model for *new* recordings instead, use Settings,
+Models.
+
+There is deliberately no language menu. The library underneath Listen accepts a
+language and then ignores it, so a menu of languages would be a control that
+quietly does nothing. Choosing the model is the real choice, which is why that
+is the one on offer.
+
 ### Your own vocabulary
 
 Settings, Dictionary. Speech models get the same proper nouns wrong the same

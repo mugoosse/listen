@@ -70,19 +70,11 @@ final class WaveformView: NSView {
 
     // MARK: - Resampling
 
-    /// Reduce the stored peaks to one value per bar, taking the maximum.
-    ///
-    /// The maximum and not the mean: averaging a bucket of speech against the
-    /// pauses around it flattens exactly the difference the picture exists to
-    /// show.
+    /// Reduce the stored peaks to one value per bar. See `Waveform.resample`,
+    /// which the transcription picture uses too so the two cannot disagree.
     private func rebuild() {
         let count = max(1, Int(bounds.width / (barWidth + barGap)))
-        guard !peaks.isEmpty else { bars = []; return }
-        bars = (0..<count).map { i in
-            let from = i * peaks.count / count
-            let to = max(from + 1, (i + 1) * peaks.count / count)
-            return peaks[from..<min(to, peaks.count)].max() ?? 0
-        }
+        bars = Waveform.resample(peaks, to: count)
     }
 
     override func layout() {

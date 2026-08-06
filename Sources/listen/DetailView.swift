@@ -35,6 +35,11 @@ final class DetailView: NSView {
     private let stack = NSStackView()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "")
+
+    /// The meeting being read, drawn while it happens. Replaces the sentence
+    /// above for the one state that has something to show rather than something
+    /// to explain.
+    private let transcribing = TranscribingView()
     private let emptyIcon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
 
     /// Which document this pane is showing.
@@ -270,7 +275,8 @@ final class DetailView: NSView {
             modeBar.addSubview(v)
         }
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
-                  scroll, noteInfo, notesScroll, notesPlaceholder, empty, emptyIcon] {
+                  scroll, noteInfo, notesScroll, notesPlaceholder, empty, emptyIcon,
+                  transcribing] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -406,7 +412,27 @@ final class DetailView: NSView {
             empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
             emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
             emptyIcon.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
+
+            // Wider than the 320 the sentence is capped at, because it is a
+            // picture of the recording rather than a paragraph: the wider it is
+            // the more of the meeting each bar covers less of, which is the
+            // whole point of drawing the envelope instead of a plain bar.
+            transcribing.centerXAnchor.constraint(equalTo: centerXAnchor),
+            transcribing.centerYAnchor.constraint(equalTo: centerYAnchor),
+            transcribing.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor,
+                                                  constant: 40),
+            transcribing.widthAnchor.constraint(lessThanOrEqualToConstant: 620),
+            transcribing.heightAnchor.constraint(equalToConstant: 210),
         ])
+
+        // The pane's width up to that cap, which is `Pane.widthCapped`'s trick:
+        // a low-priority equality against a required maximum resolves to the
+        // smaller of the two. A custom view has no intrinsic width to fall back
+        // on, so without an equality here it would lay out at zero and the
+        // picture would be invisible rather than merely narrow.
+        let width = transcribing.widthAnchor.constraint(equalTo: widthAnchor, constant: -80)
+        width.priority = .defaultHigh
+        width.isActive = true
     }
 
     // MARK: - Notes
@@ -922,21 +948,109 @@ final class DetailView: NSView {
         updateEmpty()
     }
 
+    /// Show the meeting being read, or put the picture away.
+    ///
+    /// Called on every piece, which is thirty times a track, so it does as
+    /// little as possible: it sets two numbers on a view that is already on
+    /// screen. The full `reload` path is what a job *starting or finishing*
+    /// takes, and it must not be what a job *advancing* takes, because that one
+    /// re-shows the recording, which stops playback and puts the playhead back
+    /// to the beginning. Somebody listening to yesterday's meeting while today's
+    /// transcribes would have had it stopped from under them thirty times.
+    func showProgress() {
+        guard let recording, Queue.shared.running == recording.id else {
+            transcribing.progress = nil
+            return
+        }
+        transcribing.progress = Queue.shared.progress
+        // The sentence changes with the stage, so the label under the picture
+        // has to be refreshed as well as the picture. Cheap: one string compare
+        // per piece, against a pane that is already laid out.
+        updateEmpty()
+    }
+
+    /// Put the transcription picture up with a made-up position.
+    ///
+    /// `LISTEN_PANEL=transcribing:0.6`, and the same argument as the recording
+    /// panel's preview clock next door. This state lasts under thirty seconds a
+    /// track on a fast Mac and needs a meeting to reach at all, so without this
+    /// the only way to look at the drawing is to catch it, and a picture nobody
+    /// can put on screen on demand is a picture nobody checks. It is also the
+    /// only way to see the two lanes at different fills, which is the frame most
+    /// likely to be laid out wrongly.
+    func previewTranscribing(_ fraction: Double) {
+        showing = .transcript
+        applyShowing()
+        transcribing.progress = TranscriptionProgress(
+            message: fraction < 0.5 ? "transcribing the other participants"
+                                    : "transcribing you",
+            everyone: min(1, fraction * 2),
+            you: max(0, fraction * 2 - 1))
+        transcribing.isHidden = false
+        empty.isHidden = true
+        emptyIcon.isHidden = true
+        // As `updateEmpty` does. Without it the preview draws over whatever
+        // transcript the chosen recording already has, which is not a state the
+        // app can be in and would have somebody chasing a bug that is only in
+        // the preview.
+        scroll.isHidden = true
+    }
+
     /// What this pane says when it has nothing to show, per mode.
+    ///
+    /// One owner for the whole empty area, which is why the picture is chosen
+    /// here rather than by whoever happens to be updating it. It is the same
+    /// state as "Transcribing. This stays here if you quit." was, drawn instead
+    /// of said, so it belongs in the same switch and cannot end up on screen at
+    /// the same time as the sentence it replaces.
     private func updateEmpty() {
         guard let recording else { return }
-        let message: String
+        var message: String
+        var showPicture = false
         switch showing {
         case .transcript:
             message = turns.isEmpty ? Self.emptyTranscriptMessage(recording) : ""
+            // Whenever this recording is the running job, and deliberately not
+            // only when there is no transcript yet.
+            //
+            // Transcribe Again is the case that settles it. It overwrites a
+            // transcript that is already on screen, so gated on `turns.isEmpty`
+            // the pane went on showing the old transcript for the whole re-run
+            // and the only sign anything had happened was a word in the sidebar
+            // row. Reported as "I pressed it and it didn't really do anything",
+            // which is exactly right: a job that takes under a minute and shows
+            // nothing is indistinguishable from a menu item that does nothing.
+            //
+            // The transcript underneath is about to be replaced, so covering it
+            // costs a reader nothing and is the only acknowledgement the click
+            // gets.
+            showPicture = Queue.shared.running == recording.id
         case .notes:
             // Never empty any more: the user's own note is always offered, and
             // an empty one is a cursor rather than a message. The placeholder
             // inside the text view is what says what this is for.
             message = ""
         }
+        // The sentence and the picture are both centred in the pane, so they
+        // cannot both be up. "This stays here if you quit" moves *into* the
+        // picture rather than being dropped: it is the reason the window can be
+        // closed on an hour-long job, and a picture of work in progress is
+        // exactly what makes somebody wonder whether they have to sit and watch
+        // it finish.
+        if showPicture { message = "" }
+
         empty.stringValue = message
         empty.isHidden = message.isEmpty
+        transcribing.isHidden = !showPicture
+        // The transcript goes away while the picture is up, or a re-run draws
+        // the picture on top of the paragraphs it is in the middle of replacing.
+        scroll.isHidden = showing != .transcript || showPicture
+        // Not just hidden: clearing the progress is what stops the thirty a
+        // second timer inside it. Clicking from a transcribing recording to any
+        // other one would otherwise leave it running against a view nobody can
+        // see, for as long as the window is open.
+        if !showPicture { transcribing.progress = nil }
+        if showPicture { emptyIcon.isHidden = true }
     }
 
     /// Why there is no transcript on screen, in the order the reasons rule each
@@ -951,7 +1065,12 @@ final class DetailView: NSView {
         // speech in it, whether or not the audio is on this Mac.
         if recording.hasTranscript { return "This recording has no speech in it." }
         if Queue.shared.isQueued(recording.id) {
-            return "Transcribing. This stays here if you quit."
+            // Named, because the model is the thing somebody just chose and the
+            // run is the hour they have to wait to find out whether it was the
+            // right choice. It is also the only place the model appears until
+            // there is a transcript to carry it.
+            return "Transcribing with \(recording.asrModel.title)."
+                + " This stays here if you quit."
         }
         // Before "Not transcribed yet", which would be a promise this Mac cannot
         // keep. On a Mac sharing a library with the machine that recorded the
@@ -1010,14 +1129,28 @@ final class DetailView: NSView {
         // into instead of a word to delete first.
         titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
         titleLabel.placeholderString = Metadata.untitled
+
+        // Read once. `storedTranscript` decodes the whole file, which on an hour
+        // of meeting is several hundred segments, and the subtitle and the
+        // sentence spans below both want it.
+        let stored = recording.storedTranscript
+
         // The app goes here rather than in the title. Blackbox names a
         // recording after the app it was in, which is where the imported
         // library's "2607-17-Google Chrome" comes from; doing that in Listen
         // would break calendar naming outright, because `isUntitled` is the
         // literal placeholder and a recording called "Google Chrome" is one
         // the calendar will never name.
+        //
+        // The model is the fourth fact, and it is here unconditionally rather
+        // than only when it differs from the default. Nothing anywhere used to
+        // say what produced a transcript, so a meeting held in Dutch and decoded
+        // by the English-only model read as fluent nonsense with no fact on
+        // screen to explain it, and the model that did it was the default. A
+        // fact that only appears sometimes is one nobody learns to read.
         subtitleLabel.stringValue = [recording.when, recording.lengthText,
-                                     recording.appLabel ?? ""]
+                                     recording.appLabel ?? "",
+                                     stored.map { Recording.modelName($0.model) } ?? ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
         // Who is in this recording and what it is about, on one line above the
@@ -1034,8 +1167,7 @@ final class DetailView: NSView {
         // files are written together and neither is derived here, so the
         // transcript on screen is still exactly the one the CLI and the MCP
         // server serve.
-        sentences = Merge.sentences(in: turns,
-                                    from: recording.storedTranscript?.segments ?? [])
+        sentences = Merge.sentences(in: turns, from: stored?.segments ?? [])
         renderTurns()
 
         // No player while it is being recorded. The tracks exist and are
@@ -1231,6 +1363,7 @@ final class DetailView: NSView {
 
     private func loadWaveform(_ recording: Recording) {
         waveform.peaks = []
+        transcribing.peaks = []
         // The same turns the transcript below is built from, so a coloured bar
         // and the paragraph it belongs to cannot name different people. Set
         // before the audio arrives: `spans` is read against `duration`, and both
@@ -1248,6 +1381,9 @@ final class DetailView: NSView {
                 guard self.waveformToken == token, let wave else { return }
                 self.waveform.peaks = wave.peaks
                 self.waveform.duration = wave.duration
+                // The same envelope, so the picture of the work and the
+                // scrubber under it are unmistakably the same recording.
+                self.transcribing.peaks = wave.peaks
                 // The audio is the authority on how long the recording is.
                 // `metadata.duration` is what the recorder believed when it
                 // stopped, and an imported recording's can be a rounded number.
@@ -2120,6 +2256,17 @@ final class DetailViewController: NSViewController {
     }
 
     func stopPlayback() { detail.stopPlayback() }
+
+    /// The running job moved. Cheap by construction, and called per chunk.
+    func showProgress() {
+        guard isViewLoaded else { return }
+        detail.showProgress()
+    }
+
+    func previewTranscribing(_ fraction: Double) {
+        loadViewIfNeeded()
+        detail.previewTranscribing(fraction)
+    }
 
     func showNote(_ slug: String?) {
         loadViewIfNeeded()

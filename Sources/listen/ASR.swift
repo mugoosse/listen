@@ -53,6 +53,18 @@ struct Transcript: Codable {
     var duration: Double
     var model: String
 
+    /// How many pieces the track was cut into. One for anything short enough to
+    /// decode in a single pass.
+    var chunks: Int = 1
+
+    /// How many of those cuts could not find a pause to land in.
+    ///
+    /// Zero on ordinary speech. Each one behaves like one of the old fixed-offset
+    /// seams, so it is about one corrupted word. Reported rather than assumed to
+    /// be zero, because the whole argument for cutting at silence is that this
+    /// number is small, and an argument nobody can check is not one.
+    var hardCuts: Int = 0
+
     /// True when every segment carries word timings.
     ///
     /// Checked rather than assumed. See the note in `ASR.transcribe`.
@@ -111,40 +123,35 @@ actor ASR {
     private var model: (any STTGenerationModel)?
     private var loadedRepo: String?
 
-    /// Ten minutes, which is a measured compromise between two real failures.
+    /// Two minutes, on every machine.
     ///
-    /// mlx-audio corrupts exactly one word at every chunk seam (see CLAUDE.md),
-    /// so fewer seams is better. But decoding a whole file in one pass does not
-    /// scale: measured on 67 minutes of speech, `chunkDuration: 0` reached
-    /// 3.93 GB and died with a Metal `kIOGPUCommandBufferCallbackErrorOutOfMemory`,
-    /// while 600 s chunks peaked at 3.28 GB and finished in 36.7 s. Speak's
-    /// 120 s would work too, at 33 seams an hour instead of 6.
+    /// This used to be 600 s above 12 GB of memory and 120 s below it, and the
+    /// whole reason for the long chunk was that mlx-audio corrupts one word at
+    /// every seam, so fewer seams was better. `Chunking` cuts at pauses instead,
+    /// where there is no word to corrupt, and once a seam is free the argument
+    /// for a long chunk disappears. What is left says short, on three counts:
     ///
-    /// So: the largest chunk that has been shown to survive an hour. The real
-    /// fix is to cut at silence so no word ever straddles a seam, which would
-    /// let this go back up.
+    /// **Time.** Decode cost is strongly super-linear in chunk length, which is
+    /// the conformer's attention being quadratic in the sequence it sees.
+    /// Measured on the same 3643 s track, 600 s against 120 s, interleaved three
+    /// times because the machine's load moved the absolute figures around by a
+    /// factor of two: 71.5/25.8, 51.6/23.6, 48.6/21.8 seconds. The ratio is
+    /// steady where the absolutes are not, and it is **over 2x in favour of the
+    /// short chunk**. A quieter earlier run put it at 27.0 against 11.8.
     ///
-    /// **Except on a small machine, where 3.28 GB is not affordable.** That
-    /// figure was measured here, with 128 GB and nothing else running. An 8 GB
-    /// M1 Air is the entry Mac of the whole Apple Silicon era and is most of
-    /// what anyone still using a laptop from 2020 has; on one of those, 3.28 GB
-    /// alongside the browser and the video call the meeting was *in* is the
-    /// same Metal OOM that killed the whole-file pass, and it lands an hour in,
-    /// after the recording, where it costs the transcript rather than a retry.
+    /// **Memory.** 600 s peaked at 3.28 GB here, which was affordable on 128 GB
+    /// and was exactly the figure that made a second, smaller value necessary
+    /// for an 8 GB M1 Air. One value that fits the smallest supported Mac is one
+    /// fewer thing that behaves differently on somebody else's machine.
     ///
-    /// 120 s is not a guess at a safer number: it is Speak's, which has shipped
-    /// on 8 GB machines throughout. The trade is real and it is the right way
-    /// round. Six seams an hour become 33, so an hour-long meeting carries
-    /// about 33 corrupted words instead of 6, and that is worth paying on the
-    /// machines whose alternative is no transcript at all. Nothing changes for
-    /// a machine with the memory to spare.
+    /// **Progress.** The chunk is the unit progress is counted in, so an hour is
+    /// 30 of them per track rather than 6.
     ///
-    /// The threshold is 12 GB rather than 8 so that an 8 GB machine is not
-    /// decided by whether `physicalMemory` reports slightly under its nominal
-    /// size. Nothing ships between 8 and 16.
+    /// 120 s is not a guess: it is Speak's, which has shipped on 8 GB machines
+    /// throughout. `LISTEN_CHUNK` still overrides it, and still exists for
+    /// measurement rather than for users.
     static let chunkSeconds: Float =
-        Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "")
-            ?? (ProcessInfo.processInfo.physicalMemory > 12 << 30 ? 600 : 120)
+        Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "") ?? 120
 
     /// Load the weights, downloading them first if they are not on disk.
     ///
@@ -183,11 +190,24 @@ actor ASR {
         loadedRepo = choice.repo
     }
 
-    /// Transcribe a whole file.
+    /// Transcribe a whole file, reporting how far through it is.
+    ///
+    /// `progress` is called with a fraction of this file, 0 before the first
+    /// piece and 1 after the last. It fires once per piece, so on a two minute
+    /// chunk an hour-long track reports thirty times.
+    ///
+    /// **The chunk loop is here rather than in mlx-audio, deliberately.**
+    /// `ParakeetModel.generate` will cut a long file up itself, at a fixed
+    /// offset with two seconds of overlap, and it returns nothing at all until
+    /// the whole file is done. Doing it here buys two things that could not be
+    /// had otherwise: the cuts land in pauses, so no word is lost at a seam, and
+    /// there is somewhere to report from. Each piece is therefore handed over
+    /// with `chunkDuration: 0`, meaning one pass and no chunking of its own.
     ///
     /// Returns segments with whatever timings the engine exposes. Read the note
     /// on word timings below before building speaker assignment on this.
-    func transcribe(_ url: URL) throws -> Transcript {
+    func transcribe(_ url: URL,
+                    progress: (@Sendable (Double) -> Void)? = nil) throws -> Transcript {
         guard let model else { throw ASRError.modelUnavailable("model not loaded") }
 
         let audio: MLXArray
@@ -197,25 +217,72 @@ actor ASR {
             throw ASRError.audioUnreadable(url.path, error)
         }
 
-        // Parakeet degrades badly on inputs shorter than about a second, which
-        // a clip trimmed to one utterance easily is. Padding with silence is
-        // cheaper than a wrong transcript.
-        var samples = audio.asArray(Float.self)
+        let samples = audio.asArray(Float.self)
         let minimum = Int(SAMPLE_RATE)
         let duration = Double(samples.count) / SAMPLE_RATE
+
+        let pieces = Chunking.pieces(samples, rate: Double(SAMPLE_RATE),
+                                     chunk: Double(Self.chunkSeconds))
+
+        // Kept as an `MLXArray` so a piece is a view rather than a copy. The
+        // obvious form, slicing the Swift array and building an `MLXArray` per
+        // piece, copies the whole track out and back again a piece at a time:
+        // an hour is 233 MB of float, and mlx-audio's own loop slices the array
+        // it was handed for exactly this reason.
+        //
+        // Parakeet degrades badly on inputs shorter than about a second, which a
+        // clip trimmed to one utterance easily is, and padding with silence is
+        // cheaper than a wrong transcript. Only ever the whole file: `Chunking`
+        // gives a short tail to the piece before it, so a piece can be under a
+        // second only when the recording is.
+        var flat = audio.ndim == 1 ? audio : audio.reshaped([-1])
         if samples.count < minimum {
-            samples.append(contentsOf: repeatElement(0, count: minimum - samples.count))
+            var padded = samples
+            padded.append(contentsOf: repeatElement(0, count: minimum - samples.count))
+            flat = MLXArray(padded)
         }
 
-        let out = model.generate(
-            audio: MLXArray(samples),
-            generationParameters: STTGenerateParameters(chunkDuration: Self.chunkSeconds))
+        progress?(0)
+
+        var segments: [ASRSegment] = []
+        var text: [String] = []
+        var hardCuts = 0
+
+        for (index, piece) in pieces.enumerated() {
+            let slice = pieces.count == 1 ? flat : flat[piece.start..<piece.end]
+            let out = model.generate(
+                audio: slice,
+                generationParameters: STTGenerateParameters(chunkDuration: 0))
+
+            // Every time in the piece is relative to the piece. The offset is
+            // what puts it back on the recording's clock, and it has to reach
+            // the words too: they are empty today, and the day mlx-audio exposes
+            // them a missed offset here would be an hour-long recording whose
+            // word timings are all in the first two minutes.
+            let offset = Double(piece.start) / SAMPLE_RATE
+            segments += Self.segments(from: out).map { segment in
+                var moved = segment
+                moved.start += offset
+                moved.end += offset
+                moved.words = moved.words.map {
+                    ASRWord(word: $0.word, start: $0.start + offset, end: $0.end + offset)
+                }
+                return moved
+            }
+
+            let spoken = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !spoken.isEmpty { text.append(spoken) }
+            if !piece.quiet { hardCuts += 1 }
+            progress?(Double(index + 1) / Double(pieces.count))
+        }
 
         return Transcript(
-            text: out.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            segments: Self.segments(from: out),
+            text: text.joined(separator: " "),
+            segments: segments,
             duration: duration,
-            model: loadedRepo ?? "unknown")
+            model: loadedRepo ?? "unknown",
+            chunks: pieces.count,
+            hardCuts: hardCuts)
     }
 
     /// Pull segments out of `STTOutput`'s untyped dictionaries.

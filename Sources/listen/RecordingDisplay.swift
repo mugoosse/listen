@@ -81,7 +81,17 @@ extension Recording {
         // disk can report: a recording in progress looks exactly like one that
         // was never transcribed.
         if isLive { return "recording" }
-        if Queue.shared.running == id { return Queue.shared.stage ?? "transcribing" }
+        // The percentage first, and the stage after it.
+        //
+        // A 280 point sidebar truncates the tail, and between "47%" and
+        // "transcribing the other participants" the number is what a glance at
+        // the row is for. Ordered this way the row degrades to "47% · transcri…"
+        // rather than losing the only part that changes. The whole sentence is
+        // in the pane, under the picture, where there is room for it.
+        if Queue.shared.running == id {
+            guard let step = Queue.shared.progress else { return "transcribing" }
+            return "\(Int((step.overall * 100).rounded()))% · \(step.message)"
+        }
         if Queue.shared.isQueued(id) { return "waiting" }
         switch effectiveState {
         case .transcribing:  return "transcribing"
@@ -94,6 +104,19 @@ extension Recording {
     /// This is the recording being captured right now.
     @MainActor
     var isLive: Bool { Capture.shared.current?.id == id }
+
+    /// What produced this transcript, as somebody reads it.
+    ///
+    /// The transcript's own record of what ran, never the recording's choice for
+    /// the next run: those differ for exactly the minutes between choosing a
+    /// model and the job finishing, which is when somebody is watching.
+    ///
+    /// A repo this app has never shipped, which is every legacy import, prints
+    /// as it is. It is still the true answer to "what made this", and a name
+    /// nobody recognises is more use than no name.
+    static func modelName(_ repo: String) -> String {
+        ModelChoice.forRepo(repo)?.title ?? repo
+    }
 
     /// The transcript as one string, for searching.
     var transcriptText: String {

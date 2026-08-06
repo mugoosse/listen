@@ -19,12 +19,32 @@ final class Queue {
     private let pipeline = Pipeline()
     private var waiting: [String] = []
     private(set) var running: String?
-    /// 0...1 while a job is going, nil otherwise. Coarse on purpose: the stages
-    /// are few and long, and a fake smooth bar would be a lie about progress.
-    private(set) var stage: String?
+    /// What the running job is doing and how far through it is, nil otherwise.
+    ///
+    /// Counted rather than estimated, all the way down: see
+    /// `TranscriptionProgress`. This used to be a bare stage string, which was
+    /// all there was to report while the chunk loop lived inside mlx-audio and
+    /// returned nothing until the whole track was done.
+    private(set) var progress: TranscriptionProgress?
+
+    /// The sentence alone, which is all a sidebar row has room for.
+    var stage: String? { progress?.message }
 
     /// Fires on any queue change so the sidebar can redraw a row.
     var onChange: ((String) -> Void)?
+
+    /// Fires as the running job advances, which is once per chunk.
+    ///
+    /// Separate from `onChange` because the two mean different things to a
+    /// window. A queue change is a recording arriving or finishing: the list is
+    /// different and a transcript may now exist, so the answer is a reload. This
+    /// is the same job moving, thirty times a track, and `LibraryWindow.reload`
+    /// re-shows the selected recording, which stops playback and puts the
+    /// playhead back to zero. Sending progress down that path would interrupt
+    /// anybody listening to one meeting while another transcribes, once per
+    /// piece. While the chunk loop was inside mlx-audio there were only three or
+    /// four of these in a whole job and one callback was enough for both.
+    var onProgress: ((String) -> Void)?
 
     var isBusy: Bool { running != nil }
 
@@ -46,9 +66,27 @@ final class Queue {
     ///
     /// Returns whether it was queued, so a caller that is a control can say why
     /// rather than appearing to do nothing.
+    ///
+    /// `using` is a model for this recording from here on, not for this run.
+    /// It is written to `metadata.json` **before** the job starts, so a quit or
+    /// a crash mid-run resumes on the model somebody chose rather than silently
+    /// falling back to the default and reproducing the transcript they were
+    /// trying to replace. That is the same property the rest of the queue has:
+    /// the state is the files, and there is nothing else to lose.
+    ///
+    /// Written after the already-queued guard, deliberately. A job that has
+    /// started has its weights loaded, so filing a different model against it
+    /// would leave a claim in `metadata.json` that the transcript on its way out
+    /// contradicts.
     @discardableResult
-    func enqueue(_ id: String) -> Bool {
+    func enqueue(_ id: String, using choice: ModelChoice? = nil) -> Bool {
         guard !isQueued(id) else { return false }
+
+        if let choice, var recording = Recording.find(id),
+           recording.metadata.asr_model != choice.id {
+            recording.metadata.asr_model = choice.id
+            try? recording.save()
+        }
 
         // Audio is the thing there is to transcribe, and a recording without any
         // cannot be a job however pending it looks.
@@ -83,18 +121,24 @@ final class Queue {
         guard var recording = Recording.find(id) else { advance(); return }
 
         running = id
-        stage = "starting"
+        progress = TranscriptionProgress()
         recording.metadata.state = Metadata.State.transcribing.rawValue
         try? recording.save()
         onChange?(id)
 
+        // Resolved here rather than inside the pipeline, and traced, because a
+        // recording carrying its own model is the case a resumed job gets wrong
+        // if anything reads the app default instead.
+        let choice = recording.asrModel
+        trace("transcribing \(id) with \(choice.title)")
+
         Task { [pipeline] in
             var result: Result<StoredTranscript, Error>
             do {
-                let transcript = try await pipeline.run(recording) { [weak self] message in
+                let transcript = try await pipeline.run(recording, using: choice) { [weak self] step in
                     Task { @MainActor in
-                        self?.stage = message
-                        self?.onChange?(id)
+                        self?.progress = step
+                        self?.onProgress?(id)
                     }
                 }
                 result = .success(transcript)
@@ -113,7 +157,7 @@ final class Queue {
                 }
                 try? finished.save()
                 self.running = nil
-                self.stage = nil
+                self.progress = nil
                 self.onChange?(id)
                 self.advance()
             }

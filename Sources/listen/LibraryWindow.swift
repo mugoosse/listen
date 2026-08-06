@@ -69,6 +69,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
     fileprivate var actionsMenu: NSMenu?
+    /// The File menu's model list: see `modelMenu`. Kept for the same reason
+    /// and stored here for the same one.
+    fileprivate var fileModelMenu: NSMenu?
 
     /// The recording whose row was selected when capture started, so it is
     /// selected once rather than on every state change.
@@ -315,6 +318,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
+        // Deliberately not `reload`. See `Queue.onProgress`: a job advancing is
+        // one row's subtitle and one picture, and rebuilding the list and
+        // re-showing the recording thirty times a track would stop playback on
+        // every piece.
+        Queue.shared.onProgress = { [weak self] id in
+            guard let self else { return }
+            self.sidebar.tickRow(id)
+            self.detail.showProgress()
+        }
 
         // Somebody else may have written to the library since you last looked.
         NotificationCenter.default.addObserver(
@@ -601,6 +613,76 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Nothing is selected while settings is open, so the Actions menu says so
     /// and the File menu greys out rather than acting on a row nobody can see.
     var selected: Recording? { mode == .library ? sidebar.selectedRecording : nil }
+
+    /// Draw the window into a PNG without going near the screen.
+    ///
+    /// `LISTEN_SHOT=<prefix>`, in the same family as `LISTEN_PANEL` and
+    /// `LISTEN_CHUNK`: scaffolding for looking at the thing, not a feature.
+    ///
+    /// It exists because `screencapture` and ScreenCaptureKit both photograph
+    /// the *screen*, so neither can see this window when the Mac is locked, over
+    /// SSH, or on the second machine that shares this library. `cacheDisplay`
+    /// asks the view to draw itself into a bitmap, which needs no display, no
+    /// session and no Screen Recording permission. For a window whose most
+    /// interesting states last under a minute and only happen after a real
+    /// meeting, that is the difference between a picture somebody can check and
+    /// one they have to catch.
+    @discardableResult
+    func writeShot(to path: String) -> Bool {
+        guard let view = window?.contentView else { return false }
+        // Laid out first: a window that was never ordered front has never been
+        // through a layout pass, and the bitmap would be of the frames the views
+        // were created with rather than the ones they are drawn at.
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return false
+        }
+        view.cacheDisplay(in: view.bounds, to: rep)
+
+        // Composited onto the window's own background afterwards, because
+        // `cacheDisplay` draws the views and not the window: an
+        // `NSVisualEffectView`'s material is the window server's work, so the
+        // sidebar and the page behind the text come out transparent. Left as it
+        // is, a dark-mode window is white text on white, which is not a picture
+        // anybody can review. This is not what the window looks like to the
+        // pixel, and it is not meant to be: it is legible, and the colours and
+        // the layout are the app's own.
+        let size = view.bounds.size
+        let flattened = NSImage(size: size)
+        flattened.lockFocus()
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            NSColor.windowBackgroundColor.setFill()
+            NSRect(origin: .zero, size: size).fill()
+        }
+        rep.draw(in: NSRect(origin: .zero, size: size))
+        flattened.unlockFocus()
+
+        guard let flat = flattened.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: flat),
+              let data = bitmap.representation(using: .png, properties: [:]) else { return false }
+        do {
+            try data.write(to: URL(fileURLWithPath: path))
+            return true
+        } catch {
+            log("could not write \(path): \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Show the transcription picture on a real recording, at a made-up
+    /// position. `LISTEN_PANEL=transcribing:0.6`, and nothing else calls it.
+    ///
+    /// A real recording rather than a made-up one, so the waveform is a real
+    /// envelope: the drawing is a picture of an hour of somebody's meeting, and
+    /// checking it against a flat line would miss exactly the bugs worth
+    /// catching. The most recent one, because it is the one already selected.
+    func previewTranscribing(_ fraction: Double) {
+        show()
+        if let first = Recording.all().first { sidebar.select(first.id) }
+        // After the selection: `select` re-shows the recording, which rebuilds
+        // the empty area and would put the picture straight back away again.
+        detail.previewTranscribing(fraction)
+    }
 
     /// Select a recording from somewhere that is not the list, which today
     /// means from a person's popover.
@@ -897,7 +979,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 extension LibraryWindow: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(retranscribeSelected):
+        case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)):
             // Transcribing needs the audio, and on a Mac sharing a library with
             // the machine that recorded it there is none. Enabled, this would be
             // a control that does nothing and reports nothing, which is the
@@ -1008,7 +1090,67 @@ extension LibraryWindow: NSMenuDelegate {
         return menu
     }
 
+    /// The File menu's copy of the model list.
+    ///
+    /// Kept, unlike the other two, because the item it hangs off is built once
+    /// at launch. Filled here as well as on open so it is never empty: AppKit
+    /// will not open an empty submenu, and a parent that cannot be opened is a
+    /// menu item that does nothing.
+    var modelMenu: NSMenu {
+        if let built = fileModelMenu { return built }
+        let menu = NSMenu()
+        menu.delegate = self
+        fill(menu, for: nil)
+        fileModelMenu = menu
+        return menu
+    }
+
+    /// The models, as a submenu of Transcribe Again.
+    func modelSubmenu(for recording: Recording?) -> NSMenu {
+        let menu = NSMenu()
+        fill(menu, for: recording)
+        return menu
+    }
+
+    private func fill(_ menu: NSMenu, for recording: Recording?) {
+        menu.removeAllItems()
+        // The tick goes on what **made** the transcript, not on what the next
+        // run would use. That is the question somebody reading a wrong
+        // transcript actually has, and this is the only place the app answers it
+        // in the same gesture that changes it. Before there is a transcript
+        // there is nothing to have made it, so the recording's own choice stands
+        // in.
+        let current = recording?.storedTranscript
+            .flatMap { ModelChoice.forRepo($0.model) } ?? recording?.asrModel
+
+        for choice in ModelChoice.all {
+            // The coverage rather than the whole blurb. "May misdetect short
+            // clips" is true and belongs in Settings, and it is misleading
+            // here: what is being re-transcribed is a meeting, which is not
+            // short. What matters at this click is which languages it can read.
+            var title = "\(choice.title) · \(choice.coverage)"
+            // The cost of the click, before the click. Otherwise a 2.5 GB
+            // download starts inside the job and the first thing that says so
+            // is the progress line in the sidebar.
+            if !choice.isDownloaded {
+                title += " · downloads \(ModelChoice.humanBytes(choice.approxBytes))"
+            }
+            let item = NSMenuItem(title: title,
+                                  action: #selector(retranscribeWithModel(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.id
+            item.state = choice.id == current?.id ? .on : .off
+            menu.addItem(item)
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // The File menu's model list, which is the one menu here that is kept
+        // rather than rebuilt. Before the recording actions below, which would
+        // otherwise fill it with Export and Delete.
+        if menu === fileModelMenu { fill(menu, for: selected); return }
+
         menu.removeAllItems()
         // A pull-down menu takes its **first** item as the button's own title
         // and never shows it, so the toolbar's copy needs something expendable
@@ -1029,8 +1171,14 @@ extension LibraryWindow: NSMenuDelegate {
 
         add(menu, "Export…", #selector(exportSelected), "square.and.arrow.down")
         menu.addItem(.separator())
+        // The model hangs off this item rather than living three screens away
+        // in Settings, because a transcript in the wrong language is read here
+        // and the model is the only lever over it. A fresh submenu each time:
+        // an `NSMenu` can be the submenu of one item only, and these two menus
+        // are rebuilt on every open anyway.
         add(menu, recording.hasTranscript ? "Transcribe Again" : "Transcribe",
             #selector(retranscribeSelected), "arrow.triangle.2.circlepath")
+            .submenu = modelSubmenu(for: recording)
         add(menu, "Rename…", #selector(renameSelected), "pencil")
         // The one way in for a recording whose band is collapsed, which is a
         // live or untranscribed one: with no speakers and no tags there is no
@@ -1080,10 +1228,59 @@ extension LibraryWindow: NSMenuDelegate {
                                       inFileViewerRootedAtPath: recording.folder.path)
     }
 
+    /// Transcribe again on whatever model this recording already carries.
+    ///
+    /// Rarely reached now that the item owns a submenu, because AppKit sends no
+    /// action for an item that has one: the submenu's ticked row is the "same
+    /// again" click. It stays because it is still the right answer if anything
+    /// ever does fire it, and because keeping the action on the parent is what
+    /// keeps both copies of the item going through `validateMenuItem`.
     @objc func retranscribeSelected() {
         guard let recording = selected else { return }
-        Queue.shared.enqueue(recording.id)
+        retranscribe(recording, using: recording.asrModel)
+    }
+
+    /// Transcribe again on the model this menu item names.
+    @objc func retranscribeWithModel(_ sender: NSMenuItem) {
+        guard let recording = selected,
+              let id = sender.representedObject as? String,
+              let choice = ModelChoice.named(id) else { return }
+        retranscribe(recording, using: choice)
+    }
+
+    private func retranscribe(_ recording: Recording, using choice: ModelChoice) {
+        guard confirmOverwrite(recording, with: choice) else { return }
+        Queue.shared.enqueue(recording.id, using: choice)
         reload()
+    }
+
+    /// Whether the re-run may go ahead.
+    ///
+    /// Transcribing again overwrites `transcript.json`, `turns.json` and the
+    /// voiceprints beside them, so it discards every speaker somebody named and
+    /// every sentence they corrected. Nothing asked before this, which was
+    /// survivable while the item was a plain repeat and is not now that it is a
+    /// choice: picking a model is what somebody does to a transcript they have
+    /// already been through by hand.
+    ///
+    /// Only when there is something to lose, though. An unnamed recording stays
+    /// one click, which is most of them and is exactly the case this feature was
+    /// written for, and a confirmation that fires every time is one people learn
+    /// to dismiss without reading it.
+    private func confirmOverwrite(_ recording: Recording, with choice: ModelChoice) -> Bool {
+        guard recording.hasHumanEdits else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Transcribe \(recording.metadata.title) again"
+            + " with \(choice.title)?"
+        // Name what goes and what does not. The audio is untouched and so are
+        // the notes, and somebody deciding this in a hurry should not have to
+        // work that out.
+        alert.informativeText = "The names you gave the speakers, and any sentences"
+            + " you corrected, are part of the transcript this replaces."
+            + " The audio and your notes are untouched."
+        alert.addButton(withTitle: "Transcribe Again")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc func exportSelected() {

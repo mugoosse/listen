@@ -40,6 +40,78 @@ extension StoredTranscript {
     }
 }
 
+/// What transcription is doing, and how far through it is.
+///
+/// **Every number here is counted, none of it is predicted.** `everyone` and
+/// `you` are pieces decoded over pieces to decode, which is work finished on the
+/// machine doing it. There is deliberately no estimate of time remaining: the
+/// only way to have one before the first piece lands is to carry a throughput
+/// figure measured somewhere else, and a figure measured on a 128 GB Mac Studio
+/// is a promise an M1 Air cannot keep. A machine's own speed shows up here as
+/// how fast the bar moves, which is the honest form of the same information.
+///
+/// `overall` averages the two passes rather than weighting them, because they
+/// are the same model over two tracks of the same length and there is nothing
+/// to weight. Diarization sits between them and reports no fraction at all, so
+/// the bar holds at one half while it runs, with the message saying why. That is
+/// a stall of about 7 seconds in 57 on the hour-long recording this was measured
+/// against, and a bar that visibly waits next to a sentence explaining the wait
+/// is better than one that invents movement to cover it.
+struct TranscriptionProgress: Sendable {
+    /// The sentence the sidebar row and the pane both show.
+    var message: String = "starting"
+
+    /// 0...1 through the track carrying everybody who is not the user. Also the
+    /// whole of the work for an imported recording, which has one mixed track.
+    var everyone: Double = 0
+
+    /// 0...1 through the microphone track.
+    var you: Double = 0
+
+    /// Whether this recording has two tracks. False for an imported one, where
+    /// there is a single mixed track and no separate side to fill.
+    var split: Bool = true
+
+    /// 0...1 across the whole job.
+    var overall: Double {
+        split ? (everyone + you) / 2 : everyone
+    }
+}
+
+/// Somewhere thread-safe for the running totals to live.
+///
+/// Progress is reported from inside the `ASR` actor, from a `@Sendable` closure,
+/// while `Pipeline` is a different actor holding the totals it updates. A
+/// captured `var` cannot cross that boundary, and the alternative of rebuilding
+/// the whole value at every call site loses whichever field the current stage is
+/// not touching.
+private final class Tally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TranscriptionProgress
+    private let report: (@Sendable (TranscriptionProgress) -> Void)?
+
+    /// Fixed for the life of the job, so it needs no lock and the caller can
+    /// word a stage differently for a recording with only one track.
+    let split: Bool
+
+    init(split: Bool, report: (@Sendable (TranscriptionProgress) -> Void)?) {
+        self.split = split
+        value = TranscriptionProgress(split: split)
+        self.report = report
+    }
+
+    /// Change one or both fields and tell whoever is listening.
+    func update(_ change: (inout TranscriptionProgress) -> Void) {
+        lock.lock()
+        change(&value)
+        let snapshot = value
+        lock.unlock()
+        report?(snapshot)
+    }
+
+    func say(_ message: String) { update { $0.message = message } }
+}
+
 /// Runs a recording through ASR, diarization and the merge, and writes the
 /// results next to the audio.
 ///
@@ -58,13 +130,27 @@ actor Pipeline {
     static let userLabel = "Me"
 
     /// Transcribe a whole recording: both tracks, diarized and merged.
-    func run(_ recording: Recording,
-             progress: (@Sendable (String) -> Void)? = nil) async throws -> StoredTranscript {
-        try await asr.load(Settings.model) { progress?($0) }
-
+    ///
+    /// The model is an argument rather than a read of `Settings` in here,
+    /// because a recording can carry its own (`Metadata.asr_model`) and the two
+    /// readers of that rule must not be able to disagree. `Recording.asrModel`
+    /// resolves it; every caller passes the result.
+    func run(_ recording: Recording, using choice: ModelChoice,
+             progress: (@Sendable (TranscriptionProgress) -> Void)? = nil) async throws -> StoredTranscript {
         let fm = FileManager.default
         var hasSystem = fm.fileExists(atPath: recording.systemURL.path)
         let hasMic = fm.fileExists(atPath: recording.micURL.path)
+
+        // Asked here rather than at the mic pass below, where it used to be,
+        // because whether there is a second pass decides the shape of the
+        // picture and the picture is drawn before the first pass starts. A
+        // meeting nobody spoke into would otherwise show a lane for the user
+        // that stays empty for ever, which reads as the job having stalled
+        // halfway rather than as there being nothing to put in it.
+        let micHasSpeech = hasMic && !Self.isSilent(recording.micURL)
+
+        let tally = Tally(split: hasSystem && micHasSpeech, report: progress)
+        try await asr.load(choice) { tally.say($0) }
 
         // An imported recording has neither track, only the mixdown the legacy
         // recorder produced. Treat that as the everyone-track: diarize it whole
@@ -82,26 +168,34 @@ actor Pipeline {
         var embeddings: [String: [Float]] = [:]
         var speech: [String: Double] = [:]
         var wordLevel = false
-        var model = Settings.model.repo
+        var model = choice.repo
 
         // The system track carries everyone who is not the user, so it is the
         // only one worth diarizing. Doing both would spend ANE time to
         // rediscover something already known and occasionally get it wrong by
         // splitting the user into two people.
         if hasSystem {
-            progress?("transcribing the other participants")
-            let transcript = try await asr.transcribe(everyone)
+            // "the other participants" only when there is a separate mic track
+            // to be the other side of. An imported recording is one mixed track
+            // holding everybody including the user, and naming it after the
+            // people who are not you is simply wrong there.
+            tally.say(tally.split ? "transcribing the other participants"
+                                  : "transcribing the meeting")
+            let transcript = try await asr.transcribe(everyone) { fraction in
+                tally.update { $0.everyone = fraction }
+            }
             wordLevel = transcript.hasWordTimings
             model = transcript.model
+            Self.reportCuts(transcript, track: "everyone")
 
-            progress?("identifying speakers")
+            tally.say("identifying speakers")
             // Diarization failing must not cost the transcript. It throws on a
             // track with no speech in it, which is an ordinary thing for a
             // recording to contain, and a transcript with everybody under one
             // label is worth enormously more than no transcript at all.
             var turns: [SpeakerTurn] = []
             do {
-                try await diarizer.load { progress?($0) }
+                try await diarizer.load { tally.say($0) }
                 let diarization = try await diarizer.run(everyone)
                 turns = diarization.turns
                 embeddings = diarization.embeddings
@@ -121,10 +215,13 @@ actor Pipeline {
         }
 
         // The mic is the user. One step, no clustering, no doubt.
-        if hasMic, !Self.isSilent(recording.micURL) {
-            progress?("transcribing you")
-            let transcript = try await asr.transcribe(recording.micURL)
+        if micHasSpeech {
+            tally.say("transcribing you")
+            let transcript = try await asr.transcribe(recording.micURL) { fraction in
+                tally.update { $0.you = fraction }
+            }
             wordLevel = wordLevel || transcript.hasWordTimings
+            Self.reportCuts(transcript, track: "you")
             labelled += transcript.segments.map {
                 LabelledSegment(start: $0.start, end: $0.end,
                                 speaker: Self.userLabel, text: $0.text)
@@ -177,10 +274,11 @@ actor Pipeline {
     /// What `listen transcribe --diarize` uses. There is no mic and system
     /// distinction here, so every speaker is discovered rather than one of them
     /// being known in advance.
-    func runFile(_ url: URL,
+    func runFile(_ url: URL, using choice: ModelChoice,
                  progress: (@Sendable (String) -> Void)? = nil) async throws -> StoredTranscript {
-        try await asr.load(Settings.model) { progress?($0) }
+        try await asr.load(choice) { progress?($0) }
         let transcript = try await asr.transcribe(url)
+        Self.reportCuts(transcript, track: url.lastPathComponent)
 
         progress?("identifying speakers")
         try await diarizer.load { progress?($0) }
@@ -193,6 +291,21 @@ actor Pipeline {
         return StoredTranscript(segments: cleaned, duration: transcript.duration,
                                 model: transcript.model,
                                 wordLevel: transcript.hasWordTimings, cleanup: fired)
+    }
+
+    /// Say how the track was cut, on stderr, every run.
+    ///
+    /// Same argument as the dictionary counts rather than the cleanup ones: this
+    /// is the app deciding where to break somebody's meeting, and a cut that
+    /// could not find a pause costs about one word with nothing left behind to
+    /// find it by. The whole case for cutting at silence is that `hard` is zero
+    /// on ordinary speech, and a case nobody can check is not one.
+    private static func reportCuts(_ transcript: Transcript, track: String) {
+        guard transcript.chunks > 1 else { return }
+        let hard = transcript.hardCuts
+        log("\(track): \(transcript.chunks) chunks, "
+            + (hard == 0 ? "every cut in a pause"
+                         : "\(hard) cut(s) with no pause to land in"))
     }
 
     // MARK: - Writing

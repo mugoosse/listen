@@ -41,6 +41,25 @@ extension Recording {
 }
 
 extension Waveform {
+    /// Reduce a stored envelope to one value per bar, taking the maximum.
+    ///
+    /// The maximum and not the mean: averaging a bucket of speech against the
+    /// pauses around it flattens exactly the difference the picture exists to
+    /// show. (`make` stores mean energy per bucket, which is the other half of
+    /// the same argument at a different scale. The buckets are already the
+    /// averaging step; averaging them again would flatten it twice.)
+    ///
+    /// Shared by the scrubber and by the transcription picture, so a bar cannot
+    /// be in one place in the player and somewhere else in the panel above it.
+    static func resample(_ peaks: [Float], to count: Int) -> [Float] {
+        guard !peaks.isEmpty, count > 0 else { return [] }
+        return (0..<count).map { i in
+            let from = i * peaks.count / count
+            let to = max(from + 1, (i + 1) * peaks.count / count)
+            return peaks[from..<min(to, peaks.count)].max() ?? 0
+        }
+    }
+
     /// The cached envelope, or nil if it has to be computed.
     static func cached(for recording: Recording) -> Waveform? {
         guard let data = try? Data(contentsOf: recording.waveformURL),

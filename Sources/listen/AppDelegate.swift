@@ -27,7 +27,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // recordings, sweeping staging, and a queue that would start
         // transcribing the same audio the other process is already working on.
         // So a preview does none of it and stops here.
-        if previewPanelIfAsked() { return }
+        if previewPanelIfAsked() {
+            shootIfAsked()
+            return
+        }
 
         try? Library.prepare()
 
@@ -103,6 +106,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         _ = Updater.shared
 
+        // Last, so a series of shots catches a launch that has already queued
+        // whatever was pending.
+        shootIfAsked()
     }
 
     /// Recordings left in staging by a crash or a quit join the library.
@@ -145,6 +151,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // the ones a user would see rather than placeholders that hide a
             // sizing bug.
             indicator.show(.detected("com.google.Chrome"))
+        case let want where want.hasPrefix("transcribing"):
+            // `transcribing`, or `transcribing:0.6` for a position in the job.
+            // One number across the whole thing, split across the two lanes the
+            // way the real one is: the first half fills the far side of the
+            // call, the second half fills you.
+            let fraction = Double(want.dropFirst("transcribing".count)
+                                      .drop { $0 == ":" }) ?? 0.35
+            LibraryWindow.shared.previewTranscribing(fraction)
         case let want where want.hasPrefix("settings"):
             // `settings`, or `settings:developers` for a particular tab.
             let name = want.dropFirst("settings".count).drop { $0 == ":" }
@@ -167,6 +181,47 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                   .drop { $0 == ":" })
         }
         return true
+    }
+
+    /// `LISTEN_SHOT=<prefix>` writes a numbered series of window PNGs, then
+    /// quits. `LISTEN_SHOT_EVERY` and `LISTEN_SHOT_COUNT` set the interval in
+    /// seconds and how many, defaulting to every 6 seconds, 8 times.
+    ///
+    /// Scaffolding, in the family of `LISTEN_PANEL` and `LISTEN_CHUNK`. It draws
+    /// the window into a bitmap rather than photographing the screen, so it
+    /// works when the Mac is locked, over SSH, and with no Screen Recording
+    /// permission. The states worth looking at here are the ones that last under
+    /// a minute and need a real meeting first, which is exactly the set nobody
+    /// manages to catch with a screenshot key.
+    private func shootIfAsked() {
+        guard let prefix = ProcessInfo.processInfo.environment["LISTEN_SHOT"] else { return }
+        let env = ProcessInfo.processInfo.environment
+        let every = Double(env["LISTEN_SHOT_EVERY"] ?? "") ?? 6
+        let count = Int(env["LISTEN_SHOT_COUNT"] ?? "") ?? 8
+        // A preview launch has already put the window where it wants it, and
+        // `show()` would send it back to the library and undo a settings preview.
+        //
+        // Otherwise the window is opened on a recording, because a shot needs a
+        // subject: a launch with nothing selected shows "Select a recording",
+        // which is a true page and not the one anybody is taking a picture of.
+        if env["LISTEN_PANEL"] == nil {
+            LibraryWindow.shared.show()
+            if let first = Recording.all().first { LibraryWindow.shared.reveal(first.id) }
+        }
+
+        var taken = 0
+        let timer = Timer(timeInterval: every, repeats: true) { timer in
+            MainActor.assumeIsolated {
+                taken += 1
+                let path = String(format: "%@-%02d.png", prefix, taken)
+                log(LibraryWindow.shared.writeShot(to: path) ? "shot \(path)"
+                                                            : "shot failed: \(path)")
+                guard taken >= count else { return }
+                timer.invalidate()
+                NSApp.terminate(nil)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     // MARK: - Menu

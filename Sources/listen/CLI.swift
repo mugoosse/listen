@@ -1265,7 +1265,10 @@ enum CLI {
 
     transcribe options:
       --format md|json|txt       default md. json carries the timings.
-      --model v2|v3              default v2, or whatever Settings holds.
+      --model v2|v3              v2 is English only, v3 reads 25 languages.
+                                 On a recording this is remembered: every later
+                                 run of that one uses it. Without it, whatever
+                                 that recording already carries, or the default.
       --diarize                  label speakers in a bare audio file.
                                  Implied when the argument is a recording.
 
@@ -1282,7 +1285,12 @@ enum CLI {
     private static func transcribe(_ args: [String]) async -> Never {
         var path: String?
         var format = "md"
-        var choice = Settings.model
+        // nil is "not asked for", which is not the same as the default. On a
+        // recording, no flag means the model that recording already carries,
+        // and `--model` means change it. Collapsing the two here would pin every
+        // recording ever transcribed from the CLI to whatever the default
+        // happened to be that day.
+        var chosen: ModelChoice?
         var diarize = false
 
         var i = 0
@@ -1303,7 +1311,7 @@ enum CLI {
                 guard let m = ModelChoice.named(args[i]) else {
                     fail("unknown model `\(args[i])`. Use v2 or v3.")
                 }
-                choice = m
+                chosen = m
             case let other where other.hasPrefix("-"):
                 fail("unknown option `\(other)`. Try `listen help`.")
             default:
@@ -1319,13 +1327,17 @@ enum CLI {
         // diarize the system track, label the mic track as the user, merge. A
         // bare audio file cannot take that path because it has no track split.
         if let recording = Recording.find(path) ?? Self.recordingFolder(path) {
-            await transcribeRecording(recording, format: format, choice: choice)
+            await transcribeRecording(recording, format: format, chosen: chosen)
         }
 
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             fail("no such file or recording: \(url.path)")
         }
+
+        // A bare file is not in the library and has nothing to remember a model
+        // with, so the default stands in when none was named.
+        let choice = chosen ?? Settings.model
 
         if diarize {
             await transcribeDiarized(url, format: format, choice: choice)
@@ -1336,7 +1348,12 @@ enum CLI {
             let t0 = Date()
             try await asr.load(choice) { log($0) }
             let loaded = Date()
-            let transcript = try await asr.transcribe(url)
+            // The chunk counter on stderr, so a long file says something while
+            // it works. The same callback the window's picture is driven by, so
+            // what the CLI reports and what the pane draws cannot come apart.
+            let transcript = try await asr.transcribe(url) { fraction in
+                log(String(format: "%.0f%%", fraction * 100))
+            }
             let done = Date()
 
             // Timings on stderr so the transcript on stdout stays pipeable.
@@ -1346,14 +1363,17 @@ enum CLI {
                        transcript.duration,
                        transcript.duration / max(done.timeIntervalSince(loaded), 0.001)))
 
-            // The chunk length is chosen from installed memory, so two machines
-            // transcribing the same file produce a different number of seams and
-            // therefore a different number of corrupted words. Say which one this
-            // was: otherwise "my transcript has more glitches than yours" has
-            // nothing behind it to check.
-            log(String(format: "chunk %.0fs, about %.0f seam(s)",
-                       ASR.chunkSeconds,
-                       max((transcript.duration / Double(ASR.chunkSeconds)).rounded(.down), 0)))
+            // What the file was actually cut into, rather than what a chunk
+            // length implies it was cut into. These used to be the same
+            // statement because the cuts were at fixed offsets; now a cut moves
+            // back up to ten seconds to find a pause, so the count is a count.
+            //
+            // `hard` is the number that matters and the reason this is printed
+            // every run. A cut that found no pause behaves like one of the old
+            // fixed-offset seams and costs about one word, and the whole case
+            // for cutting at silence is that it is zero on ordinary speech.
+            log(String(format: "chunk %.0fs, %d piece(s), %d hard cut(s)",
+                       ASR.chunkSeconds, transcript.chunks, transcript.hardCuts))
 
             // Section 4.4 assigns each word to the overlapping speaker turn, so
             // the absence of word timings is a finding, not a detail. Say it
@@ -1448,7 +1468,12 @@ enum CLI {
         guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
 
         print(recording.metadata.title)
-        print([recording.when, recording.lengthText, recording.appLabel ?? ""]
+        // The model that produced the transcript, on the same line as the rest
+        // of the provenance and in the same order as the detail pane. It is the
+        // only fact that explains a transcript in the wrong language, and until
+        // it was printed here there was nowhere to read it but the raw JSON.
+        print([recording.when, recording.lengthText, recording.appLabel ?? "",
+               recording.storedTranscript.map { Recording.modelName($0.model) } ?? ""]
                 .filter { !$0.isEmpty }.joined(separator: " · "))
         let speakers = recording.speakers
         if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
@@ -1913,13 +1938,33 @@ enum CLI {
     }
 
     /// The two-track pipeline over a stored recording.
+    ///
+    /// `--model` is filed on the recording, so the next run of any kind uses it
+    /// too and a job interrupted by a crash resumes on it. This used to write
+    /// `Settings.model = choice` instead, which meant transcribing one meeting
+    /// with `--model v3` quietly changed the model **every future recording**
+    /// would use, with nothing anywhere reporting it.
+    ///
+    /// With no flag the recording's own model wins, not the app default. The
+    /// two differ for exactly the recordings somebody has already had to
+    /// correct, which are the ones most likely to be run again.
     private static func transcribeRecording(_ recording: Recording, format: String,
-                                            choice: ModelChoice) async -> Never {
-        Settings.model = choice
+                                            chosen: ModelChoice?) async -> Never {
+        var updated = recording
+        if let chosen, updated.metadata.asr_model != chosen.id {
+            updated.metadata.asr_model = chosen.id
+            try? updated.save()
+        }
+        let choice = chosen ?? updated.asrModel
+        log("transcribing with \(choice.title)")
         do {
             let t0 = Date()
-            var updated = recording
-            let transcript = try await Pipeline().run(recording) { log($0) }
+            // The percentage as well as the sentence: this is the one place the
+            // pipeline's progress can be watched without a window, so it is
+            // also where a stage that is not moving has to be visible.
+            let transcript = try await Pipeline().run(updated, using: choice) {
+                log("\($0.message) (\(Int(($0.overall * 100).rounded()))%)")
+            }
             // The same bookkeeping the queue does, through the same call, so
             // the two cannot come to different conclusions about a recording
             // they both just transcribed.
@@ -1953,11 +1998,10 @@ enum CLI {
     /// `listen transcribe <file> --diarize`: the whole pipeline over one file.
     private static func transcribeDiarized(_ url: URL, format: String,
                                            choice: ModelChoice) async -> Never {
-        Settings.model = choice
         let pipeline = Pipeline()
         do {
             let t0 = Date()
-            let transcript = try await pipeline.runFile(url) { log($0) }
+            let transcript = try await pipeline.runFile(url, using: choice) { log($0) }
             log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
                        transcript.duration))
             if !transcript.wordLevel {

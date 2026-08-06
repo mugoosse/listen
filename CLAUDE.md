@@ -87,55 +87,147 @@ rather than assuming it is not, and `Transcript.hasWordTimings` reports the
 answer instead of anyone guessing. The CLI says so on every run. Do not build
 word-level assignment on this until the exposure question is settled.
 
-### One word is corrupted at every ASR chunk seam
+### The chunk loop is Listen's, and it cuts at pauses
 
-Measured on synthesised speech numbering 60 sentences, so every word is
-checkable:
+`ASR.transcribe` cuts the track up itself and hands mlx-audio one piece at a
+time with `chunkDuration: 0`. `Chunking.pieces` chooses the boundaries: a
+nominal one every `chunkSeconds`, then slid **backwards** by up to ten seconds
+to the quietest 200 ms window it can find there.
 
-| `LISTEN_CHUNK` | seams | result |
+This replaced letting `ParakeetModel.generate` chunk internally, and it bought
+three things that could not be had separately.
+
+**One word was corrupted at every seam.** Originally measured on synthesised
+speech numbering 60 sentences, so every word is checkable: at `LISTEN_CHUNK=120`
+sentence 56 came back as "number 50", and at 60 both 29 and 55 went. The
+corrupted segment was short, 1.2 s against about 2.2 s for its neighbours, so
+the tail of the word straddling the boundary was being dropped rather than
+mistranscribed. mlx-audio chunks with a 2 second overlap and merges token
+sequences on the longest contiguous match, and that overlap is not enough to
+protect a word sitting on the boundary. A cut inside a pause has no word on it
+to lose, so the pieces need no overlap and their transcripts need no merge:
+they are concatenated with each piece's start added to its times.
+
+Re-measured against the shipped 0.5.0 build, 300 numbered sentences (803 s),
+both at `LISTEN_CHUNK=120` so the only difference is where the cuts land:
+
+| build | sentences | result |
 |---|---|---|
-| 0 (whole file) | 0 | 60 sentences, in order, nothing missing or duplicated |
-| 120 | 1 | sentence 56 came back as "number 50" |
-| 60 | 2 | sentences 29 and 55 came back as "number 20" and "number 50" |
+| 0.5.0, fixed offsets | 300/300 | 56 missing, 50 twice |
+| this one, cut at pauses | 300/300 | nothing missing, nothing duplicated |
 
-Exactly one corruption per seam, at the seam. The corrupted segment is also
-short: 1.2 s against about 2.2 s for its neighbours, so the tail of the word
-straddling the boundary is being dropped rather than mistranscribed.
+Note the rate: 6 seams produced **one** corruption, not six, so the original
+"exactly one per seam" was a small sample. The direction is what matters.
 
-mlx-audio chunks internally with a 2 second overlap and merges token sequences
-on the longest contiguous match (`NemoAlignment.mergeLongestContiguous`). The
-overlap is not enough to protect a word sitting on the boundary.
+**It is about twice as fast**, because the reason for a long chunk went away.
+See `ASR.chunkSeconds`: decode cost is strongly super-linear in chunk length,
+600 s was chosen only to have fewer seams, and once a seam is free the argument
+collapses. Interleaved three times against 0.5.0 on the same 3643 s track, this
+Mac: 60.3/27.6, 56.9/28.5, 56.5/29.4 seconds. Two times, consistently.
 
-This matters more here than in Speak because a dictation is one chunk and a
-meeting is not: at 120 s chunks an hour-long recording has 29 seams and
-therefore about 29 corrupted words. Do not treat it as noise.
+**There is somewhere to report from.** `generate` returns nothing until the
+whole file is done, so before this the only progress a job could report was
+which of three stages it was in. Now it is one callback per piece, which is 30
+an hour per track. That is the whole of `TranscriptionProgress`, the sidebar
+row's percentage and the picture in the pane.
 
-The principled fix is to cut chunks at silence rather than at a fixed offset,
-so no word ever straddles a seam. mlx-audio ships `MLXAudioVAD`, so the parts
-exist. Until then the chunk length is a trade against memory, measured below.
+Two things about the boundaries are load-bearing:
 
-#### The chunk length depends on the machine, so two Macs disagree
+1. **Backwards only, never forwards**, so a piece can never be longer than the
+   chunk length. The chunk length is chosen against a memory ceiling, and a rule
+   that could overshoot is one that occasionally asks for more than the machine
+   was judged able to give.
+2. **A cut that finds no pause is counted, not hidden.** `Piece.quiet` is false
+   when the quietest window in the search range is still within 20 dB of the
+   track's speech level, `listen transcribe` prints the count every run, and
+   `Pipeline` logs it per track. Such a cut behaves exactly like one of the old
+   seams. The whole case for this design is that the number is zero on ordinary
+   speech, and a case nobody can check is not one. Measured: **0 hard cuts** over
+   32 pieces on each track of a real hour-long two-person call, and 0 over 8
+   pieces of synthesised speech.
 
-`ASR.chunkSeconds` is 600 above 12 GB of installed memory and 120 at or below
-it. The 3.28 GB peak that made 600 s the answer was measured here, on 128 GB
-with nothing else running. An 8 GB M1 Air is the entry Mac of the entire Apple
-Silicon era, and on one of those, 3.28 GB alongside the browser and the video
-call the meeting is *in* is the same Metal OOM that killed the whole-file pass.
-It would land an hour in, after the recording, where it costs the transcript
-rather than a retry.
+Plain RMS, not the `MLXAudioVAD` mlx-audio ships. This is not the general
+speech-versus-noise problem a VAD solves: the search window is ten seconds of a
+conversation and all that is wanted is the quietest moment in it. A VAD would be
+another model to download on first run, which is a poor trade for a boundary
+that only has to avoid landing inside a word.
 
-120 s is not a guess at a safer number, it is Speak's, which has shipped on
-8 GB machines throughout. The trade is real and it is the right way round: an
-hour-long meeting on a small Mac carries about 33 corrupted words instead of 6,
-which is worth paying when the alternative is no transcript at all. Nothing
-changes on a machine with the memory to spare.
+#### One chunk length for every Mac, and it is the short one
 
-The consequence is that the same file transcribed on two Macs has a different
-number of seams and therefore a different number of corrupted words, so
-`listen transcribe` reports the chunk length and the seam count on every run.
-Without that, "my transcript has more glitches than yours" has nothing behind
-it to check. `LISTEN_CHUNK` still overrides both, and still exists for
-measurement rather than for users.
+`ASR.chunkSeconds` was 600 above 12 GB of installed memory and 120 at or below
+it, so the same file transcribed on two Macs had a different number of seams and
+therefore a different number of corrupted words. That whole trade is gone. It is
+120 everywhere, and the three arguments all point the same way now: 120 s is
+over twice as fast as 600 s, it peaks far below the 3.28 GB that made 600 s
+unaffordable on an 8 GB M1 Air, and it makes an hour 30 progress units per track
+rather than 6.
+
+`LISTEN_CHUNK` still overrides it, and still exists for measurement rather than
+for users. `listen transcribe` now reports the pieces and the hard cuts rather
+than the chunk length and an implied seam count, because with the boundaries
+moving those had stopped being the same statement.
+
+### Progress is counted, and there is no estimate anywhere
+
+`TranscriptionProgress` carries pieces decoded over pieces to decode, per track.
+There is deliberately **no time remaining**, and the reason is worth keeping:
+the only way to show one before the first piece lands is to carry a throughput
+figure measured somewhere else, and a figure measured on this 128 GB machine is
+a promise an 8 GB M1 Air cannot keep. A machine's own speed shows up as how fast
+the bar moves, which is the honest form of the same information.
+
+`overall` averages the two passes rather than weighting them, because they are
+the same model over two tracks of the same length and there is nothing to
+weight. Diarization reports no fraction at all, so the bar **holds at one half**
+while it runs, with the message saying why. That is about 7 seconds in 57 on the
+hour-long recording this was measured against, and a bar that visibly waits next
+to a sentence explaining the wait beats one that invents movement to cover it.
+
+Whether there are two lanes is settled **before the model loads**, from whether
+there is a mic track with speech in it. A picture that grows a second half when
+the first pass ends reads as the first half having been wrong. That is also why
+`Pipeline.isSilent` moved up: an untouched microphone would otherwise draw a
+lane for the user that never fills.
+
+#### A job advancing is not a queue change
+
+`Queue.onProgress` is separate from `Queue.onChange`, and the split is required
+rather than tidy. `LibraryWindow.reload` re-shows the selected recording, which
+stops playback and puts the playhead back to zero, and it is the right answer to
+a recording arriving or finishing. Progress is the same job moving, 60 times a
+job now rather than three or four, and sending it down that path would interrupt
+anybody listening to one meeting while another transcribes, once per piece. So
+progress redraws one sidebar row (`Sidebar.tickRow`, which is `tickLive`
+generalised) and sets two numbers on a view already on screen.
+
+#### The picture is the meeting, drawn as it is read
+
+`TranscribingView` fills the pane that used to hold one grey sentence. It draws
+the recording's own envelope, the same `waveform.json` the scrubber below it
+uses, through `Waveform.resample` so the two cannot disagree about a bar.
+
+**Two lanes because there are two tracks**: the upper half is everybody else and
+the lower half is you, each filling during its own pass. A single bar would have
+had to sweep twice and reset in the middle, which reads as starting over. An
+imported recording has one mixed track and gets one lane, because the picture
+should say what the job actually is.
+
+Two details are the sort that only show up in use:
+
+1. **The fill eases toward the reported value rather than jumping to it.** A
+   piece takes a second or two, so the truth arrives in steps. Easing means the
+   drawing always shows *at most* what has been reported: it lags and never
+   leads, which is the only direction a progress bar may be wrong in.
+2. **The glow at the head pulses, and is the only thing not driven by counted
+   work.** It moves in brightness, never in position, so it cannot claim
+   progress that has not happened. Without it a busy chunk on a small Mac is two
+   seconds of a completely still picture, which people reasonably read as hung.
+
+`LISTEN_PANEL=transcribing[:0.6]` puts it on screen on demand, against a real
+recording so the envelope is a real one. Same argument as the recording panel's
+preview clock: this state lasts under thirty seconds a track here and needs a
+meeting to reach, so without it the only way to look at the drawing is to catch
+it.
 
 ### A process tap with an empty include list records perfect silence
 
@@ -1630,6 +1722,111 @@ speaker editing looks like.
 The `.raw.json.bak` backup is written **once**, before the first edit. Writing
 it on every edit would overwrite it with edited data the second time, and it
 would no longer be a way back to what the model actually said.
+
+### The model belongs to the recording, and the language is not a setting
+
+Reported from a real 30 minute call held in Dutch: the transcript is fluent,
+confident English and every sentence of it is invented. The model did not fail
+and nothing errored. An English-only decoder handed Dutch audio produces English
+words, which is the one failure mode of this app that leaves no trace anywhere:
+the recording looks transcribed, the state says `needs_labelling`, and the only
+evidence that anything went wrong is that a human reads it.
+
+Two things were missing, and the second one is the interesting one.
+
+1. **Nothing said which model made a transcript.** `StoredTranscript.model` has
+   held it since milestone 0 and no screen printed it, so "why is this
+   gibberish?" was unanswerable without opening the JSON. It is now the fourth
+   fact in the detail pane's subtitle and on `listen show`'s second line, always
+   rather than only when it is unusual: a fact that appears sometimes is one
+   nobody learns to read, and the failure case is the ordinary configuration.
+   It earned that immediately. The recording this was written for turned out to
+   say `imported: mlx-whisper + pyannote`, not Parakeet at all, so the model
+   everyone assumed was at fault was not even the one that ran.
+2. **Transcribe Again was a repeat, not a choice.** It re-ran `Settings.model`,
+   which is the model that produced the wrong transcript, so the one control on
+   screen that looks like the fix was guaranteed to reproduce the fault.
+
+**There is no language picker and this is not the feature that adds one.**
+Checked against the pinned mlx-audio rather than remembered:
+`STTGenerateParameters.language` exists, and `ParakeetModel` copies it into
+`STTOutput` at four places and never hands it to the decoder. A language control
+would do nothing at all, silently. The model is the whole lever: v2 is English
+only, v3 reads 25 languages and detects which. So the menu says "Parakeet v3 ·
+25 languages", not "Dutch".
+
+#### The choice is on the recording, because the queue has no job table
+
+`Metadata.asr_model` holds a `ModelChoice.id`, and `nil` is "the app default",
+which is every recording written before it. `Optional` for the reason recorded
+against `calendar_event_id`: measured before writing a single one, `listen list`
+and `listen list --json` both return 31 over a library where no file has the key.
+
+Carrying it on the job instead would have been less code and wrong. `Queue` is
+rebuilt at launch from "audio exists and a transcript does not", with nothing
+persisted, which is what makes a crash mid-job cost one re-run. A model held
+only by the running job is lost by that crash, and the relaunch re-runs the
+Dutch meeting on the English-only model and writes the same nonsense a second
+time. `Queue.enqueue(_:using:)` therefore writes the choice to `metadata.json`
+**before** the job starts, and after the already-queued guard: a job whose
+weights are loaded must not have a different model filed against it.
+
+`Recording.asrModel` is the one place the rule lives, and `Pipeline.run` takes
+the model as an argument rather than reading `Settings` itself, so nothing can
+transcribe with one model while the library records another.
+
+That fixed a real fault next door. `listen transcribe <id> --model v3` used to
+do `Settings.model = choice`, so transcribing one meeting permanently changed
+the model **every future recording** would use, and nothing said so. `--model`
+now files the choice on that recording, and with no flag the recording's own
+model wins over the default, which matters because the recordings somebody has
+already had to correct are the ones most likely to be run again.
+
+#### The submenu, and the three copies of Transcribe Again
+
+The models hang off the item that re-runs, in the toolbar's ellipsis, the
+sidebar's right-click menu and the File menu. Four things about it:
+
+1. **The tick is on what produced the transcript**, not on what the next run
+   would use, so opening the menu answers "which model wrote this?" in the same
+   gesture that changes it.
+2. **The coverage, not the blurb.** Settings says v3 "may misdetect short
+   clips", which is true and is why `ModelChoice.coverage` exists separately: at
+   this click the thing being re-transcribed is a meeting, and a meeting is not
+   short, so the caveat would be misleading exactly where it is loudest.
+3. **The download is named before the click.** A model that is not on disk says
+   "downloads 2.5 GB". `ASR.load` reports the transfer into `Queue.stage` and
+   the sidebar row shows it, but that is after somebody has committed to it.
+4. **An `NSMenu` can be the submenu of one item only.** The ellipsis and the
+   sidebar build a fresh one per open, which they do anyway; the File menu's
+   item is built once at launch, so it keeps one instance, refilled by
+   `menuNeedsUpdate` and filled once at creation because AppKit will not open an
+   empty submenu and a parent that cannot open is an item that does nothing.
+
+The parent item keeps its `retranscribeSelected` action even though AppKit sends
+no action for an item with a submenu. That is what keeps both copies going
+through `validateMenuItem`, which is the property the section above this one
+depends on.
+
+#### Transcribing again destroys hand corrections, and now says so
+
+`Pipeline.write` overwrites `transcript.json`, `turns.json` and
+`embeddings.json`, so a re-run discards every speaker somebody named and every
+sentence they corrected. Nothing asked, which was survivable while the item was
+a repeat of itself and is not now that it is a choice: choosing a model is what
+somebody does to a transcript they have already been through by hand.
+
+`Recording.hasHumanEdits` gates the alert, and what it counts is the point.
+`Me` does not count, because the pipeline writes it rather than a person, and a
+placeholder letter does not count either, because nobody chose that. Counting
+either would put a confirmation in front of every recording in the library,
+which is the same as putting one in front of none of them. The recording this
+feature was written for has Speaker A and Speaker B and correctly asks nothing.
+
+The other half is the `.raw.json.bak` that `TranscriptEditor` writes once before
+the first sentence edit. Its path moved onto `Recording` because that file now
+has a second reader: its existence is how the app knows somebody has corrected a
+sentence in a transcript it is about to throw away.
 
 ### The model is cached twice, and deleting one copy does not test anything
 

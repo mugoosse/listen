@@ -77,8 +77,14 @@ enum MainMenu {
         // ellipsis and the sidebar's right-click menu cannot carry one.
         add(menu, "Tags…", #selector(LibraryWindow.tagSelected), "t")
             .target = LibraryWindow.shared
-        add(menu, "Transcribe Again", #selector(LibraryWindow.retranscribeSelected))
-            .target = LibraryWindow.shared
+        let again = add(menu, "Transcribe Again",
+                        #selector(LibraryWindow.retranscribeSelected))
+        again.target = LibraryWindow.shared
+        // The same model list the toolbar's ellipsis and the sidebar's
+        // right-click menu carry, and the same instance every time this item is
+        // shown, because this item is built once at launch. `LibraryWindow`
+        // refills it on open, so the tick follows the selection.
+        again.submenu = LibraryWindow.shared.modelMenu
         menu.addItem(.separator())
         // No key equivalent. Delete is irreversible and this is a list people
         // navigate with the keyboard.

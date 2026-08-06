@@ -480,7 +480,21 @@ final class SidebarViewController: NSViewController {
     /// drag, fight the scroller and rebuild every cell in the library to
     /// advance one number.
     func tickLive() {
-        guard let id = Capture.shared.current?.id, let row = row(for: id),
+        guard let id = Capture.shared.current?.id else { return }
+        tickRow(id)
+    }
+
+    /// Redraw one row in place, wherever the reason came from.
+    ///
+    /// The second caller is transcription progress, which is the same argument
+    /// as the clock's and arrives more often: once per chunk rather than once
+    /// per second, and the row's subtitle carries the stage.
+    ///
+    /// A row that is scrolled out of view has no cell, and `makeIfNecessary` is
+    /// false on purpose: there is nothing to redraw, and building one to write a
+    /// number nobody can see is the work this exists to avoid.
+    func tickRow(_ id: String) {
+        guard let row = row(for: id),
               let recording = recording(at: row),
               let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false)
                   as? RecordingCell

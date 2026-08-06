@@ -30,14 +30,11 @@ final class SidebarViewController: NSViewController {
     /// library with recordings missing from it.
     private var speakerFilter: String?
 
-    /// The two rows that used to be toolbar buttons.
+    /// Settings is the one row left here, at the bottom, because it is the
+    /// thing you reach for least. Record was the row above the list until it
+    /// became `RecordButton`: see there for why it left, which is that a
+    /// collapsed sidebar took the app's primary action off the screen with it.
     ///
-    /// Codex's shape, and it earns its place here for a reason the toolbar
-    /// could not: Record is the app's primary action and belongs where the eye
-    /// already is, at the top of the list it will add to, and Settings is the
-    /// one thing you reach for least, so it belongs at the bottom out of the
-    /// way. A toolbar gives both the same weight and puts them equally far from
-    /// what they act on.
     /// Where a row's content starts, matching the app icons below.
     ///
     /// An inset table indents its rows and `RecordingCell` insets its own
@@ -50,10 +47,10 @@ final class SidebarViewController: NSViewController {
     /// nothing else in the list to line up with. Now that a recording carries
     /// its app's icon, the sidebar has two columns and not three: this row's
     /// icon over the app icons, this row's label over the titles. Measured off
-    /// the screen after the change, in points from the same edge: icon ink at
-    /// 33 (New Recording), 32 (Settings, a narrower glyph in the same box) and
-    /// 34 (an app icon, which fills its box); text ink at 56 and 58. What is
-    /// left is the glyphs' own side bearings.
+    /// the screen when both rows were still here, in points from the same edge:
+    /// icon ink at 33 (New Recording), 32 (Settings, a narrower glyph in the
+    /// same box) and 34 (an app icon, which fills its box); text ink at 56 and
+    /// 58. What is left is the glyphs' own side bearings.
     private static let rowInset: CGFloat = 22
 
     /// Where a row's *background* starts: level with the search field, so the
@@ -61,10 +58,8 @@ final class SidebarViewController: NSViewController {
     /// floating inside the same column.
     private static let rowEdge: CGFloat = 10
 
-    private var newButton: SidebarRow!
     private var settingsButton: SidebarRow!
 
-    var onNewRecording: (() -> Void)?
     var onSettings: (() -> Void)?
     private var filterBar: NSView!
     private var filterButton: NSButton!
@@ -154,20 +149,12 @@ final class SidebarViewController: NSViewController {
         filterBar.addSubview(filterButton)
         filterBar.isHidden = true
 
-        // "New Recording" and not "Record": it names the thing that appears in
-        // the list below it, the way every other row here is a noun, and it
-        // does not collide with the state it turns into. Somebody who has just
-        // installed this cannot tell what "Record" would record, so the tooltip
-        // says the part that cannot be guessed.
-        newButton = row("New Recording", "record.circle", #selector(newRecording))
-        newButton.toolTip = "Record this Mac's audio and your microphone"
         settingsButton = row("Settings", "gearshape", #selector(openSettings))
         settingsButton.toolTip = "Settings (⌘,)"
         settingsButton.contentTintColor = .secondaryLabelColor
 
         container.addSubview(picker)
         container.addSubview(searchField)
-        container.addSubview(newButton)
         container.addSubview(filterBar)
         container.addSubview(scroll)
         // A hairline, so the list ends rather than appearing to run underneath
@@ -181,22 +168,13 @@ final class SidebarViewController: NSViewController {
         // Collapses to nothing, spacing included. A hidden view keeps its
         // frame, so an unfiltered list would otherwise sit six points lower
         // than it did before this row existed.
-        filterTop = filterBar.topAnchor.constraint(equalTo: newButton.bottomAnchor,
+        filterTop = filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor,
                                                    constant: 0)
         NSLayoutConstraint.activate(picker.constraints(in: container, above: searchField) + [
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor,
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                                   constant: -10),
-            // Spaced like a row in the list below it rather than crammed
-            // against the search field: the icon lines up with the recording
-            // titles, and there is air on both sides of the pair.
-            newButton.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
-            newButton.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                               constant: Self.rowEdge),
-            newButton.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                                constant: -Self.rowEdge),
-            newButton.heightAnchor.constraint(equalToConstant: 32),
             filterTop,
             filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             filterBar.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor,
@@ -436,29 +414,6 @@ final class SidebarViewController: NSViewController {
         return button
     }
 
-    /// The Record row while a meeting is running: the same words, greyed.
-    ///
-    /// It used to become a red Stop row with a clock in it, which put the
-    /// elapsed time on screen three times at once and a second stop control
-    /// beside the one in the toolbar. A row that changes its verb, its icon and
-    /// its colour is also a row you have to read before you can trust what
-    /// pressing it does.
-    ///
-    /// Disabled says the one thing that is true and is not said anywhere else:
-    /// there is no second recording to start. Stopping is the toolbar's, on the
-    /// meeting you have open, and the menu bar's from anywhere.
-    func setRecording(_ recording: Bool) {
-        loadViewIfNeeded()
-        newButton.isEnabled = !recording
-        // A greyed control with no reason beside it is the shape people read as
-        // broken, and the reason is not guessable from a row that says the same
-        // thing it always says.
-        newButton.toolTip = recording
-            ? "Already recording. Stop it from the toolbar or the menu bar."
-            : "Record this Mac's audio and your microphone"
-    }
-
-    @objc private func newRecording() { onNewRecording?() }
     @objc private func openSettings() { onSettings?() }
 
     private func rowMenu() -> NSMenu {

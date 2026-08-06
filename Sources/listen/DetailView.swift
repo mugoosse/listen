@@ -57,6 +57,16 @@ final class DetailView: NSView {
     private let noteInfo = LinkLine()
     private let notesPlaceholder = PassthroughLabel(labelWithString: "")
 
+    /// Where the note's text starts inside `notesScroll`, split the way AppKit
+    /// splits it: the scroll view's content inset, then the text view's own.
+    /// Three things read these and have to agree, or the caret and the prompt
+    /// it sits on end up on different lines.
+    private static let notesTopInset: CGFloat = 14
+    /// Small, because the provenance line above already separates the note from
+    /// the toggle. It was 16, which stacked with that line and left the first
+    /// character of an empty note a long way from anything.
+    private static let notesTextInset: CGFloat = 2
+
     /// Pending write of the user's own note, and whether one is in flight.
     ///
     /// Their note materialises on the first keystroke, so every keystroke is a
@@ -325,10 +335,13 @@ final class DetailView: NSView {
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             notesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // Over the text view's own inset, so the prompt sits exactly where
-            // the caret will be. An `NSTextView` has no placeholder of its own.
-            notesPlaceholder.topAnchor.constraint(equalTo: notesScroll.topAnchor,
-                                                  constant: 16),
+            // Exactly where the caret will be, and derived rather than measured
+            // so the two cannot come apart again: the text starts at the scroll
+            // view's top inset plus the text view's own. An `NSTextView` has no
+            // placeholder of its own.
+            notesPlaceholder.topAnchor.constraint(
+                equalTo: notesScroll.topAnchor,
+                constant: Self.notesTopInset + Self.notesTextInset),
             notesPlaceholder.leadingAnchor.constraint(equalTo: notesScroll.leadingAnchor),
             notesPlaceholder.trailingAnchor.constraint(equalTo: notesScroll.trailingAnchor),
 
@@ -405,7 +418,7 @@ final class DetailView: NSView {
         // Small, because the provenance line above already separates the note
         // from the toggle. It was 16, which stacked with that line and left the
         // first character of an empty note a long way from anything.
-        notesText.textContainerInset = NSSize(width: 0, height: 2)
+        notesText.textContainerInset = NSSize(width: 0, height: Self.notesTextInset)
         // Zero, not the default 5. A text container pads its line fragments,
         // so the note's first character sat five points right of the label
         // above it and of the transcript beside it: close enough to read as a
@@ -420,6 +433,21 @@ final class DetailView: NSView {
         notesScroll.hasVerticalScroller = true
         notesScroll.drawsBackground = false
         notesScroll.isHidden = true
+        // Room at the bottom for the floating Record button, which is in the
+        // window's content host and therefore over this. It matters more here
+        // than in the transcript: this one is typed into, so what ends up under
+        // the button is the caret rather than a line somebody could scroll past.
+        //
+        // **The top inset has to be stated with it.** Setting `contentInsets`
+        // turns `automaticallyAdjustsContentInsets` off, and the automatic top
+        // inset here was 14: the note's first line, and therefore the caret, sat
+        // at 16 below this scroll view because of it, which is where
+        // `notesTopInset` puts the placeholder. Adding only a bottom inset
+        // silently zeroed the top one, the caret jumped a line above the prompt
+        // it is supposed to sit on, and nothing else moved to explain it.
+        notesScroll.automaticallyAdjustsContentInsets = false
+        notesScroll.contentInsets = NSEdgeInsets(top: Self.notesTopInset, left: 0,
+                                                 bottom: RecordButton.clearance, right: 0)
 
         // An agent writes notes while this window is open and nothing on disk
         // announces it. Coming back to the app is the moment somebody expects
@@ -1004,6 +1032,23 @@ final class DetailView: NSView {
                                         constant: -20).isActive = true
             turnViews.append(view)
         }
+
+        // Room at the end for the floating Record button, which is in the
+        // window's content host and therefore over this. A spacer in the stack
+        // and not `scroll.contentInsets`, which is what the note beside this
+        // has to use: setting `contentInsets` turns
+        // `automaticallyAdjustsContentInsets` off, taking the *top* inset with
+        // it, and this scroll view's top is measured against nothing that would
+        // report the change. A view at the end of the document moves only the
+        // end of the document.
+        let tail = NSView()
+        tail.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(tail)
+        NSLayoutConstraint.activate([
+            tail.heightAnchor.constraint(equalToConstant: RecordButton.clearance),
+            tail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+        ])
+
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
         guard scrollToTop else { return }

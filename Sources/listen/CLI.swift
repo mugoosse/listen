@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts",
+        "calendar", "contacts", "notes",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -81,6 +81,8 @@ enum CLI {
             contacts(rest)
         case "dictionary":
             dictionary(rest)
+        case "notes":
+            notes(rest)
         case "edit":
             edit(rest)
         case "mcp":
@@ -785,6 +787,247 @@ enum CLI {
         exit(0)
     }
 
+    // MARK: - Notes
+
+    /// `listen notes <sub>`: the note artifacts in the library.
+    ///
+    /// The same `Notes` store the MCP server and the detail pane use, for the
+    /// reason `listen label` and `listen edit` exist: with no test target, a
+    /// command that drives the exact write path the window drives is the only
+    /// verification that path gets. It also came first, before any of the UI,
+    /// because a store that can be exercised from a terminal is a store whose
+    /// behaviour is settled before anything renders it.
+    ///
+    /// A note is named by its slug alone, because slugs are unique across the
+    /// library: `read` and `delete` take no recording, and `--recording` on
+    /// `write` is repeatable because a note can be about four meetings.
+    private static func notes(_ args: [String]) -> Never {
+        let rest = Array(args.dropFirst())
+        switch args.first ?? "list" {
+        case "list":    notesList(rest)
+        case "read":    notesRead(rest)
+        case "write":   notesWrite(rest)
+        case "delete":  notesDelete(rest)
+        default:
+            fail("unknown notes subcommand `\(args[0])`. Try `listen help`.")
+        }
+    }
+
+    /// Collect a repeatable `--recording <id>` out of an argument list.
+    ///
+    /// Repeatable rather than comma-separated, because a recording id has no
+    /// commas in it today and a flag that quietly changes meaning the day one
+    /// does is the sort of thing nobody finds again.
+    private static func notesRecordings(_ ids: [String]) -> [Recording] {
+        ids.map { id in
+            guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+            return recording
+        }
+    }
+
+    /// Every note, or the ones about one recording, with who wrote each.
+    ///
+    /// The provenance is the point, the same way the dictionary's fire counts
+    /// are. A note is derived from a meeting nobody may read for a week, and
+    /// "which of these did I write and which did an agent write" is the first
+    /// question anybody has about a folder of them.
+    private static func notesList(_ args: [String]) -> Never {
+        var about: [String] = []
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--recording":
+                i += 1
+                guard i < args.count else { fail("--recording needs a recording id.") }
+                about.append(args[i])
+            default:
+                // A bare id still works, because `listen notes list <id>` is
+                // what anybody who used the previous shape will type.
+                guard !args[i].hasPrefix("-") else {
+                    fail("unknown option `\(args[i])`. Try `listen help`.")
+                }
+                about.append(args[i])
+            }
+            i += 1
+        }
+
+        let recordings = notesRecordings(about)
+        let notes = recordings.isEmpty
+            ? Notes.all()
+            : recordings.flatMap(Notes.list(about:))
+                .reduce(into: [Note]()) { out, note in
+                    if !out.contains(where: { $0.slug == note.slug }) { out.append(note) }
+                }
+        guard !notes.isEmpty else {
+            log(recordings.isEmpty
+                ? "no notes in the library yet."
+                : "no notes about \(recordings.map(\.id).joined(separator: ", ")) yet.")
+            exit(0)
+        }
+
+        let width = notes.map(\.slug.count).max() ?? 0
+        for note in notes {
+            var facts = [note.source]
+            if !note.updated.isEmpty { facts.append(note.updated) }
+            if note.updated != note.created { facts.append("edited") }
+            // How many meetings it covers, but only when it is more than one.
+            // Printing "1 recording" on every row of a library where almost
+            // every note has one source is noise; printing "4 recordings" is
+            // the whole reason the field exists.
+            if note.recordings.count > 1 {
+                facts.append("\(note.recordings.count) recordings")
+            }
+            print(note.slug.padding(toLength: max(width + 2, note.slug.count + 2),
+                                    withPad: " ", startingAt: 0)
+                  + note.title + "  (" + facts.joined(separator: ", ") + ")")
+        }
+        exit(0)
+    }
+
+    /// One note. The body on stdout, everything about it on stderr.
+    ///
+    /// Split that way so the body pipes and diffs cleanly, which is what makes
+    /// the compare-and-swap usable from a terminal:
+    /// `listen notes read <note> > was.md` gives you exactly the string
+    /// `--was-file` wants back.
+    private static func notesRead(_ args: [String]) -> Never {
+        guard let name = args.first, !name.hasPrefix("-") else {
+            fail("read needs a note. `listen notes list` shows them.")
+        }
+        guard let note = Notes.find(name) else {
+            fail("no note `\(name)`. `listen notes list` shows them.")
+        }
+        print(note.body)
+        log("\(note.slug): \(note.title), written by \(note.source)"
+            + (note.updated.isEmpty ? "" : " on \(note.updated)"))
+        if let prompt = note.prompt, !prompt.isEmpty { log("prompt: \(prompt)") }
+        // Every source, including one the library no longer has, which prints
+        // as a bare id. A note that quietly stopped listing a deleted meeting
+        // would be claiming it was never about it.
+        for source in Notes.sources(of: note) {
+            log("about: \(source.id)"
+                + (source.title.map { " (\($0))" } ?? "  [no longer in the library]"))
+        }
+        exit(0)
+    }
+
+    /// `listen notes write <title> --recording <id>…`, or `--replace <note>`.
+    ///
+    /// `--was` is optional here and required on the MCP surface, which is not
+    /// an inconsistency. A person at a terminal is one writer and can see what
+    /// they are replacing; an agent and the window can be holding the same note
+    /// at the same time, and that is the surface where a lost edit is possible.
+    private static func notesWrite(_ args: [String]) -> Never {
+        var title: String?
+        var body: String?
+        var prompt: String?
+        var replacing: String?
+        var was: String?
+        var about: [String] = []
+        var i = 0
+        while i < args.count {
+            func value(_ flag: String) -> String {
+                i += 1
+                guard i < args.count else { fail("\(flag) needs a value.") }
+                return args[i]
+            }
+            switch args[i] {
+            case "--body":      body = value("--body")
+            case "--file":      body = read(file: value("--file"), for: "--file")
+            case "--prompt":    prompt = value("--prompt")
+            case "--replace":   replacing = value("--replace")
+            case "--title":     title = value("--title")
+            case "--recording": about.append(value("--recording"))
+            case "--was":       was = value("--was")
+            case "--was-file":  was = read(file: value("--was-file"), for: "--was-file")
+            case let other where other.hasPrefix("-"):
+                fail("unknown option `\(other)`. Try `listen help`.")
+            default:
+                guard title == nil else {
+                    fail("write takes one title. Quote it, and name recordings "
+                         + "with --recording.")
+                }
+                title = args[i]
+            }
+            i += 1
+        }
+
+        // Validated here rather than left to the store, so a mistyped id is
+        // refused before anything reads a body off stdin.
+        _ = notesRecordings(about)
+        if body == nil { body = readStdin() }
+        guard let body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            fail("write needs a body: --body \"…\", --file <path>, or piped in.")
+        }
+
+        do {
+            let note: Note
+            if let replacing {
+                // Nil rather than an empty array when no --recording was given:
+                // adding a paragraph is not a claim about what the note is
+                // about, so the sources are left exactly as they were.
+                note = try Notes.replace(replacing, body: body, title: title,
+                                         prompt: prompt, source: .cli,
+                                         recordings: about.isEmpty ? nil : about,
+                                         expecting: was)
+                log("rewrote `\(note.slug)`")
+            } else {
+                guard let title, !title.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    fail("write needs a title, or --replace to rewrite a note "
+                         + "that already has one.")
+                }
+                if was != nil {
+                    fail("--was checks a rewrite, so it needs --replace. Without it "
+                         + "this would add a note rather than change one.")
+                }
+                note = try Notes.create(title: title, body: body, source: .cli,
+                                        prompt: prompt, recordings: about)
+                log("wrote `\(note.slug)`, about "
+                    + note.recordings.joined(separator: ", "))
+            }
+            // The slug on stdout, so a script can pipe it into the next command
+            // the way `listen record` prints its folder.
+            print(note.slug)
+            exit(0)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    private static func notesDelete(_ args: [String]) -> Never {
+        guard let name = args.first, !name.hasPrefix("-") else {
+            fail("delete needs a note. `listen notes list` shows them.")
+        }
+        do {
+            let note = try Notes.delete(name)
+            log("deleted `\(note.slug)` (\(note.title))")
+            exit(0)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// A file, or stdin for `-`.
+    private static func read(file path: String, for flag: String) -> String {
+        if path == "-" { return readStdin() ?? "" }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            fail("\(flag): could not read \(url.path).")
+        }
+        return text
+    }
+
+    /// Everything on stdin, or nil when there is nobody piping anything in.
+    ///
+    /// The `isatty` check is what stops `listen notes write <id> "Title"` with
+    /// no body from sitting silently waiting for a terminal to reach EOF, which
+    /// reads exactly like the command having hung.
+    private static func readStdin() -> String? {
+        guard isatty(FileHandle.standardInput.fileDescriptor) == 0 else { return nil }
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
+    }
+
     private static var version: String {
         // Resolved through AppInfo rather than Bundle.main, because the
         // installed command is a symlink and Bundle.main follows the path it
@@ -813,11 +1056,13 @@ enum CLI {
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       dictionary <sub>           your own terms and corrections
+      notes <sub>                the note artifacts, one or many recordings each
       calendar <sub>             the calendars on this Mac, and what they name
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
       sources                    what meeting detection sees, run during a call
-      mcp                        stdio MCP server, read-only
+      mcp                        stdio MCP server. Notes are the only thing
+                                 an agent can write.
 
     calendar subcommands:
       status                     access, calendars and today. The default.
@@ -844,6 +1089,28 @@ enum CLI {
       import <path>              merge a file in, keeping what is here
       import --from-speak        merge Speak's dictionary in
       export [<path>]            write the list out, stdout by default
+
+    notes subcommands:
+      list [<id>]                every note, or the ones about one recording
+      read <note>                one note. Body on stdout, provenance on stderr.
+      write <title> --recording <id>…
+                                 add one. Body from --body, --file or stdin.
+      write --replace <note>     rewrite one instead of adding one
+      delete <note>              remove one
+
+    notes options:
+      --recording <id>           which meeting the note is about. Repeat it:
+                                 a note can be about four at once.
+      --body <text>              the note itself, inline
+      --file <path>              the note itself, from a file. `-` is stdin.
+      --prompt <text>            what was asked for, kept beside the note
+      --replace <note>           rewrite a note by slug or title
+      --was <text>               refuse the rewrite unless it still reads this
+      --was-file <path>          the same check, from a file
+      --title <text>             rename it while rewriting it
+
+    Notes live in the library rather than inside a recording folder, so a note
+    can be about several meetings and deleting one meeting does not delete it.
 
     import options:
       --dry-run                  list what would be imported, copy nothing

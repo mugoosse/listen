@@ -27,7 +27,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// What the window is showing. Settings is a mode of this window rather
     /// than a window of its own: the sidebar swaps the recording list for the
     /// section list and the content side swaps the transcript for a pane.
-    private enum Mode { case library, settings, people }
+    private enum Mode { case library, settings, people, notes }
     private var mode: Mode = .library
 
     /// The two split items' view controllers, which never change. Swapping a
@@ -44,6 +44,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// of which is a recording.
     private let peopleNav = PeopleNav()
     private let personPane = PersonPane()
+    /// Notes are a fourth collection for the reason People is a third: a note
+    /// can name four recordings, so a recording-centric list cannot show one.
+    private let notesNav = NotesNav()
+    private let notePane = NotePane()
     /// Built once each and kept, so returning to a section finds it where it
     /// was left rather than scrolled back to the top with its fields cleared.
     private var panes: [SettingsTab: Pane] = [:]
@@ -223,11 +227,33 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.window?.toolbar?.validateVisibleItems()
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
-        detail.onChanged = { [weak self] in self?.reload() }
+        // The list, and not the pane that just wrote the change. `reload` calls
+        // `detail.show`, which stops playback, puts the playhead back to zero
+        // and rebuilds every turn, and the pane is already showing what it
+        // wrote: a title it has in hand, or a sentence it re-rendered in place.
+        // So a rename or a correction made while listening used to silence the
+        // recording being corrected, which is exactly what `applyEdit`'s
+        // targeted reload exists to avoid and was undone one line later. It also
+        // pulled the clicked view out of the hierarchy mid-click, which is how a
+        // rename followed by a click on a speaker aborted the app.
+        detail.onChanged = { [weak self] in self?.sidebar.reload() }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
         sidebar.onNewRecording = { [weak self] in self?.newRecording() }
         sidebar.onSettings = { [weak self] in self?.showSettings() }
         peopleNav.onSelect = { [weak self] person in self?.personPane.show(person) }
+        // One handler, three lists. Each carries its own copy of the same
+        // control because the sidebar swaps its whole view controller, and they
+        // all report the same thing.
+        sidebar.onCollection = { [weak self] in self?.showCollection($0) }
+        peopleNav.onCollection = { [weak self] in self?.showCollection($0) }
+        notesNav.onCollection = { [weak self] in self?.showCollection($0) }
+        notesNav.onSelect = { [weak self] note in self?.notePane.show(note) }
+        // A note names the meetings it is about, and those names are the way
+        // back to them. This is what makes a synthesis of four catch-ups
+        // navigable rather than a dead end.
+        notePane.onOpenRecording = { [weak self] id, slug in
+            self?.open(recording: id, note: slug)
+        }
         // A rename rewrites transcripts, so the roster beside it is stale the
         // moment it lands, and so is the recording list behind both.
         personPane.onChanged = { [weak self] in
@@ -262,6 +288,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // It was answered once already: a window moved under a stationary
         // pointer had pressed the back button, which no log would have shown.
         trace("window mode \(mode) -> \(next)")
+        let was = mode
         mode = next
 
         switch next {
@@ -284,22 +311,33 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             sidebarHost.show(settingsNav)
 
         case .people:
-            // Same lock as settings, and the same reason: a person page with no
-            // roster beside it is a page you cannot navigate away from except
-            // backwards.
+            // The sidebar stays collapsible, unlike settings. It used to be
+            // locked open because the roster was the only way out of this
+            // screen, and now the segmented control at the top of it is the way
+            // in and out of every collection: the lock was about navigation,
+            // not about People.
+            detail.saveYours()
             detail.stopPlayback()
-            sidebarWasCollapsed = sidebarItem.isCollapsed
-            if sidebarItem.isCollapsed { sidebarItem.isCollapsed = false }
-            sidebarItem.canCollapse = false
-            split.canToggleSidebar = false
             peopleNav.reload()
+            sidebarItem.canCollapse = true
+            split.canToggleSidebar = true
             sidebarHost.show(peopleNav)
             detailHost.show(personPane)
+
+        case .notes:
+            detail.saveYours()
+            detail.stopPlayback()
+            notesNav.reload()
+            sidebarItem.canCollapse = true
+            split.canToggleSidebar = true
+            sidebarHost.show(notesNav)
+            detailHost.show(notePane)
 
         case .library:
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
-            sidebarItem.isCollapsed = sidebarWasCollapsed
+            // Only settings hid the sidebar, so only settings restores it.
+            if was == .settings { sidebarItem.isCollapsed = sidebarWasCollapsed }
             sidebarHost.show(sidebar)
             detailHost.show(detail)
             reload()
@@ -308,7 +346,69 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 window?.makeFirstResponder(sidebar.view)
             }
         }
+        // All three, not just the one on screen: the next mode change swaps in
+        // a list whose control was last touched by a click that took the user
+        // somewhere else.
+        if let collection = Self.collection(for: next) {
+            sidebar.setCollection(collection)
+            peopleNav.setCollection(collection)
+            notesNav.setCollection(collection)
+        }
         rebuildToolbar()
+    }
+
+    /// Settings has no segment, so it leaves the three controls alone.
+    private static func collection(for mode: Mode) -> LibraryCollection? {
+        switch mode {
+        case .library:  return .recordings
+        case .people:   return .people
+        case .notes:    return .notes
+        case .settings: return nil
+        }
+    }
+
+    /// Open a recording from a link inside a note.
+    ///
+    /// The one entry point for both places a note names its sources, and they
+    /// want different tabs.
+    ///
+    /// From the **Notes collection**, `note` is the note being read, and it
+    /// lands on the Notes tab showing that note beside the recording: the whole
+    /// page has changed, and a synthesis of four meetings has to be walkable
+    /// through its sources without losing your place in it.
+    ///
+    /// From the **"Also about" line under a note shown beside a recording**,
+    /// `note` is nil and it lands on the transcript. The note being read is
+    /// about that meeting too, so staying on the Notes tab would put the same
+    /// words under a different title, and a page that does not visibly change
+    /// is a click that did not appear to work.
+    func open(recording id: String, note slug: String?) {
+        if window == nil { build() }
+        enter(.library)
+        reload()
+        // A filter or a search in the sidebar can hide the recording a note
+        // points at, and a click that appears to do nothing is worse than one
+        // that gives way. The click already said which recording to look at, so
+        // the filter is what loses, as it does in `reveal`.
+        if !sidebar.select(id) {
+            sidebar.clearFilters()
+            guard sidebar.select(id) else { NSSound.beep(); return }
+        }
+        // After the selection, because selecting shows the recording and `show`
+        // decides which tab is up.
+        if let slug { detail.showNote(slug) } else { detail.showTranscript() }
+    }
+
+    /// Follow the sidebar's segmented control.
+    ///
+    /// Settings is deliberately not one of these: the segments are which part
+    /// of the library you are looking at, and settings is configuring the app.
+    func showCollection(_ collection: LibraryCollection) {
+        switch collection {
+        case .recordings: enter(.library)
+        case .people:     enter(.people)
+        case .notes:      enter(.notes)
+        }
     }
 
     /// Open the roster, on `label` if somebody was asked for.
@@ -413,7 +513,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
-         Self.newRecordingItem, .flexibleSpace, Self.peopleItem, Self.settingsItem,
+         Self.newRecordingItem, .flexibleSpace, Self.settingsItem,
          Self.actionsItem, Self.personActionsItem]
     }
 
@@ -470,7 +570,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 // that appears and disappears as you click around the list is
                 // harder to find than one that is always in the same place and
                 // tells you why it is empty.
-                items.append(contentsOf: [Self.peopleItem, Self.actionsItem])
+                // People used to sit here. It moved into the sidebar, because
+                // a toolbar holds verbs on the selected recording (export this,
+                // transcribe this again, delete this) and People is not a verb
+                // on a recording: it is a peer collection of the whole library,
+                // and so are notes.
+                items.append(Self.actionsItem)
             }
             return items
         case .settings:
@@ -490,10 +595,29 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // menu in this window lives, rather than as a button inside the
             // page. It also lets the name and the disc sit at the top of the
             // page instead of below a row of controls.
+            //
+            // The sidebar toggle is here now, unlike before: these modes no
+            // longer lock the sidebar open, because the segmented control in it
+            // is the navigation and collapsing is a choice like any other.
             return Capture.shared.isRecording
-                ? [.sidebarTrackingSeparator, Self.newRecordingItem, .flexibleSpace,
+                ? [Self.brandItem, .flexibleSpace, .toggleSidebar,
+                   .sidebarTrackingSeparator, Self.newRecordingItem, .flexibleSpace,
                    Self.personActionsItem]
-                : [.sidebarTrackingSeparator, .flexibleSpace, Self.personActionsItem]
+                : [Self.brandItem, .flexibleSpace, .toggleSidebar,
+                   .sidebarTrackingSeparator, .flexibleSpace, Self.personActionsItem]
+        case .notes:
+            // Nothing on the right. A note has no verbs yet: it is deleted
+            // where it is written, and there is nothing to export that is not
+            // already a markdown file on disk.
+            // The masthead in every collection, not just the recording list.
+            // Switching is one click now, so a window whose title bar empties
+            // as you move between segments reads as three different screens
+            // rather than three views of one library.
+            return Capture.shared.isRecording
+                ? [Self.brandItem, .flexibleSpace, .toggleSidebar,
+                   .sidebarTrackingSeparator, Self.newRecordingItem, .flexibleSpace]
+                : [Self.brandItem, .flexibleSpace, .toggleSidebar,
+                   .sidebarTrackingSeparator, .flexibleSpace]
         }
     }
 
@@ -690,6 +814,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     func windowWillClose(_ notification: Notification) {
         detail.stopPlayback()
+        // The user's own note is written as they type, but a keystroke inside
+        // the last 0.8 seconds has not landed yet, and closing the window is
+        // exactly when somebody stops typing.
+        detail.saveYours()
         // Back to the library, so the collapse lock and the remembered sidebar
         // state are unwound rather than left in place for the next `show()`.
         exitSettings()
@@ -888,9 +1016,24 @@ extension LibraryWindow: NSMenuDelegate {
         guard let recording = selected else { return }
         let alert = NSAlert()
         alert.messageText = "Delete \(recording.metadata.title)?"
-        // Say what is actually lost. The audio is the irreplaceable part.
-        alert.informativeText = "The audio and the transcript are deleted from disk. "
+        // Say what is actually lost. The audio is the irreplaceable part, and
+        // what the user typed during the meeting is more irreplaceable still:
+        // a call can in principle be had again, and a thought somebody had
+        // while it was happening cannot. Notes an agent wrote are derived from
+        // the transcript, so they are not worth a sentence here.
+        var lost = "The audio and the transcript are deleted from disk. "
             + "This cannot be undone."
+        if let yours = Notes.yours(for: recording), !yours.body.isEmpty {
+            // Kept rather than deleted, and said so rather than left to be
+            // discovered. Notes live in the library and not in the recording
+            // folder, so nothing here removes them, which is what stops a
+            // synthesis of four meetings vanishing because one was tidied up.
+            // The consequence for this one is worth a sentence: it survives
+            // naming a recording that no longer exists.
+            lost += "\n\nYour own notes are kept, under Notes in the sidebar. "
+                + "They will name a recording that is no longer here."
+        }
+        alert.informativeText = lost
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")

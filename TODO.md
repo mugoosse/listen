@@ -3,8 +3,8 @@
 Where the project is, what is left, and what needs a decision. Update this in
 the same commit as the work it describes.
 
-Last updated: 0.1.0 and 0.1.1 published, and Gatekeeper measured clean on a
-second Mac.
+Last updated: notes built end to end, outline removed, sidebar navigation in.
+All unreleased; 0.2.0 is the last thing published.
 
 ## Milestones
 
@@ -20,6 +20,50 @@ second Mac.
 | 7 | Settings, onboarding, permissions | done, onboarding still unrun on a clean account |
 | 8 | CLI install, MCP | done |
 | 9 | Release pipeline | done: 0.2.0 out, and an update proven installing |
+| 10 | Notes | store, CLI, MCP tools, skills, UI and sidebar navigation in; unreleased |
+
+## Notes
+
+Unreleased, and the whole of it is in the working tree rather than in 0.2.0.
+
+Notes live at `~/Library/Application Support/Listen/notes/<slug>.md`, one
+markdown file each, with `recordings: [...]` in the frontmatter. `Notes` owns
+read and write; the CLI, the MCP server and the window all go through it.
+
+Two kinds. The user's own note, one per recording, `source: you`, editable in
+the Notes tab and while the recording still runs. Notes an agent wrote, which
+can name several recordings at once. An agent may read the user's note and may
+not write it; everything else on the MCP surface is read-only.
+
+Done:
+
+- [x] `Notes` store: list, find, create, replace with an optional
+      compare-and-swap, delete, and the one-time move out of the old
+      per-recording layout (35 notes moved on the real library).
+- [x] `listen notes list|read|write|delete`, with a repeatable `--recording`.
+- [x] `list_notes`, `read_note`, `write_note`, `edit_note`, `delete_note` over
+      MCP, plus note slugs on `get_recording`. `edit_note` and `delete_note`
+      refuse a `source: you` note.
+- [x] `.claude/skills/listen-library` and `.claude/skills/listen-note`.
+- [x] Transcript/Notes toggle and the artifact switcher in `DetailView`, with
+      `MarkdownText` rendering headings, lists, tables and inline emphasis.
+- [x] Recordings / People / Notes segmented control in the sidebar; People
+      removed from the toolbar.
+- [x] The extractive outline: built, measured, and deleted before commit. 33
+      outline notes removed. See `CLAUDE.md` for why.
+
+Left:
+
+- [ ] **A note is read-only in the Notes collection**, including the user's own.
+      It is edited on the recording, and the sources are buttons that go there.
+      Worth revisiting if that reads as broken rather than as deliberate.
+- [ ] **Export does not include notes.** `LibraryWindow.exportSelected` and
+      `listen export` both write the transcript only.
+- [ ] **No note-level verbs in the toolbar** in the Notes collection. Deleting a
+      note is CLI or Finder only.
+- [ ] Local generation stays deferred. Measured at 5.9 GB and about 63 s per
+      meeting for a two-pass 9B model, against a cloud call at a fifth of a
+      cent. See `listen-notes-spike/` if it is ever revived.
 
 ## Blocking decisions
 

@@ -25,7 +25,7 @@ import AppKit
 /// A push button that paints its own accent fill.
 ///
 /// Measured, because the obvious two ways both silently do nothing here:
-/// `keyEquivalent = "\r"` and `bezelColor = .controlAccentColor` each left the
+/// `keyEquivalent = "\r"` and `bezelColor = Brand.accent` each left the
 /// button rendering identically to its neighbours. AppKit draws the blue
 /// default-button fill only for the *key* window's default cell, and this panel
 /// is `.nonactivatingPanel` and deliberately never becomes key, because taking
@@ -46,7 +46,7 @@ final class FilledButton: NSButton {
     override func layout() {
         super.layout()
         layer?.cornerRadius = 6
-        layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        layer?.backgroundColor = Brand.accent.cgColor
     }
 }
 

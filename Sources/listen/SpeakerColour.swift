@@ -12,15 +12,35 @@ import AppKit
 /// disagreeing about a colour is invisible; a chip disagreeing with the disc it
 /// stands for is the sort of thing that reads as the colour meaning nothing.
 enum SpeakerColour {
+    /// Orange is last, and last is reserved for you. See `colour(for:)`.
+    ///
+    /// `systemBrown` used to be in here and was dropped: beside the orange that
+    /// is now permanently the user's, it is the one entry a reader has to look
+    /// twice at, and the user's voice is in every recording, so that pair would
+    /// have come up more than any other.
     private static let palette: [NSColor] = [.systemBlue, .systemPurple, .systemTeal,
-                                             .systemIndigo, .systemPink, .systemBrown,
+                                             .systemIndigo, .systemPink,
                                              .systemGreen, .systemOrange]
 
     /// The colour standing for a transcript label.
+    ///
+    /// **You are reserved one entry and everybody else hashes over the rest.**
+    /// The palette has eight colours and the user's own label is the constant
+    /// `Me`, so without this a one-to-one call has both people in the same
+    /// colour one time in eight, and a one-to-one call is the common case. It
+    /// happened on the first two names tried for a screenshot: `Me` and
+    /// "Priya Raman" both land in the last bucket.
+    ///
+    /// Reserving costs a colour and keeps every other property. Somebody is
+    /// still the same colour in every meeting, because the hash is still over
+    /// the label alone and nothing is handed out in arrival order. Two *other*
+    /// speakers in one meeting can still collide, which is rarer and matters
+    /// less: neither of them is the one voice that is on every recording.
     static func colour(for label: String) -> NSColor {
+        guard label != SpeakerName.you else { return palette[palette.count - 1] }
         var hash = 5381
         for byte in label.utf8 { hash = (hash &* 33) &+ Int(byte) }
-        return palette[abs(hash) % palette.count]
+        return palette[abs(hash) % (palette.count - 1)]
     }
 
     /// The same colour, or nil when nobody has named this speaker yet.

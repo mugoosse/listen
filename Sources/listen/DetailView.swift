@@ -29,6 +29,60 @@ final class DetailView: NSView {
     private let empty = NSTextField(labelWithString: "")
     private let emptyIcon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
 
+    /// Which document this pane is showing.
+    ///
+    /// A mode rather than two panes side by side: the transcript and a note are
+    /// both the whole width of the reading area, and neither is worth half of
+    /// it. Held in a property rather than read back off the segmented control,
+    /// which is `DictionaryPane`'s rule and for the same reason: a re-render
+    /// would otherwise snap it back to whatever the control last drew.
+    private enum Showing { case transcript, notes }
+    private var showing: Showing = .transcript
+
+    private let modeBar = NSView()
+    private let modePicker = NSSegmentedControl(
+        labels: ["Transcript", "Notes"], trackingMode: .selectOne, target: nil, action: nil)
+    /// Analog's artifact switcher, which is the part of their notes design worth
+    /// copying: a recording has any number of notes and they are all the same
+    /// kind of thing, so the way to move between them is a list of their names.
+    private let notePicker = NSPopUpButton()
+    private let notesScroll = NSScrollView()
+    private let notesText = NSTextView()
+    /// Who wrote the note on screen, above it rather than inside it.
+    ///
+    /// It used to be the first paragraph of the text view, which was fine while
+    /// every note was read-only and became a bug the moment one was not: the
+    /// user's own note is editable, and provenance you can put the cursor in
+    /// and delete is not provenance.
+    private let noteInfo = LinkLine()
+    private let notesPlaceholder = PassthroughLabel(labelWithString: "")
+
+    /// Pending write of the user's own note, and whether one is in flight.
+    ///
+    /// Their note materialises on the first keystroke, so every keystroke is a
+    /// potential file write. Coalesced rather than debounced away entirely:
+    /// losing a sentence because the app was killed is worse than a small write.
+    private var noteSaveTimer: Timer?
+
+    /// The notes on the selected recording, oldest first, and which one is up.
+    private var notes: [Note] = []
+    private var showingNote: String?
+    /// What the notes folder looked like when it was last drawn, so an app that
+    /// comes back to the front does not rebuild a pane nobody changed and lose
+    /// the reader's scroll position doing it.
+    private var notesSignature = ""
+
+    private var modeTop: NSLayoutConstraint!
+    private var modeHeight: NSLayoutConstraint!
+    private var playerTop: NSLayoutConstraint!
+    private var playerHeight: NSLayoutConstraint!
+    private var noteInfoTop: NSLayoutConstraint!
+    private var noteInfoHeight: NSLayoutConstraint!
+    /// Whether this recording has anything to play. Held rather than recomputed,
+    /// because the player is now collapsed by the mode as well as by the audio
+    /// and both have to agree.
+    private var hasAudio = false
+
     /// Fires when this pane changes something the list also shows.
     var onChanged: (() -> Void)?
 
@@ -103,10 +157,10 @@ final class DetailView: NSView {
         waveform.onScrub = { [weak self] fraction in self?.scrub(to: fraction) }
 
         // A chip is a control, so its click never reaches `mouseDown` below and
-        // it has to let the title field go itself. Everything else in this pane
-        // that claims a click does the same.
+        // it has to let the title field go itself. `editSpeaker` does that,
+        // because it has to happen in a particular order: see the comment
+        // there.
         chips.onName = { [weak self] speaker, anchor, rect in
-            self?.endEditing()
             self?.editSpeaker(speaker, from: anchor, rect: rect)
         }
         chips.onChanged = { [weak self] in
@@ -115,15 +169,11 @@ final class DetailView: NSView {
             self.show(updated)
             LibraryWindow.shared.reload()
         }
+        // Named or unnamed, the same funnel. `editSpeaker` routes on the label,
+        // and a chip that reports a name is a chip whose label is not a
+        // placeholder, so the two agree by construction.
         chips.onPerson = { [weak self] speaker, anchor, rect in
-            guard let self else { return }
-            self.endEditing()
-            PersonPopover.show(speaker, from: anchor, rect: rect) { [weak self] in
-                guard let self, let id = self.recording?.id,
-                      let updated = Recording.find(id) else { return }
-                self.show(updated)
-                LibraryWindow.shared.reload()
-            }
+            self?.editSpeaker(speaker, from: anchor, rect: rect)
         }
 
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -161,15 +211,30 @@ final class DetailView: NSView {
             self, selector: #selector(userScrolled),
             name: NSView.boundsDidChangeNotification, object: scroll.contentView)
 
+        buildNotesPane()
+
         empty.font = .systemFont(ofSize: 13)
         empty.textColor = .secondaryLabelColor
         empty.alignment = .center
+        // Wrapping, and told what width to wrap at. An `NSTextField` computes
+        // its height from `preferredMaxLayoutWidth` rather than from the width
+        // it is given, so without both it stays one line and truncates: every
+        // message here used to be short enough that nobody noticed, and the
+        // first longer one came back as "…written by an agent connecte".
+        empty.maximumNumberOfLines = 0
+        empty.preferredMaxLayoutWidth = 320
+        empty.cell?.wraps = true
 
         for v in [playButton, timeLabel, waveform] {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
-        for v in [titleLabel, subtitleLabel, chips, playerCard, scroll, empty, emptyIcon] {
+        for v in [modePicker, notePicker] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            modeBar.addSubview(v)
+        }
+        for v in [titleLabel, subtitleLabel, chips, playerCard, modeBar,
+                  scroll, noteInfo, notesScroll, notesPlaceholder, empty, emptyIcon] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -177,6 +242,27 @@ final class DetailView: NSView {
         chipsTop = chips.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor,
                                               constant: 10)
         chipsHeight = chips.heightAnchor.constraint(equalToConstant: 24)
+
+        // Above the player, not below it. The player belongs to the transcript:
+        // a transcript is a thing you read while listening, and a note is a
+        // thing you write. Under the player, the toggle read as a control on
+        // the recording rather than a choice of document, and switching to
+        // Notes left a 58 point transport on screen with nothing to transport.
+        //
+        // Collapsible for the reason the chips row is: a hidden view still
+        // occupies its frame.
+        modeTop = modeBar.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 14)
+        modeHeight = modeBar.heightAnchor.constraint(equalToConstant: 24)
+        playerTop = playerCard.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
+                                                    constant: 10)
+        playerHeight = playerCard.heightAnchor.constraint(equalToConstant: 58)
+        // An empty note has nothing to say about itself: no date, because it has
+        // never been saved. A label with an empty string still occupies a line,
+        // so the caret sat forty points below the toggle with nothing between
+        // them, which reads as a field that has come loose from its heading.
+        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: scroll.topAnchor)
+        noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
+        noteInfoHeight.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             chipsTop,
@@ -192,10 +278,10 @@ final class DetailView: NSView {
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
 
-            playerCard.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 14),
+            playerTop,
+            playerHeight,
             playerCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             playerCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            playerCard.heightAnchor.constraint(equalToConstant: 58),
 
             playButton.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 10),
             playButton.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
@@ -211,10 +297,40 @@ final class DetailView: NSView {
             waveform.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
             waveform.heightAnchor.constraint(equalToConstant: 36),
 
+            modeTop,
+            modeHeight,
+            modeBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            modeBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            modePicker.leadingAnchor.constraint(equalTo: modeBar.leadingAnchor),
+            modePicker.centerYAnchor.constraint(equalTo: modeBar.centerYAnchor),
+            // Trailing, and allowed to shrink. A note titled with a whole
+            // sentence would otherwise push the segmented control off the
+            // leading edge of the pane.
+            notePicker.trailingAnchor.constraint(equalTo: modeBar.trailingAnchor),
+            notePicker.centerYAnchor.constraint(equalTo: modeBar.centerYAnchor),
+            notePicker.leadingAnchor.constraint(
+                greaterThanOrEqualTo: modePicker.trailingAnchor, constant: 12),
+
             scroll.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            noteInfoTop,
+            noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            noteInfo.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor, constant: 6),
+            notesScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            notesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            // Over the text view's own inset, so the prompt sits exactly where
+            // the caret will be. An `NSTextView` has no placeholder of its own.
+            notesPlaceholder.topAnchor.constraint(equalTo: notesScroll.topAnchor,
+                                                  constant: 16),
+            notesPlaceholder.leadingAnchor.constraint(equalTo: notesScroll.leadingAnchor),
+            notesPlaceholder.trailingAnchor.constraint(equalTo: notesScroll.trailingAnchor),
 
             stack.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -20),
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -223,6 +339,499 @@ final class DetailView: NSView {
             emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
             emptyIcon.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
         ])
+    }
+
+    // MARK: - Notes
+
+    private func buildNotesPane() {
+        modePicker.selectedSegment = 0
+        modePicker.selectedSegmentBezelColor = Brand.tint
+        modePicker.target = self
+        modePicker.action = #selector(switchShowing)
+
+        notePicker.target = self
+        notePicker.action = #selector(pickNote)
+        notePicker.font = .systemFont(ofSize: 12)
+        notePicker.toolTip = "Which note to read"
+
+        // A text view rather than a label, because the meetings a note is also
+        // about have to be links here for the same reason they are in the note
+        // pane: naming them and leaving them dead is naming a place with no way
+        // to get to it.
+        noteInfo.isEditable = false
+        noteInfo.isSelectable = true
+        noteInfo.drawsBackground = false
+        noteInfo.delegate = self
+        noteInfo.textContainerInset = .zero
+        noteInfo.textContainer?.lineFragmentPadding = 0
+        noteInfo.textContainer?.widthTracksTextView = true
+        noteInfo.isVerticallyResizable = true
+        noteInfo.isHorizontallyResizable = false
+        noteInfo.setContentHuggingPriority(.required, for: .vertical)
+        noteInfo.linkTextAttributes = [
+            .foregroundColor: Brand.accent,
+            .cursor: NSCursor.pointingHand,
+        ]
+        notesPlaceholder.font = .systemFont(ofSize: 13)
+        notesPlaceholder.textColor = .tertiaryLabelColor
+        notesPlaceholder.maximumNumberOfLines = 0
+        notesPlaceholder.cell?.wraps = true
+        notesPlaceholder.isHidden = true
+
+        notesText.frame = NSRect(x: 0, y: 0, width: 400, height: 100)
+        notesText.isEditable = false
+        notesText.isSelectable = true
+        notesText.drawsBackground = false
+        notesText.delegate = self
+        // No rich text, no substitutions, no smart quotes. What is typed here
+        // is markdown that an agent reads, so a curly apostrophe or an em dash
+        // AppKit inserted on somebody's behalf is a character they did not
+        // write sitting in a file they will later be quoted from.
+        notesText.isRichText = false
+        notesText.isAutomaticQuoteSubstitutionEnabled = false
+        notesText.isAutomaticDashSubstitutionEnabled = false
+        notesText.isAutomaticTextReplacementEnabled = false
+        notesText.allowsUndo = true
+        // Sized by its scroll view rather than by autolayout. A text view in a
+        // scroll view is the one AppKit arrangement that still wants the
+        // autoresizing mask: the document view's height is the text's, which
+        // constraints cannot know before the layout manager has run.
+        notesText.minSize = NSSize(width: 0, height: 0)
+        notesText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                   height: CGFloat.greatestFiniteMagnitude)
+        notesText.isVerticallyResizable = true
+        notesText.isHorizontallyResizable = false
+        notesText.autoresizingMask = [.width]
+        // Small, because the provenance line above already separates the note
+        // from the toggle. It was 16, which stacked with that line and left the
+        // first character of an empty note a long way from anything.
+        notesText.textContainerInset = NSSize(width: 0, height: 2)
+        // Zero, not the default 5. A text container pads its line fragments,
+        // so the note's first character sat five points right of the label
+        // above it and of the transcript beside it: close enough to read as a
+        // mistake rather than as a margin, which is the same test the sidebar's
+        // row inset was measured against.
+        notesText.textContainer?.lineFragmentPadding = 0
+        notesText.textContainer?.widthTracksTextView = true
+        notesText.textContainer?.containerSize = NSSize(
+            width: 0, height: CGFloat.greatestFiniteMagnitude)
+
+        notesScroll.documentView = notesText
+        notesScroll.hasVerticalScroller = true
+        notesScroll.drawsBackground = false
+        notesScroll.isHidden = true
+
+        // An agent writes notes while this window is open and nothing on disk
+        // announces it. Coming back to the app is the moment somebody expects
+        // to see what it wrote, and re-reading one directory is cheap enough to
+        // do on every activation.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appBecameActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    /// A hidden view still occupies its frame, so both dimensions have to go.
+    private func setModeBarCollapsed(_ collapsed: Bool) {
+        modeBar.isHidden = collapsed
+        modeTop.constant = collapsed ? 0 : 14
+        modeHeight.constant = collapsed ? 0 : 24
+    }
+
+    /// The player is on screen for the transcript and gone for a note.
+    ///
+    /// Collapsed rather than hidden, for the reason the chips row is: a hidden
+    /// view keeps its frame, and 58 points of nothing above a note is worse
+    /// than the player itself would have been. This also closes the gap a
+    /// recording with no audio yet used to leave, which was the same bug
+    /// nobody had noticed.
+    private func setPlayerCollapsed(_ collapsed: Bool) {
+        playerCard.isHidden = collapsed
+        playerTop.constant = collapsed ? 0 : 10
+        playerHeight.constant = collapsed ? 0 : 58
+    }
+
+    @objc private func switchShowing(_ sender: NSSegmentedControl) {
+        // A control swallows its own click, so it has to let the title field go
+        // itself. Every control in this pane does the same.
+        endEditing()
+        saveYours()
+        showing = sender.selectedSegment == 0 ? .transcript : .notes
+        // A transport nobody can see is a transport nobody can pause, which is
+        // the rule `enter(.settings)` already follows for the same reason.
+        if showing == .notes { stopPlayback() }
+        // Re-read on the way in rather than only on selection, so switching to
+        // Notes is also the gesture that refreshes them.
+        if showing == .notes { reloadNotes(reset: false) }
+        applyShowing()
+    }
+
+    @objc private func pickNote(_ sender: NSPopUpButton) {
+        endEditing()
+        // Read the choice **first**. `saveYours` rebuilds this menu, and
+        // `rebuildNotePicker` re-selects the note that is on screen, so asking
+        // the sender afterwards returns the note you were leaving rather than
+        // the one you picked. The symptom is a switcher that appears to do
+        // nothing at all, which is exactly what it did.
+        let picked = sender.selectedItem?.representedObject as? String
+        // Before the selection moves, or the pending text is written to
+        // whichever note is chosen next.
+        saveYours()
+        showingNote = picked
+        rebuildNotePicker()
+        renderNote()
+    }
+
+    @objc private func appBecameActive() {
+        reloadNotes(reset: false)
+    }
+
+    // MARK: - The user's own note
+
+    /// Open the Notes tab, on `slug` when one is named.
+    ///
+    /// The entry point from the Notes collection: clicking one of a note's
+    /// source meetings lands on that recording, and landing on its transcript
+    /// would be answering a question nobody asked. The note that was being read
+    /// is selected too, so a synthesis of four meetings can be walked through
+    /// its sources without losing your place in it.
+    /// Open the Transcript tab, whatever mode this pane was left in.
+    ///
+    /// The mode survives a selection change, so arriving at a recording from a
+    /// note's "Also about" line kept the Notes tab up, showing the same note
+    /// again because the note is about both meetings. Only the title moved, and
+    /// a page that does not visibly change is a click that did not appear to
+    /// work. The transcript is the meeting, and it is different.
+    func showTranscript() {
+        saveYours()
+        showing = .transcript
+        applyShowing()
+    }
+
+    func showNote(_ slug: String?) {
+        showing = .notes
+        if let slug, notes.contains(where: { $0.slug == slug }) {
+            showingNote = slug
+            rebuildNotePicker()
+            renderNote()
+        }
+        applyShowing()
+    }
+
+    /// Is the note on screen the one the user types into?
+    private var showingYours: Bool {
+        guard let recording else { return false }
+        return showingNote == Notes.yoursSlug(for: recording.id)
+    }
+
+    /// Every keystroke schedules a write, and never more than one.
+    func textDidChange(_ notification: Notification) {
+        guard notification.object as AnyObject === notesText, showingYours else { return }
+        notesPlaceholder.isHidden = !notesText.string.isEmpty
+        noteSaveTimer?.invalidate()
+        noteSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
+            Task { @MainActor in self.saveYours() }
+        }
+    }
+
+    func textDidEndEditing(_ notification: Notification) {
+        guard notification.object as AnyObject === notesText else { return }
+        saveYours()
+    }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any,
+                  at charIndex: Int) -> Bool {
+        guard let id = RecordingLink.id(link) else { return false }
+        // No note named, so it lands on the transcript. See `showTranscript`:
+        // the note being read is about that meeting too, so staying on the
+        // Notes tab would show the same words under a different title.
+        LibraryWindow.shared.open(recording: id, note: nil)
+        return true
+    }
+
+    /// Write what is in the text view, if it is the user's own note.
+    ///
+    /// Called from everything that could take the text off screen: switching
+    /// note, switching mode, switching recording, losing focus, closing the
+    /// window. It is cheap and idempotent, so calling it too often costs a
+    /// string comparison and calling it too rarely costs somebody a paragraph.
+    func saveYours() {
+        noteSaveTimer?.invalidate()
+        noteSaveTimer = nil
+        guard showingYours, let recording, notesText.isEditable else { return }
+        do {
+            let saved = try Notes.setYours(notesText.string, for: recording)
+            // The in-memory list and the signature are updated here rather than
+            // by re-reading, because re-reading would re-render the very text
+            // view the caret is sitting in.
+            notes = Notes.list(about: recording)
+            if !notes.contains(where: { $0.slug == Notes.yoursSlug(for: recording.id) }) {
+                notes.insert(Notes.yoursOrEmpty(for: recording), at: 0)
+            }
+            setProvenance(of: saved ?? Notes.yoursOrEmpty(for: recording))
+            notesSignature = signature()
+            rebuildNotePicker()
+        } catch {
+            // Said out loud rather than swallowed. A note that silently failed
+            // to save is the worst thing this pane could do: the text is on
+            // screen, so it looks kept.
+            log("could not save your note: \(error.localizedDescription)")
+        }
+    }
+
+    /// Re-read the notes folder, and redraw only if it changed.
+    ///
+    /// The signature check is what makes this safe to call on every activation:
+    /// rebuilding the text view scrolls it back to the top, and losing your
+    /// place in a note because you switched to another app and back is exactly
+    /// the failure `renderTurns(scrollToTop:)` exists to avoid next door.
+    private func reloadNotes(reset: Bool) {
+        guard let recording else {
+            notes = []
+            notesSignature = ""
+            return
+        }
+        // Never underneath somebody who is typing. Re-rendering the text view
+        // would take the caret with it, and this runs on every activation.
+        if !reset, showingYours, notesText.window?.firstResponder === notesText { return }
+
+        notes = Notes.list(about: recording)
+        // Their own note is offered whether or not it exists on disk. That is
+        // what makes "open the tab and there is a cursor" true: no New Note
+        // button, no naming step, and nothing written until a key is pressed.
+        if !notes.contains(where: { $0.slug == Notes.yoursSlug(for: recording.id) }) {
+            notes.insert(Notes.yoursOrEmpty(for: recording), at: 0)
+        }
+        if reset || showingNote == nil
+            || !notes.contains(where: { $0.slug == showingNote }) {
+            showingNote = notes.first?.slug
+        }
+        // Only when the recording changed. The mode survives a selection, so a
+        // recording with no notes arriving under somebody reading notes has to
+        // put them back on the transcript rather than on an empty pane.
+        //
+        // It must not fire on the other calls. Doing that made the Notes
+        // segment unpressable on any recording with no notes: the click set the
+        // mode, this line put it straight back, and the control snapped to
+        // Transcript with nothing said. Asking for an empty pane on purpose is
+        // allowed, and the empty pane is where it says what notes are.
+        if reset, showing == .notes, notes.isEmpty { showing = .transcript }
+
+        let now = signature()
+        guard now != notesSignature else { return }
+        notesSignature = now
+        rebuildNotePicker()
+        renderNote()
+        if !reset { applyShowing() }
+    }
+
+    private func signature() -> String {
+        notes.map { "\($0.slug)|\($0.updated)" }.joined(separator: ",")
+            + "#" + (showingNote ?? "")
+    }
+
+    private func rebuildNotePicker() {
+        notePicker.removeAllItems()
+        for note in notes {
+            // A note about four meetings is listed under all four, so under any
+            // one of them its title alone reads as a note that has wandered off
+            // the subject. The count is what says it belongs here as well as
+            // elsewhere.
+            notePicker.addItem(withTitle: note.recordings.count > 1
+                ? "\(note.title)  ·  \(note.recordings.count) meetings"
+                : note.title)
+            // The slug on the item, because two notes may legitimately share a
+            // title and the title is not the identity. Same reason the CLI
+            // prints the slug rather than the name it was asked for.
+            notePicker.lastItem?.representedObject = note.slug
+            if note.slug == showingNote {
+                notePicker.select(notePicker.lastItem)
+            }
+        }
+    }
+
+    /// Put a note on screen: theirs to type in, anything else to read.
+    ///
+    /// The two are drawn differently on purpose. An agent's note is rendered
+    /// markdown, because it is finished writing somebody else did. The user's
+    /// own note is the plain source in a plain text view, because it is being
+    /// written, and rendering text under a caret is a text editor, which this
+    /// deliberately is not: anybody who wants a document already has a notes
+    /// app and will use it. What earns its place here is that this file is
+    /// attached to the recording and readable by an agent.
+    private func renderNote() {
+        guard let note = notes.first(where: { $0.slug == showingNote }) else {
+            notesText.isEditable = false
+            notesText.textStorage?.setAttributedString(NSAttributedString())
+            noteInfo.textStorage?.setAttributedString(NSAttributedString())
+            updatePlaceholder()
+            return
+        }
+        setProvenance(of: note)
+
+        if Notes.isYours(note) {
+            notesText.isEditable = true
+            notesText.font = .systemFont(ofSize: 13)
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = 3
+            // Set on the view as well as on the string, or the first character
+            // typed into an empty note arrives in whatever AppKit last used.
+            notesText.typingAttributes = [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: style,
+            ]
+            notesText.textStorage?.setAttributedString(
+                NSAttributedString(string: note.body, attributes: notesText.typingAttributes))
+        } else {
+            notesText.isEditable = false
+            // Without the heading the switcher above already shows. See
+            // `MarkdownText.attributed(_:without:)`.
+            notesText.textStorage?.setAttributedString(
+                MarkdownText.attributed(note.body, without: note.title))
+        }
+        updatePlaceholder()
+        // Here as well as in `applyShowing`, because the text and the mode do
+        // not change together. `applyShowing` decides whether this line is
+        // drawn from whether it has anything to say, and `renderNote` is what
+        // gives it something to say: without this, a line rendered while the
+        // pane was on the transcript stayed hidden after switching to Notes,
+        // laid out at its full height and drawing nothing. A blank band where
+        // the provenance goes reads as a note that has lost its own history.
+        showProvenance()
+        notesText.scroll(NSPoint(x: 0, y: 0))
+    }
+
+    private func showProvenance() {
+        noteInfo.isHidden = showing != .notes || noteInfo.string.isEmpty
+        // Collapsed as well as hidden: a hidden view keeps its frame, which is
+        // the trap the chips row and the player already record.
+        noteInfoHeight.isActive = noteInfo.isHidden
+        noteInfoTop.constant = noteInfo.isHidden ? -6 : 0
+    }
+
+    /// An `NSTextView` has no placeholder, so this is a label behind one.
+    ///
+    /// Computed from the state rather than set where the text is, because the
+    /// two do not change together: switching to the Notes tab does not
+    /// re-render a note whose text has not changed, and the first version hid
+    /// the prompt on the way past and never put it back.
+    private func updatePlaceholder() {
+        notesPlaceholder.stringValue =
+            "What you are thinking. Only you write this, and an agent can read it."
+        notesPlaceholder.isHidden = showing != .notes
+            || !showingYours
+            || !notesText.string.isEmpty
+    }
+
+    /// Who wrote this note and what they were asked for, above it.
+    ///
+    /// Above rather than inside, because the user's note is editable and
+    /// provenance somebody can put a caret in and delete is not provenance. It
+    /// is on screen at all because a note is derived and a transcript is
+    /// evidence: somebody reading a meeting's summary in a month needs to know
+    /// whether a person or a model wrote it before acting on it, and the
+    /// frontmatter that says so is not rendered.
+    private func setProvenance(of note: Note) {
+        let when = Timestamps.parse(note.updated).map { date -> String in
+            let f = DateFormatter()
+            f.doesRelativeDateFormatting = true
+            f.dateStyle = .medium
+            f.timeStyle = .short
+            return f.string(from: date)
+        }
+        var parts: [String] = []
+        // Nothing that repeats the switcher directly above it. That control
+        // already says "Your notes", so a line under it reading "Yours" is a
+        // word spent saying nothing: what is worth knowing about your own note
+        // is when you last touched it, and about anything else is who wrote it.
+        if Notes.isYours(note) {
+            if let when { parts.append("Edited \(when)") }
+        } else {
+            parts.append(note.source == Notes.Source.cli.rawValue
+                ? "Written from the command line" : "Written by an agent")
+            if let when { parts.append(when) }
+            if !note.updated.isEmpty, note.updated != note.created {
+                parts.append("edited since")
+            }
+        }
+        var text = parts.joined(separator: " · ")
+        if let prompt = note.prompt, !prompt.isEmpty { text += "\nAsked for: \(prompt)" }
+
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let line = NSMutableAttributedString(string: text, attributes: plain)
+
+        // The other meetings a note draws on, named and reachable. A synthesis
+        // of four catch-ups appears under all four, and reading it from one of
+        // them without being told about the other three makes it look like a
+        // note about this meeting that has wandered off the subject. They are
+        // links for the same reason they are in the note pane: naming a place
+        // with no way to get to it is worse than not naming it.
+        let others = Notes.sources(of: note).filter { $0.id != recording?.id }
+        if !others.isEmpty {
+            if line.length > 0 { line.append(NSAttributedString(string: "\n", attributes: plain)) }
+            line.append(NSAttributedString(string: "Also about: ", attributes: plain))
+            for (index, source) in others.enumerated() {
+                if index > 0 {
+                    line.append(NSAttributedString(string: ", ", attributes: plain))
+                }
+                var attributes = plain
+                if let title = source.title {
+                    attributes[.link] = RecordingLink.scheme + source.id
+                    attributes[.foregroundColor] = Brand.accent
+                    line.append(NSAttributedString(string: title, attributes: attributes))
+                } else {
+                    attributes[.foregroundColor] = NSColor.tertiaryLabelColor
+                    line.append(NSAttributedString(
+                        string: source.id + " (no longer in the library)",
+                        attributes: attributes))
+                }
+            }
+        }
+        noteInfo.textStorage?.setAttributedString(line)
+        noteInfo.invalidateIntrinsicContentSize()
+    }
+
+    /// Put the chosen document on screen. The only place either pane is hidden.
+    private func applyShowing() {
+        modePicker.selectedSegment = showing == .transcript ? 0 : 1
+        setPlayerCollapsed(!hasAudio || showing == .notes)
+        scroll.isHidden = showing != .transcript
+        notesScroll.isHidden = showing != .notes
+        showProvenance()
+        updatePlaceholder()
+        // One note is still worth a switcher: it is also where the note's title
+        // is written, and the pane would otherwise show a document with no name
+        // on it.
+        notePicker.isHidden = showing != .notes || notes.isEmpty
+        updateEmpty()
+    }
+
+    /// What this pane says when it has nothing to show, per mode.
+    private func updateEmpty() {
+        guard let recording else { return }
+        let message: String
+        switch showing {
+        case .transcript:
+            message = turns.isEmpty
+                ? (recording.isLive
+                    ? "Recording. The transcript appears when you stop."
+                    : (recording.hasTranscript
+                        ? "This recording has no speech in it."
+                        : (Queue.shared.isQueued(recording.id)
+                            ? "Transcribing. This stays here if you quit."
+                            : "Not transcribed yet.")))
+                : ""
+        case .notes:
+            // Never empty any more: the user's own note is always offered, and
+            // an empty one is a cursor rather than a message. The placeholder
+            // inside the text view is what says what this is for.
+            message = ""
+        }
+        empty.stringValue = message
+        empty.isHidden = message.isEmpty
     }
 
     /// Layer colours do not follow the appearance on their own, so the card is
@@ -245,6 +854,9 @@ final class DetailView: NSView {
         // Stop the player when the selection changes. Leaving one meeting
         // playing while reading another is never what anyone meant.
         stopPlayback()
+        // Before `self.recording` moves, or a half-typed note is written to the
+        // recording that arrives next.
+        saveYours()
         self.recording = recording
 
         guard let recording else {
@@ -298,9 +910,8 @@ final class DetailView: NSView {
         // growing, so a mixdown made now would be of half a meeting and the
         // waveform cache would keep that half for ever: the cache is keyed on
         // its format version, not on how long the audio was when it was drawn.
-        let hasAudio = !recording.isLive && !recording.waveformSources.isEmpty
+        hasAudio = !recording.isLive && !recording.waveformSources.isEmpty
         setChromeHidden(false)
-        playerCard.isHidden = !hasAudio
         length = recording.metadata.duration
         position = 0
         currentTurn = nil
@@ -308,18 +919,30 @@ final class DetailView: NSView {
         refresh()
         if hasAudio { loadWaveform(recording) }
 
-        if turns.isEmpty {
-            empty.isHidden = false
-            empty.stringValue = recording.isLive
-                ? "Recording. The transcript appears when you stop."
-                : (recording.hasTranscript
-                    ? "This recording has no speech in it."
-                    : (Queue.shared.isQueued(recording.id)
-                        ? "Transcribing. This stays here if you quit."
-                        : "Not transcribed yet."))
-        } else {
-            empty.isHidden = true
-        }
+        // After `setChromeHidden(false)`, which unhides both panes, because
+        // `applyShowing` is the only thing that decides which of the two is up.
+        //
+        // The mode survives the selection change, the way the Dictionary pane's
+        // does: somebody reading notes down a list of meetings is in a mode, not
+        // repeating a choice. `reloadNotes` puts it back to the transcript when
+        // the recording that arrives has no notes, so the mode never leaves
+        // anybody on an empty pane.
+        notesSignature = ""
+        // Notes first, so the default for a recording with nothing else to show
+        // is decided against a list that exists.
+        //
+        // A recording being made now has no transcript and cannot have one for
+        // an hour, so Transcript is an empty pane and Notes is the only thing
+        // on this screen anybody can use. It is also the moment the note is
+        // worth the most: what somebody types during a call is exactly what no
+        // transcript will ever contain.
+        if recording.isLive { showing = .notes }
+        reloadNotes(reset: true)
+        // Always, now that every recording has a note to type into. It used to
+        // collapse when there was nothing to switch between, and there always
+        // is.
+        setModeBarCollapsed(false)
+        applyShowing()
     }
 
     private func setChromeHidden(_ hidden: Bool) {
@@ -327,7 +950,11 @@ final class DetailView: NSView {
         subtitleLabel.isHidden = hidden
         playerCard.isHidden = hidden
         scroll.isHidden = hidden
-        if hidden { setChipsCollapsed(true) }
+        notesScroll.isHidden = hidden
+        if hidden {
+            setChipsCollapsed(true)
+            setModeBarCollapsed(true)
+        }
     }
 
     /// A hidden view still occupies its frame, so the row's height and the
@@ -354,7 +981,6 @@ final class DetailView: NSView {
                 self?.seek(to: sentence?.start ?? turn.start, playing: true)
             }
             view.onSpeaker = { [weak self] anchor, rect in
-                self?.endEditing()
                 self?.editSpeaker(turn.speaker, from: anchor, rect: rect)
             }
             view.onEdit = { [weak self] sentence, was, text in
@@ -624,8 +1250,28 @@ final class DetailView: NSView {
     /// speaker opens the picker. Neither is a dialog. The alert this replaced
     /// asked "Who is Ryan?" with a text field even when the answer was a
     /// person the library had known for months.
+    /// **The pane is the anchor, and the rect is converted before anything
+    /// else runs.** Both halves of that were a crash.
+    ///
+    /// A turn's pill is inside the transcript stack, which `renderTurns`
+    /// empties: `endEditing` commits a title, a committed title reloads, and a
+    /// reload rebuilds every turn, so one line after it the view that was
+    /// clicked is out of the hierarchy. A view with no window can neither be
+    /// converted from, which silently yields a nonsense rect, nor position a
+    /// popover, which raises rather than failing quietly. Measured: rename a
+    /// recording, click a speaker in the transcript, and
+    /// `showRelativeToRect:ofView:preferredEdge:` aborted the app from inside
+    /// the deferred block that shows it.
+    ///
+    /// So the order is: take the rect while the view is still in the window,
+    /// then end the edit, then point the popover at the pane, which is on
+    /// screen for as long as the transcript is. `SpeakerChips` already hands
+    /// out its row rather than a chip for the same reason; this makes the rule
+    /// hold for every caller instead of each one remembering it.
     private func editSpeaker(_ speaker: String, from view: NSView, rect: NSRect) {
         guard let recording else { return }
+        let anchor = convert(rect, from: view)
+        endEditing()
         let refresh = { [weak self] in
             guard let self, let updated = Recording.find(recording.id) else { return }
             self.show(updated)
@@ -633,9 +1279,9 @@ final class DetailView: NSView {
         }
         if VoiceBank.isPlaceholder(speaker) {
             SpeakerPicker.show(for: recording, speaker: speaker,
-                               from: view, rect: rect, done: refresh)
+                               from: self, rect: anchor, done: refresh)
         } else {
-            PersonPopover.show(speaker, from: view, rect: rect, done: refresh)
+            PersonPopover.show(speaker, from: self, rect: anchor, done: refresh)
         }
     }
 
@@ -915,7 +1561,7 @@ final class TurnView: NSView {
         didSet {
             guard isCurrent != oldValue else { return }
             layer?.backgroundColor = isCurrent
-                ? NSColor.controlAccentColor.withAlphaComponent(0.07).cgColor
+                ? Brand.accent.withAlphaComponent(0.07).cgColor
                 : NSColor.clear.cgColor
         }
     }
@@ -937,7 +1583,7 @@ final class TurnView: NSView {
         let text = NSMutableAttributedString(attributedString: base)
         if let index {
             text.addAttribute(.backgroundColor,
-                              value: NSColor.controlAccentColor.withAlphaComponent(0.30),
+                              value: Brand.accent.withAlphaComponent(0.30),
                               range: sentences[index].range)
         }
         bodyLabel.attributedStringValue = text
@@ -1149,7 +1795,7 @@ extension TurnView: NSTextFieldDelegate {
 
 // MARK: - Renaming
 
-extension DetailView: NSTextFieldDelegate {
+extension DetailView: NSTextFieldDelegate, NSTextViewDelegate {
     /// Commit the title when the field loses focus or Return is pressed.
     ///
     /// `metadata.json` already carried a `title` field in the Python version,
@@ -1201,6 +1847,22 @@ extension DetailView: NSTextFieldDelegate {
     /// Clicks that no subview claimed arrive here through the responder chain,
     /// which is every part of this pane that is not a button or a link.
     override func mouseDown(with event: NSEvent) {
+        // A click anywhere in the notes area is a click on the note.
+        //
+        // An `NSTextView` in a scroll view is only as tall as its own text, so
+        // an empty note is one line high and the whole obvious writing surface
+        // below it is scroll view that does nothing when clicked. Measured on
+        // an empty note: the caret never appeared, which reads as a field that
+        // is not really a field.
+        if showing == .notes, notesText.isEditable, !notesScroll.isHidden,
+           notesScroll.frame.contains(convert(event.locationInWindow, from: nil)) {
+            window?.makeFirstResponder(notesText)
+            // At the end rather than the start: a click below the text means
+            // "carry on from here", and there is nothing below the text.
+            notesText.setSelectedRange(
+                NSRange(location: (notesText.string as NSString).length, length: 0))
+            return
+        }
         endEditing()
         super.mouseDown(with: event)
     }
@@ -1239,6 +1901,32 @@ final class DetailViewController: NSViewController {
     }
 
     func stopPlayback() { detail.stopPlayback() }
+
+    func showNote(_ slug: String?) {
+        loadViewIfNeeded()
+        detail.showNote(slug)
+    }
+
+    func showTranscript() {
+        loadViewIfNeeded()
+        detail.showTranscript()
+    }
+
+    /// Flush a keystroke that has not reached disk yet. Safe at any time.
+    func saveYours() {
+        guard isViewLoaded else { return }
+        detail.saveYours()
+    }
+}
+
+/// A label that clicks pass straight through.
+///
+/// The note's placeholder sits over the text view, and a plain `NSTextField`
+/// is hit-testable whether or not it is selectable: clicking the words that
+/// say "type here" landed on the label and went nowhere. Nothing about a
+/// placeholder is interactive, so it should not be in the hit chain at all.
+final class PassthroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// A clip view whose origin is the top left.

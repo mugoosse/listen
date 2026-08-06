@@ -381,8 +381,26 @@ final class ActionHandler: NSObject {
 
 final class GeneralPane: Pane {
     private var loginBox: NSButton?
+    private var nameField: NSTextField?
 
     override func build() {
+        heading("Your name")
+        let field = NSTextField(string: Settings.userName ?? "")
+        // The placeholder is what the app calls you with nothing set, so the
+        // field shows the current answer whether or not it has been given one.
+        field.placeholderString = SpeakerName.you
+        field.delegate = self
+        stack.addArrangedSubview(field)
+        widthCapped(field)
+        nameField = field
+        note("What your own track is called on screen, in the transcript, in the "
+             + "roster and to an agent.\n\n"
+             + "Transcripts keep saying `Me` whatever you put here, which is what "
+             + "makes this safe to change your mind about: every recording you "
+             + "have already made reads the same as the ones you make next, and "
+             + "nothing is rewritten. Clearing it puts `Me` back.")
+
+        separator()
         heading("Startup")
         loginBox = checkbox("Open Listen at login", LoginItem.state.isSelected) { on in
             if let message = LoginItem.setEnabled(on) {
@@ -397,6 +415,22 @@ final class GeneralPane: Pane {
 
     override func refresh() {
         loginBox?.state = LoginItem.state.isSelected ? .on : .off
+        // Re-read rather than left alone: the same preference is set from the
+        // person page's editor and from `listen me`, and a settings field
+        // showing a stale name is a settings field nobody can trust.
+        if let nameField, nameField.currentEditor() == nil {
+            nameField.stringValue = Settings.userName ?? ""
+        }
+    }
+}
+
+extension GeneralPane: NSTextFieldDelegate {
+    func controlTextDidEndEditing(_ note: Notification) {
+        guard let field = note.object as? NSTextField, field === nameField else { return }
+        // `Settings.userName` trims and treats empty as nil, so clearing the
+        // field is how you go back to `Me` and needs no separate control.
+        Settings.userName = field.stringValue
+        LibraryWindow.shared.reload()
     }
 }
 
@@ -957,9 +991,15 @@ final class DevelopersPane: Pane {
 
         separator()
         heading("MCP")
-        note("`listen mcp` serves the library to an agent over stdio. Read-only, no "
-             + "port, and the app does not need to be running. Paste this into your "
-             + "MCP client configuration.")
+        note("`listen mcp` serves the library to an agent over stdio. No port, and "
+             + "the app does not need to be running. Paste this into your MCP "
+             + "client configuration.\n\n"
+             + "Notes are the only thing an agent can write. It can add, rewrite "
+             + "and delete the notes it wrote; it can read the notes you type "
+             + "yourself and not change them; and it cannot rename a speaker, "
+             + "correct a transcript or delete a meeting. It also reads your "
+             + "transcripts, so if the agent runs in the cloud, that text leaves "
+             + "this Mac.")
 
         let field = NSTextView()
         field.string = MCPConfig.json

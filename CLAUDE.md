@@ -1391,6 +1391,440 @@ Date bounds are applied **before** `person` and `query`, which is not cosmetic:
 those two read every `turns.json` in the library and the date bounds read only
 the metadata already in hand.
 
+### The server is no longer read-only, and notes are the entire exception
+
+This reverses a property `CLAUDE.md`, `README.md`, `SPEC.md`, the Developers
+pane and the landing page all stated four different ways, so the reversal has to
+be as narrow as the original claim was broad. `write_note`, `edit_note` and
+`delete_note` are the whole of it. An agent still cannot rename a speaker,
+correct a sentence or delete a recording, and none of those is a missing feature
+waiting for a milestone.
+
+The line is between evidence and opinion. A transcript is a record of what was
+said; a note is somebody's reading of it. A wrong note is a wrong opinion sitting
+beside the recording that disproves it, and a wrong transcript edit is a fact
+that is simply gone, because the audio is an hour long and nobody re-listens.
+So anything that changes the evidence goes through a human at the window or the
+CLI, where it is visible and reversible, and everything derived from it is open.
+
+The five places that asserted read-only are all updated. If a sixth appears,
+that is the list to check.
+
+**`Notes` is one owner with three callers**, which is the rule
+`TranscriptEditor` already sets: `listen notes`, the MCP tools and `DetailView`
+all go through it. The CLI came first, before any UI, because a store that can
+be driven from a terminal is a store whose behaviour is settled before anything
+renders it, and there is no test target.
+
+#### The compare-and-swap is required over MCP and optional at the CLI
+
+`Notes.replace` takes `expecting:` and refuses the write when the body no longer
+matches, which is `TranscriptEditor.retext` one layer up. `edit_note` makes
+`was` a required parameter; `listen notes write --replace` makes `--was` a flag.
+
+That is not an inconsistency. The window and an agent can be holding the same
+note at the same time, and that is the surface where an unseen overwrite is
+possible. A person at a terminal is one writer looking at what they are
+replacing, and demanding they paste the previous body back would make the
+command unusable rather than safe. `listen notes read` prints the body on stdout
+and the provenance on stderr precisely so `--was-file` has something to be given:
+
+```sh
+listen notes read <id> outline > was.md
+listen notes write <id> --replace outline --was-file was.md --file new.md
+```
+
+#### A note belongs to the library, not to a recording
+
+Notes started in `recordings/<id>/notes/` and moved to
+`~/Library/Application Support/Listen/notes/<slug>.md` before anything was
+committed. The reason is one use case: "summarise everything with Edgar in June"
+spans four recordings, and under one-note-per-recording it had three bad homes
+and no good one. Pick one of the four arbitrarily; duplicate it into all four
+and keep them in sync by hand; or do not write it. **A note with one source is
+the common case, not a special case**, so `recordings` is an array all the way
+down and a single-meeting note is an array of one.
+
+That is the arrangement `dictionary.json` and `contacts.json` already have, for
+the same stated reason: they are about the library as a whole.
+
+Three consequences, all deliberate:
+
+1. **Slugs are unique library-wide**, so the user's own note is
+   `<id>-yours` rather than `yours`: two recordings would otherwise both want
+   the same file and the second would silently become `yours-2`, which nothing
+   could find again.
+2. **Deleting a recording no longer deletes notes about it.** A synthesis of
+   four meetings must not vanish because one of them was tidied up. A note
+   naming a deleted recording keeps naming it and shows the bare id as
+   unresolved, in `Notes.sources`, in `listen notes read`, in the note pane and
+   as `unresolved_recordings` over MCP. It is never cleaned up.
+3. **There is no wiki-link parsing, no graph view and no automatic linking.**
+   The agent states its sources in `recordings` and nothing guesses. A note that
+   mentions a name is not a note about that meeting.
+
+`Notes.migrate()` moves the old layout, keeping `created`, `updated`, `source`
+and `prompt` so a note somebody edited arrives still looking edited. It runs
+once per process, from a `private static let` initialiser, because there is no
+single startup path the CLI, the app and the pipeline actor all go through and a
+`static let` is initialised lazily and exactly once by the runtime. **35 notes
+moved** on the real library.
+
+#### A note file has to survive being written by hand
+
+The frontmatter is emitted with every value double-quoted and escaped, always,
+rather than only when it needs it. A title is free text and will eventually hold
+a colon, a leading `#`, or the word `yes`, each of which changes what an unquoted
+YAML scalar means. Two characters, one class of bug removed.
+
+`Notes.decode` goes the other way and is deliberately liberal, same as
+`CustomDictionary.decode`. A markdown file dropped into `notes/` in Finder with
+no frontmatter at all is still a note: it takes its title from its first heading
+or its filename and its source from nobody. Refusing it would make the whole
+argument for markdown-on-disk false, and the promise that deleting one in Finder
+is a supported operation only holds if creating one there is too.
+
+The terminator is found by scanning for a line that is exactly `---`, not by
+searching for `\n---\n` in the string. A note body containing a horizontal rule
+would otherwise end the frontmatter block from inside the document.
+
+### The outline was built, measured and deleted
+
+A recording used to get an extractive `outline` note at the end of
+`Pipeline.run`: duration, a talk-time table, the longest stretches with
+timestamps, how it opened and closed. It shipped in the working tree, ran over
+the whole library, and was removed before any of it was committed. **33 outline
+notes were deleted.** Worth recording, because the argument for building one is
+good and the argument against only appears once you read a real one.
+
+1. **It is derived from the transcript, so it asks the reader to supply the
+   intelligence and gives them more to read in exchange.** Everything in it was
+   already on the screen next to it.
+2. **The "Who talked" table duplicated the speaker chips**, which are in the
+   header of the same pane, four inches away.
+3. **"Longest stretches" selects the most rambling turn, not the most
+   important one.** Ranking by word count is exactly a ranking of who went on
+   longest without being interrupted. On a real recording the top entry was 843
+   words beginning "yeah um no so sorry for the delay to getting ready here um".
+
+The talk-time measurement it forced is still worth having: on a real 33:14
+two-person call, talk time sums to **47m 40s** because 28 of its 48 turns end
+after the next turn starts. The two tracks are captured and transcribed
+separately, so a long system-track segment straddles several mic-track ones and
+`Merge.turns` takes the `max` of the ends. Anything that reports per-speaker
+seconds has to know that, including the chips, which use the same measure.
+
+### The user's own note is the thing no transcript contains
+
+What replaced the outline. One note per recording, `source: you`, slug
+`<id>-yours`, and it is the default selection in the Notes tab. A transcript
+records what was said; this records what somebody was thinking while it was
+said, and "we should upsell them" is exactly the context an agent needs and had
+no way to get.
+
+Four properties, each of which is a decision:
+
+1. **It materialises on the first keystroke.** No New Note button, no naming
+   step. `Notes.yoursOrEmpty` returns an unsaved note so the pane always has
+   something to put a cursor in, and `Notes.setYours` writes the file when there
+   is a body and deletes it when there is not. An empty note is not a note, and
+   a library with 36 empty files in it is worse than one with none.
+2. **Plain markdown in a plain text view.** No rich text, no slash commands, no
+   templates, and `isRichText`, the quote substitution and the dash
+   substitution are all off: a curly apostrophe AppKit inserted on somebody's
+   behalf is a character they did not type sitting in a file they will be quoted
+   from. Anyone who wants a document already has a notes app.
+3. **It is editable while the recording is still running**, and Notes is the
+   default tab in that state because Transcript is an empty pane for the next
+   hour. `Recording.promote()` moves `staging/<id>` to `recordings/<id>` with the
+   id unchanged, so a library-level note keyed on that id needs no special
+   handling at adoption. `Notes.setYours` deliberately skips the `checked`
+   validation that every other write goes through, because `Recording.all()`
+   cannot see a staged recording, and `Notes.sources` looks in `staged()` too or
+   a live recording's own note would report its own meeting as missing.
+4. **An agent may read it and may not write it.** `MCP.writable` refuses
+   `edit_note` and `delete_note` on a `source: you` note, and says to write a
+   separate note instead. This is the one asymmetry in the note surface, and it
+   is the same line the transcript is on: that text was not derived from
+   anything, so there is no way to get it back.
+
+**Do not call it "private".** That names a sharing model this app does not have
+and would be a lie the day anything syncs. `source: you` and "Your notes" are
+claims about who wrote it, which stay true.
+
+Deleting has to say so. `LibraryWindow.deleteSelected` names it in the alert,
+and answering "No" to the meeting prompt, which is otherwise the one place a
+recording is deleted without being asked about, now asks exactly when there is a
+non-empty note: somebody who has typed into it has said this is a meeting more
+clearly than the panel ever asked.
+
+### `NSAttributedString(markdown:)` parses the structure and then throws it away### `NSAttributedString(markdown:)` parses the structure and then throws it away
+
+Handed a whole document it returns the text with inline emphasis applied and
+nothing else: headings come back as plain paragraphs at body size, list items
+lose their bullets, and a table's cells run together. A note whose headings and
+bullets are gone is *less* readable than the raw file, and the raw file is what
+is on disk, so rendering has to beat showing the source or it is not worth
+doing.
+
+`MarkdownText` therefore splits the job. Blocks are handled here, line by line,
+and every line's inline markup goes through Foundation with
+`.inlineOnlyPreservingWhitespace`, which is exactly what that option is for.
+Bold, italic, code and links come back correct with no second parser to be wrong
+in its own way, as an `.inlinePresentationIntent` attribute rather than as fonts,
+so the caller's font is applied first and the traits are added on top. That is
+what makes a bold word inside a heading a bold heading.
+
+Three things it got wrong first, all visible only against a real note:
+
+1. **A paragraph runs to the next blank line**, not to the end of the source
+   line. Everything that writes these notes hard-wraps its prose, and one
+   sentence rendered as two half-sentences with a gap down the middle.
+2. **A list needs a hanging indent.** Without `headIndent` the second line of an
+   item starts under the marker and a list of two-line items stops looking like
+   a list.
+3. **A numbered item keeps the number it was written with.** Counting them here
+   would mean the file and the pane disagree about which one is item 3, and the
+   file is editable in any editor.
+
+Tables are padded monospaced text rather than tab stops, because the column
+widths are known here and the pane's width is not: a tab stop set from a guess
+comes apart when somebody drags the divider.
+
+### Collection navigation is in the sidebar, not the toolbar
+
+A three-way segmented control above the search field: Recordings, People, Notes.
+People used to be a toolbar button and is not one any more.
+
+**The rule it encodes: a toolbar holds verbs on the selected recording.** Export
+this, transcribe this again, delete this. People was never a verb on a
+recording, it is a peer collection of the whole library, and once a note can
+name four recordings so are notes. A note referencing four meetings has no home
+in a recording-centric sidebar at all, which is the sharp version: without this
+the app can create something it cannot show.
+
+Five things it has to get right:
+
+1. **Above the search field, not below.** Search scopes to the active segment,
+   so the scope selector comes first, and the placeholder changes with it
+   ("Search recordings", "Search people", "Search notes"). Otherwise the first
+   search in People returns people as a surprise rather than an expectation.
+2. **Settings is not a fourth segment.** The segments are which part of the
+   library you are looking at; settings is configuring the app. It keeps the
+   gear at the bottom left.
+3. **Each list carries its own copy of the control**, because the sidebar swaps
+   its whole view controller through `PaneHost`. Same builder, same constraints,
+   same position, so it does not appear to move. The cost is that they go out of
+   sync: clicking Notes on the recordings list leaves *that* control reading
+   Notes, so coming back showed the recording list with the Notes segment lit.
+   Measured that way round. `enter()` sets all three, not just the one on
+   screen.
+4. **Do not touch `minimumThickness`, `maximumThickness` or the holding
+   priorities on a segment change.** One `autosaveName` owns the divider, and
+   moving the limits makes the split view redistribute and rewrite the saved
+   width. `CLAUDE.md` already records this for the settings mode; a segmented
+   control changes mode far more often than Settings does.
+5. **Every list needs the Settings row, not just the recordings one.** It was
+   the only list with a bottom row, because People was entered from the toolbar
+   and left by a back row. Peers behind one control, a gear in one of them means
+   being in People or Notes is being somewhere with no visible way to Settings.
+   Found by looking for it and it not being there. `sidebarSettingsRow` builds
+   the row, the hairline above it and its constraints once for all three.
+6. **People and Notes no longer lock the sidebar open.** That lock existed
+   because the roster was the only way out of the person page. The segmented
+   control is now the way in and out of everything, so the lock was about
+   navigation rather than about People, and the sidebar toggle is back in the
+   toolbar in those modes. The masthead is in all three too: switching is one
+   click now, and a title bar that empties as you move between segments reads as
+   three different apps.
+
+A note's sources are `SourceChip`s, and they took three goes. An `.inline`
+button draws a flat grey capsule that reads as a tag, so nothing said the
+meeting a note is about was also the way to it: zero signals. An accent-filled
+capsule with a chevron said it far too loudly, and on a note whose body is one
+sentence the loudest thing on the page was the navigation. What is there now is
+a link: accent text, a chevron, a pointing hand, no fill.
+
+The label in front of them went with the capsule. "Open a recording:" spent a
+third of the row on a sentence introducing four things that already look like
+links.
+
+The header lost a line too. It carried who wrote it, when, and, on the user's
+own note, a sentence saying it is edited on the recording, every time it was
+shown for ever. That sentence is a thing somebody needs once, so it is the text
+view's tooltip, and what is left is the same two facts the sidebar row already
+prints in the same order.
+
+A note's sources are links in a sentence, not a row of buttons. Buttons with a
+trailing chevron each read as one step of a path, so four of them are a
+breadcrumb trail claiming a hierarchy that does not exist: these are four peers.
+`LinkLine` is an `NSTextView` that reports an intrinsic height, so a
+comma-separated line of links wraps, underlines on hover and takes the pointing
+hand for free. The `listen-recording:` scheme is made up and read back by the
+delegate that owns the view, so an id in a note's provenance can never reach
+`NSWorkspace`.
+
+**An `NSTextView` reports no intrinsic size**, which is fine inside a scroll
+view and wrong everywhere else: pinned into a stack of constraints with nothing
+saying how tall it is, it took the whole pane and pushed the note body off the
+bottom of the window. The symptom is a note that renders its header and nothing
+else, which reads as an empty note.
+
+The same line appears under a note shown beside a recording, as "Also about",
+and it is links there too. `LibraryWindow.open(recording:note:)` is the one
+entry point both use, and **they land on different tabs**.
+
+From the Notes collection it lands on the Notes tab with that note beside the
+recording: the whole page has changed, and a synthesis of four meetings has to
+be walkable through its sources without losing your place in it.
+
+From "Also about" it lands on the **transcript**. The note being read is about
+that meeting too, so staying on the Notes tab put the same words under a
+different title, and a page that does not visibly change is a click that did not
+appear to work. The rule generalises: land where the change is visible.
+
+**A leading heading that repeats the note's title is dropped when rendering.**
+An agent asked for "Decisions" writes `# Decisions` as the first line, which is
+right in a markdown file somebody may open in an editor and reads as a mistake
+on a pane whose own title is two lines above it. The file keeps it.
+
+**Every one of the user's notes is titled "Your notes"**, so the library list
+was a column of identical rows told apart by a truncated second line. Those rows
+lead with the meeting and put "Your notes" where the kind goes; an agent's note
+is the other way round, because its title is the one thing that is its own.
+
+Clicking one lands on the **Notes tab** of that recording, with the same note
+selected. Landing on its transcript would be answering a
+question nobody asked, and a synthesis of four meetings has to be walkable
+through its sources without losing your place in it.
+
+`NotePane` is read-only for every note, including the user's own, and that is a
+choice rather than an omission. Their note is edited on the recording it belongs
+to, where the audio and the transcript are, and two editors for one file would
+be two writers of the thing this app is most careful about. The sources are
+buttons, so the way to edit it is one click and the click also goes to the
+meeting.
+
+#### Reading the popup's selection after rebuilding its menu returns the old one
+
+`pickNote` called `saveYours()` before reading `sender.selectedItem`, and
+`saveYours` calls `rebuildNotePicker`, which re-selects the note that is on
+screen. So picking a different note in the switcher read back the note you were
+leaving, and the pane redrew what it was already showing. The symptom is a
+control that appears to be dead, which is the hardest kind to attribute.
+
+The choice is read first, before anything that could touch the menu. The wider
+rule: an action handler that rebuilds its own control has to take what it needs
+off the sender on the first line.
+
+#### A day heading that pins to the top is not a row that has vanished
+
+Reported as "the first recording of the day disappeared": the sidebar showed
+"Today" with nothing beneath it and "Yesterday" immediately after. It was not a
+bug. `NSTableView` floats group rows, so the heading of the group you are in
+stays pinned while its rows scroll away underneath, and landing at the one
+offset where Today's only recording had just gone past the top leaves exactly
+that picture.
+
+Three wrong theories went by before the measurement that settled it: the table
+reported 58 rows before and after, and asking through accessibility returned the
+right title for the row that was not on screen. Data right, drawing right,
+heading in front of it.
+
+**The fix is not `floatsGroupRows = false`.** That was tried, and it removes the
+sticky heading and its separator, which are the thing that tells you which day
+you are looking at halfway down a long library. Turning off a feature to
+suppress a symptom is how a report of "this looks wrong" becomes a regression
+nobody asked for. What put the list at that offset is `select`'s own
+`scrollRowToVisible`, which is correct: arriving from a note has to bring the
+recording into view.
+
+#### A recording with no call shows Listen's own icon
+
+`appBundleID` is nil for a recording started from the sidebar in a quiet room,
+so its icon column was empty while every other row had one. `AppNames.own` fills
+it, which is the true answer rather than a blank: that meeting was recorded by
+this app and by nothing else. It also keeps one left edge down the list instead
+of one that changes as you scroll.
+
+#### The document toggle sits above the player, not below it
+
+The player belongs to the transcript. A transcript is a thing you read while
+listening; a note is a thing you write. Under the player the toggle read as a
+control on the recording rather than a choice of document, and switching to
+Notes left 58 points of transport on screen with nothing to transport.
+
+So `modeBar` is between the chips and `playerCard`, and the player is collapsed
+in notes mode through the same two-constraint pattern the chips row uses. It is
+also collapsed when there is no audio, which closes a gap that had been there
+since before any of this and that nobody had noticed.
+
+Switching to Notes stops playback, which is the rule `enter(.settings)` already
+follows: a transport nobody can see is a transport nobody can pause. The cost is
+that you cannot listen back while typing, which is a real thing somebody might
+want and is worth revisiting if it comes up.
+
+#### A convenience initialiser that shadows its superclass's calls itself
+
+`SourceChip` is an `NSButton` subclass, and its first version was:
+
+```swift
+convenience init(title: String, target: AnyObject, action: Selector) {
+    self.init(title: title, target: target, action: action)   // itself
+```
+
+`NSButton` already has `init(title:target:action:)`, so `self.init` resolves to
+the subclass's own initialiser and not the superclass's. It compiles clean, and
+crashes the first time a note is selected: `EXC_BAD_ACCESS`, "thread stack size
+exceeded due to excessive recursion", **74,609 frames** of
+`SourceChip.__allocating_init(title:target:action:)`.
+
+Any argument label that is not `title` sends it to `NSButton`, so the parameter
+is `recording:`. The general rule: a `convenience init` on a subclass must not
+have the same signature as an initialiser it means to call.
+
+Two things made this cost more than it should have. It only fires on a code path
+a click reaches, so a build and a launch both look fine, and every screenshot
+taken before that click is evidence of nothing. And the fix is one word, which
+is the shape of bug worth writing down rather than remembering.
+
+### The user's name is a preference, and nothing said where to set it
+
+`Settings.userName` has existed since the label design was settled: the
+transcripts keep saying `Me` and `SpeakerName.display` resolves it on the way to
+the screen, so the name can change without rewriting anything. The person page's
+editor already wrote it, and so did `listen me`.
+
+What did not exist was any way to find that out. The Me page's heading said
+"Me", the roster said "Me", and nothing anywhere admitted that was a placeholder
+or that it could be changed, so the reasonable conclusion from looking at it is
+that the app does not know who you are. Settings, General now has the field, and
+the Me page carries one dimmed line saying where it is, **only while the name is
+unset**.
+
+It was first put inside the `·` list in the person's subtitle, which read badly:
+a sentence with a full stop in it, wedged between a job description and a
+duration. A hint that is not one of the facts does not belong in the list of
+facts.
+
+### The notes pane re-reads on activation, and only redraws when something changed
+
+An agent writes a note while the window is open and nothing on disk announces
+it. Coming back to the app is when somebody expects to see it, so `DetailView`
+listens for `didBecomeActiveNotification` and re-lists one directory, which is
+cheap.
+
+Redrawing is not cheap, though, because rebuilding the text view scrolls it back
+to the top. `notesSignature` is every note's slug and `updated` joined up, and an
+unchanged signature returns without touching the view. Losing your place in a
+note because you switched to another app and back is the same failure
+`renderTurns(scrollToTop:)` exists to avoid next door.
+
+The mode itself survives a selection change, the way `DictionaryPane.showing`
+does: reading notes down a list of meetings is a mode, not a choice being
+repeated. `reloadNotes` puts it back to the transcript when a recording with no
+notes arrives, so the mode can never leave anybody on an empty pane.
+
 ### An app with no nib has no menu bar, and it is not obvious
 
 Listen builds its own `NSMenu` in `MainMenu.install()`. Without it there is no

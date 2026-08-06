@@ -59,9 +59,12 @@ Listen.app
 ├── Capture          Core Audio process tap (system) + AVAudioEngine (mic)
 ├── Library          ~/Library/Application Support/Listen/recordings/<id>/
 ├── Pipeline         ASR (MLX Parakeet) → diarization (FluidAudio) → merge → voiceprints
-├── UI               Apple Notes style: sidebar list + detail with player and transcript
+├── Notes            markdown artifacts in the library, each naming one or
+│                    more recordings. One per recording is the user's own.
+├── UI               Apple Notes style: sidebar list + detail with player, transcript, notes
 ├── CLI              `listen` binary, installed on request from Settings
-└── MCP              `listen mcp`, stdio, read-only, over the same library
+└── MCP              `listen mcp`, stdio, over the same library. Notes are the
+                     only writable surface; everything else is read-only.
 ```
 
 ### 3.1 Package layout
@@ -392,19 +395,33 @@ which. Show the resulting path. Never install silently on first launch.
 
 ## 7. MCP
 
-`listen mcp` speaks MCP over stdio. Read-only, idempotent, local. It opens no
-port. The app does not need to be running; the library on disk is the source of
-truth. Model the surface on `docs/reference/mcp.mdx` in the Anarlog repo.
+`listen mcp` speaks MCP over stdio. Local, and it opens no port. The app does
+not need to be running; the library on disk is the source of truth. Model the
+surface on `docs/reference/mcp.mdx` in the Anarlog repo.
+
+**Notes are the only writable surface.** Everything else is read-only and
+idempotent. An agent may create, rewrite and delete a note artifact; it may not
+rename a speaker, edit a transcript or delete a recording. The transcript is
+evidence and notes are derived from it, so changing the evidence stays with a
+human, in the window or at the CLI.
 
 Tools:
 
 | Tool | Parameters |
 |---|---|
-| `list_recordings` | `query`, `limit` (default 20, clamp 1..200), `offset` |
-| `get_recording` | `recording_id`. Metadata, participants, speaker names. No transcript text. |
+| `list_recordings` | `query`, `person`, `after`, `before`, `limit` (default 20, clamp 1..200), `offset` |
+| `get_recording` | `recording_id`. Metadata, participants, speaker names, note slugs. No transcript text. |
 | `get_transcript` | `recording_id`, `offset`, `limit` (default 200, clamp 1..500), returns `pagination` with `next_offset` |
-| `search_transcripts` | `query`, `limit`. Full-text across the library, returns matching turns with recording IDs. |
+| `search_transcripts` | `query`, `person`, `limit`. Full-text across the library, returns matching turns with recording IDs. |
 | `list_people` | Everyone in the voice bank, with recording counts. |
+| `list_notes` | `recording_id` optional. Provenance only, no bodies. |
+| `read_note` | `note` (slug or title), `recording_id` optional to narrow a shared title. |
+| `write_note` | `recordings` (array, at least one), `title`, `body`, `prompt`. Never overwrites; a colliding slug is numbered. |
+| `edit_note` | `note`, `body`, `was`, optional `title`/`recordings`/`prompt`. `was` is required and is a compare-and-swap. |
+| `delete_note` | `note`. |
+
+`edit_note` and `delete_note` refuse a note whose `source` is `you`: an agent
+reads what the user typed and never rewrites it.
 
 Resources: `listen://recordings/{id}` as `text/markdown`, and
 `listen://recordings/{id}/transcript{?offset,limit}` as `text/plain`.

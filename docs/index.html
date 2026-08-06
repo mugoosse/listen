@@ -86,6 +86,11 @@ li { margin-bottom: 8px; }
 strong { color: var(--text); font-weight: 600; }
 footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
 footer a { color: var(--grey); }
+.shot {
+  display: block; width: 100%; height: auto; margin: 0 0 8px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.caption { font-size: 13px; color: var(--grey-dim); margin: 0 0 16px; }
 table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 td { padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--grey); vertical-align: top; }
 td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
@@ -117,6 +122,13 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 </header>
 
 <section>
+  <img class="shot" src="screenshot.png"
+       alt="Listen showing a meeting: the recording list on the left, the
+            speakers and a waveform above the transcript, and each turn
+            attributed by name.">
+  <p class="caption">Invented meeting, invented people, synthesised voices.
+  Nobody's call is on this page.</p>
+
   <h2>What it does</h2>
   <p class="lead">You press record. Nobody joins the call, nothing appears on
   the calendar, and no one else is told the meeting is being recorded by a
@@ -142,21 +154,41 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
   <p>Name someone once and Listen suggests them the next time it hears them.
   Suggestions are ranked and never applied on their own, so the transcript
   never quietly claims somebody said something.</p>
+
+  <h3>Named before you get there</h3>
+  <p>A recording takes the name of the meeting in your calendar it lines up
+  with, and the people on the invitation are offered when you name a speaker.
+  Google and Microsoft calendars come through whatever you have already added
+  in System Settings, so there is no sign-in and nothing in the middle.</p>
 </section>
 
 <section>
-  <h2>Ask an agent about your own meetings</h2>
-  <p>Listen ships an MCP server. Read-only, no port, and the app does not need
-  to be running.</p>
-  <pre><code>{
-  "mcpServers": {
-    "listen": {
-      "command": "/usr/local/bin/listen",
-      "args": ["mcp"]
-    }
-  }
-}</code></pre>
-  <p>Settings has this ready to copy with the right path already filled in.</p>
+  <h2>The notes you meant to write</h2>
+  <p class="lead">The part of a meeting worth keeping is rarely the transcript.
+  It is the line you would have scribbled at the time.</p>
+
+  <p>Every recording has a notes page that is yours. Open it and there is a
+  cursor: no button to press first, no template to choose, nothing saved until
+  you type. It works <strong>while the call is still running</strong>, which is
+  when it is worth the most. "We should upsell them" is in no transcript and
+  cannot be reconstructed from one.</p>
+
+  <p>The write-ups are the other half, and Listen does not pretend to do them.
+  Point Claude, or anything else that speaks MCP, at your library and ask for
+  the summary, the decisions, the open questions. The answer comes back as a
+  note filed against the meetings it came from, so a synthesis of four
+  catch-ups belongs to all four rather than being buried under one.</p>
+
+  <p>Your own notes are read-only to it. It reads what you wrote, and writes
+  beside it. It cannot rename anybody, edit a transcript, or delete a
+  recording.</p>
+
+  <p>Settings has the configuration ready to copy. There is no port, no account,
+  and the app does not even need to be running.</p>
+
+  <img class="shot" src="notes-screenshot.png"
+       alt="Listen showing a personal meeting note alongside its recording.">
+  <p class="caption">A synthetic library: invented meetings, people and text.</p>
 </section>
 
 <section>

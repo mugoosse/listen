@@ -44,6 +44,17 @@ enum PersonPopover {
         // control's own action arrives while the mouse event is still being
         // dispatched.
         DispatchQueue.main.async {
+            // A positioning view that has left the window is an exception and
+            // not a popover that fails to appear, so this is a crash guard
+            // rather than tidiness. Anything the click set off gets a runloop
+            // turn to reload the pane before this runs, and `DetailView` points
+            // at itself precisely so that cannot take the anchor with it: if
+            // this ever fires, the anchor outlived the click by less than the
+            // popover needs and the caller is the thing to fix.
+            guard view.window != nil else {
+                trace("popover: anchor left the window before it opened")
+                return
+            }
             popover.show(relativeTo: rect, of: view, preferredEdge: .minY)
         }
         current = popover

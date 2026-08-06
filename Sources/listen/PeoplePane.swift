@@ -124,11 +124,10 @@ final class PeopleNav: NSViewController {
     private var searchField: NSSearchField!
     private var people: [Person] = []
     private var query = ""
-    private var backTop: NSLayoutConstraint!
-    private var backLeading: NSLayoutConstraint!
-    private var back: SidebarRow!
+    private var picker: CollectionPicker!
 
     var onSelect: ((Person) -> Void)?
+    var onCollection: ((LibraryCollection) -> Void)?
 
     private(set) var selected: Person?
     private var hover: TableHover!
@@ -136,8 +135,11 @@ final class PeopleNav: NSViewController {
     override func loadView() {
         let container = NSView()
 
+        picker = CollectionPicker(showing: .people)
+        picker.onSelect = { [weak self] in self?.onCollection?($0) }
+
         searchField = NSSearchField()
-        searchField.placeholderString = "Search people"
+        searchField.placeholderString = LibraryCollection.people.searchPlaceholder
         searchField.target = self
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -157,21 +159,13 @@ final class PeopleNav: NSViewController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        back = sidebarBackRow(target: self, action: #selector(goBack))
-        container.addSubview(back)
+        // No back row any more. The segmented control above is the way to
+        // every other collection *and* the way back, so a "Library" chevron
+        // beside it would be a second control saying the same thing.
+        container.addSubview(picker)
         container.addSubview(searchField)
         container.addSubview(scroll)
-        backTop = back.topAnchor.constraint(equalTo: container.topAnchor, constant: 12)
-        backLeading = back.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                                    constant: 78)
-        NSLayoutConstraint.activate([
-            // Level with the traffic lights and just clear of them, in the
-            // place the collapse toggle occupies in library mode. These modes
-            // lock the sidebar open, so that button is not drawn here and the
-            // row costs no vertical space of its own.
-            backTop, backLeading,
-            back.heightAnchor.constraint(equalToConstant: 26),
-            searchField.topAnchor.constraint(equalTo: back.bottomAnchor, constant: 12),
+        NSLayoutConstraint.activate(picker.constraints(in: container, above: searchField) + [
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor,
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
@@ -179,8 +173,9 @@ final class PeopleNav: NSViewController {
             scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        ] + sidebarSettingsRow(in: container, above: container.bottomAnchor,
+                               under: scroll, target: self,
+                               action: #selector(openSettings)))
         hover = TableHover(table, name: "people")
         view = container
     }
@@ -235,19 +230,21 @@ final class PeopleNav: NSViewController {
         return true
     }
 
+    /// See `SidebarViewController.setCollection`.
+    func setCollection(_ collection: LibraryCollection) {
+        loadViewIfNeeded()
+        picker.selectedSegment = collection.rawValue
+    }
+
     func focusSearch() { view.window?.makeFirstResponder(searchField) }
+
+    @objc private func openSettings() { LibraryWindow.shared.showSettings() }
 
     @objc private func searchChanged() {
         query = searchField.stringValue
         reload()
     }
 
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        alignToTrafficLights(row: back, top: backTop, leading: backLeading, in: view)
-    }
-
-    @objc private func goBack() { LibraryWindow.shared.exitSettings() }
 }
 
 extension PeopleNav: NSTableViewDataSource, NSTableViewDelegate {
@@ -401,6 +398,19 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
     private var scroll: NSScrollView!
     private var content: NSStackView!
+    /// Who this is, and everything about them that is not a recording.
+    ///
+    /// Outside the scroll view. It used to be the first thing in it, so
+    /// scrolling a person with twenty meetings took their name, their disc and
+    /// the note about them off the top of the page: by the time you were
+    /// reading the list you could no longer see whose it was. The list is the
+    /// only thing here that can be long, so it is the only thing that scrolls.
+    private var head: NSStackView!
+    /// Which stack `add` is filling. Set by `render` around the two halves,
+    /// rather than threaded through every builder: the page is built top to
+    /// bottom in one pass, and passing a target into fifteen call sites is
+    /// fifteen chances to pass the wrong one.
+    private var into: NSStackView!
 
     /// The card changed and the person is still who they were, so the roster
     /// row beside it is stale and its selection is not.
@@ -444,14 +454,21 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         notes.isRichText = false
         notes.textContainerInset = NSSize(width: 6, height: 6)
 
+        head = NSStackView()
+        head.orientation = .vertical
+        head.alignment = .leading
+        head.spacing = 6
+        // 14 and not 38: the window's title is hidden, so the name and the
+        // disc sit level with the toolbar buttons rather than a title's height
+        // below where a title used to be.
+        head.edgeInsets = NSEdgeInsets(top: 14, left: 24, bottom: 0, right: 24)
+        head.translatesAutoresizingMaskIntoConstraints = false
+
         content = NSStackView()
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 6
-        // 14 and not 38: the window's title is hidden, so the name and the
-        // disc sit level with the toolbar buttons rather than a title's height
-        // below where a title used to be.
-        content.edgeInsets = NSEdgeInsets(top: 14, left: 24, bottom: 28, right: 24)
+        content.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 28, right: 24)
         content.translatesAutoresizingMaskIntoConstraints = false
 
         scroll = NSScrollView()
@@ -465,10 +482,14 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         empty.textColor = .secondaryLabelColor
         empty.translatesAutoresizingMaskIntoConstraints = false
 
+        container.addSubview(head)
         container.addSubview(scroll)
         container.addSubview(empty)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: container.topAnchor),
+            head.topAnchor.constraint(equalTo: container.topAnchor),
+            head.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            head.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: head.bottomAnchor),
             scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -490,12 +511,15 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     }
 
     private func render() {
+        for sub in head.arrangedSubviews { sub.removeFromSuperview() }
         for sub in content.arrangedSubviews { sub.removeFromSuperview() }
         guard let person else {
+            head.isHidden = true
             scroll.isHidden = true
             empty.isHidden = false
             return
         }
+        head.isHidden = false
         scroll.isHidden = false
         empty.isHidden = true
 
@@ -504,7 +528,22 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         nameLabel.stringValue = person.display
         summary.stringValue = facts(person)
 
-        let titles = NSStackView(views: [nameLabel, summary])
+        // A line of its own, and only when there is nothing to say instead.
+        //
+        // This page is where somebody comes to ask "does it know who I am", and
+        // with no name set the heading says "Me" while nothing anywhere admits
+        // that is a placeholder or that it can be changed. It was tried inside
+        // the `·` list above and read badly: a sentence with a full stop in it,
+        // wedged between a job description and a duration.
+        var lines: [NSView] = [nameLabel, summary]
+        if person.isYou, Settings.userName == nil {
+            let hint = NSTextField(labelWithString:
+                "Listen calls you Me. Settings, General is where you give it your name.")
+            hint.font = .systemFont(ofSize: 11)
+            hint.textColor = .tertiaryLabelColor
+            lines.append(hint)
+        }
+        let titles = NSStackView(views: lines)
         titles.orientation = .vertical
         titles.alignment = .leading
         titles.spacing = 2
@@ -513,13 +552,26 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 14
+        into = head
         add(header, spacingAfter: 18)
         add(rule(), spacingAfter: 14)
 
         editing ? renderEditor(person, contact) : renderDetails(person, contact)
 
+        // No list while editing. It is a form, and a form with somebody's
+        // twenty meetings under it is a form you have to scroll past to find
+        // the Save button. It matters more now that the head does not scroll:
+        // the fields would be squeezed into whatever the list left them.
+        guard !editing else {
+            scroll.isHidden = true
+            return
+        }
+
         add(rule(), spacingAfter: 14)
-        add(section("Recordings"))
+        add(section("Recordings"), spacingAfter: 10)
+
+        // Everything above is fixed; only the list scrolls.
+        into = content
         renderRecordings(person)
     }
 
@@ -535,7 +587,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
                 label.isSelectable = true
                 add(label)
             }
-            content.setCustomSpacing(14, after: content.arrangedSubviews.last!)
+            into.setCustomSpacing(14, after: into.arrangedSubviews.last!)
             said = true
         }
         if let note = contact?.note, !note.isEmpty {
@@ -909,20 +961,22 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     /// Width is applied after the view is in the stack, because a constraint
     /// between two views with no common ancestor throws rather than laying out
     /// badly.
-    private func add(_ view: NSView, width: Bool = false, spacingAfter: CGFloat? = nil) {
-        content.addArrangedSubview(view)
+    private func add(_ view: NSView, width: Bool = false, spacingAfter: CGFloat? = nil,
+                     to stack: NSStackView? = nil) {
+        let stack = stack ?? into ?? content!
+        stack.addArrangedSubview(view)
         if width {
-            let fill = view.widthAnchor.constraint(equalTo: content.widthAnchor,
+            let fill = view.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                                    constant: -48)
             fill.priority = .defaultLow
             NSLayoutConstraint.activate([
                 fill,
-                view.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor,
+                view.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor,
                                             constant: -48),
                 view.widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxWidth),
             ])
         }
-        if let spacingAfter { content.setCustomSpacing(spacingAfter, after: view) }
+        if let spacingAfter { stack.setCustomSpacing(spacingAfter, after: view) }
     }
 
     private func section(_ title: String) -> NSTextField {

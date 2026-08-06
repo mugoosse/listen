@@ -33,6 +33,12 @@ enum SpeakerPicker {
         // top of the pane, and one that does not fit above is not moved, it is
         // closed.
         DispatchQueue.main.async {
+            // Refused rather than raised, for the reason `PersonPopover.show`
+            // gives: an anchor with no window aborts the app here.
+            guard view.window != nil else {
+                trace("picker: anchor left the window before it opened")
+                return
+            }
             popover.show(relativeTo: rect, of: view, preferredEdge: .minY)
         }
         current = popover
@@ -238,7 +244,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             new.isBordered = false
             new.font = .systemFont(ofSize: 13, weight: .medium)
             new.alignment = .left
-            new.contentTintColor = .controlAccentColor
+            new.contentTintColor = Brand.accent
             rows.addArrangedSubview(new)
             new.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
             new.heightAnchor.constraint(equalToConstant: 28).isActive = true

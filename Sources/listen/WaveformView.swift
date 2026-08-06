@@ -166,7 +166,7 @@ final class WaveformView: NSView {
     /// appearance is current there, so the bars follow light and dark exactly as
     /// the names above them do.
     private func runs(in rects: [NSRect], upTo played: CGFloat) -> [(NSColor, NSBezierPath)] {
-        let accent = NSColor.controlAccentColor
+        let accent = Brand.accent
         guard !spans.isEmpty, duration > 0, bounds.width > 0 else {
             let path = NSBezierPath()
             for rect in rects where rect.minX < played {

@@ -73,6 +73,8 @@ final class SidebarViewController: NSViewController {
 
     var onSelect: ((Recording?) -> Void)?
     var onRenamed: (() -> Void)?
+    var onCollection: ((LibraryCollection) -> Void)?
+    private var picker: CollectionPicker!
 
     private(set) var selectedRecording: Recording?
     private var hover: TableHover!
@@ -80,8 +82,14 @@ final class SidebarViewController: NSViewController {
     override func loadView() {
         let container = NSView()
 
+        picker = CollectionPicker(showing: .recordings)
+        picker.onSelect = { [weak self] in self?.onCollection?($0) }
+
         searchField = NSSearchField()
-        searchField.placeholderString = "Search"
+        // Scoped, and it says so. The search reads this list and nothing else,
+        // so a field that just said "Search" beside a segment control would be
+        // claiming a reach it does not have.
+        searchField.placeholderString = LibraryCollection.recordings.searchPlaceholder
         searchField.target = self
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -115,9 +123,9 @@ final class SidebarViewController: NSViewController {
         filterButton.isBordered = false
         filterButton.wantsLayer = true
         filterButton.layer?.cornerRadius = 11
-        filterButton.layer?.backgroundColor = NSColor.controlAccentColor
+        filterButton.layer?.backgroundColor = Brand.accent
             .withAlphaComponent(0.18).cgColor
-        filterButton.contentTintColor = .controlAccentColor
+        filterButton.contentTintColor = Brand.accent
         filterButton.font = .systemFont(ofSize: 11, weight: .semibold)
         filterButton.image = NSImage(systemSymbolName: "xmark.circle.fill",
                                      accessibilityDescription: "Show everything")?
@@ -142,6 +150,7 @@ final class SidebarViewController: NSViewController {
         settingsButton.toolTip = "Settings (⌘,)"
         settingsButton.contentTintColor = .secondaryLabelColor
 
+        container.addSubview(picker)
         container.addSubview(searchField)
         container.addSubview(newButton)
         container.addSubview(filterBar)
@@ -159,10 +168,7 @@ final class SidebarViewController: NSViewController {
         // than it did before this row existed.
         filterTop = filterBar.topAnchor.constraint(equalTo: newButton.bottomAnchor,
                                                    constant: 0)
-        NSLayoutConstraint.activate([
-            // Clear of the traffic lights, which sit over the content because
-            // the window uses a transparent full-size title bar.
-            searchField.topAnchor.constraint(equalTo: container.topAnchor, constant: 44),
+        NSLayoutConstraint.activate(picker.constraints(in: container, above: searchField) + [
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor,
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
@@ -370,6 +376,18 @@ final class SidebarViewController: NSViewController {
                   as? RecordingCell
         else { return }
         cell.configure(recording)
+    }
+
+    /// Put the segmented control back where the window says it should be.
+    ///
+    /// Each list carries its own copy of the same control, so clicking Notes on
+    /// this one leaves it reading "Notes" while this one is the list on screen.
+    /// Measured that way round: the sidebar came back to Recordings with the
+    /// segment still highlighting Notes, which reads as the control having
+    /// stopped working.
+    func setCollection(_ collection: LibraryCollection) {
+        loadViewIfNeeded()
+        picker.selectedSegment = collection.rawValue
     }
 
     func focusSearch() {
@@ -594,9 +612,14 @@ final class RecordingCell: NSView {
         // as you scroll, which is worse than an empty square: a recording made
         // in a quiet room, and one made on a call, are the same kind of thing.
         // Cells are reused, so this is written every time.
-        appIcon.image = recording.appBundleID.flatMap(AppNames.icon)
+        // Listen's own icon when nothing else was on the call, because that is
+        // the true answer rather than a blank: a recording started from the
+        // sidebar in a quiet room was recorded by this app and by nothing else.
+        // It also keeps the column full, so the list has one left edge instead
+        // of a ragged one that changes as you scroll.
+        appIcon.image = recording.appBundleID.flatMap(AppNames.icon) ?? AppNames.own
         // The name is not on the row, so the icon has to answer for itself.
-        appIcon.toolTip = recording.appLabel
+        appIcon.toolTip = recording.appLabel ?? "Recorded in Listen"
         // An untitled recording says so in grey, so a list of them reads as a
         // list of things waiting for a name rather than as a list of things
         // that happen to share one.
@@ -664,7 +687,7 @@ final class HoverRowView: NSTableRowView {
         // Emphasized is the accent colour, which is the window being key; the
         // unemphasized grey is what AppKit uses when it is not, and copying
         // both is what keeps a background window's list from shouting.
-        (isEmphasized ? NSColor.controlAccentColor
+        (isEmphasized ? Brand.accent
                       : NSColor.unemphasizedSelectedContentBackgroundColor).setFill()
         NSBezierPath(roundedRect: highlightRect,
                      xRadius: Self.radius, yRadius: Self.radius).fill()

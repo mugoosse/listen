@@ -347,6 +347,20 @@ final class App: NSObject, NSApplicationDelegate {
             // The one place a recording is deleted without being asked
             // about. "No" is the answer, given while the call is in front of
             // you and the answer is obvious.
+            //
+            // One exception, and it is the whole reason their note is editable
+            // during a recording: somebody who has already typed into it has
+            // said this is a meeting more clearly than the panel ever asked, so
+            // deleting it on a mis-click would throw away the only thing here
+            // that could not be recorded again.
+            if let yours = Notes.yours(for: recording), !yours.body.isEmpty,
+               !confirmDiscardingNotes() {
+                resolve(recording, keep: true)
+                MeetingDetector.shared.captureEnded()
+                indicator.hide()
+                rebuildMenu()
+                return
+            }
             do {
                 try Capture.shared.discard(recording)
             } catch {
@@ -357,6 +371,25 @@ final class App: NSObject, NSApplicationDelegate {
         MeetingDetector.shared.captureEnded()
         indicator.hide()
         rebuildMenu()
+    }
+
+    /// The one follow-up question "No" is allowed to ask.
+    ///
+    /// Answering a question with another question is normally how people are
+    /// trained to click through both, which is why "No" deletes without
+    /// confirming. This asks only when there is something in the recording that
+    /// was not recorded: text the user typed themselves. Returns true to go
+    /// ahead with the deletion.
+    private func confirmDiscardingNotes() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "You have written notes on this recording."
+        alert.informativeText = "Deleting it now deletes the audio. What you typed "
+            + "was not recorded from anything, so it cannot be got back."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Keep the Recording")
+        alert.addButton(withTitle: "Delete Anyway")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() != .alertFirstButtonReturn
     }
 
     /// Keep or delete, wherever the decision came from.

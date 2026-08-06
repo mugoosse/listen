@@ -19,6 +19,10 @@ behind its ears. In the menu bar, it uses the Good Pair's square listening
 seal, carrying 聞 (hear): a quiet nod to the three wise monkeys' Japanese
 roots that remains clear at 16 points.
 
+<p align="center">
+  <img width="860" alt="Listen showing a meeting: the recording list, the speakers and waveform above the transcript, and each turn attributed by name" src="docs/screenshot.png" />
+</p>
+
 ## What it does
 
 - **Records both sides of a call**, on two separate tracks: your microphone,
@@ -38,8 +42,12 @@ roots that remains clear at 16 points.
   you name a speaker. Google and Microsoft calendars come through whatever you
   have already added in System Settings, so there is no sign-in, no
   subscription and no server in the middle.
-- **Answers to an agent** over MCP, read-only, so you can ask about your own
-  meetings without handing them to anyone.
+- **Keeps your own notes**, typed during the call or after it, one per
+  recording. An agent can read them and cannot change them.
+- **Answers to an agent** over MCP. Ask about your own meetings, and have the
+  answer written back as a note, which can name several meetings at once. Notes
+  are the only thing an agent can write: it cannot rename a speaker, edit a
+  transcript or delete a recording.
 
 ## Requirements
 
@@ -73,6 +81,12 @@ Listen will find it: both resolve the same Hugging Face cache, so whichever
 downloaded first paid for both.
 
 ## Using it
+
+The sidebar holds three lists and a switch at the top of it: **Recordings**,
+**People** and **Notes**. Recordings is the library by day. People is everybody
+Listen has heard, with what they have been in. Notes is every note in the
+library, including the ones that are about several meetings at once. Search
+scopes to whichever you are in.
 
 Start a recording from the menu bar. When you stop, Listen asks whether to keep
 it.
@@ -116,6 +130,15 @@ things wrong often enough to need them:
 
 Both write a one-time backup of the pipeline's own output before the first
 edit. Renaming never re-transcribes.
+
+### What you are called
+
+Settings, General. Your own track is written as `Me` and shown as whatever you
+put there, in the transcript, the roster and to an agent.
+
+The transcripts keep saying `Me` whatever you choose, which is what makes it
+safe to change your mind: every recording you already have reads the same as the
+ones you make next, nothing is rewritten, and clearing the field puts `Me` back.
 
 ### Correcting the transcript
 
@@ -190,6 +213,37 @@ somebody, and typing a name from scratch files nothing.
 This is optional, and refusing costs exactly those two things. Recording,
 transcription and speaker labelling are unaffected.
 
+## Notes
+
+Two kinds, and the difference is the whole design.
+
+**Your own note**, one per recording. Open a recording, click **Notes** beside
+Transcript, and there is a cursor: no New Note button, no naming step, and nothing written to
+disk until you type. It is plain markdown in a plain text view, because the
+value is that it is attached to the meeting and readable by an agent, not that
+it is a good editor. It is editable **while the recording is still running**,
+which is when it is worth the most: "we should upsell them" is exactly the
+context that is in no transcript and can never be reconstructed from one.
+
+**Notes an agent wrote.** A summary, the decisions, the actions, whatever you
+asked for. There is no model in Listen that summarises anything, and adding one
+is not planned: an agent connected over MCP already has a frontier model, the
+transcript, and the question you actually asked. See the MCP section below.
+
+An agent may **read** your own note and may not write it. That asymmetry is the
+point of having two kinds: the transcript is evidence, your note is your
+thinking, and only the derived one is open to being rewritten.
+
+Notes live in `notes/` beside the recordings rather than inside one, because a
+note can be about **several meetings at once**. "Summarise everything with Edgar
+in June" spans four recordings and belongs to all of them; the frontmatter names
+every one. The Notes tab in the sidebar lists them all, and clicking a meeting
+in a note goes to it.
+
+Deleting a recording does not delete notes that mention it. A synthesis of four
+meetings must not vanish because one was tidied up, so the note stays and shows
+the missing meeting as an id it can no longer resolve.
+
 ## The command line
 
 Install it from Settings, Developers. It is the same binary as the app,
@@ -203,10 +257,11 @@ listen show <id>                  metadata and transcript
 listen export <id> [--format]     write a transcript out
 listen label <id> <speaker> ...   name, merge or discard a speaker
 listen dictionary <sub>           your own terms and corrections
+listen notes <sub>                the notes, one or many recordings each
 listen calendar <sub>             the calendars on this Mac, and what they name
 listen contacts <sub>             which address belongs to which person
 listen calibrate                  voiceprint threshold report
-listen mcp                        stdio MCP server, read-only
+listen mcp                        stdio MCP server
 ```
 
 `listen calendar match <id>` is the one worth knowing about. Naming happens
@@ -243,6 +298,13 @@ listen dictionary import --from-speak
 listen dictionary export [<path>]
 ```
 
+```
+listen notes list [<id>]          every note, or those about one recording
+listen notes read <slug>          one note, body on stdout
+listen notes write "<title>" --recording <id>    add one
+listen notes delete <slug>        remove one
+```
+
 ## MCP
 
 ```json
@@ -258,18 +320,32 @@ listen dictionary export [<path>]
 
 Settings, Developers has this ready to copy with the right path filled in.
 
-Read-only, opens no port, and the app does not need to be running: the library
-on disk is the source of truth.
+Opens no port, and the app does not need to be running: the library on disk is
+the source of truth.
+
+**Notes are the only thing an agent can write, and not all of them.** Everything
+else is read-only, and that is a boundary rather than a milestone. An agent can
+add, rewrite and delete the notes it wrote; it can read your own note and not
+change it; and it cannot rename a speaker, correct a transcript or delete a
+recording. The transcript is evidence of what was said and notes are derived
+from it, so a wrong note is a wrong opinion and a wrong transcript edit is a
+lost fact. Changing the evidence goes through you, in the window or at the
+command line, where you can see it and undo it.
 
 ### The tools
 
 | tool | what it answers |
 |---|---|
 | `list_recordings` | which meetings match, as metadata only |
-| `get_recording` | who was in one meeting, and whether it has a transcript |
+| `get_recording` | who was in one meeting, whether it has a transcript, which notes |
 | `get_transcript` | the speaker turns, paginated |
 | `search_transcripts` | which turns anywhere contain a phrase |
 | `list_people` | everyone the voice bank knows, and how much they talk |
+| `list_notes` | the notes on one recording, or all of them, without their text |
+| `read_note` | one note in full |
+| `write_note` | add a note. Markdown body, free-text title, one or more recordings |
+| `edit_note` | rewrite one, refused if it changed since you read it |
+| `delete_note` | remove one |
 
 `list_recordings` takes `query`, `person`, `after`, `before`, `limit` and
 `offset`. They combine with AND:
@@ -301,7 +377,10 @@ be walked from cheap to expensive rather than read whole:
 1. `list_people` or `list_recordings` with `person` and a date range. Metadata
    only, no transcript is read.
 2. `get_recording` on the shortlist, to see who is in each and how long it ran.
-3. `get_transcript` on the few that matter, paginated.
+3. `list_notes` and `read_note` on the ones that look promising. A note is a few
+   hundred tokens against a transcript's several thousand, and your own note on
+   a meeting is often the whole answer.
+4. `get_transcript` on the few that matter, paginated.
 
 `search_transcripts` short-circuits that when you already know the phrase.
 
@@ -327,8 +406,19 @@ turns.json         condensed per-speaker turns
 embeddings.json    one voiceprint per speaker
 ```
 
+```
+~/Library/Application Support/Listen/notes/<slug>.md
+```
+
+One markdown file per note, with frontmatter saying who wrote it, what they were
+asked for, and which recordings it is about. Beside the recordings rather than
+inside one, for the same reason `dictionary.json` and `contacts.json` are: a
+note can name four meetings, so it is about the library rather than about any
+one folder in it.
+
 Two lists sit beside the recordings rather than inside one, because they are
-about the library as a whole: `dictionary.json` and `contacts.json`.
+about the library as a whole: `dictionary.json` and `contacts.json`. So do the
+notes, for the same reason.
 
 One folder per recording, and no database anywhere. The folders *are* the
 library and the `embeddings.json` files *are* the voice bank, which means
@@ -351,6 +441,29 @@ That is all. Audio, transcripts and voiceprints are never uploaded, and there
 is no telemetry. Reading your calendar adds nothing to this list: it is the
 local calendar store, not a network call, which is the reason the feature needs
 no account.
+
+The MCP server adds nothing either, because it opens no port and speaks over a
+pipe. What it does do is hand transcript text to whatever is on the other end of
+that pipe, and if that is a cloud model then those turns go wherever that model
+runs. Listen cannot know and does not decide; connecting an agent is a choice
+you make, and the notes it writes come back and stay local. Nothing connects on
+its own.
+
+## Screenshots
+
+`./make_demo_library.sh` writes a library of invented meetings to
+`/tmp/listen-demo`: made-up people, made-up companies, and speech synthesised
+with `say`, so nothing published anywhere is a recording of anybody.
+
+```sh
+./make_demo_library.sh
+LISTEN_LIBRARY=/tmp/listen-demo LISTEN_DEMO_NAME=Alex \
+  Listen.app/Contents/MacOS/Listen
+```
+
+`LISTEN_LIBRARY` points the app at another library and touches nothing in
+`~/Library/Application Support/Listen`. A Finder launch inherits no shell
+environment, so the app has to be started from a terminal for it to be seen.
 
 ## Building it
 

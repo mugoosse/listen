@@ -316,6 +316,11 @@ enum AppNames {
         installedName(bundleID) ?? bundleID
     }
 
+    /// Listen's own icon, for a recording that was not made on a call.
+    static var own: NSImage? {
+        AppInfo.bundleID.flatMap(icon) ?? NSApp.applicationIconImage
+    }
+
     static func icon(_ bundleID: String) -> NSImage? {
         if let cached = icons[bundleID] { return cached }
         let image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)

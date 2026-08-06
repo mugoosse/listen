@@ -395,7 +395,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
             let dot = NSImageView(image: NSImage(
                 systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
             dot.contentTintColor = s.rawValue <= step.rawValue
-                ? .controlAccentColor : .tertiaryLabelColor
+                ? Brand.accent : .tertiaryLabelColor
             dot.translatesAutoresizingMaskIntoConstraints = false
             dot.widthAnchor.constraint(equalToConstant: 13).isActive = true
             dot.heightAnchor.constraint(equalToConstant: 13).isActive = true

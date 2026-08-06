@@ -369,12 +369,36 @@ enum Library {
     /// in Finder cannot strand a row, and a half-finished job is just a folder
     /// whose transcript does not exist yet.
     static var root: URL {
+        // A different library, for a screenshot or a demo, without touching the
+        // real one. Same family as `LISTEN_DEBUG` and `LISTEN_CHUNK`: an
+        // environment variable, so a Finder launch inherits no shell and can
+        // never see it, and nothing inside the app can set it by accident.
+        //
+        // It exists because the alternative for publishing a screenshot is
+        // renaming real people in a real library and hoping to put them back.
+        if let path = ProcessInfo.processInfo.environment["LISTEN_LIBRARY"],
+           !path.trimmingCharacters(in: .whitespaces).isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Listen")
     }
 
     static var recordings: URL { root.appendingPathComponent("recordings") }
+
+    /// The note artifacts, one markdown file each.
+    ///
+    /// Beside the recordings rather than inside one, which is where
+    /// `dictionary.json` and `contacts.json` already sit and for the same
+    /// reason: a note can be about four meetings at once, so it is about the
+    /// library rather than about any single folder in it.
+    ///
+    /// The consequence is that deleting a recording no longer deletes the notes
+    /// that mention it, and that is deliberate. A synthesis of four meetings
+    /// must not vanish because one of them was tidied up, so a note keeps
+    /// naming an id the library no longer has and shows it unresolved.
+    static var notes: URL { root.appendingPathComponent("notes") }
 }
 
 extension Settings {
@@ -483,6 +507,16 @@ extension Settings {
     /// `Me` rather than a nameless chip.
     static var userName: String? {
         get {
+            // A screenshot must not inherit the name from the developer's real
+            // library. This is intentionally an environment-only preview
+            // override: Finder launches cannot acquire it by accident, and it
+            // never writes to the user's defaults. `make_demo_library.sh` sets
+            // it alongside LISTEN_LIBRARY, so its output contains no local
+            // profile data.
+            if let demo = ProcessInfo.processInfo.environment["LISTEN_DEMO_NAME"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !demo.isEmpty {
+                return demo
+            }
             let stored = defaults.string(forKey: userNameKey)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let stored, !stored.isEmpty else { return nil }

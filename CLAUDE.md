@@ -476,7 +476,7 @@ exception is what this bug was.
 
 ### `NSPopover` and the row of chips
 
-Two rules, both learned by measurement, both invisible from the code:
+Three rules, all learned by measurement, all invisible from the code:
 
 1. **A popover closes when its positioning view leaves the window.** The chips
    are rebuilt by `configure` on every reload of the pane, so a popover anchored
@@ -490,10 +490,65 @@ Two rules, both learned by measurement, both invisible from the code:
    immediately afterwards with a close reason of "standard" and no other
    symptom. `.minY` is downward in an unflipped view, which is where the room
    is.
+3. **A view that has *already* left the window does not close the popover, it
+   crashes the app.** Rule 1 is the polite half of this and reads as though it
+   were the whole of it. `showRelativeToRect:ofView:preferredEdge:` raises
+   `NSInvalidArgumentException`, "view has no window. You must supply a view in
+   a window", and nothing catches it.
 
 It is also shown on the next runloop turn rather than inline, because a popover
 put up from inside a control's own action arrives while the mouse event is still
 being dispatched.
+
+#### No window is the only thing that raises
+
+Worth knowing exactly, because the natural fix for rule 3 is to start
+sanity-checking the rectangle too, and there is nothing there to check. Measured
+against AppKit directly, one popover per row:
+
+| positioning view | result |
+|---|---|
+| in a window, own bounds | opens |
+| never in a window, or removed from one | **raises** |
+| hidden | opens, `isShown == false` |
+| zero height, which is a collapsed chips row | opens, `isShown == false` |
+| rect 4000 points outside its bounds | opens, `isShown == false` |
+| `NSZeroRect` | opens, documented to mean the view's bounds |
+
+So a rect that is wrong costs a popover nobody sees, and an anchor that is gone
+costs the process.
+
+#### The pane is the anchor, and the rect is taken before the edit is committed
+
+Shipped in 0.2.0 and reported from a real session: rename a recording, click a
+speaker in the transcript, `SIGABRT`. Reproduced against the same build,
+identical frames, `-[NSPopover showRelativeToRect:ofView:preferredEdge:] + 244`
+under `_dispatch_call_block_and_release`, which is the deferred block above.
+
+Every speaker click calls `endEditing()` first, because a control swallows its
+own click and the title field would otherwise keep the caret. That commits the
+title, a committed title reloads, and a reload runs `renderTurns`, which empties
+the transcript stack. So one line after `endEditing()` the view that was clicked
+is out of the hierarchy, and it is *also* too late to call `convert(_:from:)` on
+it: with no common ancestor left, the rectangle it returns is meaningless and
+nothing reports that either.
+
+`DetailView.editSpeaker` is therefore the one funnel for all three callers, and
+it does the three steps in the only order that works: take the rect, then end
+the edit, then point the popover at the pane, which is on screen for as long as
+the transcript is. `PersonPopover.show` and `SpeakerPicker.show` additionally
+refuse to show on an anchor with no window, with a `LISTEN_DEBUG` trace, so the
+next caller to get this wrong loses a popover instead of the app.
+
+Verified by driving the real window: the crash sequence now opens the contact
+card, the unnamed-speaker picker and the chip's card, and the guard has not
+fired once.
+
+**Do not verify this with System Events.** `first application process whose
+unix id is N` returned a *different* Listen when several were running, so the
+first three attempts at this were inspecting the wrong process and reporting the
+wrong library's contents. `AXUIElementCreateApplication(pid)` cannot pick the
+wrong app.
 
 ### An `NSMenuToolbarItem` eats the first item of its menu
 
@@ -990,6 +1045,35 @@ Settings and People keep the stop control unconditionally while capture runs, an
 so does the menu bar item. Those are now the only two ways to stop a meeting you
 are not looking at, which is the trade this makes: one control on the screen that
 is about that recording, rather than one on every screen.
+
+### A sidebar reload is not somebody choosing a recording
+
+`SidebarViewController.reload()` rebuilds the list and puts the selection back on
+the same recording. Both halves post
+`NSTableViewSelectionDidChangeNotification`: `reloadData` drops the selection and
+`selectRowIndexes` restores it. Reported as a selection change, that runs
+`onSelect`, which is `DetailView.show`, which **stops playback, puts the playhead
+back to zero and rebuilds every turn.**
+
+So every reload was blanking the pane and rebuilding it, and renaming a recording
+or correcting a sentence while listening silenced the recording being corrected.
+Measured: paused at 00:03, rename, 00:00. That is exactly what `applyEdit`'s
+"targeted reload, not `show`" exists to prevent, and it was undone by the
+`onChanged?()` on the line after it.
+
+`reloading` suppresses the callback while the list is being rebuilt. Landing
+somewhere new is still reported, at the end of `reload`, because then it is true,
+and the deliberate cases already call `onSelect` themselves: `select(_:)` does it
+when the id differs, and `LibraryWindow.reload()` re-shows the selected recording
+explicitly so a transcript that has just finished appears without anyone clicking
+away and back.
+
+`DetailView.onChanged` reloads the list only, and no longer the pane that just
+wrote the change: the pane is already showing what it wrote, either a title it
+has in hand or a sentence it re-rendered in place.
+
+Measured after: paused at 00:03, rename, still 00:03, with the row in the list
+carrying the new title.
 
 ### The floating panel is sized from its strings, and one of them changes
 

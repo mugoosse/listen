@@ -79,6 +79,21 @@ final class SidebarViewController: NSViewController {
     private(set) var selectedRecording: Recording?
     private var hover: TableHover!
 
+    /// True while `reload` is rebuilding the list, so its own re-selection is
+    /// not reported as the user picking a recording.
+    ///
+    /// `reloadData` drops the table's selection and the re-select puts it back,
+    /// and both post `NSTableViewSelectionDidChangeNotification`. Reported as
+    /// a selection change, that reaches `DetailView.show`, which stops
+    /// playback, puts the playhead back to zero and rebuilds every turn: so
+    /// renaming a recording or correcting a sentence while listening to it
+    /// silenced the recording being corrected, and any reload at all blanked
+    /// the pane and rebuilt it. Measured: paused at 00:03, rename, 00:00.
+    ///
+    /// Landing somewhere new is still reported, at the end of `reload`, because
+    /// then it is true.
+    private var reloading = false
+
     override func loadView() {
         let container = NSView()
 
@@ -270,6 +285,7 @@ final class SidebarViewController: NSViewController {
             rows.append(.recording(recording))
         }
 
+        reloading = true
         table.reloadData()
 
         // Keep the selection on the same recording rather than the same row
@@ -282,9 +298,13 @@ final class SidebarViewController: NSViewController {
         }) {
             table.selectRowIndexes([row], byExtendingSelection: false)
             if let fresh = Recording.find(keepID) { selectedRecording = fresh }
+            reloading = false
         } else if selectedRecording != nil, Recording.find(keepID ?? "") == nil {
             selectedRecording = nil
+            reloading = false
             onSelect?(nil)
+        } else {
+            reloading = false
         }
     }
 
@@ -502,6 +522,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        // Not while `reload` is putting the selection back where it was: that
+        // is the list being rebuilt, not somebody choosing a recording. See
+        // `reloading`.
+        guard !reloading else { return }
         selectedRecording = recording(at: table.selectedRow)
         onSelect?(selectedRecording)
     }

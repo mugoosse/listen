@@ -8,6 +8,50 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.4.0 (2026-08-06)
+
+### The menu bar says which app it is, and what you recorded
+
+Listen's menu now opens with its own name and mascot. That row is there because
+an icon in a menu bar of twenty is not a name, and the only other place the app
+said what it was called was About Listen, eight items down.
+
+Under it, the five most recent recordings. Clicking one opens it: the library
+comes forward with that meeting selected and its transcript on screen, whether
+or not the window was open when you reached for the menu. Each row is stamped
+with the time if it was recorded today and with the date if it was not, so a
+meeting from Tuesday does not read as one from this morning. The recording in
+progress is deliberately not in that list, because it is already the two rows at
+the top of the same menu.
+
+A row now appears when a permission is missing, next to the one that has always
+appeared when the speech model has not been downloaded. Both go straight to the
+settings pane that can do something about it. The elapsed clock is also correct
+now: it is read when you open the menu rather than when the recording started,
+so it no longer reads 0:00 for the length of a meeting.
+
+### About says whether you are up to date
+
+Sparkle answers a check in a window that is then dismissed, taking the answer
+with it, and a scheduled check that finds nothing says nothing at all, so "am I
+on the latest version" had no answer that survived closing a dialog. About now
+carries Check Now, a Check automatically switch, the result of the last check
+and when it ran, alongside the app icon, the version and a line saying Listen is
+free software under the AGPL 3.0 with a link to its source.
+
+Nothing about what is sent changed. The check asks whether a newer version
+exists and sends nothing about you, and every update is still verified against
+Listen's signing key before it is installed.
+
+### Still true from 0.1.0 through 0.3.0
+
+About six words an hour are corrupted at chunk seams on a Mac with the memory
+for 600 second chunks, and about 33 on a Mac with 12 GB or less, where the
+chunks are 120 seconds. Speaker labelling is per sentence rather than per word,
+so two people talking over each other inside one sentence come out as one
+speaker. Meeting detection is on by default: it starts recording, then asks on
+screen, and answering no deletes the audio straight away.
+
 ## 0.3.0 (2026-08-06)
 
 ### The notes you meant to write

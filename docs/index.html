@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Listen, remember your meetings on your Mac</title>
-<meta name="description" content="A private, local meeting memory for Mac. Capture both sides, know who said what, and keep the point of the call.">
+<title>Listen, remember your meetings</title>
+<meta name="description" content="Record your meetings on your Mac. Find what was said later.">
 <link rel="icon" href="icon.png">
 <meta property="og:title" content="Listen">
-<meta property="og:description" content="A private, local meeting memory for Mac. No bot, no account, no upload.">
+<meta property="og:description" content="Record your meetings on your Mac. Find what was said later.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mugoosse.github.io/listen/">
 <meta property="og:image" content="https://mugoosse.github.io/listen/social-preview.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Listen, remember your meetings on your Mac">
-<meta name="twitter:description" content="A private, local meeting memory for Mac. No bot, no account, no upload.">
+<meta name="twitter:title" content="Listen, remember your meetings">
+<meta name="twitter:description" content="Record your meetings on your Mac. Find what was said later.">
 <meta name="twitter:image" content="https://mugoosse.github.io/listen/social-preview.png">
 <style>
 :root {
@@ -71,7 +71,6 @@ a.button.primary { background: var(--blue); color: var(--ink); border-color: var
 .chipcheck a { color: var(--blue); }
 section { padding: 40px 0; border-top: 1px solid var(--line); }
 h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
-h3 { font-size: 15px; margin: 28px 0 6px; }
 p { margin: 0 0 16px; color: var(--grey); }
 p.lead { color: var(--text); }
 code, pre {
@@ -92,9 +91,6 @@ footer a { color: var(--grey); }
 }
 .demo-media { display: block; margin: 0 0 24px; }
 .caption { font-size: 13px; color: var(--grey-dim); margin: 0 0 16px; }
-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-td { padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--grey); vertical-align: top; }
-td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 </style>
 </head>
 <body>
@@ -103,9 +99,8 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
 <header>
   <img class="icon" src="icon.png" alt="Listen app icon">
   <h1>Listen</h1>
-  <p class="tagline">Listen keeps a private, searchable memory of who said
-  what, what you noticed, and what needs to happen next.</p>
-  <p class="claim">Entirely on your Mac. No bot, no account, nothing uploaded.</p>
+  <p class="tagline">Remember what was said.</p>
+  <p class="claim">No bot joins your call. Your recordings stay on your Mac.</p>
   <div class="buttons" id="buttons">
     <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
   </div>
@@ -130,106 +125,55 @@ td:first-child { color: var(--text); width: 40%; padding-right: 16px; }
          alt="Listen replaying a meeting, with the speaker-coloured waveform
               and the sentence playing now highlighted in the transcript.">
   </picture>
-  <p class="caption">A real playback capture from an invented meeting. The
-  people, conversation and synthesised voices are all fake.</p>
+  <p class="caption">A demo meeting. The people and voices are synthetic.</p>
 
-  <h2>The part you need, back in context</h2>
-  <p class="lead">When someone says “what did Priya mean by that?”, you can
-  replay the exact moment, see the words as they are spoken, and know who said
-  them.</p>
-
-  <h3>Both sides, one conversation</h3>
-  <p>Listen captures your microphone and what your Mac is playing as separate
-  tracks. A call is not a monologue, and a meeting record should not be either.</p>
-
-  <h3>Know who said it</h3>
-  <p>Your own voice never has to be guessed: the microphone is you. Name the
-  other people once and Listen suggests them when it hears them again, without
-  silently changing a transcript behind your back.</p>
-
-  <h3>Find the meeting you remember</h3>
-  <p>Meetings take the calendar name already on your Mac. Browse by recording,
-  person or note instead of trying to remember a filename, then search inside
-  the part of the library you are looking at.</p>
-
-  <h3>Ready before the next meeting starts</h3>
-  <p>Transcription begins as soon as you keep a recording. On an M4 Max, an
-  hour-long meeting is written up in well under a minute.</p>
+  <h2>Stay in the meeting</h2>
+  <p class="lead">Listen records both sides of the call. When you need
+  something later, play it back and read along.</p>
 </section>
 
 <section>
-  <h2>Keep the conclusion with the evidence</h2>
-  <p class="lead">The useful thing from a meeting is often the thought that
-  never made it into the transcript.</p>
-
-  <p>Every recording has a notes page that is yours. Open it and there is a
-  cursor: no button to press first, no template to choose, nothing saved until
-  you type. It works <strong>while the call is still running</strong>, which is
-  when it is worth the most. "We should upsell them" is in no transcript and
-  cannot be reconstructed from one.</p>
-
-  <p>When you want a write-up, ask your preferred assistant for the summary,
-  decisions or open questions. It comes back as a separate note linked to every
-  meeting it used, so a conclusion from four catch-ups belongs to all four.</p>
-
-  <p>Your own notes are read-only to it. It reads what you wrote, and writes
-  beside it. It cannot rename anybody, edit a transcript, or delete a
-  recording.</p>
-
-  <p>Settings has the configuration ready to copy. There is no port, no account,
-  and the app does not even need to be running.</p>
+  <h2>Keep your own notes</h2>
+  <p class="lead">Write down what matters while you listen. When you want a
+  summary, your assistant can make one from the meetings you choose.</p>
 
   <picture class="demo-media">
     <source media="(prefers-reduced-motion: no-preference)" srcset="notes.gif">
     <img class="shot" src="notes-screenshot.png"
          alt="Listen opening an agent-written summary that links two meetings.">
   </picture>
-  <p class="caption">The Notes collection moving from a library of personal
-  notes and summaries into a cross-meeting write-up. Everything is synthetic.</p>
+  <p class="caption">A demo of personal notes and a summary across two meetings.</p>
 </section>
 
 <section>
-  <h2>Private means no one else joins</h2>
-  <p class="lead">There is no meeting bot, account or upload in the middle.
-  Listen records and transcribes on this Mac, and the library stays here.</p>
-  <table>
-    <tr><td>huggingface.co</td><td>Once, to download the speech model.</td></tr>
-    <tr><td>github.com</td><td>Every two days, to check for an update.</td></tr>
-  </table>
-  <p>That is the whole list. Audio, transcripts and voiceprints are never
-  uploaded, and there is no telemetry.</p>
+  <h2>Your meetings stay on your Mac</h2>
+  <p class="lead">There is no meeting bot and no account. Your audio,
+  transcripts and voiceprints never leave your Mac.</p>
+  <p>Listen downloads its speech model once and checks for updates. It does
+  not upload your meetings or collect telemetry.</p>
 </section>
 
 <section>
-  <h2>Never lose the first minute</h2>
-  <p>Recording begins the moment you press Start and writes to disk
-  immediately. Listen asks whether to keep it when you stop, not before.</p>
-  <p>That order is deliberate. A recorder that waits for you to confirm has
-  already lost the first minute, which is the part where everybody says who
-  they are. Walk away without answering and the audio is deleted after
-  24 hours.</p>
+  <h2>Catch the start</h2>
+  <p>Press Record when the meeting begins. Decide whether to keep it when you
+  are done.</p>
 </section>
 
 <section>
-  <h2>For the thought before the meeting</h2>
-  <p class="lead">For the thought you want to get down before the meeting,
-  there is <a href="https://mugoosse.github.io/speak/">Speak</a>. It turns your
-  voice into text in any Mac app, privately and without an account.</p>
+  <h2>Speak before the meeting</h2>
+  <p class="lead">For thoughts you want to get down before the call, there is
+  <a href="https://mugoosse.github.io/speak/">Speak</a>. It turns your voice
+  into text in any Mac app.</p>
 </section>
 
 <section id="install">
-  <h2>Other ways to install</h2>
-  <p>Prefer Homebrew?</p>
+  <h2>Install with Homebrew</h2>
   <pre><code>brew trust --cask mugoosse/tap/listen
 brew install --cask mugoosse/tap/listen</code></pre>
-  <p>The first line is Homebrew 6.0 and later refusing to load a cask from a
-  tap that is not one of its own until you say so. Install without it and
-  Homebrew stops and tells you the same thing.</p>
   <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
   below that Listen records your microphone only.</p>
-  <p>The speech model is about 2.5 GB and downloads on first run, after you
-  press the button that says so. If you already use Speak it is already on your
-  disk, and Listen will find it rather than fetching it twice.</p>
+  <p>The speech model is about 2.5 GB and downloads on first run. If you use
+  Speak already, Listen uses the copy on your Mac.</p>
 </section>
 
 <footer>

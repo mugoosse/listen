@@ -1100,6 +1100,29 @@ The `.raw.json.bak` backup is written **once**, before the first edit. Writing
 it on every edit would overwrite it with edited data the second time, and it
 would no longer be a way back to what the model actually said.
 
+### The model is cached twice, and deleting one copy does not test anything
+
+`ModelChoice` names two directories under the same hub root, and they are not
+alternatives:
+
+- `downloadDirectory`, `models--mlx-community--parakeet-tdt-0.6b-v2`, the
+  Hugging Face blob cache the transfer streams into.
+- `cacheDirectory`, `mlx-audio/mlx-community_parakeet-tdt-0.6b-v2`, mlx-audio's
+  own unpacked copy, and **the only one `isDownloaded` looks at**.
+
+So `bytesUsed` sums them and `bytesOnDisk` takes the maximum, which is why the
+Models pane reports about 4.9 GB for a model whose download is 2.5 GB.
+
+The consequence cost a testing round. Moving `mlx-audio` aside to force a
+first-run download does not force one: the blob cache is still there, so
+`resolveOrDownloadModel` finds it populated and re-copies locally, in seconds
+and with no network. Measured on a second Mac, where the listing afterwards
+held **both** `mlx-audio` and `mlx-audio.bak`, and the pane correctly reported
+the model as present. That reads exactly like the pane lying, and it is not.
+
+Forcing a real download means moving both, which also takes Speak's model away
+when Speak is installed, because that is the whole point of a shared cache.
+
 ### The cache root is not always `~/.cache/huggingface`
 
 Inherited wholesale from Speak, and the reason models are shared between the

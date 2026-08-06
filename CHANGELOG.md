@@ -8,6 +8,92 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.5.0 (2026-08-06)
+
+### A meeting no longer records you as silence when you put on a headset
+
+Reported from a real 49 minute call: the other speaker at 100% of talk time and
+the user at 1%, because a headset was turned on a few seconds in. When the
+microphone's format changes underneath it, AVAudioEngine stops calling its tap
+and never resumes, so the rest of the meeting recorded as silence with nothing
+logged anywhere.
+
+The obvious fix does not work, which is the part worth knowing. With the device
+pinned the way Listen pins it, the configuration-change notification every guide
+points at fires once at startup and never at the hardware change, and the engine
+reports itself running for the whole outage. Listen now watches Core Audio's own
+property listeners, which do fire, and rebuilds the engine in about a third of a
+second. A watchdog on the symptom catches whatever they miss at two seconds.
+
+Reproduced by changing the input device's sample rate 8 seconds into a 26 second
+recording: before, 8.6 seconds of microphone against 26.0 of system audio.
+
+### Tag a recording with what it is about
+
+A recruiter screen, a hiring manager chat and a referral catch-up share no word,
+no attendee and no week, so free text, a person and a date range between them
+cannot name "the job hunt calls". A tag is how a question says what it is about.
+
+Tags are free text on the recording, filterable in the window, at the command
+line and over MCP, and an agent may write one: it is somebody's filing of a
+meeting, the same side of the evidence line a note is on. Filters stack, so
+Maxime and Edgar together means both.
+
+### Record moved to the corner it acts in
+
+The New Recording row was at the top of the sidebar, so collapsing the sidebar
+took the app's primary action off the screen with it, leaving only Cmd-N and the
+menu bar. It is now a capsule floating over the bottom right of the content
+pane, present whatever the sidebar is doing, and it is the stop control too:
+start and stop are one toggle, and putting them in opposite corners means
+crossing the window to undo a press.
+
+Running, it is on every screen. Settings, People and Notes have no row with a
+clock in them, so a meeting started an hour ago would otherwise have no visible
+end from any of them.
+
+### One library, two Macs
+
+Listen has no account and no server, so there has never been anything to sync
+with. But the library is ordinary folders with no database anywhere, which makes
+it about the easiest thing there is to put behind Resilio Sync, Syncthing or a
+network share. [`SYNC.md`](SYNC.md) is the guide.
+
+Measured on a real 41-recording library: the audio is 8.3 GB and everything else
+is 6.5 MB, and nothing but playback reads the audio. So the audio stays on the
+Mac that recorded it and about 6.5 MB crosses, plus roughly 160 KB per new
+meeting. Both Macs can record, and each transcribes only its own meetings.
+
+Three things had to change in the app for that to be true rather than nearly
+true. The transcription queue no longer picks up a recording whose audio is on
+another Mac, which is what stops two machines transcribing the same meeting and
+writing over each other's metadata. The player keeps its place and says where
+the audio is, instead of vanishing and leaving a gap that reads as playback
+being broken. And the window re-reads the library when you come back to the app,
+so a meeting recorded on the other Mac appears without relaunching, which also
+fixes a note or tag written by an agent not showing until something else
+happened to reload the list.
+
+Known limitations, both of them consequences of what sync means rather than
+bugs. Deleting a recording anywhere deletes it everywhere, including the audio
+on the machine that has it. And preferences do not sync, only the library does,
+so a second Mac shows your own turns as `Me` until you run `listen me "Your
+Name"` there and starts with an empty meeting-detection skip list.
+
+### The MCP reference has its own page
+
+The README had grown to 557 lines with MCP the largest section in it, so that
+moved to [`MCP.md`](MCP.md): how to connect each client, what every tool takes,
+and how to walk a large library without reading it whole. It gains per-client
+setup for Claude Code and Hermes.
+
+Two things worth knowing if you wire up an agent. Hermes profiles do not inherit
+MCP servers, so a server added to the default profile is invisible from every
+other one with nothing reported. And point any client at the installed app or
+the `listen` symlink rather than a build directory: the config stores a path and
+an update replaces the app at that same path, so a new version is picked up with
+nothing to re-register.
+
 ## 0.4.0 (2026-08-06)
 
 ### The menu bar says which app it is, and what you recorded

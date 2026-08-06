@@ -103,12 +103,24 @@ enum MCP {
         [
             [
                 "name": "list_recordings",
-                "description": "List recordings, newest first. Returns metadata only.",
+                "description": "List recordings, newest first. Returns metadata only. "
+                    + "Filters combine with AND, so person plus a date range is the "
+                    + "cheapest way to narrow a library before asking for transcripts.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
                         "query": ["type": "string",
                                   "description": "Filter on title and transcript text."],
+                        "person": ["type": "string",
+                                   "description": "Only recordings this person speaks in. "
+                                       + "Matches the name from list_people, and your own "
+                                       + "name matches the microphone track."],
+                        "after": ["type": "string",
+                                  "description": "Only recordings on or after this date, "
+                                      + "as YYYY-MM-DD or a full ISO 8601 timestamp."],
+                        "before": ["type": "string",
+                                   "description": "Only recordings on or before this date. "
+                                       + "A bare YYYY-MM-DD includes the whole day."],
                         "limit": ["type": "integer", "description": "Default 20, max 200."],
                         "offset": ["type": "integer", "description": "Default 0."],
                     ],
@@ -145,6 +157,10 @@ enum MCP {
                     "type": "object",
                     "properties": [
                         "query": ["type": "string"],
+                        "person": ["type": "string",
+                                   "description": "Only turns spoken by this person, "
+                                       + "rather than every turn in a recording they "
+                                       + "were in."],
                         "limit": ["type": "integer", "description": "Default 20, max 200."],
                     ],
                     "required": ["query"],
@@ -163,10 +179,34 @@ enum MCP {
         switch name {
         case "list_recordings":
             let query = (args["query"] as? String ?? "").lowercased()
+            let person = (args["person"] as? String ?? "")
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)
             let offset = max(0, args["offset"] as? Int ?? 0)
+            let after = try dayBound(args["after"], endOfDay: false, field: "after")
+            let before = try dayBound(args["before"], endOfDay: true, field: "before")
 
             var all = Recording.all()
+            // Cheapest filters first. `query` and `person` both read every
+            // turns.json in the library, and the date bounds read nothing but
+            // the metadata already in hand, so narrowing on dates first is the
+            // difference between reading 33 transcripts and reading 3.
+            if after != nil || before != nil {
+                all = all.filter { recording in
+                    guard let at = Timestamps.parse(recording.metadata.recorded_at) else {
+                        // A recording whose timestamp will not parse is kept
+                        // rather than dropped. Being invisible to every dated
+                        // query is a worse answer than being in the wrong one,
+                        // and it would be invisible with nothing to explain it.
+                        return true
+                    }
+                    if let after, at < after { return false }
+                    if let before, at > before { return false }
+                    return true
+                }
+            }
+            if !person.isEmpty {
+                all = all.filter { $0.speaks(person) }
+            }
             if !query.isEmpty {
                 all = all.filter {
                     $0.metadata.title.lowercased().contains(query)
@@ -207,15 +247,21 @@ enum MCP {
                 throw MCPError.badArguments("search_transcripts needs a query")
             }
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)
+            // `person` here means "said by", which is a different question from
+            // the one `list_recordings` answers ("was in the room"). Asking what
+            // somebody said about a topic is the whole point of the pairing.
+            let person = (args["person"] as? String ?? "")
             var hits: [[String: Any]] = []
             for recording in Recording.all() {
                 for turn in recording.storedTurns
-                where turn.text.lowercased().contains(query) {
+                where turn.text.lowercased().contains(query)
+                    && (person.isEmpty || SpeakerName.matches(turn.speaker, person)) {
                     hits.append([
                         "recording_id": recording.id,
                         "title": recording.metadata.title,
+                        "recorded_at": recording.metadata.recorded_at,
                         "start": turn.start,
-                        "speaker": turn.speaker,
+                        "speaker": SpeakerName.display(turn.speaker),
                         "text": turn.text,
                     ])
                     if hits.count >= limit { break }
@@ -233,9 +279,19 @@ enum MCP {
                     seconds[name, default: 0] += print.speech
                 }
             }
-            let people = counts.keys.sorted().map { name in
-                ["name": name, "recordings": counts[name] ?? 0,
-                 "speech_seconds": Int(seconds[name] ?? 0)] as [String: Any]
+            let people = counts.keys.sorted().map { label -> [String: Any] in
+                var row: [String: Any] = [
+                    "name": SpeakerName.display(label),
+                    "recordings": counts[label] ?? 0,
+                    "speech_seconds": Int(seconds[label] ?? 0),
+                ]
+                // The disk label only when it differs, which is the user's own
+                // track and nothing else. Printing `label: "Edgar"` beside
+                // `name: "Edgar"` on every row is noise; printing it for `Me`
+                // is the one case where an agent reading a raw transcript will
+                // see a word that is in no list it was given.
+                if row["name"] as? String != label { row["label"] = label }
+                return row
             }
             return json(["people": people])
 
@@ -295,6 +351,30 @@ enum MCP {
                 + "\(turn.text)\n\n"
         }
         return out
+    }
+
+    // MARK: - Filters
+
+    /// Parse `after` and `before` into an instant, or nil when absent.
+    ///
+    /// A bare `YYYY-MM-DD` names a day, and a day has two ends. `before:
+    /// 2026-07-14` meaning midnight would exclude everything recorded on the
+    /// 14th, which is the opposite of what anybody asking that means, so the
+    /// bare form is widened to the end of the day here and to its start for
+    /// `after`. A full timestamp is taken literally.
+    private static func dayBound(
+        _ raw: Any?, endOfDay: Bool, field: String
+    ) throws -> Date? {
+        guard let text = (raw as? String)?.trimmingCharacters(in: .whitespaces),
+              !text.isEmpty
+        else { return nil }
+
+        if let exact = Timestamps.parse(text) { return exact }
+        if let day = Timestamps.parseDay(text) {
+            return endOfDay ? day.addingTimeInterval(24 * 60 * 60 - 1) : day
+        }
+        throw MCPError.badArguments(
+            "\(field) must be YYYY-MM-DD or an ISO 8601 timestamp, got \"\(text)\"")
     }
 
     // MARK: - Plumbing
@@ -370,5 +450,64 @@ enum MCPError: Error, LocalizedError {
         case .badArguments(let m): return m
         case .notFound(let m):     return m
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Reading the one timestamp format the library writes.
+///
+/// `metadata.recorded_at` is ISO 8601 with a `Z`, written by one place, so this
+/// parses that and a bare day and nothing else. A `DateFormatter` with a
+/// locale-dependent format would read the library differently on a machine set
+/// to a different region, which is the sort of failure that appears only on
+/// somebody else's Mac.
+enum Timestamps {
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .iso8601)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    static func parse(_ text: String) -> Date? { iso.date(from: text) }
+
+    static func parseDay(_ text: String) -> Date? { day.date(from: text) }
+}
+
+extension Recording {
+    /// Does this person speak in this recording?
+    ///
+    /// Matching is on the displayed name as well as the stored label, because
+    /// the microphone track is stored as `Me` however the user chooses to be
+    /// shown. Somebody who has set their name to Maxime and asks for
+    /// `person: "Maxime"` means their own track, and matching only the disk
+    /// label would return nothing with no way to tell that from "no such
+    /// person". The same rule makes `Speaker A` findable by what the UI calls
+    /// it rather than only by `A`.
+    func speaks(_ person: String) -> Bool {
+        speakers.contains { SpeakerName.matches($0, person) }
+    }
+}
+
+extension SpeakerName {
+    /// Does a stored speaker label answer to this name?
+    ///
+    /// Case and surrounding space are ignored: an agent is passing through a
+    /// name a human typed, and refusing "edgar" for `Edgar` would be a filter
+    /// that silently returns nothing.
+    static func matches(_ label: String, _ wanted: String) -> Bool {
+        let wanted = wanted.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return false }
+        return label.caseInsensitiveCompare(wanted) == .orderedSame
+            || display(label).caseInsensitiveCompare(wanted) == .orderedSame
     }
 }

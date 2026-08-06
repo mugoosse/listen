@@ -927,19 +927,73 @@ final class PermissionsPane: Pane {
 
 final class AboutPane: Pane {
     private static let websiteURL = "https://maxgoespublic.com/"
+    private static let sourceURL = "https://github.com/mugoosse/listen"
+
+    private var checkButton: NSButton?
+    private var autoCheck: NSButton?
+    private var result: NSTextField?
+    private var lastChecked: NSTextField?
+
+    /// A check can also be started from the menu bar, and a scheduled one starts
+    /// on its own, so follow the updater rather than only reacting to this
+    /// pane's own button.
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        Updater.shared.onChange = { [weak self] in self?.refreshUpdates() }
+        refreshUpdates()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        Updater.shared.onChange = nil
+    }
 
     override func build() {
-        // No "Listen" heading here any more: the pane draws its own section
-        // name at the top, and two 22pt words above the version number read as
-        // a mistake rather than as a title.
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-            ?? "dev"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        note("Version \(version) (build \(build))")
+        header()
 
-        note("A local meeting recorder, transcriber and speaker labeller. Audio never "
-             + "leaves this Mac. The only network connections Listen makes are "
-             + "downloading models the first time and checking for updates.")
+        separator()
+        heading("Updates")
+        // A button and a checkbox on one row, the way Speak has them: the
+        // checkbox is about the button beside it, and a second line for it read
+        // as a preference belonging to whatever came next.
+        let check = NSButton(title: "Check Now", target: nil, action: nil)
+        let checkHandler = ActionHandler { [weak self] _ in
+            Updater.shared.checkForUpdates(nil)
+            // Immediately, not from the callback. `checkForUpdates` sets the
+            // outcome to `.checking` before it asks, and waiting for a delegate
+            // that a check with no network never reaches leaves the button
+            // looking untouched.
+            self?.refreshUpdates()
+        }
+        check.target = checkHandler
+        check.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(check, "handler", checkHandler, .OBJC_ASSOCIATION_RETAIN)
+
+        let auto = NSButton(checkboxWithTitle: "Check automatically",
+                            target: nil, action: nil)
+        auto.state = Updater.shared.automaticallyChecks ? .on : .off
+        let autoHandler = ActionHandler { sender in
+            Updater.shared.automaticallyChecks = (sender as? NSButton)?.state == .on
+        }
+        auto.target = autoHandler
+        auto.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(auto, "handler", autoHandler, .OBJC_ASSOCIATION_RETAIN)
+
+        row([check, auto])
+        checkButton = check
+        autoCheck = auto
+
+        let outcome = NSTextField(wrappingLabelWithString: "")
+        outcome.font = .systemFont(ofSize: 12)
+        stack.addArrangedSubview(outcome)
+        widthCapped(outcome)
+        result = outcome
+
+        lastChecked = note("")
+
+        note("Updates come from this project's GitHub releases. Each one is checked "
+             + "against Listen's signing key before it is installed, and the check "
+             + "itself sends nothing about you.")
 
         separator()
         heading("Setup")
@@ -969,7 +1023,120 @@ final class AboutPane: Pane {
              + "Updates by Sparkle.")
 
         separator()
-        button("Check for Updates") { Updater.shared.checkForUpdates(nil) }
+        note("Listen is free software under the AGPL 3.0. It has no account and no "
+             + "telemetry. It uses the network twice: to download a model you chose, "
+             + "and to ask whether a newer version of Listen exists.")
+        // The AGPL is a source-availability licence, so the About box is the
+        // honest place to say where that source is.
+        let source = button(Self.sourceURL) {
+            if let url = URL(string: Self.sourceURL) { NSWorkspace.shared.open(url) }
+        }
+        source.bezelStyle = .inline
+        source.controlSize = .small
+    }
+
+    /// Icon, name, version and what the app is, laid out the way an About box
+    /// usually is.
+    ///
+    /// The name is 17pt and not Speak's 22: this pane draws its own section
+    /// title at 22 immediately above, and two 22pt words one line apart read as
+    /// a mistake rather than as a title. The icon is what makes this an identity
+    /// block rather than a repeated heading.
+    private func header() {
+        let text = NSStackView()
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 4
+
+        let name = NSTextField(labelWithString: "Listen")
+        name.font = .systemFont(ofSize: 17, weight: .semibold)
+        text.addArrangedSubview(name)
+
+        let version = NSTextField(labelWithString: Self.versionString)
+        version.font = .systemFont(ofSize: 12)
+        version.textColor = .secondaryLabelColor
+        text.addArrangedSubview(version)
+
+        let tagline = NSTextField(wrappingLabelWithString:
+            "A meeting recorder, transcriber and speaker labeller that runs "
+            + "entirely on your Mac.")
+        tagline.font = .systemFont(ofSize: 12)
+        tagline.textColor = .secondaryLabelColor
+        tagline.preferredMaxLayoutWidth = 340
+        text.addArrangedSubview(tagline)
+
+        let icon = NSApp.applicationIconImage.map { image -> NSView in
+            let view = NSImageView(image: image)
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.imageScaling = .scaleProportionallyUpOrDown
+            NSLayoutConstraint.activate([
+                view.widthAnchor.constraint(equalToConstant: 72),
+                view.heightAnchor.constraint(equalToConstant: 72),
+            ])
+            return view
+        }
+
+        let line = row(icon.map { [$0, text] } ?? [text])
+        line.alignment = .top
+        line.spacing = 16
+    }
+
+    /// Read from the bundle rather than hardcoded, so bumping `VERSION` is
+    /// enough and this cannot go stale.
+    private static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "dev"
+        let build = info?["CFBundleVersion"] as? String
+        if let build, build != short { return "Version \(short) (build \(build))" }
+        return "Version \(short)"
+    }
+
+    /// Mirror the updater into the four controls, in place. Rebuilding the pane
+    /// instead would replace the button under the cursor of somebody who has
+    /// just clicked it.
+    private func refreshUpdates() {
+        guard let checkButton, let result, let lastChecked else { return }
+
+        checkButton.isEnabled = Updater.shared.canCheck
+        autoCheck?.state = Updater.shared.automaticallyChecks ? .on : .off
+
+        switch Updater.shared.outcome {
+        case .unknown:
+            result.stringValue = ""
+            result.isHidden = true
+        case .checking:
+            result.stringValue = "Checking…"
+            result.textColor = .secondaryLabelColor
+            result.isHidden = false
+        case .upToDate(let why):
+            result.stringValue = "● \(why)"
+            result.textColor = .systemGreen
+            result.isHidden = false
+        case .available(let version):
+            result.stringValue = "● Version \(version) is available."
+            result.textColor = .systemBlue
+            result.isHidden = false
+        case .failed(let why):
+            result.stringValue = "○ \(why)"
+            result.textColor = .systemOrange
+            result.isHidden = false
+        }
+
+        if let date = Updater.shared.lastCheck {
+            let f = DateFormatter()
+            f.dateStyle = .medium
+            f.timeStyle = .short
+            f.doesRelativeDateFormatting = true
+            lastChecked.stringValue = "Last checked \(f.string(from: date))."
+        } else {
+            lastChecked.stringValue = "Not checked yet."
+        }
+        // Deliberately no `resizeDocument()`. The result line appearing changes
+        // the pane's height, but `sizeDocument` already runs on every layout
+        // pass and a text field whose string changed schedules one. Calling the
+        // public one would also scroll the pane back to its first control, and a
+        // scheduled check finishing while somebody is reading the credits is not
+        // a reason to move the page under them.
     }
 }
 

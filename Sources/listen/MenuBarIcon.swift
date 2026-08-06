@@ -11,9 +11,17 @@ enum MenuBarIcon: Hashable {
 
     var image: NSImage { Self.mascot(side: Self.side) }
 
+    /// For the row inside the menu that names the app, where the system symbols
+    /// beside it are sized 15. Rasterised at that size rather than scaled down
+    /// from `image`: resampling 24 point artwork to 15 loses the pixel snapping
+    /// and the mark comes out soft.
+    var menuImage: NSImage { Self.mascot(side: Self.menuSide) }
+
     /// 24 points gives the 48/64-pixel visible mark a roughly 18-point
     /// footprint, matching the stature of the surrounding menu-bar apps.
     private static let side: CGFloat = 24
+    /// What `App.symbol` sizes the menu's own symbols to.
+    private static let menuSide: CGFloat = 15
     private static var cache: [CGFloat: NSImage] = [:]
 
     private static func mascot(side: CGFloat) -> NSImage {

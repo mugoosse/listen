@@ -575,6 +575,67 @@ menu, which shows every item it is handed, blank one included. Hence
 `recordingActionsMenu` is built once and kept: the identity check is what tells
 the two callers apart.
 
+### The status menu is Speak's, refilled in place
+
+`App.refreshMenu` is a port of Speak's `refreshMenu`, down to the order: the app's
+name with the mascot at 15 points, the verbs, whatever is wrong, the library, a
+Recent list, then Settings, Check for Updates, About and Quit. The row that names
+the app exists for Speak's reason and it is stronger here, because Listen's icon
+is one of twenty in a menu bar and the only other place the app said its own name
+was `About Listen`, eight items down.
+
+Four things about it are load-bearing.
+
+**One `NSMenu` for the life of the process.** `menuWillOpen` calls `refreshMenu`,
+which does `removeAllItems` and refills; handing the status item a *new* menu from
+that callback would swap the menu out from under the one being displayed. This is
+also why `rebuildMenu` and `refreshMenu` are two functions. `rebuildMenu` follows
+capture everywhere else it shows: the icon, the tooltip, the floating panel and
+`LibraryWindow.recordingChanged()`, which rebuilds the sidebar and the toolbar.
+None of that is something opening a menu asked for.
+
+**The clock is only right because of `menuWillOpen`.** `Capture.onChange` fires on
+the edges of capture and not per second, so `Recording, 0:00` drawn once at the
+start stayed 0:00 for the length of the meeting. The library count and the Recent
+list are re-read there for the same reason.
+
+**`autoenablesItems` is off, and that is deliberate.** Left on, an item is enabled
+whenever its target responds to its action, which silently ignores the one line in
+this menu that says otherwise: Sparkle disables its own check while one is running,
+and `Updater` has no `validateMenuItem` for AppKit to ask. So enablement is stated,
+and the rows that only report something go through `info()`, which sets **both** a
+nil action and `isEnabled = false`. Measured against the built app either way: the
+rendering is identical, so the dimmed rows are not evidence that the old form was
+doing the work.
+
+**A recent row carries the recording's id in `representedObject`, not its index.**
+The menu is rebuilt on every open and a recording can arrive or be deleted between
+two of them, so an index taken from the menu drawn last time names a different
+meeting by the time it is clicked. Speak's `copyRecent` keys on `tag` and is right
+to: its five entries are re-read from the same file in the same handler.
+
+Two differences from Speak, both because a meeting is not a dictation:
+
+1. **Clicking a recent row opens the recording**, where Speak copies the text. A
+   dictation *is* its text; a meeting is an hour of audio, a transcript and a set
+   of speakers, and there is nothing useful to put on a pasteboard.
+2. **The stamp is a time only for today**, and the date otherwise. Speak's history
+   is the last five things you dictated, all minutes old; a library spans months,
+   and `15:14` on a recording from Tuesday is a lie nothing on the row corrects.
+   The cost is that the titles no longer line up in a column, which is what a tab
+   stop in an `attributedTitle` would fix and is not worth an attributed string
+   whose highlight behaviour would then need checking.
+
+The recording in progress is deliberately **not** in Recent. It is the two rows at
+the top of the same menu, and listing it twice puts one meeting under two verbs.
+
+`LibraryWindow.open(recording:note:)` gained `activate` and `makeKeyAndOrderFront`
+for this. Its first callers were note links inside a window that was already key,
+so it built the window without ever showing it; from the menu bar that is a click
+that appears to do nothing. Verified by closing the window through its accessibility
+close button, pressing the first Recent row, and finding the library up with that
+recording selected and its transcript rendered.
+
 ### Listen is not `LSUIElement`, and Speak is
 
 This is the one place the Speak template was deliberately reversed. Speak is a
@@ -2064,6 +2125,40 @@ Two traps around it:
 `skipRow` is added to the list *before* `widthCapped` is applied to it, because
 the constraint is against the pane's stack and two views with no common ancestor
 yet is an exception rather than a layout that sorts itself out.
+
+### The About pane is Speak's, and the app name is one size down
+
+`AboutPane` follows Speak's section for section: identity header, Updates, Setup,
+Made by, Built on, then the licence and the source link. The Updates block is the
+part that was missing rather than merely differently worded, and the argument for
+it is Speak's own: Sparkle answers a check in a window that is then dismissed,
+taking the answer with it, and a scheduled check that finds nothing says nothing
+at all, so "am I on the latest version" had no answer that survived closing a
+dialog. Before this, About offered one `Check for Updates` button and reported
+none of what came back.
+
+Three things are Listen's own:
+
+1. **The name is 17pt, not Speak's 22.** The pane draws its own section title at
+   22 immediately above, and the previous version of this file records why there
+   is no `Listen` heading here: two 22pt words one line apart read as a mistake
+   rather than as a title. The 72 point app icon beside it is what makes this an
+   identity block instead of a repeated heading, so the header came back and the
+   size did not.
+2. **`refreshUpdates` does not call `resizeDocument`.** The result line appearing
+   does change the pane's height, but `sizeDocument` already runs on every layout
+   pass and a text field whose string changed schedules one. The public one also
+   scrolls the pane back to its first control, and a scheduled check finishing
+   while somebody is reading the credits is not a reason to move the page.
+3. **`Updater.onChange` is claimed in `viewWillAppear` and released in
+   `viewWillDisappear`.** A check can be started from the menu bar or by the
+   scheduler, so following the button alone would leave the pane showing the
+   previous answer.
+
+Verified end to end against the real feed by pressing Check Now through
+accessibility on a `LISTEN_PANEL=settings:about` launch, which touches nothing in
+the library: Sparkle's "You're up to date" window, then the green result line and
+`Last checked Today at 15:30` in the pane behind it.
 
 ### The transcript opened near the end of the meeting
 

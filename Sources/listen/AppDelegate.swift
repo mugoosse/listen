@@ -2,7 +2,7 @@ import AppKit
 
 /// The app itself: menu bar, capture control, and the confirm step.
 @MainActor
-final class App: NSObject, NSApplicationDelegate {
+final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status: NSStatusItem?
     private let indicator = RecordingIndicator()
 
@@ -50,6 +50,12 @@ final class App: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = MenuBarIcon.ready.image
         item.button?.toolTip = "Listen"
+        // One menu for the life of the process, refilled in place. Handing the
+        // status item a *new* `NSMenu` from `menuWillOpen` would swap the menu
+        // out from under the one being displayed.
+        let menu = NSMenu()
+        menu.delegate = self
+        item.menu = menu
         status = item
         rebuildMenu()
 
@@ -165,62 +171,16 @@ final class App: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu
 
+    /// Refill the menu, and follow capture everywhere else it shows.
+    ///
+    /// Split from `refreshMenu` because opening the menu must not do any of
+    /// this: `indicator.show` puts a panel on screen and `recordingChanged`
+    /// rebuilds the library window's sidebar and toolbar, and neither is
+    /// something clicking the menu bar asked for.
     private func rebuildMenu() {
-        let menu = NSMenu()
+        refreshMenu()
+
         let recording = Capture.shared.isRecording
-
-        if recording {
-            let elapsed = Capture.shared.elapsed
-            menu.addItem(withTitle: "Recording, \(Self.clock(elapsed))",
-                         action: nil, keyEquivalent: "").isEnabled = false
-            menu.addItem(withTitle: "Stop Recording",
-                         action: #selector(stopRecording), keyEquivalent: "").target = self
-        } else {
-            menu.addItem(withTitle: "Start Recording",
-                         action: #selector(startRecording), keyEquivalent: "").target = self
-        }
-
-        // Said here because this is the menu recording starts from, and it is
-        // the last moment it costs nothing to know.
-        //
-        // A missing model never loses a meeting: ASR.load fetches it and the
-        // transcript arrives late rather than not at all. But "late" is a
-        // 2.5 GB download standing between a finished call and its transcript,
-        // discovered afterwards, and the pane that reports it is three clicks
-        // away in Settings. Not a dialog: detection starts recordings on its
-        // own, and a modal in front of somebody joining a call is worse than
-        // the wait it warns about.
-        if !Settings.model.isDownloaded {
-            menu.addItem(.separator())
-            let size = ModelChoice.humanBytes(Settings.model.approxBytes)
-            let warn = menu.addItem(
-                withTitle: "Speech model not downloaded (\(size))",
-                action: #selector(openModelSettings), keyEquivalent: "")
-            warn.target = self
-            menu.addItem(withTitle: "Recordings are kept and transcribed once it is",
-                         action: nil, keyEquivalent: "").isEnabled = false
-        }
-
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Open Listen", action: #selector(openLibrary),
-                     keyEquivalent: "o").target = self
-        let count = Recording.all().count
-        menu.addItem(withTitle: count == 1 ? "1 recording" : "\(count) recordings",
-                     action: nil, keyEquivalent: "").isEnabled = false
-        if Queue.shared.isBusy {
-            menu.addItem(withTitle: "Transcribing…", action: nil, keyEquivalent: "")
-                .isEnabled = false
-        }
-        menu.addItem(withTitle: "Reveal Library in Finder",
-                     action: #selector(revealLibrary), keyEquivalent: "").target = self
-
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: #selector(openSettings),
-                     keyEquivalent: ",").target = self
-        menu.addItem(withTitle: "Quit Listen", action: #selector(quit), keyEquivalent: "q")
-            .target = self
-        status?.menu = menu
-
         status?.button?.image = (recording ? MenuBarIcon.recording : .ready).image
         status?.button?.toolTip = recording ? "Listen, recording" : "Listen"
         // The window says so too. The menu bar item is 16 points wide and may
@@ -242,10 +202,209 @@ final class App: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Kept deliberately thin, the same shape as Speak's. Everything
+    /// configurable lives in Settings; the menu is for state, the recordings
+    /// worth reaching in one click, and the four things every menu bar app has
+    /// at the bottom.
+    private func refreshMenu() {
+        guard let menu = status?.menu else { return }
+        menu.removeAllItems()
+        // Every enablement is stated here. Left to AppKit, an item is enabled
+        // whenever its target responds to its action, which quietly ignores the
+        // one line in this menu that says otherwise: Sparkle disables its own
+        // check while one is already running, and `Updater` has no
+        // `validateMenuItem` for AppKit to ask. The cost is that the rows which
+        // only report something have to say they are not controls, which `info`
+        // does.
+        menu.autoenablesItems = false
+
+        // Say whose menu this is. Somebody who cannot place an icon in a menu
+        // bar of twenty clicks it to find out, and until this row existed the
+        // only answer was "About Listen", eight items down past the verbs and
+        // the library.
+        let name = info("Listen")
+        name.image = MenuBarIcon.ready.menuImage
+        menu.addItem(name)
+        menu.addItem(.separator())
+
+        let recording = Capture.shared.isRecording
+        if recording {
+            // Right whenever the menu is open, because `menuWillOpen` refills
+            // it. `Capture.onChange` fires on the edges of capture and not per
+            // second, so a clock drawn once at the start would say "0:00" for
+            // the length of the meeting.
+            let elapsed = info("Recording, \(Self.clock(Capture.shared.elapsed))")
+            elapsed.image = symbol("record.circle")
+            menu.addItem(elapsed)
+            let stop = NSMenuItem(title: "Stop Recording",
+                                  action: #selector(stopRecording), keyEquivalent: "")
+            stop.target = self
+            stop.image = symbol("stop.circle")
+            menu.addItem(stop)
+        } else {
+            let start = NSMenuItem(title: "Start Recording",
+                                   action: #selector(startRecording), keyEquivalent: "")
+            start.target = self
+            start.image = symbol("record.circle")
+            menu.addItem(start)
+        }
+
+        // Said here because this is the menu recording starts from, and it is
+        // the last moment it costs nothing to know.
+        //
+        // A missing model never loses a meeting: ASR.load fetches it and the
+        // transcript arrives late rather than not at all. But "late" is a
+        // 2.5 GB download standing between a finished call and its transcript,
+        // discovered afterwards, and the pane that reports it is three clicks
+        // away in Settings. Not a dialog: detection starts recordings on its
+        // own, and a modal in front of somebody joining a call is worse than
+        // the wait it warns about.
+        if !Settings.model.isDownloaded {
+            menu.addItem(.separator())
+            let size = ModelChoice.humanBytes(Settings.model.approxBytes)
+            let warn = NSMenuItem(title: "Speech model not downloaded (\(size))",
+                                  action: #selector(openModelSettings), keyEquivalent: "")
+            warn.target = self
+            warn.image = symbol("exclamationmark.triangle")
+            menu.addItem(warn)
+            let hint = info("Recordings are kept and transcribed once it is")
+            hint.image = symbol("arrow.down.circle")
+            menu.addItem(hint)
+        }
+
+        // The other half of the same argument. A recorder with no microphone
+        // permission records silence and says nothing about it, and the pane
+        // that fixes it is behind Settings.
+        if !Permissions.allGranted {
+            menu.addItem(.separator())
+            let warn = NSMenuItem(title: "Finish setup…",
+                                  action: #selector(openPermissions), keyEquivalent: "")
+            warn.target = self
+            warn.image = symbol("exclamationmark.triangle")
+            menu.addItem(warn)
+        }
+
+        menu.addItem(.separator())
+        let open = NSMenuItem(title: "Open Listen", action: #selector(openLibrary),
+                              keyEquivalent: "o")
+        open.target = self
+        open.image = symbol("macwindow")
+        menu.addItem(open)
+
+        let recordings = Recording.all()
+        menu.addItem(info(recordings.count == 1 ? "1 recording"
+                                                : "\(recordings.count) recordings"))
+        if Queue.shared.isBusy { menu.addItem(info("Transcribing…")) }
+        let reveal = NSMenuItem(title: "Reveal Library in Finder",
+                                action: #selector(revealLibrary), keyEquivalent: "")
+        reveal.target = self
+        reveal.image = symbol("folder")
+        menu.addItem(reveal)
+
+        // The five most recent, straight to the recording rather than to the
+        // library with the user to find it again. Speak's equivalent row copies
+        // the dictation, because a dictation *is* its text; a meeting is an
+        // hour of audio, a transcript and a set of speakers, so the useful
+        // thing to do with one in a menu is open it.
+        //
+        // The recording in progress is deliberately not here. It is the two
+        // rows at the top of this menu, and listing it twice would put the same
+        // meeting under two different verbs.
+        let recent = recordings.prefix(5)
+        if !recent.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(info("Recent"))
+            for recording in recent {
+                var title = recording.metadata.title
+                    .replacingOccurrences(of: "\n", with: " ")
+                if title.count > 52 { title = String(title.prefix(51)) + "…" }
+                // A recording whose `recorded_at` will not parse gets its title
+                // alone rather than two leading spaces where a stamp should be.
+                let stamp = Self.stamp(recording)
+                let item = NSMenuItem(title: stamp.isEmpty ? title : "\(stamp)  \(title)",
+                                      action: #selector(openRecent(_:)), keyEquivalent: "")
+                item.target = self
+                // The id, not the row number. The menu is rebuilt on every open
+                // and a recording can arrive or be deleted between two of them,
+                // so an index taken from the menu that was drawn last time names
+                // a different meeting by the time it is clicked.
+                item.representedObject = recording.id
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
+        let prefs = NSMenuItem(title: "Settings…", action: #selector(openSettings),
+                               keyEquivalent: ",")
+        prefs.target = self
+        prefs.image = symbol("gearshape")
+        menu.addItem(prefs)
+
+        let update = NSMenuItem(title: "Check for Updates…",
+                                action: #selector(Updater.checkForUpdates(_:)),
+                                keyEquivalent: "")
+        update.target = Updater.shared
+        update.isEnabled = Updater.shared.canCheck
+        update.image = symbol("arrow.triangle.2.circlepath")
+        menu.addItem(update)
+
+        let about = NSMenuItem(title: "About Listen", action: #selector(openAbout),
+                               keyEquivalent: "")
+        about.target = self
+        about.image = symbol("info.circle")
+        menu.addItem(about)
+
+        // Not `NSApplication.terminate`, unlike Speak: capture has to stop
+        // cleanly first so the WAV headers are finalised. `QuitConfirm` does not
+        // intercept this, deliberately, because reaching for a menu item is
+        // already a decision.
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        quitItem.image = symbol("power")
+        menu.addItem(quitItem)
+    }
+
+    /// Right before it is displayed, so the clock, the library count and the
+    /// recent list are what they are now rather than what they were the last
+    /// time capture changed.
+    func menuWillOpen(_ menu: NSMenu) { refreshMenu() }
+
+    /// A row that reports something rather than doing something.
+    ///
+    /// Both halves are needed with `autoenablesItems` off: no action so a click
+    /// does nothing, and `isEnabled` false so it is drawn as the note it is
+    /// instead of highlighting under the pointer like a command.
+    private func info(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    private func symbol(_ name: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        image?.size = NSSize(width: 15, height: 15)
+        image?.isTemplate = true
+        return image
+    }
+
     private static func clock(_ seconds: TimeInterval) -> String {
         let t = Int(seconds)
         return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
                          : String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    /// When a recent recording was made, in one narrow column.
+    ///
+    /// Speak prints the time and nothing else, which is right there: its history
+    /// is the last five things you dictated, all of them minutes old. A library
+    /// of meetings is not, and "15:14" on a recording from Tuesday is a lie
+    /// nothing on the row corrects, so anything older than today gets its date
+    /// instead.
+    private static func stamp(_ recording: Recording) -> String {
+        guard let date = recording.date else { return "" }
+        let f = DateFormatter()
+        f.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "d MMM"
+        return f.string(from: date)
     }
 
     // MARK: - Capture
@@ -419,6 +578,16 @@ final class App: NSObject, NSApplicationDelegate {
         LibraryWindow.shared.show()
     }
 
+    /// One recording, from the Recent list.
+    ///
+    /// `open` does not raise the window on its own, because its other callers
+    /// are links inside a window that is already key. This one is pressed from
+    /// the menu bar, where the window may be closed or behind a browser.
+    @objc private func openRecent(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        LibraryWindow.shared.open(recording: id, note: nil)
+    }
+
     @objc private func openSettings() {
         LibraryWindow.shared.showSettings()
     }
@@ -427,6 +596,14 @@ final class App: NSObject, NSApplicationDelegate {
     /// Settings in general with the user to find it.
     @objc private func openModelSettings() {
         LibraryWindow.shared.showSettings(.models)
+    }
+
+    @objc private func openPermissions() {
+        LibraryWindow.shared.showSettings(.permissions)
+    }
+
+    @objc private func openAbout() {
+        LibraryWindow.shared.showSettings(.about)
     }
 
     @objc private func revealLibrary() {

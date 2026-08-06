@@ -382,10 +382,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// about that meeting too, so staying on the Notes tab would put the same
     /// words under a different title, and a page that does not visibly change
     /// is a click that did not appear to work.
+    ///
+    /// The window is raised as well as filled. The note links that were this
+    /// function's first callers are inside a window that is already key, so it
+    /// did not use to be; the menu bar's Recent list is pressed with the window
+    /// closed or behind a browser, and building it without showing it is a click
+    /// that appears to do nothing at all.
     func open(recording id: String, note slug: String?) {
         if window == nil { build() }
         enter(.library)
         reload()
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
         // A filter or a search in the sidebar can hide the recording a note
         // points at, and a click that appears to do nothing is worse than one
         // that gives way. The click already said which recording to look at, so

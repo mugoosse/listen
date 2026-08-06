@@ -115,6 +115,14 @@ enum MainMenu {
         add(menu, "Hide Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)),
             "s", [.command, .control])
         menu.addItem(.separator())
+        // Targets nil, so it travels the responder chain to the library window
+        // the way the recording items already do. The row above the sidebar's
+        // list is the discoverable way in and it is gone once the work is done,
+        // which leaves a library with nothing outstanding unable to ask the
+        // question at all.
+        add(menu, "Recordings Needing a Speaker",
+            #selector(LibraryWindow.showUnnamedSpeakers(_:)), "u")
+        menu.addItem(.separator())
         add(menu, "Open Listen", #selector(MenuActions.openLibrary), "0")
             .target = MenuActions.shared
         return item

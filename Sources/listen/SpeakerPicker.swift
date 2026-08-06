@@ -15,17 +15,42 @@ import AppKit
 /// something new offers to make it a person. Merge and Discard are still here,
 /// because a phantom speaker over silence is not a person, but they are at the
 /// bottom in the size they deserve.
+/// Hearing the speaker, without this popover owning a player.
+///
+/// The pane behind it already has the recording open, the mixdown built or
+/// buildable, and a waveform with a playhead on it, so a preview is a message to
+/// that rather than a second audio path. The visible consequence is the point:
+/// pressing play here moves the playhead below, colours the scrubber where that
+/// person talks, and scrolls the transcript to them.
+@MainActor
+struct SpeakerPreview {
+    /// Play this speaker's turns in order, one after the next.
+    var play: () -> Void
+    var pause: () -> Void
+    /// Playing, or about to be once a mixdown has been built.
+    var isPlaying: () -> Bool
+    /// This popover has gone: dismissed, or closed because a name was applied.
+    ///
+    /// **The narrowed transcript belongs to the popover and ends with it.** The
+    /// filter exists to answer the question this popover is asking, so a filter
+    /// that outlived it would be a transcript with most of its paragraphs
+    /// missing and nothing on screen still asking anything.
+    var end: () -> Void
+}
+
 @MainActor
 enum SpeakerPicker {
     private static var current: NSPopover?
 
     static func show(for recording: Recording, speaker: String,
-                     from view: NSView, rect: NSRect, done: @escaping () -> Void) {
+                     from view: NSView, rect: NSRect,
+                     preview: SpeakerPreview? = nil,
+                     done: @escaping () -> Void) {
         current?.performClose(nil)
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = PickerController(
-            recording: recording, speaker: speaker) {
+            recording: recording, speaker: speaker, preview: preview) {
                 current?.performClose(nil)
                 done()
             }
@@ -82,11 +107,21 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     private var rows: NSStackView!
     private var candidates: [Candidate] = []
 
+    /// How to hear the speaker, or nil where there is no pane behind this to
+    /// play it: `SpeakerSheet` presents the same question from a window.
+    private let preview: SpeakerPreview?
+    private let playButton = NSButton()
+    /// Keeps the play button honest while the popover is open. See
+    /// `viewDidAppear`.
+    private var poll: Timer?
+
     private static let width: CGFloat = 320
 
-    init(recording: Recording, speaker: String, done: @escaping () -> Void) {
+    init(recording: Recording, speaker: String, preview: SpeakerPreview?,
+         done: @escaping () -> Void) {
         self.recording = recording
         self.speaker = speaker
+        self.preview = preview
         self.done = done
         super.init(nibName: nil, bundle: nil)
     }
@@ -109,7 +144,41 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // recording" is what that reads as in a sentence built around it.
         let spoken = People.speakers(in: recording).first { $0.label == speaker }?.seconds
         let howLong = spoken.map(Recording.length) ?? ""
-        if !howLong.isEmpty {
+
+        // **Hearing them is the evidence this question needs, and it was the one
+        // thing not on offer.** Everything else here is inference: how long they
+        // spoke, what the voice bank ranks them against, who was on the
+        // invitation. Two seconds of the voice settles what all of that is
+        // circling, and until this button existed the only way to get it was to
+        // dismiss the popover, hunt the transcript for one of their paragraphs
+        // and click it, which on a two hour meeting where somebody speaks for
+        // one minute is a search rather than a click.
+        //
+        // It plays in the pane behind rather than owning a player: the mixdown
+        // is loaded there, and the visible side effects are the point. See
+        // `SpeakerPreview`.
+        if preview != nil {
+            playButton.bezelStyle = .rounded
+            playButton.controlSize = .small
+            playButton.imagePosition = .imageLeading
+            playButton.target = self
+            playButton.action = #selector(togglePreview)
+            playButton.toolTip = "Play what they said, skipping everybody else"
+            drawPreviewButton()
+
+            // Says what the button does when there is no length to report,
+            // rather than leaving a bare glyph with nothing beside it.
+            let detail = NSTextField(labelWithString: howLong.isEmpty
+                ? "Hear them before naming them"
+                : "Spoke for " + howLong + " of this recording")
+            detail.font = .systemFont(ofSize: 11)
+            detail.textColor = .secondaryLabelColor
+            let row = NSStackView(views: [playButton, detail])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+            stack.addArrangedSubview(row)
+        } else if !howLong.isEmpty {
             let detail = NSTextField(labelWithString:
                 "Spoke for " + howLong + " of this recording")
             detail.font = .systemFont(ofSize: 11)
@@ -186,6 +255,52 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(field)
+
+        // The pane can stop on its own, at the end of the last thing this
+        // speaker said, and nothing reports that back here. A button drawn once
+        // would then be offering to pause something that has already stopped,
+        // which is the small kind of lie that makes people stop trusting a
+        // control. Three times a second, for as long as one popover is open.
+        guard preview != nil else { return }
+        poll = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
+            Task { @MainActor in self.drawPreviewButton() }
+        }
+    }
+
+    /// Closing puts the transcript back, however it was closed.
+    ///
+    /// The one lifecycle hook both routes go through: clicking away dismisses a
+    /// `.transient` popover without telling anybody, and applying a name closes
+    /// it from the inside. Hanging the undo on this rather than on a delegate
+    /// means there is no case where the filter is left on with nothing on screen
+    /// explaining it.
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        poll?.invalidate()
+        poll = nil
+        // Stopped as well as unfiltered, because a preview that outlives the
+        // question it was answering is a meeting playing to nobody.
+        preview?.pause()
+        preview?.end()
+    }
+
+    private func drawPreviewButton() {
+        let playing = preview?.isPlaying() ?? false
+        playButton.title = playing ? "Pause" : "Play"
+        playButton.image = NSImage(
+            systemSymbolName: playing ? "pause.fill" : "play.fill",
+            accessibilityDescription: playing ? "Pause" : "Play")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+    }
+
+    @objc private func togglePreview() {
+        guard let preview else { return }
+        if preview.isPlaying() { preview.pause() } else { preview.play() }
+        // Redrawn at once rather than waiting for the poll. `isPlaying` reports
+        // "about to be" as well as "is", so the first press on a recording whose
+        // mixdown has still to be built flips the button immediately instead of
+        // sitting on "Play" for the seconds that takes.
+        drawPreviewButton()
     }
 
     // MARK: - Candidates

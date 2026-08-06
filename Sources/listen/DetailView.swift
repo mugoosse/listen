@@ -26,6 +26,36 @@ final class DetailView: NSView {
     private let waveform = WaveformView()
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
 
+    /// Which speaker the transcript is narrowed to, or nil for everybody.
+    ///
+    /// **A view state, never a change to `turns`.** `refresh` finds the turn
+    /// being spoken by indexing into `turns` and uses that index into
+    /// `turnViews`, twenty times a second, so filtering either array would put
+    /// the playhead's highlight on somebody else's paragraph. Both stay whole
+    /// and the views that do not match are hidden, which `NSStackView` collapses
+    /// for free.
+    private var soloed: String?
+
+    /// What says the transcript is not all of the meeting.
+    ///
+    /// Stated rather than left to be inferred from a shorter page. There is no
+    /// button on it and it needs none: the filter lasts exactly as long as the
+    /// popover that opened it, so the way back is to finish with the popover,
+    /// which is where the pointer already is.
+    private let soloBar = NSView()
+    private let soloLabel = NSTextField(labelWithString: "")
+    private var soloTop: NSLayoutConstraint!
+    private var soloHeight: NSLayoutConstraint!
+
+    /// Which popover owns the current solo.
+    ///
+    /// A `.transient` popover reports its close whenever it gets round to it,
+    /// and clicking a second chip opens one popover while closing another, so a
+    /// late close from the one being replaced would clear the filter the new one
+    /// just set. Each opening takes the next token and a close only undoes its
+    /// own, which makes the order the two callbacks arrive in stop mattering.
+    private var soloToken = 0
+
     /// What stands in for the transport when the audio is on another Mac.
     ///
     /// In the card rather than instead of it, so the transcript does not move
@@ -266,6 +296,13 @@ final class DetailView: NSView {
         playerNote.lineBreakMode = .byTruncatingTail
         playerNote.isHidden = true
 
+        soloLabel.font = .systemFont(ofSize: 12)
+        soloLabel.textColor = .secondaryLabelColor
+        soloLabel.lineBreakMode = .byTruncatingTail
+        soloBar.isHidden = true
+        soloLabel.translatesAutoresizingMaskIntoConstraints = false
+        soloBar.addSubview(soloLabel)
+
         for v in [playButton, timeLabel, waveform, playerNote] {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
@@ -275,8 +312,8 @@ final class DetailView: NSView {
             modeBar.addSubview(v)
         }
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
-                  scroll, noteInfo, notesScroll, notesPlaceholder, empty, emptyIcon,
-                  transcribing] {
+                  soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, empty,
+                  emptyIcon, transcribing] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -302,6 +339,9 @@ final class DetailView: NSView {
         // never been saved. A label with an empty string still occupies a line,
         // so the caret sat forty points below the toggle with nothing between
         // them, which reads as a field that has come loose from its heading.
+        soloTop = soloBar.topAnchor.constraint(equalTo: playerCard.bottomAnchor,
+                                               constant: 0)
+        soloHeight = soloBar.heightAnchor.constraint(equalToConstant: 0)
         noteInfoTop = noteInfo.topAnchor.constraint(equalTo: scroll.topAnchor)
         noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
         noteInfoHeight.priority = .defaultHigh
@@ -382,7 +422,19 @@ final class DetailView: NSView {
             notePicker.leadingAnchor.constraint(
                 greaterThanOrEqualTo: modePicker.trailingAnchor, constant: 12),
 
-            scroll.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 12),
+            // Between the player and the transcript, and collapsing to nothing
+            // when nobody is soloed, for the reason the chips row collapses: a
+            // hidden view keeps its frame, so leaving it would open a gap under
+            // the player of every recording in the library.
+            soloTop,
+            soloHeight,
+            soloBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            soloBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            soloLabel.leadingAnchor.constraint(equalTo: soloBar.leadingAnchor),
+            soloLabel.centerYAnchor.constraint(equalTo: soloBar.centerYAnchor),
+            soloLabel.trailingAnchor.constraint(lessThanOrEqualTo: soloBar.trailingAnchor),
+
+            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -939,6 +991,11 @@ final class DetailView: NSView {
                   hidden: showing == .notes || recording?.isLive == true)
         scroll.isHidden = showing != .transcript
         notesScroll.isHidden = showing != .notes
+        // A solo is a lens on the transcript, so it goes with the transcript.
+        // Leaving the bar up over a note would be a sentence about paragraphs
+        // that are not on screen, and the player it narrows is collapsed here
+        // anyway: switching to Notes already stops playback.
+        if showing != .transcript { setSolo(nil) }
         showProvenance()
         updatePlaceholder()
         // One note is still worth a switcher: it is also where the note's title
@@ -1106,6 +1163,11 @@ final class DetailView: NSView {
         // Before `self.recording` moves, or a half-typed note is written to the
         // recording that arrives next.
         saveYours()
+        // A lens on one transcript, so it does not travel to the next one. The
+        // sidebar's lenses are the opposite and deliberately survive a selection
+        // change: those narrow the library, and this narrows one meeting.
+        soloed = nil
+        waveform.soloed = nil
         self.recording = recording
 
         guard let recording else {
@@ -1225,6 +1287,10 @@ final class DetailView: NSView {
             tagChips.clear()
             setChipsCollapsed(true)
             setModeBarCollapsed(true)
+            // `show` clears `soloed` before it gets here, so this closes the bar
+            // rather than leaving the last recording's solo announced over an
+            // empty pane.
+            applySolo()
         }
     }
 
@@ -1334,22 +1400,34 @@ final class DetailView: NSView {
             tail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
         ])
 
+        // Whoever was soloed stays soloed across a re-render, so correcting a
+        // sentence while reading one person does not silently put everybody
+        // else back on the page.
+        applySolo()
+
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
         guard scrollToTop else { return }
+        scrollTranscriptToTop()
+    }
 
-        // Open at the beginning. A freshly selected recording used to open
-        // somewhere near the end of the meeting with half a paragraph cut off
-        // above it, which reads as a rendering fault rather than as a scroll
-        // position.
-        //
-        // The top is `bounds.maxY`, not zero. `TopAlignedClipView` flips the
-        // *clip view*, which decides where a short transcript sits and which
-        // way the scrollers run, and changes nothing about the stack view's own
-        // coordinates: its arranged subviews are still laid out with the first
-        // turn at the highest y. Measured both ways round on an 80 minute
-        // recording, because the two flags read as if they should agree and do
-        // not: y = 0 opens on the last turn, y = maxY - 1 on the first.
+    /// Open at the beginning.
+    ///
+    /// A freshly selected recording used to open somewhere near the end of the
+    /// meeting with half a paragraph cut off above it, which reads as a
+    /// rendering fault rather than as a scroll position.
+    ///
+    /// The top is `bounds.maxY`, not zero. `TopAlignedClipView` flips the *clip
+    /// view*, which decides where a short transcript sits and which way the
+    /// scrollers run, and changes nothing about the stack view's own
+    /// coordinates: its arranged subviews are still laid out with the first turn
+    /// at the highest y. Measured both ways round on an 80 minute recording,
+    /// because the two flags read as if they should agree and do not: y = 0
+    /// opens on the last turn, y = maxY - 1 on the first.
+    ///
+    /// Deferred, because soloing hides most of the arranged subviews and the
+    /// stack has not shrunk to fit what is left until the next layout pass.
+    private func scrollTranscriptToTop() {
         DispatchQueue.main.async { [self] in
             layoutSubtreeIfNeeded()
             scrollingProgrammatically = true
@@ -1450,9 +1528,7 @@ final class DetailView: NSView {
         // do claim their click each have to let the fields go themselves.
         endEditing()
         if let player, player.isPlaying {
-            player.pause()
-            setPlaying(false)
-            tick?.invalidate()
+            pausePlayback()
             return
         }
         follows = true
@@ -1460,6 +1536,22 @@ final class DetailView: NSView {
             // Pressing play on a finished recording plays it, rather than
             // sitting silently at the end wondering what the button did.
             if player.currentTime >= player.duration - 0.05 { player.currentTime = 0 }
+            // While somebody is soloed, start inside one of their turns rather
+            // than wherever the playhead was left. `updatePlayhead` would jump
+            // there on its first tick anyway, and a press that plays a twentieth
+            // of a second of the wrong person first is a press that sounds
+            // broken.
+            switch self.soloStep(at: player.currentTime) {
+            case .carryOn:
+                break
+            case .jump(let time):
+                player.currentTime = time
+            case .finished:
+                // Past their last turn, so start again at their first, which is
+                // the soloed reading of the finished-recording rule above.
+                if let first = self.soloTurns.first { player.currentTime = first.start }
+            }
+            self.position = player.currentTime
             player.play()
             self.setPlaying(true)
             self.tick?.invalidate()
@@ -1470,6 +1562,16 @@ final class DetailView: NSView {
                 Task { @MainActor in self.updatePlayhead() }
             }
         }
+    }
+
+    /// Stop where it is, keeping the playhead. Split out of `togglePlay` because
+    /// the speaker picker's own control has to be able to stop a preview without
+    /// starting one when it is already stopped.
+    private func pausePlayback() {
+        guard let player, player.isPlaying else { return }
+        player.pause()
+        setPlaying(false)
+        tick?.invalidate()
     }
 
     private func setPlaying(_ playing: Bool) {
@@ -1512,6 +1614,28 @@ final class DetailView: NSView {
         guard let player else { return }
         position = player.currentTime
         if player.duration > 0 { length = player.duration }
+
+        // While somebody is soloed, playback runs through their turns and skips
+        // what is between them. Announced on the bar above the transcript rather
+        // than left to be discovered, because this is the only place in the app
+        // where play does not play what comes next.
+        if player.isPlaying {
+            switch soloStep(at: position) {
+            case .carryOn:
+                break
+            case .jump(let time):
+                // `seek` refreshes on the way through, so there is nothing left
+                // to do on this tick.
+                seek(to: time, playing: true)
+                return
+            case .finished:
+                // Stop at the end of the last thing they said rather than
+                // playing the rest of the meeting behind a page that says it is
+                // showing one person.
+                pausePlayback()
+            }
+        }
+
         refresh()
         if !player.isPlaying {
             setPlaying(false)
@@ -1552,6 +1676,10 @@ final class DetailView: NSView {
     /// somewhere else.
     private func reveal(_ index: Int) {
         guard follows, index < turnViews.count else { return }
+        // A hidden turn has no frame worth scrolling to, and while somebody is
+        // soloed most of them are hidden. Without this, the moment before a skip
+        // scrolls the reader to a collapsed view somewhere else in the meeting.
+        guard !turnViews[index].isHidden else { return }
         let frame = turnViews[index].frame
         guard !scroll.documentVisibleRect.contains(frame) else { return }
         scrollingProgrammatically = true
@@ -1574,6 +1702,132 @@ final class DetailView: NSView {
         waveform.progress = 0
         setPlaying(false)
     }
+
+    // MARK: - Soloing one speaker
+
+    /// This speaker's turns, in order.
+    private var soloTurns: [Turn] {
+        guard let soloed else { return [] }
+        return turns.filter { $0.speaker == soloed }
+    }
+
+    /// Show one speaker's turns and nothing else, or everybody again.
+    ///
+    /// The argument is checked against the transcript rather than trusted: a
+    /// stale menu or a picker left open across a rename can name somebody who is
+    /// no longer in it, and soloing them would empty the pane with nothing on
+    /// screen to explain it.
+    func setSolo(_ label: String?) {
+        let next = label.flatMap { wanted in
+            turns.contains { $0.speaker == wanted } ? wanted : nil
+        }
+        guard next != soloed else { return }
+        soloed = next
+        waveform.soloed = next
+        applySolo()
+        // Their first turn, rather than wherever the reader happened to be.
+        // Soloing changes the whole page, and a page that has changed without
+        // appearing to is the failure "Also about" already has a rule for.
+        if next != nil { scrollTranscriptToTop() }
+    }
+
+    /// Narrow the transcript to one speaker for as long as a popover is asking
+    /// about them, and hand back the closure that puts it right.
+    ///
+    /// Both chip kinds go through here so there is one rule rather than two that
+    /// agree today. See `soloToken` for why the undo is guarded.
+    private func soloWhile(_ speaker: String) -> () -> Void {
+        soloToken += 1
+        let token = soloToken
+        setSolo(speaker)
+        return { [weak self] in
+            guard let self, self.soloToken == token else { return }
+            self.setSolo(nil)
+        }
+    }
+
+    /// Hide the paragraphs that are not this speaker's, and say so above them.
+    ///
+    /// Hiding views rather than rebuilding the stack from a filtered list, which
+    /// keeps `turns`, `sentences` and `turnViews` the same length and the same
+    /// order. `refresh` indexes all three against each other twenty times a
+    /// second; a filtered array would put the playing highlight on somebody
+    /// else's paragraph, and the sentence editor would write to the wrong
+    /// segment.
+    private func applySolo() {
+        for (index, view) in turnViews.enumerated() where index < turns.count {
+            view.isHidden = soloed != nil && turns[index].speaker != soloed
+        }
+
+        let showing = soloed != nil
+        soloBar.isHidden = !showing
+        soloHeight.constant = showing ? 22 : 0
+        soloTop.constant = showing ? 10 : 0
+
+        guard let soloed else { return }
+        let mine = soloTurns
+        let spoken = Recording.length(mine.reduce(0) { $0 + max(0, $1.end - $1.start) })
+        let counted = mine.count == 1 ? "1 turn" : "\(mine.count) turns"
+        // What play does is stated rather than left in a tooltip. A player that
+        // silently jumps is one you stop trusting, and this is the only place in
+        // the app where pressing play does not play what comes next.
+        soloLabel.stringValue = ["Showing only " + SpeakerName.display(soloed),
+                                 counted, spoken]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+            + ". Play runs through them in order."
+    }
+
+    /// What playback should do next while somebody is soloed.
+    private enum SoloStep {
+        /// Inside one of their turns, or nobody is soloed.
+        case carryOn
+        /// Between two of them: go here.
+        case jump(TimeInterval)
+        /// Past the last thing they said.
+        case finished
+    }
+
+    private func soloStep(at time: TimeInterval) -> SoloStep {
+        guard let soloed else { return .carryOn }
+        if turns.contains(where: {
+            $0.speaker == soloed && time >= $0.start && time < $0.end
+        }) { return .carryOn }
+        if let next = turns.first(where: { $0.speaker == soloed && $0.start > time }) {
+            return .jump(next.start)
+        }
+        return .finished
+    }
+
+    /// Play everything the soloed speaker said, in order, one turn after the
+    /// next.
+    ///
+    /// **From their first turn, not their longest.** Starting at the longest
+    /// gives the best single voice sample soonest, which is what identifying
+    /// somebody wants, and it was the first thing this did. It is still the
+    /// wrong rule: `soloStep` only ever moves forward, so starting in the middle
+    /// means the turns before it can never be reached and pressing play twice
+    /// gives two different halves of the same person. One press plays all of
+    /// them, from the beginning, which is the only behaviour that needs no
+    /// explaining.
+    ///
+    /// No offset into the turn either, for the same reason: the jumps between
+    /// turns land on `start`, so an offset here would make the first snippet the
+    /// one clipped differently from the rest.
+    func playSolo() {
+        guard let first = soloTurns.first else { return }
+        follows = true
+        seek(to: first.start, playing: true)
+    }
+
+    /// Whether the pane is playing, or about to be once a mixdown has been
+    /// built.
+    ///
+    /// The second half matters to a control drawing itself from this. The first
+    /// press on an hour-long meeting spends seconds mixing two tracks before
+    /// there is a player at all, and a button that stays on "Play" throughout
+    /// reads as a press that did nothing.
+    var isPlaying: Bool { (player?.isPlaying ?? false) || preparing }
 
     // MARK: - Labelling
 
@@ -1611,11 +1865,31 @@ final class DetailView: NSView {
             self.show(updated)
             LibraryWindow.shared.reload()
         }
+        // **Asking about somebody narrows the page to them, for as long as the
+        // asking lasts.** Opening the popover shows only what that speaker said
+        // and makes play run through their turns in order; closing it, by
+        // dismissing or by applying a name, puts the whole meeting back. So the
+        // filter has exactly one lifetime and it is one the user is already
+        // holding in their hand, which is why there is no control anywhere for
+        // turning it off: the popover in front of them is the off switch.
+        //
+        // Both kinds of chip, because "click a speaker to read only them" is one
+        // rule and two implementations of it would be two rules by the next
+        // change. The named side gets no play button of its own: the pane's own
+        // play already runs through their turns while they are soloed.
+        let restore = soloWhile(speaker)
         if VoiceBank.isPlaceholder(speaker) {
-            SpeakerPicker.show(for: recording, speaker: speaker,
-                               from: self, rect: anchor, done: refresh)
+            SpeakerPicker.show(
+                for: recording, speaker: speaker, from: self, rect: anchor,
+                preview: SpeakerPreview(
+                    play: { [weak self] in self?.playSolo() },
+                    pause: { [weak self] in self?.pausePlayback() },
+                    isPlaying: { [weak self] in self?.isPlaying ?? false },
+                    end: restore),
+                done: refresh)
         } else {
-            PersonPopover.show(speaker, from: self, rect: anchor, done: refresh)
+            PersonPopover.show(speaker, from: self, rect: anchor,
+                               closed: restore, done: refresh)
         }
     }
 

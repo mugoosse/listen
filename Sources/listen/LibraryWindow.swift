@@ -708,6 +708,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.filter(byTag: name)
     }
 
+    /// Show only the recordings with a voice nobody has named.
+    ///
+    /// Reachable from the menu bar as well as from the row above the list,
+    /// because that row is gone once the work is done and "which recordings did
+    /// I still owe a name to" is a question worth being able to ask of a library
+    /// that currently answers none.
+    @objc func showUnnamedSpeakers(_ sender: Any?) {
+        show()
+        sidebar.filter(byUnnamedSpeakers: true)
+    }
+
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {

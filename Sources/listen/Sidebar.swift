@@ -39,9 +39,30 @@ final class SidebarViewController: NSViewController {
     private enum Lens: Equatable {
         case speaker(String)
         case tag(String)
+        /// Recordings with a voice nobody has named. Unlike the other two this
+        /// one is set from inside the list, by the row above it, because it is
+        /// the only lens that is a question about the library as a whole rather
+        /// than about a thing you arrived at holding.
+        case unnamed
     }
 
     private var lenses: [Lens] = []
+
+    /// The row that offers the to-do list, above the list and only while there
+    /// is one.
+    ///
+    /// **Not a status on every row, which is what this replaces.** There used to
+    /// be a "needs labelling" state in the sidebar with a filter tab beside it,
+    /// and the reason both went is in `Recording.stateText`: an unnamed speaker
+    /// reads as "Speaker A" in the transcript, which is legible on its own, so
+    /// the list was nagging about something that did not look broken. What was
+    /// actually missing was never a badge on 13 rows, it was one sentence saying
+    /// the 13 exist. This row is that sentence, it counts rather than warns, and
+    /// it is gone entirely the moment the count is zero, so a library with
+    /// nothing outstanding looks exactly as it did before this existed.
+    private var todoRow: SidebarRow!
+    private var todoHeight: NSLayoutConstraint!
+    private var todoTop: NSLayoutConstraint!
 
     /// Settings is the one row left here, at the bottom, because it is the
     /// thing you reach for least. Record was the row above the list until it
@@ -178,9 +199,14 @@ final class SidebarViewController: NSViewController {
         settingsButton.toolTip = "Settings (⌘,)"
         settingsButton.contentTintColor = .secondaryLabelColor
 
+        todoRow = row("", "person.crop.circle.badge.questionmark",
+                      #selector(showUnnamed))
+        todoRow.isHidden = true
+
         container.addSubview(picker)
         container.addSubview(searchField)
         container.addSubview(filterBar)
+        container.addSubview(todoRow)
         container.addSubview(scroll)
         // A hairline, so the list ends rather than appearing to run underneath
         // the row pinned over it.
@@ -195,6 +221,9 @@ final class SidebarViewController: NSViewController {
         // than it did before this row existed.
         filterTop = filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor,
                                                    constant: 0)
+        todoTop = todoRow.topAnchor.constraint(equalTo: filterBar.bottomAnchor,
+                                               constant: 0)
+        todoHeight = todoRow.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate(picker.constraints(in: container, above: searchField) + [
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor,
                                                  constant: 10),
@@ -211,7 +240,19 @@ final class SidebarViewController: NSViewController {
             filterStack.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor),
             filterStack.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
             filterStack.trailingAnchor.constraint(lessThanOrEqualTo: filterBar.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 10),
+
+            // Collapses to nothing, spacing included, for the reason the lens
+            // row above it does: a hidden view keeps its frame, and a library
+            // with nothing outstanding must look exactly as it did before this
+            // row existed.
+            todoTop,
+            todoHeight,
+            todoRow.leadingAnchor.constraint(equalTo: container.leadingAnchor,
+                                             constant: Self.rowEdge),
+            todoRow.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                              constant: -Self.rowEdge),
+
+            scroll.topAnchor.constraint(equalTo: todoRow.bottomAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: footerRule.topAnchor),
@@ -271,6 +312,7 @@ final class SidebarViewController: NSViewController {
             switch lens {
             case .speaker(let label): filter.people.append(label)
             case .tag(let name): filter.tags.append(name)
+            case .unnamed: filter.needsSpeakers = true
             }
         }
 
@@ -280,6 +322,8 @@ final class SidebarViewController: NSViewController {
         // recording still being made has no transcript to have speakers in, and
         // its tags are the ones somebody is about to add.
         let matching = (live.map { [$0] } ?? []) + filter.apply(to: library)
+
+        refreshTodo(in: library)
 
         rows = []
         var lastHeading: String?
@@ -363,6 +407,38 @@ final class SidebarViewController: NSViewController {
         return true
     }
 
+    /// How many recordings are waiting on a name, said once above the list.
+    ///
+    /// Counted from the **unfiltered** library, so the row goes on saying how
+    /// much work there is while a search is narrowing the list to something
+    /// else. A count that moved with the search would be answering a question
+    /// nobody asked and would read as zero the moment somebody typed.
+    ///
+    /// Hidden while the lens is on, because then the list *is* the answer and a
+    /// row offering to show what is already shown is a control that does
+    /// nothing. The lens pill above it is what turns it back off.
+    private func refreshTodo(in library: [Recording]) {
+        let waiting = lenses.contains(.unnamed) ? 0 : Labelling.waiting(in: library).count
+        let show = waiting > 0
+        todoRow.isHidden = !show
+        todoHeight.constant = show ? 32 : 0
+        todoTop.constant = show ? 10 : 0
+        guard show else { return }
+        todoRow.title = waiting == 1
+            ? "1 recording needs a speaker"
+            : "\(waiting) recordings need a speaker"
+        todoRow.toolTip = "Show only the recordings with a voice nobody has named."
+    }
+
+    @objc private func showUnnamed() {
+        filter(byUnnamedSpeakers: true)
+    }
+
+    /// Also show only the recordings with somebody unnamed in them.
+    func filter(byUnnamedSpeakers on: Bool) {
+        add(on ? .unnamed : nil)
+    }
+
     /// Also show only the recordings one person is in. nil clears every lens.
     func filter(bySpeaker label: String?) {
         add(label.map { Lens.speaker($0) })
@@ -435,6 +511,14 @@ final class SidebarViewController: NSViewController {
                 pill.identifier = NSUserInterfaceItemIdentifier("tag:" + name)
                 pill.toolTip = "Only the recordings tagged #\(name). "
                     + "Click to drop this filter."
+            case .unnamed:
+                // The same neutral wash, for the same reason: this lens is about
+                // a state of the library rather than about a person, so a
+                // person's colour would be a lie about what set it.
+                pill.showPlain("Needs a speaker")
+                pill.identifier = NSUserInterfaceItemIdentifier("unnamed")
+                pill.toolTip = "Only the recordings with a voice nobody has named. "
+                    + "Click to drop this filter."
             }
             filterStack.addArrangedSubview(pill)
             pill.widthAnchor.constraint(lessThanOrEqualToConstant: max(44, share))
@@ -469,6 +553,7 @@ final class SidebarViewController: NSViewController {
             switch lens {
             case .speaker(let label): return id == "speaker:" + label
             case .tag(let name): return id == "tag:" + name
+            case .unnamed: return id == "unnamed"
             }
         }
         renderLenses()

@@ -47,6 +47,28 @@ final class WaveformView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// Draw one speaker and dim everybody else, over the whole recording.
+    ///
+    /// **This is the answer to "where is Speaker C in a two hour meeting".** The
+    /// bars have been coloured by speaker since the spans arrived, which means a
+    /// quiet participant was already on screen and already invisible: measured on
+    /// this library, one recording has a speaker talking for 0.0 minutes and
+    /// another for 0.1 minutes inside 97 minutes of call, which at a bar every
+    /// three points is a handful of pixels in one of five colours. Greying the
+    /// other four turns the scrubber into an index of exactly where that person
+    /// is, and finding them stops being a scroll through the transcript.
+    ///
+    /// Applied to the **unplayed** bars as well as the played ones, which is the
+    /// whole point: the question is asked before anything has been listened to,
+    /// so a highlight that only reached as far as the playhead would answer it
+    /// nowhere.
+    var soloed: String? {
+        didSet {
+            guard soloed != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
     /// Fires continuously while scrubbing, with a fraction of the whole.
     var onScrub: ((Double) -> Void)?
 
@@ -118,8 +140,33 @@ final class WaveformView: NSView {
             path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
         }
 
-        NSColor.tertiaryLabelColor.setFill()
-        path.fill()
+        // Who is talking in each bar, walked once and used by both passes below.
+        let who = speakers(for: rects)
+
+        if let soloed, !who.isEmpty {
+            // Two shapes rather than one: where that person talks, and
+            // everywhere else. The rest goes dimmer than the ordinary unplayed
+            // grey, because the contrast is the whole message and leaving it at
+            // `tertiaryLabelColor` puts their bars in a crowd.
+            let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let ink = SpeakerColour.ink(for: soloed, on: .window, dark: dark)
+            let theirs = NSBezierPath()
+            let rest = NSBezierPath()
+            for (i, rect) in rects.enumerated() {
+                let path = i < who.count && who[i] == soloed ? theirs : rest
+                path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
+            }
+            NSColor.quaternaryLabelColor.setFill()
+            rest.fill()
+            // Under full strength, so the played part still reads as played:
+            // this pass says where they are and the one below says how far
+            // through them you have listened.
+            ink.withAlphaComponent(0.45).setFill()
+            theirs.fill()
+        } else {
+            NSColor.tertiaryLabelColor.setFill()
+            path.fill()
+        }
 
         // The played part, drawn by clipping the same shapes rather than
         // building new ones, so the two halves cannot disagree about where a bar
@@ -130,7 +177,7 @@ final class WaveformView: NSView {
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: NSRect(x: 0, y: 0, width: played, height: bounds.height))
                 .setClip()
-            for (colour, run) in runs(in: rects, upTo: played) {
+            for (colour, run) in runs(in: rects, who: who, upTo: played) {
                 colour.setFill()
                 run.fill()
             }
@@ -148,6 +195,31 @@ final class WaveformView: NSView {
         }
     }
 
+    /// Who is talking in each bar, or "" for the gap between two turns.
+    ///
+    /// The spans are in order and so are the bars, so this walks both once
+    /// rather than searching the turns for every bar. Computed for every bar and
+    /// not only the played ones, because the solo pass draws the whole width.
+    /// Empty rather than a row of blanks when there is nothing to say, which is
+    /// what both callers test to fall back to the single accent fill: a
+    /// recording with no transcript, and one whose length has not arrived yet.
+    /// A blank speaker means a silence between two turns and is not the same
+    /// claim.
+    private func speakers(for rects: [NSRect]) -> [String] {
+        guard !spans.isEmpty, duration > 0, bounds.width > 0 else { return [] }
+        var out: [String] = []
+        out.reserveCapacity(rects.count)
+        var cursor = 0
+        for rect in rects {
+            let time = Double(rect.midX / bounds.width) * duration
+            while cursor < spans.count, spans[cursor].end <= time { cursor += 1 }
+            // Nobody is talking between two turns, and a silence is not a person.
+            out.append(cursor < spans.count && spans[cursor].start <= time
+                       ? spans[cursor].speaker : "")
+        }
+        return out
+    }
+
     /// The played bars grouped into stretches of one colour, in order.
     ///
     /// One path per stretch rather than one per bar: a two-person meeting is a
@@ -157,9 +229,10 @@ final class WaveformView: NSView {
     /// Called from `draw`, which is where a mixed colour has to be made: the
     /// appearance is current there, so the bars follow light and dark exactly as
     /// the names above them do.
-    private func runs(in rects: [NSRect], upTo played: CGFloat) -> [(NSColor, NSBezierPath)] {
+    private func runs(in rects: [NSRect], who: [String],
+                      upTo played: CGFloat) -> [(NSColor, NSBezierPath)] {
         let accent = Brand.accent
-        guard !spans.isEmpty, duration > 0, bounds.width > 0 else {
+        guard !who.isEmpty, duration > 0, bounds.width > 0 else {
             let path = NSBezierPath()
             for rect in rects where rect.minX < played {
                 path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
@@ -171,23 +244,26 @@ final class WaveformView: NSView {
         var inks: [String: NSColor] = [:]
         var out: [(NSColor, NSBezierPath)] = []
         var current: (colour: NSColor, path: NSBezierPath)?
-        // The spans are in order and so are the bars, so this walks both once
-        // rather than searching the turns for every bar.
-        var cursor = 0
 
-        for rect in rects where rect.minX < played {
-            let time = Double(rect.midX / bounds.width) * duration
-            while cursor < spans.count, spans[cursor].end <= time { cursor += 1 }
-            // Nobody is talking between two turns, and a silence is not a person.
-            // The same grey an unnamed speaker gets, which is the point: it says
-            // played, and it says nothing about who.
-            let speaker = cursor < spans.count && spans[cursor].start <= time
-                ? spans[cursor].speaker : ""
-            let colour = inks[speaker] ?? {
-                let ink = SpeakerColour.ink(for: speaker, on: .window, dark: dark)
-                inks[speaker] = ink
-                return ink
-            }()
+        for (i, rect) in rects.enumerated() where rect.minX < played {
+            let speaker = i < who.count ? who[i] : ""
+            // While one speaker is soloed everybody else keeps the played grey
+            // rather than their own colour. Five colours next to each other is
+            // the picture that made a quiet speaker hard to find in the first
+            // place, and repeating it inside the played part would undo above
+            // what the pass above just did.
+            let colour: NSColor
+            if let soloed, speaker != soloed {
+                colour = .tertiaryLabelColor
+            } else {
+                colour = inks[speaker] ?? {
+                    // The same grey an unnamed speaker gets for a silence, which
+                    // is the point: it says played, and it says nothing about who.
+                    let ink = SpeakerColour.ink(for: speaker, on: .window, dark: dark)
+                    inks[speaker] = ink
+                    return ink
+                }()
+            }
 
             if current?.colour != colour {
                 if let current { out.append((current.colour, current.path)) }

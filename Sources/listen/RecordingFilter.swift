@@ -33,9 +33,17 @@ struct RecordingFilter {
     var after: Date?
     var before: Date?
 
+    /// Only recordings with somebody in them nobody has named.
+    ///
+    /// The library's to-do list, asked as a lens rather than pushed at every row
+    /// as a status. See `Labelling` for why the question goes to the transcript
+    /// and not to `metadata.state`, which is wrong in both directions.
+    var needsSpeakers = false
+
     var isEmpty: Bool {
         query.trimmingCharacters(in: .whitespaces).isEmpty
             && people.isEmpty && tags.isEmpty && after == nil && before == nil
+            && !needsSpeakers
     }
 
     func apply(to library: [Recording]) -> [Recording] {
@@ -63,6 +71,15 @@ struct RecordingFilter {
                     carried.contains { Tags.matches($0, wanted) }
                 }
             }
+        }
+
+        // First of the three that read `turns.json`, because it is by far the
+        // most selective: measured on the development library it takes 31
+        // recordings to 13, so the two below it read less than half as many
+        // transcripts when it is on. It is also the cheapest of the three, being
+        // the only one answered from a cache.
+        if needsSpeakers {
+            out = out.filter(Labelling.waits)
         }
 
         for person in people where !person.isEmpty {

@@ -23,14 +23,20 @@ enum PersonPopover {
     /// row rather than the chip inside it. `NSPopover` closes itself as soon as
     /// its positioning view leaves the window, and anything that reloads the
     /// pane replaces every chip in the row.
+    /// `closed` fires however this goes away, dismissed or committed. It is what
+    /// puts the transcript back after a chip narrowed it: see `SpeakerPreview`,
+    /// which carries the same hook for the unnamed side, so both kinds of chip
+    /// follow one rule.
     static func show(_ label: String, from view: NSView, rect: NSRect,
-                     editing: Bool = false, done: @escaping () -> Void) {
+                     editing: Bool = false, closed: (() -> Void)? = nil,
+                     done: @escaping () -> Void) {
         guard let person = People.find(label) else { return }
         current?.performClose(nil)
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = ContactCard(person: person, editing: editing) {
+        popover.contentViewController = ContactCard(
+            person: person, editing: editing, closed: closed) {
             current?.performClose(nil)
             done()
         }
@@ -154,14 +160,26 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
     private let notes = NSTextView()
     private var committing = false
 
-    init(person: Person, editing: Bool, done: @escaping () -> Void) {
+    private let closed: (() -> Void)?
+
+    init(person: Person, editing: Bool, closed: (() -> Void)? = nil,
+         done: @escaping () -> Void) {
         self.person = person
         self.editing = editing
+        self.closed = closed
         self.done = done
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The one hook both ways out of this card go through, dismissed or
+    /// committed, so a transcript narrowed to this person is never left that way
+    /// with nothing on screen asking about them.
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        closed?()
+    }
 
     private var contact: Contact? { ContactBook.contact(person.label) }
 

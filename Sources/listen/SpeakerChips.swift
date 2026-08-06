@@ -34,6 +34,13 @@ final class SpeakerChips: NSView {
     var onPerson: ((String, NSView, NSRect) -> Void)?
 
     /// Something in a chip's menu changed the recording or the library.
+    ///
+    /// Narrowing the transcript to one speaker is deliberately **not** here.
+    /// It is not a mode a chip can put the pane into, it is what being asked
+    /// about looks like: `DetailView.editSpeaker` turns it on with the popover
+    /// and off again when that closes, so there is no state for this row to
+    /// carry and no second control that could disagree with the popover about
+    /// whether a filter is on.
     var onChanged: (() -> Void)?
 
     /// True when there is nobody to show, so the pane can close the gap rather
@@ -124,6 +131,11 @@ final class SpeakerChips: NSView {
         // The label decides the colour and the title decides the words. They
         // differ here: a chip carries a share, and "Me · 61%" is not somebody's
         // name to look a colour up under.
+        //
+        // Nothing is added while that speaker is the one being asked about. A
+        // mark on the chip would be a second thing on screen saying what the bar
+        // over the transcript already says, and it would have to be kept in step
+        // with a state this row does not own.
         button.show(label, title: name + percent)
         button.identifier = NSUserInterfaceItemIdentifier(label)
 

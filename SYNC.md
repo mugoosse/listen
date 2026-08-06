@@ -119,6 +119,29 @@ the `~/Resilio/Listen` you made in step 2, and leave **Selective Sync off**. See
 claude mcp add listen -- /Applications/Listen.app/Contents/MacOS/Listen mcp
 ```
 
+[`MCP.md`](MCP.md) covers the other clients, and the per-profile trap if you use
+Hermes.
+
+### 7. Set your name on the second Mac
+
+```sh
+listen me "Your Name"
+```
+
+**Preferences do not sync, only the library does.** Transcripts store `Me` on
+disk whatever you call yourself, and the name is resolved on the way to the
+screen, which is what makes it safe to change your mind. It is resolved per Mac,
+so a second one that has never been told shows every one of your own turns as
+`Me`.
+
+The other preference worth copying is the meeting-detection skip list, which is
+per Mac for the same reason. A second Mac starts with an empty one and will ask
+"are you in a meeting?" about apps the first has long since been told to ignore.
+Settings, Meetings is where they are.
+
+`microphoneUID` is the one that must stay per Mac, since it names hardware, and
+`modelID` arguably should too.
+
 ## What the second Mac can and cannot do
 
 **Can:** read every transcript, search across all of them, list people, read and
@@ -127,14 +150,22 @@ surface.
 
 **Cannot:** play a recording back, redraw a waveform, or transcribe anything. The
 audio is not there. Listen knows this and says so rather than failing: the player
-is hidden, "Transcribe Again" is greyed out, and a recording waiting on its
-transcript reads *"The audio is on the Mac that recorded this."*
+keeps its place and reads *"The audio for this meeting is on the Mac that
+recorded it"*, and "Transcribe Again" is greyed out.
+
+It keeps its place deliberately. Collapsing it left a transcript with an
+unexplained gap above it, which reads as playback being broken, and that is the
+ordinary state of every recording on this Mac rather than a rare one.
 
 You can leave the app open on both Macs. The queue will not pick up a recording
 whose audio is on the other machine, which is what stops two Macs transcribing
 the same meeting at once. See
 [CLAUDE.md](CLAUDE.md#a-recording-with-no-audio-is-not-a-job-waiting-to-happen)
 for why that guard is on the audio rather than on which device recorded it.
+
+The window re-reads the library when you come back to the app, so a meeting
+recorded on the other Mac appears without relaunching. It does not watch for
+changes continuously, so a few seconds in another app is what it takes.
 
 ## Recording on both Macs
 

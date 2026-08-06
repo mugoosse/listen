@@ -61,6 +61,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
 
+    /// What the library looked like when this window last read it. See
+    /// `appBecameActive`.
+    private var libraryStamps: [String: TimeInterval] = [:]
+
     private var recordTick: Timer?
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
@@ -312,8 +316,77 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
 
+        // Somebody else may have written to the library since you last looked.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appBecameActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
+        libraryStamps = Self.libraryStamps()
+
         sidebarHost.show(sidebar)
         detailHost.show(detail)
+    }
+
+    /// One modification date per recording folder, which is as much as is worth
+    /// knowing about a library nobody in this process has touched.
+    ///
+    /// Cheap on purpose: one directory listing with the dates prefetched, no
+    /// `metadata.json` opened. A folder's date moves when a file is created,
+    /// removed or renamed inside it, and every writer here renames into place,
+    /// both `Recording.save()` with `.atomic` and a sync tool landing a file. So
+    /// an edit made on another Mac shows up in this without reading anything.
+    private static func libraryStamps() -> [String: TimeInterval] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        var stamps: [String: TimeInterval] = [:]
+        for dir in [Library.recordings, Library.staging] {
+            guard let entries = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: keys) else { continue }
+            for url in entries {
+                let date = (try? url.resourceValues(forKeys: Set(keys)))?.contentModificationDate
+                stamps[url.lastPathComponent] = date?.timeIntervalSince1970 ?? 0
+            }
+        }
+        return stamps
+    }
+
+    /// Re-read the library when you come back to the app.
+    ///
+    /// Nothing watched the library until now, and nothing needed to: every
+    /// writer was this process, so every reload could be triggered by the edit
+    /// that caused it. Sharing a library between two Macs breaks that, and the
+    /// symptom is specific rather than general. A recording made on the other
+    /// Mac arrives as `metadata.json` a moment before its `transcript.json`, so
+    /// a row built in that second says "not transcribed" and says it for ever,
+    /// while the pane underneath renders the transcript that arrived after it.
+    /// Reported from a real two-Mac session, and the files on disk were correct
+    /// throughout: only the window was stale.
+    ///
+    /// `DetailView` already does exactly this for notes, for the same reason an
+    /// agent writing one announces nothing. This is that rule applied to the
+    /// list, and it fixes the same staleness for a tag written by an agent or
+    /// the CLI while the window is open.
+    ///
+    /// **The detail pane is re-shown only when the selected recording's own
+    /// folder moved.** `DetailView.show` stops playback and puts the playhead
+    /// back to zero, so reloading it on every activation would silence a meeting
+    /// you were listening to every time you switched to another app and back.
+    /// That is the bug `reloading` and `renderTurns(scrollToTop:)` already exist
+    /// to prevent, and it would have been reintroduced here for free.
+    @objc private func appBecameActive() {
+        guard mode == .library else { return }
+        let now = Self.libraryStamps()
+        guard now != libraryStamps else { return }
+
+        let selected = sidebar.selectedRecording?.id
+        let selectedMoved = selected.map { now[$0] != libraryStamps[$0] } ?? false
+        libraryStamps = now
+
+        sidebar.reload()
+        if selectedMoved, let selected, let fresh = Recording.find(selected) {
+            detail.show(fresh)
+        }
+        trace("library changed elsewhere, list reloaded"
+              + (selectedMoved ? " and the open recording re-read" : ""))
     }
 
     // MARK: - Modes
@@ -512,6 +585,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // MARK: - Data
 
     func reload() {
+        // Take the stamps here too, so this window's own writes are never
+        // mistaken for somebody else's the next time it is activated.
+        libraryStamps = Self.libraryStamps()
         sidebar.reload()
         // Re-read the selected recording from disk so a transcript that just
         // finished appears without anyone clicking away and back.

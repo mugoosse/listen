@@ -13,8 +13,9 @@ a local release and a CI release cannot come apart.
 
 `/release` is the shortcut, and it does all of the below: commits and pushes
 what is outstanding, bumps `VERSION`, writes the changelog entry, asks once,
-then publishes and dispatches the cask. It lives in
-`.claude/skills/release/SKILL.md`. By hand:
+then publishes and dispatches the cask. Its shared entry point lives in
+`.agents/skills/release/SKILL.md` and links to the complete procedure used by
+Claude Code too. By hand:
 
 ```sh
 $EDITOR CHANGELOG.md          # a '## 1.0.1 (2026-08-12)' section on top

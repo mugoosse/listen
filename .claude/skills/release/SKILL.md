@@ -217,10 +217,6 @@ The website needs no change: `docs/index.html` links
 `releases/latest/download/Listen.dmg`, which is why `release.sh` publishes an
 unversioned copy of the DMG alongside the versioned one.
 
-The website needs no change: `docs/index.html` links
-`releases/latest/download/Listen.dmg`, which is why `release.sh` publishes an
-unversioned copy of the DMG alongside the versioned one.
-
 ## Things that will bite you
 
 - **Never run `swift build`.** It links and then dies at runtime on the

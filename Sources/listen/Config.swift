@@ -176,6 +176,19 @@ struct ModelChoice {
     /// underneath it, invisible until it passed the abandoned file. The active
     /// download is the one being written, so mtime identifies it and size does
     /// not.
+    ///
+    /// Measured here against a genuinely hostile temp directory, which is why
+    /// that choice is not academic: this machine had **54 abandoned
+    /// `CFNetworkDownload` files totalling 13 GB**, four of them larger than
+    /// the model. Taking the largest would have reported 100% before the real
+    /// download had fetched a byte. Watching a live fetch instead, the newest
+    /// mtime tracked it cleanly and its age never exceeded one second:
+    ///
+    ///     308 MB → 600 → 872 → 1074 → 1279 → 1465 → 1529 over 66 s
+    ///
+    /// So the ten second cutoff is doing real work, and comfortably: nothing
+    /// stale ever came close to qualifying. About 23 MB/s here, 2.5 GB in
+    /// roughly 110 s, which is what the progress bar is pacing against.
     static func inFlightBytes() -> Int64 {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
         guard let entries = try? FileManager.default.contentsOfDirectory(

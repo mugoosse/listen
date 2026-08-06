@@ -815,9 +815,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 extension LibraryWindow: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(retranscribeSelected):
+            // Transcribing needs the audio, and on a Mac sharing a library with
+            // the machine that recorded it there is none. Enabled, this would be
+            // a control that does nothing and reports nothing, which is the
+            // hardest kind of failure to attribute. Both copies of this item go
+            // through here: the File menu's targets nil, and the toolbar's is
+            // validated the same way.
+            return selected?.hasAudio == true
         case #selector(exportSelected), #selector(revealSelected),
-             #selector(renameSelected), #selector(retranscribeSelected),
-             #selector(deleteSelected):
+             #selector(renameSelected), #selector(deleteSelected):
             return selected != nil
         default:
             return true

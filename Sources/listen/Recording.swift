@@ -147,6 +147,28 @@ struct Recording {
         [micURL, systemURL].filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    /// Whether any audio for this recording is on **this** Mac.
+    ///
+    /// The mixdown counts as well as the two tracks, because an imported
+    /// recording has only `mix.m4a` and `Pipeline.run` transcribes that as the
+    /// everyone-track.
+    ///
+    /// False is a normal state rather than a broken one, and that is the whole
+    /// reason this exists. A library shared between two Macs deliberately leaves
+    /// the audio on the machine that recorded it: measured here, the WAVs are
+    /// 8.3 GB of an 8.4 GB library, and nothing the transcript, the CLI or the
+    /// MCP server reads ever opens them. So on the second Mac the ordinary case
+    /// is a recording whose transcript is present and whose audio is not, and
+    /// anything that would otherwise reach for the audio has to ask first.
+    ///
+    /// `hasTranscript` is **not** the test to use instead. A recording made on
+    /// the other Mac arrives as metadata before its transcript has been written,
+    /// so for those minutes it has neither, and it is still not this machine's
+    /// job.
+    var hasAudio: Bool {
+        !tracks.isEmpty || FileManager.default.fileExists(atPath: mixURL.path)
+    }
+
     func save() throws {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]

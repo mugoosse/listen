@@ -1309,6 +1309,55 @@ One job at a time, on purpose. Parakeet is on the GPU and FluidAudio is on the
 Neural Engine, and two jobs contend for the same hardware rather than finishing
 sooner. `dashboard.py` reached the same conclusion.
 
+#### A recording with no audio is not a job waiting to happen
+
+The sentence above is load-bearing and it stops being true the moment a second
+Mac can see the library. `SYNC.md` documents putting the folder behind a file
+sync tool with the WAVs excluded, which is the right split because the audio is
+8.3 GB of an 8.4 GB library and nothing but playback reads it. The consequence is
+that the second Mac holds recordings it can never transcribe, and a recording
+synced from the other machine arrives as `metadata.json` **before** its
+transcript exists, so for those minutes it has neither.
+
+Read literally, "audio exists and a transcript does not" would queue every one of
+them at launch, run a job per recording that can only fail, mark each `failed`,
+and race the real transcript on its way over. `effectiveState` derives the state
+from the files rather than trusting the field, so the wrong state heals itself
+and the only surviving evidence is a fan spinning up. That is the worst shape a
+bug can take here.
+
+`Recording.hasAudio` is the guard, and it lives in `Queue.enqueue` rather than in
+`resume` because there are three callers (launch, `Capture` keeping a recording,
+and Transcribe Again) and one rule. `enqueue` returns `Bool` so a caller that is
+a control can say why instead of appearing dead.
+
+Three things about it are deliberate:
+
+1. **It tests the audio, not which device recorded it.** A `device` field would
+   work and would be a schema change, a migration and a fact that can be wrong.
+   The audio is already on disk, it is the thing actually required, and the rule
+   stays correct if the WAVs are ever synced too.
+2. **The mixdown counts.** An imported recording has only `mix.m4a` and
+   `Pipeline.run` transcribes it as the everyone-track, so testing `tracks` alone
+   would refuse to transcribe every legacy import.
+3. **`hasTranscript` is not the test to use instead.** It is false in exactly the
+   window this is about.
+
+`LibraryWindow.validateMenuItem` greys Transcribe Again on the same property.
+Both copies of that item go through that one function, the File menu's because it
+targets nil and the toolbar's because it is validated the same way, so they
+cannot disagree. `DetailView` reads `Recording.hasAudio` too rather than keeping
+its own reading of the same folder, and its empty state says the audio is on the
+Mac that recorded it rather than "Not transcribed yet", which on that machine is
+a promise nothing is going to keep.
+
+Verified against a real launch rather than reasoned about, using `LISTEN_LIBRARY`
+to point the app at a two-recording library, one with a track and one without:
+
+    [Listen] not queueing 2026-01-01-000000-NOAUD: no audio on this Mac
+
+and the one with a track went on to load the model.
+
 ### Transcript edits do not live in the sheet that presents them
 
 `TranscriptEditor` owns rename, discard and merge; `SpeakerSheet` only asks the

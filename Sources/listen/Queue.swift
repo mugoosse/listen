@@ -42,11 +42,39 @@ final class Queue {
         if !waiting.isEmpty { trace("queued \(waiting.count) pending recording(s) at launch") }
     }
 
-    func enqueue(_ id: String) {
-        guard !isQueued(id) else { return }
+    /// Take a recording on, if it is this machine's to transcribe.
+    ///
+    /// Returns whether it was queued, so a caller that is a control can say why
+    /// rather than appearing to do nothing.
+    @discardableResult
+    func enqueue(_ id: String) -> Bool {
+        guard !isQueued(id) else { return false }
+
+        // Audio is the thing there is to transcribe, and a recording without any
+        // cannot be a job however pending it looks.
+        //
+        // This is what makes the app safe to leave open on two Macs that share a
+        // library. "Audio exists and a transcript does not" is how the queue is
+        // rebuilt from the file system at launch, with no job table, and it is
+        // exactly the sentence that stops being true once a second machine can
+        // see the folder: a recording synced from the other Mac has metadata
+        // before it has a transcript, so every launch here would queue a run
+        // that can only fail, mark it `failed`, and race the real transcript on
+        // its way over. `effectiveState` heals the wrong state afterwards, which
+        // means the only surviving evidence would be a fan spinning up.
+        //
+        // Deliberately not a check on which device recorded it. Audio is the
+        // fact that matters, it is already on disk, and it stays correct if the
+        // WAVs are ever synced too.
+        guard Recording.find(id)?.hasAudio == true else {
+            trace("not queueing \(id): no audio on this Mac")
+            return false
+        }
+
         waiting.append(id)
         onChange?(id)
         advance()
+        return true
     }
 
     private func advance() {

@@ -843,15 +843,7 @@ final class DetailView: NSView {
         let message: String
         switch showing {
         case .transcript:
-            message = turns.isEmpty
-                ? (recording.isLive
-                    ? "Recording. The transcript appears when you stop."
-                    : (recording.hasTranscript
-                        ? "This recording has no speech in it."
-                        : (Queue.shared.isQueued(recording.id)
-                            ? "Transcribing. This stays here if you quit."
-                            : "Not transcribed yet.")))
-                : ""
+            message = turns.isEmpty ? Self.emptyTranscriptMessage(recording) : ""
         case .notes:
             // Never empty any more: the user's own note is always offered, and
             // an empty one is a cursor rather than a message. The placeholder
@@ -860,6 +852,31 @@ final class DetailView: NSView {
         }
         empty.stringValue = message
         empty.isHidden = message.isEmpty
+    }
+
+    /// Why there is no transcript on screen, in the order the reasons rule each
+    /// other out.
+    ///
+    /// Pulled out of `updateEmpty` when the fifth reason arrived: five nested
+    /// ternaries is a sentence nobody can check, and the order between them is
+    /// the whole correctness of it.
+    private static func emptyTranscriptMessage(_ recording: Recording) -> String {
+        if recording.isLive { return "Recording. The transcript appears when you stop." }
+        // A transcript that exists and yields no turns is a recording with no
+        // speech in it, whether or not the audio is on this Mac.
+        if recording.hasTranscript { return "This recording has no speech in it." }
+        if Queue.shared.isQueued(recording.id) {
+            return "Transcribing. This stays here if you quit."
+        }
+        // Before "Not transcribed yet", which would be a promise this Mac cannot
+        // keep. On a Mac sharing a library with the machine that recorded the
+        // meeting, the transcript arrives when that machine has made it, and
+        // nothing here is waiting to run. See `Recording.hasAudio`.
+        if !recording.hasAudio {
+            return "The audio is on the Mac that recorded this."
+                + " The transcript appears here when that Mac has made it."
+        }
+        return "Not transcribed yet."
     }
 
     /// Layer colours do not follow the appearance on their own, so the card is
@@ -938,7 +955,10 @@ final class DetailView: NSView {
         // growing, so a mixdown made now would be of half a meeting and the
         // waveform cache would keep that half for ever: the cache is keyed on
         // its format version, not on how long the audio was when it was drawn.
-        hasAudio = !recording.isLive && !recording.waveformSources.isEmpty
+        // `Recording.hasAudio` rather than a second reading of the same folder,
+        // so this pane, the queue and the Transcribe Again item cannot disagree
+        // about whether there is anything here to play.
+        hasAudio = !recording.isLive && recording.hasAudio
         setChromeHidden(false)
         length = recording.metadata.duration
         position = 0

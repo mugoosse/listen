@@ -429,6 +429,11 @@ The guest list is copied into `metadata.json` rather than looked up when needed,
 so a recording keeps answering after the meeting is deleted from the calendar or
 you take the permission away again.
 
+Because it is only folders, a file sync tool is all it takes to read the same
+library on a second Mac. [`SYNC.md`](SYNC.md) is the guide, and the short version
+is that the transcripts are 6.5 MB and the audio is 8.3 GB, so the audio stays on
+the machine that recorded it.
+
 ## What leaves your Mac
 
 Two things, both declared in `InternetAccessPolicy.plist` for firewall tools

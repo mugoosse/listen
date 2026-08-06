@@ -332,63 +332,9 @@ from it, so a wrong note is a wrong opinion and a wrong transcript edit is a
 lost fact. Changing the evidence goes through you, in the window or at the
 command line, where you can see it and undo it.
 
-### The tools
-
-| tool | what it answers |
-|---|---|
-| `list_recordings` | which meetings match, as metadata only |
-| `get_recording` | who was in one meeting, whether it has a transcript, which notes |
-| `get_transcript` | the speaker turns, paginated |
-| `search_transcripts` | which turns anywhere contain a phrase |
-| `list_people` | everyone the voice bank knows, and how much they talk |
-| `list_notes` | the notes on one recording, or all of them, without their text |
-| `read_note` | one note in full |
-| `write_note` | add a note. Markdown body, free-text title, one or more recordings |
-| `edit_note` | rewrite one, refused if it changed since you read it |
-| `delete_note` | remove one |
-
-`list_recordings` takes `query`, `person`, `after`, `before`, `limit` and
-`offset`. They combine with AND:
-
-```json
-{"person": "Edgar", "after": "2026-07-01", "before": "2026-07-31"}
-```
-
-`after` and `before` take `YYYY-MM-DD` or a full ISO 8601 timestamp. A bare day
-covers the whole of it, so `before: "2026-07-14"` includes everything recorded
-on the 14th rather than stopping at midnight. Anything else is refused with a
-message rather than quietly matching nothing.
-
-`search_transcripts` takes `person` too, and it means something different there:
-`list_recordings` with a person finds meetings they were **in**, and
-`search_transcripts` with a person finds turns they **said**. "What has Edgar
-said about pricing" is the second one.
-
-Names are matched case-insensitively, and both the stored label and the name you
-see work. Your own track is stored as `Me` whatever you have set your name to,
-so both answer. `list_people` prints the name to use, and adds `label` on the
-one row where the two differ.
-
-### Working through a large library
-
-Transcripts are long and there is no summary layer, so the tools are shaped to
-be walked from cheap to expensive rather than read whole:
-
-1. `list_people` or `list_recordings` with `person` and a date range. Metadata
-   only, no transcript is read.
-2. `get_recording` on the shortlist, to see who is in each and how long it ran.
-3. `list_notes` and `read_note` on the ones that look promising. A note is a few
-   hundred tokens against a transcript's several thousand, and your own note on
-   a meeting is often the whole answer.
-4. `get_transcript` on the few that matter, paginated.
-
-`search_transcripts` short-circuits that when you already know the phrase.
-
-For scale: an average meeting here is about 5,500 tokens, so a 200k context
-holds roughly 36 of them in full. Four two-hour catch-ups with one person come
-to about 79,000 tokens, which fits in one go. A library of 2,000 meetings is
-around 30 MB of text in total, so the limit you will meet is the context window
-rather than anything on disk.
+Ten tools, seven of them reads. [`MCP.md`](MCP.md) is the reference: how to
+connect each client, what every tool takes, and how to walk a large library
+without reading it whole.
 
 ## Where things are kept
 

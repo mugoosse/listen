@@ -411,6 +411,20 @@ struct Voiceprint: Codable {
     /// the labelling UI is worse than no suggestion.
     var speech: Double
 
+    /// True when the bank named this speaker rather than a person doing it.
+    ///
+    /// `Optional`, and that is load-bearing for the reason recorded against
+    /// `Metadata.calendar_event_id`: Swift's synthesized decoder throws
+    /// `keyNotFound` on a missing key even where the property has a default, so
+    /// a non-optional `Bool = false` would make every `embeddings.json` written
+    /// before this field fail to decode, and `Recording.voiceprints` swallows
+    /// that with `try?` and returns `[:]`. The whole voice bank would have
+    /// emptied itself with nothing anywhere reporting it.
+    ///
+    /// Read by `VoiceBank.named`, which is what keeps an automatic name from
+    /// becoming the evidence for the next one.
+    var auto: Bool?
+
     static let minimumSpeechForEvidence: Double = 15
 
     var isEvidence: Bool { speech >= Self.minimumSpeechForEvidence }

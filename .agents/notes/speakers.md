@@ -409,6 +409,76 @@ because that was the only one anybody had named. Three levers, in order of size:
 labelling the other four costs nothing and takes the score to 0.867; pooling the
 prints into a centroid gives **+0.828** here and is robust to one bad print in a
 way `max` is not; and offering the unnamed speakers that match a name somebody
-has just applied would have surfaced those four without being asked. None of
-them is implemented yet. The measurement is here so the next person does not
-re-derive it.
+has just applied would have surfaced those four without being asked.
+
+The first two are now done and are the section below. The third, back-filling
+the recordings that match a name somebody has just applied, is not.
+
+### A person is a centroid, the number is a word, and the sure ones name themselves
+
+The three things the section above asked for, measured together because they
+only make sense together: pooling changes what the score means, the score being
+meaningful is what lets it be a word instead of a number, and a word nobody has
+to interpret is what makes acting on it without asking defensible.
+
+**Scored against a centroid.** Every evidence-grade print for a name,
+normalised, averaged, normalised again. Unweighted by speech seconds on purpose:
+pooling exists to average over rooms, microphones and days, and weighting by
+duration lets the single longest meeting decide what somebody sounds like. A
+person with one print is unaffected, so nothing regresses.
+
+Re-measured for this scoring, leave-one-out over the whole library, 20
+same-person and 112 different-person comparisons:
+
+    same person       min +0.642  p10 +0.746  median +0.863  max +0.914
+    different people  min -0.166  median +0.110  p99 +0.360  max +0.371
+
+Against the pairwise numbers in the section above (same-person min +0.520,
+different max +0.393) that is a wider gap from a more stable statistic, which is
+the whole argument for pooling.
+
+**The percentage is gone.** `VoiceConfidence` is three words over the same
+thresholds. The number was a cosine times a hundred, and on a scale where the
+entire answer lives between 0.37 and 0.91 it spends most of itself where nothing
+happens: a correct, unambiguous match displayed as "60% match" and was read as a
+coin flip. The row now says how sure and how much was heard, and names the
+runner-up **only when the margin is genuinely narrow**, because a ranked list
+otherwise hides the one fact that would make somebody listen before choosing.
+
+**A sure match names itself.** `VoiceBank.autoAssign` runs from
+`Recording.markTranscribed`, the one call the queue and `listen transcribe`
+share. Four properties, each of which is the reason it is safe rather than a
+detail:
+
+1. **Level and margin, not level alone.** `certainThreshold` 0.75 takes 85% of
+   true matches with **zero** false pairs above it, and gives up five points of
+   recall against 0.65 to buy 0.379 of clearance over the worst different-person
+   pair, which is more than the whole gap. `marginThreshold` 0.15 sits far below
+   the smallest observed correct margin (+0.436), so it costs nothing today and
+   is not fitted to a six-person sample. It exists for the case this library has
+   already had, where one bad print put the user's own voice at +0.87 against
+   somebody else's name: two strong candidates means nothing is applied.
+2. **An automatic name never becomes evidence.** `VoiceBank.named` skips prints
+   flagged `auto`. Without this one wrong assignment recruits the next and each
+   round is more confident than the last. Only a person renaming that speaker
+   clears the flag, and "the name is still there" is deliberately not counted as
+   somebody agreeing with it.
+3. **It goes through `TranscriptEditor`**, the same write the window and `listen
+   label` use, with `backup: false` so it does not leave a `.raw.json.bak`.
+   That file is how `hasHumanEdits` knows to warn before Transcribe Again throws
+   corrections away, and a recording that warns about work nobody did is how you
+   teach somebody to click through the warning that matters. `hasHumanEdits`
+   excludes `metadata.auto_named` for the same reason.
+4. **It is written down.** `metadata.auto_named`, `listen show`'s `(by voice)`
+   marker, and a line on stderr per assignment, which is the arrangement the
+   dictionary counts have and for the stronger version of their reason: this
+   writes somebody's name into an archive nobody may open for a month.
+
+One thing it deliberately will not do: two placeholders in one recording cannot
+both take the same name. That is either a diarizer split or a wrong match, and
+neither is a thing to decide without being asked.
+
+**Not built, and the gap worth knowing.** There is no way in the window to
+*confirm* an automatic name, so its print stays out of the bank for good unless
+somebody renames that speaker. That is the safe direction and it is not the
+right end state.

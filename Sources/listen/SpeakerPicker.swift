@@ -198,14 +198,26 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // button at the bottom that says so.
         let taken = Set(recording.speakers)
 
-        for match in VoiceBank.suggestions(for: speaker, in: recording)
-        where !taken.contains(match.name) {
+        // A word rather than a percentage, and how much was heard rather than a
+        // score. See `VoiceConfidence`: the number it replaced ran on a scale
+        // where the whole answer lives between 0.37 and 0.91, so "60%" read as a
+        // coin flip on a match that was not close.
+        let ranked = VoiceBank.suggestions(for: speaker, in: recording)
+        for match in ranked where !taken.contains(match.name) {
+            var detail = match.confidence.label
+            detail += " · heard in \(match.recordings) "
+                + (match.recordings == 1 ? "recording" : "recordings")
+            // Named only when it is genuinely close, because the runner-up is
+            // the thing a ranked list hides. Two candidates a hair apart look
+            // identical to one candidate standing alone, and that is exactly the
+            // case where somebody should listen before choosing.
+            if match.name == ranked.first?.name, match.margin < VoiceBank.marginThreshold,
+               let second = ranked.dropFirst().first {
+                detail += " · close to \(SpeakerName.display(second.name))"
+            }
             out.append(Candidate(label: match.name,
                                  name: SpeakerName.display(match.name), email: nil,
-                                 detail: "\(Int(match.score * 100))% match"
-                                     + (match.recordings > 1
-                                        ? " · \(match.recordings) recordings" : ""),
-                                 section: "Sounds like"))
+                                 detail: detail, section: "Sounds like"))
         }
 
         let named = Set(out.map(\.label))

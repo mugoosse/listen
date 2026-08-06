@@ -30,11 +30,21 @@ enum TranscriptEditor {
         case retext(segment: Int, was: String, to: String)
     }
 
+    /// `backup` exists for exactly one caller, `VoiceBank.autoAssign`.
+    ///
+    /// The `.raw.json.bak` is how `Recording.hasHumanEdits` knows somebody has
+    /// corrected this transcript, which is what makes Transcribe Again ask
+    /// before throwing the corrections away. An automatic name is not a
+    /// correction and must not start that conversation, or every recording the
+    /// bank ever named would warn about losing work nobody did. It runs before
+    /// anybody has been asked anything, so there is also nothing yet to
+    /// preserve: the file it would copy is the pipeline's own output, minus a
+    /// speaker label that `metadata.auto_named` records and a rename undoes.
     @discardableResult
-    static func apply(_ edit: Edit, to recording: Recording) -> Bool {
+    static func apply(_ edit: Edit, to recording: Recording, backup: Bool = true) -> Bool {
         switch edit {
         case .rename(let speaker, let name):
-            guard change(recording, { segments in
+            guard change(recording, backup: backup, { segments in
                 for i in segments.indices where segments[i].speaker == speaker {
                     segments[i].speaker = name
                 }
@@ -98,7 +108,7 @@ enum TranscriptEditor {
     /// edit that still leaves a `.raw.json.bak` and a rewritten `turns.json`
     /// behind it. The transcript is re-read here rather than passed in, so the
     /// check inside `mutate` is against what is on disk now.
-    private static func change(_ recording: Recording,
+    private static func change(_ recording: Recording, backup takeBackup: Bool = true,
                                _ mutate: (inout [LabelledSegment]) -> Bool) -> Bool {
         guard var transcript = recording.storedTranscript else { return false }
         var proposed = transcript.segments
@@ -109,7 +119,7 @@ enum TranscriptEditor {
         // has corrected a sentence, which is what makes transcribing again ask
         // before it throws the corrections away.
         let backup = recording.rawBackupURL
-        if !FileManager.default.fileExists(atPath: backup.path) {
+        if takeBackup, !FileManager.default.fileExists(atPath: backup.path) {
             try? FileManager.default.copyItem(at: recording.transcriptURL, to: backup)
         }
         transcript.segments = proposed

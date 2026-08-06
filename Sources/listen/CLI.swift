@@ -73,6 +73,8 @@ enum CLI {
             exit(0)
         case "calibrate":
             calibrate()
+        case "voices":
+            voices(rest)
         case "sources":
             sources()
         case "calendar":
@@ -101,6 +103,79 @@ enum CLI {
                  + "recordings, then run this again.")
         }
         Calibrate.print(report)
+        exit(0)
+    }
+
+    /// `listen voices <id> [--apply]`: what the bank thinks of each unnamed
+    /// speaker, and what it would do about it.
+    ///
+    /// Exists for the reason `listen calendar` and `listen sources` do. A name
+    /// applied automatically leaves nothing behind to argue with: the losing
+    /// candidates, the margin between them and the thresholds they were judged
+    /// against are all gone by the time anybody wonders why a transcript says
+    /// Marcia. This prints all three, and it is also the only way to see the
+    /// scoring at all without transcribing something.
+    ///
+    /// `--apply` runs the same `VoiceBank.autoAssign` the pipeline runs, so a
+    /// recording transcribed before this existed can be caught up without
+    /// re-running an hour of audio.
+    private static func voices(_ args: [String]) -> Never {
+        var ids: [String] = []
+        var apply = false
+        for arg in args {
+            if arg == "--apply" { apply = true }
+            else if arg.hasPrefix("-") { fail("unknown option `\(arg)`. Try `listen help`.") }
+            else { ids.append(arg) }
+        }
+        guard let first = ids.first, let recording = Recording.find(first) else {
+            fail("voices needs a recording. `listen list` prints them.")
+        }
+
+        print(recording.id + "  " + recording.metadata.title)
+        let automatic = Set(recording.metadata.auto_named ?? [])
+        for speaker in recording.speakers.sorted() {
+            let print_ = recording.voiceprints[speaker]
+            var head = "  " + SpeakerName.display(speaker)
+            if let p = print_ { head += String(format: "  (%.0fs of speech)", p.speech) }
+            if automatic.contains(speaker) { head += "  [named by voice]" }
+            print(head)
+
+            guard let p = print_ else { print("      no voiceprint"); continue }
+            guard p.isEvidence else {
+                print("      under \(Int(Voiceprint.minimumSpeechForEvidence))s, "
+                      + "too short to be an identity")
+                continue
+            }
+            let ranked = VoiceBank.suggestions(for: speaker, in: recording)
+            guard !ranked.isEmpty else {
+                print(String(format: "      nobody above %+.2f", VoiceBank.matchThreshold))
+                continue
+            }
+            for m in ranked {
+                // Padded by hand. `String(format:)` ignores a width on `%@` on
+                // this platform, so the columns silently collapse and the
+                // numbers stop lining up, which is most of what a table is for.
+                let name = m.name.padding(toLength: max(m.name.count, 20),
+                                          withPad: " ", startingAt: 0)
+                let how = m.confidence.label.lowercased()
+                print("      " + name + "  "
+                      + how.padding(toLength: max(how.count, 22), withPad: " ", startingAt: 0)
+                      + String(format: "score %+.3f  margin %+.3f", m.score, m.margin)
+                      + (m.autoAssignable ? "  -> would name automatically" : ""))
+            }
+        }
+        print(String(format: "\njudged against: match %+.2f, likely %+.2f, "
+                     + "certain %+.2f, margin %+.2f",
+                     VoiceBank.matchThreshold, VoiceBank.strongThreshold,
+                     VoiceBank.certainThreshold, VoiceBank.marginThreshold))
+
+        if apply {
+            let applied = VoiceBank.autoAssign(in: recording)
+            print(applied.isEmpty
+                  ? "\nnothing was sure enough to name."
+                  : "\nnamed: " + applied.map { "\($0.speaker) -> \($0.name)" }
+                      .joined(separator: ", "))
+        }
         exit(0)
     }
 
@@ -1185,6 +1260,7 @@ enum CLI {
       calendar <sub>             the calendars on this Mac, and what they name
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
+      voices <id> [--apply]      who the bank thinks each unnamed speaker is
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
@@ -1475,7 +1551,12 @@ enum CLI {
         print([recording.when, recording.lengthText, recording.appLabel ?? "",
                recording.storedTranscript.map { Recording.modelName($0.model) } ?? ""]
                 .filter { !$0.isEmpty }.joined(separator: " · "))
+        // Marked, because an automatic name is otherwise indistinguishable from
+        // one somebody chose, and "why does this say Marcia?" has to be
+        // answerable from outside the window.
+        let automatic = Set(recording.metadata.auto_named ?? [])
         let speakers = recording.speakers
+            .map { automatic.contains($0) ? "\($0) (by voice)" : $0 }
         if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
         let tags = Tags.of(recording)
         if !tags.isEmpty { print("tags: " + tags.joined(separator: ", ")) }

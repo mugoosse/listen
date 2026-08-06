@@ -122,6 +122,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Voiceprint thresholds were re-derived, and the old ones would have been wrong
 - Synthetic voices measured the model's ceiling, not the task
 - A suggestion is scored against the worst print, not the best evidence
+- A person is a centroid, the number is a word, and the sure ones name themselves
 - The legacy voiceprints are a different space with the same dimension
 - An imported recording has no mic track, and must not pretend otherwise
 - Re-transcribing an import swaps Whisper for Parakeet, and v2 has no Dutch

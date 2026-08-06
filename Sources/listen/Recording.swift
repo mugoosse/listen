@@ -32,6 +32,18 @@ struct Metadata: Codable {
     /// folder and the files in it are the truth.
     var calendar_people: [CalendarPerson]?
 
+    /// Speakers the voice bank named without being asked.
+    ///
+    /// The record of what happened, and the reason it is safe for it to happen
+    /// at all: an automatic name is otherwise indistinguishable from one a
+    /// person chose, in a transcript nobody may open for a month. Read by
+    /// `hasHumanEdits`, printed by `listen show`, and the answer to "why does
+    /// this say Marcia when I never said so".
+    ///
+    /// `Optional` for the reason every other added field here is. See
+    /// `calendar_event_id`.
+    var auto_named: [String]?
+
     /// The app the call was in, as Core Audio reported it.
     ///
     /// The identifier is the stable fact and the name is what a person reads,
@@ -175,10 +187,17 @@ struct Recording {
     /// placeholder does not count because nobody chose it either. Counting
     /// either would ask for confirmation on every recording in the library,
     /// which is the same as asking on none of them.
+    /// A name the voice bank applied does not count either, for the same reason
+    /// `Me` does not: nobody chose it. Without this, every recording the bank
+    /// ever named would warn about losing corrections that were never made,
+    /// which is the fastest way to teach somebody to click through the warning
+    /// that matters.
     var hasHumanEdits: Bool {
         if FileManager.default.fileExists(atPath: rawBackupURL.path) { return true }
+        let automatic = Set(metadata.auto_named ?? [])
         return storedTurns.contains {
             !VoiceBank.isPlaceholder($0.speaker) && $0.speaker != Pipeline.userLabel
+                && !automatic.contains($0.speaker)
         }
     }
 
@@ -323,6 +342,17 @@ struct Recording {
             ? Metadata.State.done.rawValue
             : Metadata.State.needsLabelling.rawValue
         try? save()
+
+        // Name whoever the bank is sure about, before anybody is asked. Here
+        // rather than in `Pipeline` because this is the one call the queue and
+        // `listen transcribe` share, so the two cannot come to different
+        // conclusions about a recording they both just transcribed.
+        //
+        // After the save above, not before: `TranscriptEditor` re-derives the
+        // state from what is left unnamed, and that answer is the better one.
+        // The copy in hand is a moment old once it has run.
+        VoiceBank.autoAssign(in: self)
+        if let fresh = Recording.find(id) { self = fresh }
     }
 
     func delete() throws {

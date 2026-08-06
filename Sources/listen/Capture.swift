@@ -23,6 +23,13 @@ final class Capture {
 
     var isRecording: Bool { current != nil }
 
+    /// How many times the microphone had to be rebuilt mid-recording, because
+    /// the device changed underneath it. Zero for almost every meeting, and the
+    /// only evidence that anything happened when it is not: the gap is padded
+    /// with silence, so the finished file looks exactly like somebody not
+    /// talking. See `MicRecorder.restart`.
+    var micInterruptions: Int { mic.restarts }
+
     var elapsed: TimeInterval {
         guard let startedAt else { return 0 }
         return Date().timeIntervalSince(startedAt)
@@ -89,14 +96,20 @@ final class Capture {
         // still capture the meeting, and a machine where the tap is refused
         // should still capture the user, because half a recording is worth
         // enormously more than none.
+        // One instant both tracks call zero, taken here rather than inside each
+        // recorder. They start seconds apart (the system track has an aggregate
+        // device to wait for) and each pads its own head up to this, because two
+        // files that measure from their own first sample do not line up and
+        // nothing downstream can tell.
+        let origin = Date()
         do {
-            try mic.start(writingTo: recording.micURL)
+            try mic.start(writingTo: recording.micURL, from: origin)
         } catch {
             warnings.append("microphone: \(error.localizedDescription)")
             log("mic capture failed: \(error.localizedDescription)")
         }
         do {
-            try system.start(writingTo: recording.systemURL)
+            try system.start(writingTo: recording.systemURL, from: origin)
         } catch {
             warnings.append("system audio: \(error.localizedDescription)")
             log("system capture failed: \(error.localizedDescription)")
@@ -153,8 +166,15 @@ final class Capture {
         // writer, so asking afterwards records every meeting as zero seconds
         // long.
         let captured = max(mic.duration, system.duration)
+        let interruptions = micInterruptions
         mic.stop()
         system.stop()
+
+        if interruptions > 0 {
+            log("microphone changed \(interruptions) time"
+                + (interruptions == 1 ? "" : "s")
+                + " during this recording; the gaps are silent in the mic track")
+        }
 
         // The length has to be written before the second attempt below, not
         // after it. `MeetingCalendar.candidates` matches a meeting that began

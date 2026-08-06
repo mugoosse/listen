@@ -61,7 +61,13 @@ final class SystemAudioRecorder {
         return false
     }
 
-    func start(writingTo url: URL) throws {
+    /// `origin` is the instant both tracks call zero, handed over by `Capture`.
+    /// This track starts second and everything above this line can take time:
+    /// creating the tap, creating the aggregate, and `deviceFormat` polling for
+    /// up to two seconds. Measured at three seconds behind the microphone on a
+    /// busy machine, which without the pad below is three seconds of every turn
+    /// being attributed to the wrong side for the whole meeting.
+    func start(writingTo url: URL, from origin: Date) throws {
         guard !isRecording else { return }
         guard #available(macOS 14.2, *) else { throw CaptureError.tapUnsupported }
 
@@ -95,6 +101,13 @@ final class SystemAudioRecorder {
             throw CaptureError.ioProcFailed(status)
         }
         ioProc = procID
+
+        // Before the IO proc runs, so nothing can land in the file ahead of the
+        // silence that represents the time already spent getting here.
+        let padded = writer?.pad(to: Date().timeIntervalSince(origin)) ?? 0
+        if padded > 0 {
+            trace("system padded \(String(format: "%.1f", padded))s to stay aligned with the mic")
+        }
 
         let started = AudioDeviceStart(deviceID, procID)
         guard started == noErr else {

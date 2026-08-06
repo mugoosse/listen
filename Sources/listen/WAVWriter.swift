@@ -107,6 +107,37 @@ final class WAVWriter {
 
     var duration: TimeInterval { Double(frames) / sampleRate }
 
+    /// Fill the file with silence up to `seconds` from the recording's origin,
+    /// and report how much was added.
+    ///
+    /// The two tracks are separate files with no timestamps in them, so a
+    /// sample's position in the file **is** its position on the clock, and the
+    /// two only line up while both files measure from the same instant. Every
+    /// way a track can lose time (a microphone changing underneath the engine,
+    /// an aggregate device taking two seconds to become ready) is therefore a
+    /// gap that has to be filled rather than closed up: closing it up loses no
+    /// word, but moves every word after it earlier, which silently reattributes
+    /// the rest of the meeting.
+    ///
+    /// Measured against the wall clock rather than against the last gap, so
+    /// repeated small shortfalls cannot accumulate over an hour.
+    @discardableResult
+    func pad(to seconds: TimeInterval) -> TimeInterval {
+        let gap = seconds - duration
+        // Below this the pad is smaller than the buffers arriving anyway, and
+        // padding every callback would be a file made mostly of rounding.
+        guard gap > 0.05 else { return 0 }
+
+        var remaining = Int(gap * sampleRate) * channels
+        let chunk = Int(sampleRate)
+        while remaining > 0 {
+            let n = min(chunk, remaining)
+            try? append([Float](repeating: 0, count: n))
+            remaining -= n
+        }
+        return gap
+    }
+
     func close() {
         updateHeader()
         try? handle.close()

@@ -168,6 +168,82 @@ or yields silence, so `SystemAudioRecorder` drives
 path still uses `AVAudioEngine`, which is why there are two capture classes
 rather than one.
 
+### Changing the microphone mid-meeting silently ended the mic track
+
+Reported from a real 49 minute call: the other speaker is at 100% of talk time
+and the user is at 1%. "I started without my headphones then I switched to it,
+so it only got the first sentence." Capture kept running, the file was valid,
+and nothing anywhere reported an error.
+
+Reproduced exactly by changing the input device's sample rate 8 s into a 26 s
+recording: **mic 8.6 s against system 26.0 s**, no error, no warning, no trace.
+`AVAudioEngine`'s tap simply stops being called and never resumes, so an hour
+of the user's own voice is missing from a recording that looks finished.
+
+**The obvious fix does not work, and this is the part worth reading.** Measured
+against AppKit directly, one engine per row, with the input device pinned the
+way `selectDevice` pins it:
+
+| signal | when it fires |
+|---|---|
+| `AVAudioEngineConfigurationChange` | once, at `engine.start()`, and **never** at the hardware change |
+| `engine.isRunning` | stays `true` for the whole outage |
+| `kAudioDevicePropertyNominalSampleRate` listener | at the instant of the change |
+| `kAudioDevicePropertyStreamFormat` listener | at the instant of the change |
+
+So the notification every guide points at is the one thing that does not fire
+here, and the engine reports itself healthy throughout. Core Audio's own
+property listeners are the only signal, which is why `watchHardware` reaches
+past `AVAudioEngine` to `AudioObjectAddPropertyListenerBlock`.
+
+The tap does resume by itself if the device ever returns to the format the tap
+was installed with. That is why the bug reads as "only the first sentence":
+nobody switches back mid-call.
+
+Three things hold it together:
+
+1. **A watchdog on the symptom, not on the causes.** `checkForStall` rebuilds
+   the engine after `stallGrace` (2 s) with no samples, whatever stopped them.
+   The listeners are the fast path at about a third of a second; this is what
+   covers the causes nobody has reproduced yet, which is the class this bug was
+   in. `LISTEN_MIC_NO_LISTENERS=1` turns the fast path off so the backstop can
+   be exercised at all, because otherwise the listeners always win and it can
+   never be tested. Verified that way: frames frozen at 121033, idle climbing
+   0.5 s to 2.5 s, then a restart.
+2. **The gap is padded with silence, never closed up.** The two tracks are
+   separate files with no timestamps in them, so a sample's position in the file
+   **is** its position on the clock. Appending post-restart audio straight after
+   pre-restart audio loses no word and moves every word after it earlier, which
+   silently reattributes the rest of the meeting. `WAVWriter.pad(to:)` measures
+   against the wall clock rather than against the last gap, so several restarts
+   in one meeting cannot accumulate.
+3. **It follows rather than merely survives.** `selectDevice` re-resolves
+   `Settings.resolvedMicrophone` on every restart, so plugging in a headset moves
+   the recording onto it. Only when no specific microphone was chosen: somebody
+   who picked one in Settings meant it.
+
+Counted rather than hidden, and logged to stderr rather than behind
+`LISTEN_DEBUG`, for the reason the dictionary counts are. The gap is silence,
+so a finished file is indistinguishable from somebody not talking, and the
+seconds it costs are not recoverable from anything else on disk.
+
+#### The two tracks did not share a zero
+
+Found while measuring the above, and older than it. Each recorder timed from its
+own first sample, and the system track starts second: it has a tap to create, an
+aggregate device to create, and `deviceFormat` polling for up to two seconds.
+Measured at **three seconds** behind the microphone on a busy machine, which is
+three seconds of every turn being attributed to the wrong side, for the whole
+meeting, with nothing downstream able to tell.
+
+`Capture.start` now takes one `origin` and hands it to both, and each pads its
+own head up to it. Measured after, over three runs: the two tracks land within
+0.2 s of each other.
+
+This is also why a mid-recording restart cannot simply anchor to "when the mic
+started". Both files have to measure from the same instant or the padding fixes
+one misalignment by introducing another.
+
 ### The aggregate device is not ready when it is created
 
 Reading `kAudioDevicePropertyStreamFormat` immediately after creating the

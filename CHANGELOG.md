@@ -8,6 +8,49 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.3.0 (2026-08-06)
+
+### The notes you meant to write
+
+Every recording now has a Notes tab. It is one plain Markdown note that is
+yours: open it and type, during the meeting or afterwards. There is no new-note
+button and nothing is saved until there is something to save. If Listen asks
+whether a detected recording was a meeting and you say no, it asks again before
+discarding a note you made during it.
+
+An agent connected over MCP can read that note but can never change it. It can
+write a separate Markdown note with the summary, decisions or open questions
+you asked for, and file it against one or several meetings. It cannot rename a
+speaker, alter a transcript or delete a recording. Agent-written notes can be
+edited safely: Listen refuses an edit when the note changed after the agent read
+it, rather than silently replacing somebody else's work.
+
+Notes sit beside the recordings in the library, not inside one recording, so a
+write-up spanning several calls stays attached to every call it used. Removing a
+recording does not remove a note that also concerns other calls.
+
+### Finding a meeting is no longer one long list
+
+The sidebar now switches between Recordings, People and Notes. People groups
+meetings by who was there; Notes puts every write-up in one place. Search stays
+inside the collection you are looking at. Settings also has a name for your own
+track, shown in the app while the stored recording label remains safely `Me`.
+
+### A selection colour that belongs to Listen
+
+Selected recordings, tabs and controls now use Listen's website blue rather
+than the generic macOS blue. It is sampled from the app icon and retains dark
+text for contrast.
+
+### Still true from 0.1.0 through 0.2.0
+
+About six words an hour are corrupted at chunk seams on a Mac with the memory
+for 600 second chunks, and about 33 on a Mac with 12 GB or less, where the
+chunks are 120 seconds. Speaker labelling is per sentence rather than per word,
+so two people talking over each other inside one sentence come out as one
+speaker. Meeting detection is on by default: it starts recording, then asks on
+screen, and answering no deletes the audio straight away.
+
 ## 0.2.0 (2026-08-06)
 
 One change, and it is a default rather than a feature.

@@ -31,9 +31,11 @@ roots that remains clear at 16 points.
 - **Transcribes locally** with NVIDIA's Parakeet through MLX. About 240 times
   faster than real time on an M4 Max, so an hour-long meeting is written up in
   well under a minute.
-- **Separates the speakers** with FluidAudio on the Neural Engine, and labels
-  your own track without guessing, because the microphone is definitionally
-  you.
+- **Separates the speakers** with FluidAudio on the Neural Engine. On a call
+  your own track needs no guessing, because the microphone is you and the other
+  side is everyone else. With the laptop on the table in a meeting room the
+  microphone is carrying the room, and Listen works that out from the recording
+  and separates the people around it too.
 - **Recognises voices across meetings.** Name someone once and Listen suggests
   them the next time it hears them. Suggestions are ranked and never applied on
   their own.
@@ -142,6 +144,25 @@ put there, in the transcript, the roster and to an agent.
 The transcripts keep saying `Me` whatever you choose, which is what makes it
 safe to change your mind: every recording you already have reads the same as the
 ones you make next, nothing is rewritten, and clearing the field puts `Me` back.
+
+### Meetings in a room
+
+With the laptop on the table, the microphone is carrying everybody rather than
+you, and calling that whole track `Me` would file the meeting under one name.
+Listen works it out from the recording: nothing was on a call and nothing came
+out of the speakers, so nobody was remote, so the microphone is the room. It
+then separates the people around the table the way it separates a call, and one
+voice on the microphone is still just you.
+
+The one case it cannot call is the meeting that is half in the room and half on
+a call, because a system track with speech in it looks the same either way.
+Right-click the recording and tick **Recorded in the Room**, and it offers to
+transcribe again, which is when who said what is decided.
+
+The first room meeting may not know which voice is yours, and will ask. Listen
+takes your voiceprint from your own track on ordinary calls, so it knows you as
+soon as one call has been transcribed; `listen enroll <id>` takes it from a call
+you already have.
 
 ### Correcting the transcript
 

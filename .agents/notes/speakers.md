@@ -351,6 +351,40 @@ and nothing at all for a system track, whose population is exactly what is
 being asked. `Enroll` then attaches the microphone's voiceprint to whichever
 named speaker the system side did not account for, which is the user.
 
+A room recording is the one case where the microphone gets no prior either. How
+many people are around a table is exactly the question being asked, and it is
+the number nothing here knows: the calendar counts invitations, not chairs.
+
+## The bank knew everybody except its owner
+
+`Me` was the one label in the library with **no voice behind it**. Nothing
+diarized the microphone track, so nothing ever produced an embedding for it, so
+`embeddings.json` held every other participant and never the user. That went
+unnoticed for as long as the mic track was labelled in one step, because a label
+that needs no evidence needs no voiceprint.
+
+It is the print a room recording needs. A room arrives as letters and something
+has to say which letter is you, and the only thing that can is a `Me` centroid
+pooled across the recordings where the microphone genuinely held one person.
+
+So `Pipeline.printUser` files one on every call, from the same clustering the mic
+pass already ran (`expecting: 1`, or the free clustering when a room came back
+holding one voice). Measured on a 33-minute call: `Me`, 1110 seconds, 256 dims,
+beside the far end's 376. Nothing else in the pipeline changes: `Me` is not a
+placeholder, so `VoiceBank.named` pools it like any other name and `autoAssign`
+can apply it to a room cluster with the thresholds already calibrated.
+
+Two consequences worth knowing. A library recorded before this change has **no**
+`Me` prints, so the first room recording cannot name the user and asks instead.
+`listen enroll <id>` back-fills one from a call already on disk, since `Enroll`
+has always derived exactly this print and naming an id bypasses the
+"no voiceprints yet" filter; prefer that to `--force`, which rewrites every bank
+in the library and clears the `auto` flags that keep an automatic name from
+becoming evidence. And a room misread as a call
+writes a print averaged over several people, which is the one way this puts
+something wrong into the bank. Correcting the recording corrects the bank in the
+same gesture, because a re-run rewrites `embeddings.json` whole.
+
 ## Synthetic voices measured the model's ceiling, not the task
 
 The voiceprint thresholds were first calibrated on `say`-generated speech,

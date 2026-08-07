@@ -184,10 +184,12 @@ enum People {
     /// of why there are two functions. There, the name is being applied to
     /// everybody called something across the library, and folding another
     /// person into yourself everywhere at once is not an edit anybody means.
-    /// Here it is a label on one speaker in one transcript, and for a mix-only
-    /// imported recording it is the **only** way to say "that speaker is me":
-    /// the legacy recorder produced one track, so `Pipeline` labels nobody `Me`
-    /// there and there is no microphone side to Merge into. The advice
+    /// Here it is a label on one speaker in one transcript, and for two kinds of
+    /// recording it is the **only** way to say "that speaker is me". A mix-only
+    /// imported one, where the legacy recorder produced a single track so
+    /// `Pipeline` labels nobody `Me` and there is no microphone side to Merge
+    /// into. And a meeting recorded in a room, where the microphone held
+    /// everybody and they all arrive as letters, including you. The advice
     /// `.isYou` gives points at a button that has nothing to offer.
     ///
     /// `listen label <id> A Me` has always allowed this. The window refused it,

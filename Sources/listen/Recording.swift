@@ -101,6 +101,30 @@ struct Metadata: Codable {
     /// `Settings.model` does with the same kind of stale value.
     var asr_model: String?
 
+    /// Whether the microphone was carrying a room rather than one person.
+    ///
+    /// The laptop-on-the-table case. `true` means the mic track is diarized like
+    /// any other and the people in the room arrive as letters; `false` means the
+    /// mic is the user and is labelled `Me` in one step, which is what a call
+    /// looks like. `nil` means nothing has decided yet, which is every recording
+    /// made before this field existed.
+    ///
+    /// `Pipeline.decideRoom` owns the value and writes what it inferred, so this
+    /// is both the input and the record of the decision. Which of the two it is
+    /// on any given recording is what `room_auto` says.
+    var room: Bool?
+
+    /// True when `room` is the pipeline's inference rather than somebody's
+    /// answer.
+    ///
+    /// The same split as `auto_named`, for the same reason: a decision the app
+    /// made must not be indistinguishable from one a person made. It is also
+    /// what keeps the inference alive. An inferred value is re-derived on every
+    /// re-run, so a recording whose audio says "room" does not stay wrong
+    /// because an early guess was written down; a chosen one is never
+    /// re-decided, so the answer survives Transcribe Again.
+    var room_auto: Bool?
+
     // The calendar, app, tag and model fields are all `Optional`, and that is
     // what makes them safe to add to a struct with 47 files already on disk.
     //
@@ -216,6 +240,15 @@ struct Recording {
         if let stored = metadata.app_bundle_id { return stored }
         return metadata.source.contains(".") ? metadata.source : nil
     }
+
+    /// Whether the microphone held a room rather than one person.
+    ///
+    /// The tick in the menu and the line `listen show` prints. It reads the
+    /// answer for this recording without caring who gave it, which is right for
+    /// display: what a reader wants to know is how the transcript was made.
+    /// `Pipeline.decideRoom` is the one place the distinction between an
+    /// inferred and a chosen answer matters.
+    var isRoom: Bool { metadata.room == true }
 
     /// The model the next run will use: this recording's own, or the default.
     ///
@@ -336,6 +369,16 @@ struct Recording {
     }
 
     mutating func markTranscribed(_ transcript: StoredTranscript) {
+        // Re-read before writing, the same rule `Capture.noteApp` follows and
+        // for a sharper version of the same reason. Transcribing an hour takes
+        // an hour's worth of chances for the folder to have changed underneath:
+        // the title and the tags are editable from the window while the queue
+        // works, and `Pipeline.decideRoom` now writes to `metadata.json` from
+        // inside the run itself. Saving the copy this job started with silently
+        // undid all of it, which for the room decision meant the pipeline
+        // recorded what it had decided and then erased it a minute later.
+        if let fresh = Recording.load(folder) { self = fresh }
+
         // Nothing to label in a recording with no speech in it, so it is
         // finished rather than waiting on somebody.
         metadata.state = transcript.segments.isEmpty

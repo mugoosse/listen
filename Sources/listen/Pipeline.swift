@@ -68,8 +68,10 @@ struct TranscriptionProgress: Sendable {
     /// 0...1 through the microphone track.
     var you: Double = 0
 
-    /// Whether this recording has two tracks. False for an imported one, where
-    /// there is a single mixed track and no separate side to fill.
+    /// Whether there are two tracks **with speech in them**. False for an
+    /// imported recording, which is a single mixed track with no separate side
+    /// to fill, and false for a meeting held in a room, where the system track
+    /// is an hour of silence nothing transcribes.
     var split: Bool = true
 
     /// 0...1 across the whole job.
@@ -124,9 +126,14 @@ actor Pipeline {
 
     /// What the user's own track is called before anyone names it.
     ///
-    /// A word rather than a letter, because it is not a guess. The mic track is
-    /// the user by definition, and calling it "A" would invite the labelling UI
-    /// to ask a question that has no doubt in it.
+    /// A word rather than a letter, because it is not a guess. On a call the mic
+    /// track is the user, and calling it "A" would invite the labelling UI to
+    /// ask a question that has no doubt in it.
+    ///
+    /// A room recording never uses this label. There the microphone holds
+    /// several people, none of them known in advance, so they arrive as letters
+    /// like anybody else and the voice bank names the user if it has heard them
+    /// before. See `decideRoom`.
     static let userLabel = "Me"
 
     /// Transcribe a whole recording: both tracks, diarized and merged.
@@ -138,7 +145,7 @@ actor Pipeline {
     func run(_ recording: Recording, using choice: ModelChoice,
              progress: (@Sendable (TranscriptionProgress) -> Void)? = nil) async throws -> StoredTranscript {
         let fm = FileManager.default
-        var hasSystem = fm.fileExists(atPath: recording.systemURL.path)
+        let hasSystemFile = fm.fileExists(atPath: recording.systemURL.path)
         let hasMic = fm.fileExists(atPath: recording.micURL.path)
 
         // Asked here rather than at the mic pass below, where it used to be,
@@ -149,8 +156,20 @@ actor Pipeline {
         // halfway rather than as there being nothing to put in it.
         let micHasSpeech = hasMic && !Self.isSilent(recording.micURL)
 
-        let tally = Tally(split: hasSystem && micHasSpeech, report: progress)
-        try await asr.load(choice) { tally.say($0) }
+        // How much of the system track carries anything, which nothing used to
+        // ask. A meeting held in a room leaves it nearly empty: nothing is
+        // playing, so the tap records an hour of an idle Mac.
+        //
+        // Two numbers off one measurement, because the two decisions it feeds
+        // should be wrong in opposite directions. Transcribing a track that
+        // holds a few seconds of something costs a pass that finds nothing;
+        // skipping one costs whatever was said. So five seconds is enough to
+        // look, and thirty is what it takes to say somebody was on the far end,
+        // which is the claim that decides whether the microphone is one person
+        // or a room. See `signalSeconds` for the measurement behind the shape.
+        let systemSignal = hasSystemFile ? Self.signalSeconds(recording.systemURL) : 0
+        let systemHasSpeech = systemSignal >= 5
+        let somebodyRemote = systemSignal >= 30
 
         // An imported recording has neither track, only the mixdown the legacy
         // recorder produced. Treat that as the everyone-track: diarize it whole
@@ -159,22 +178,34 @@ actor Pipeline {
         // user is not distinguishable by which file they are in, and guessing
         // would be worse than asking.
         var everyone = recording.systemURL
-        if !hasSystem, !hasMic, fm.fileExists(atPath: recording.mixURL.path) {
+        var everyoneHasSpeech = systemHasSpeech
+        if !hasSystemFile, !hasMic, fm.fileExists(atPath: recording.mixURL.path) {
             everyone = recording.mixURL
-            hasSystem = true
+            // `isSilent` reads raw floats past a WAV header and a mixdown is an
+            // m4a, so it cannot be asked about this file. An import is a
+            // mixdown of a meeting somebody kept, so assume speech and let the
+            // diarizer be the one to say otherwise.
+            everyoneHasSpeech = true
         }
+
+        // Which side of the microphone the meeting is on. Everything the mic
+        // pass does below turns on this one answer.
+        let room = decideRoom(recording, somebodyRemote: somebodyRemote,
+                              micHasSpeech: micHasSpeech)
+
+        let tally = Tally(split: everyoneHasSpeech && micHasSpeech, report: progress)
+        try await asr.load(choice) { tally.say($0) }
 
         var labelled: [LabelledSegment] = []
         var embeddings: [String: [Float]] = [:]
         var speech: [String: Double] = [:]
         var wordLevel = false
         var model = choice.repo
+        /// Kept past the system pass, because a room recording needs to know
+        /// when the far end was talking. See `bleedClusters`.
+        var systemTurns: [SpeakerTurn] = []
 
-        // The system track carries everyone who is not the user, so it is the
-        // only one worth diarizing. Doing both would spend ANE time to
-        // rediscover something already known and occasionally get it wrong by
-        // splitting the user into two people.
-        if hasSystem {
+        if everyoneHasSpeech {
             // "the other participants" only when there is a separate mic track
             // to be the other side of. An imported recording is one mixed track
             // holding everybody including the user, and naming it after the
@@ -193,38 +224,95 @@ actor Pipeline {
             // track with no speech in it, which is an ordinary thing for a
             // recording to contain, and a transcript with everybody under one
             // label is worth enormously more than no transcript at all.
-            var turns: [SpeakerTurn] = []
             do {
                 try await diarizer.load { tally.say($0) }
                 let diarization = try await diarizer.run(everyone)
-                turns = diarization.turns
-                embeddings = diarization.embeddings
-                speech = diarization.speech
+                // Tagged with the track, because the mic track below can now
+                // produce a speaker 1 of its own and the two are not the same
+                // person. Untangled by the single `Merge.relabel` after the
+                // merge, which is also what makes the letters follow the order
+                // people first speak across the whole meeting.
+                systemTurns = Merge.namespaced(diarization.turns, "system")
+                embeddings = Merge.namespaced(diarization.embeddings, "system")
+                speech = Merge.namespaced(diarization.speech, "system")
             } catch {
                 log("speakers not identified: \(error.localizedDescription)")
             }
 
-            var assigned = Merge.assign(transcript.segments, to: turns,
-                                        fallback: "A")
-            let mapping = Merge.relabel(&assigned)
-            // Carry the voiceprints over to the letters the transcript uses,
-            // otherwise the embeddings are filed under labels nothing displays.
-            embeddings = Self.remap(embeddings, using: mapping)
-            speech = Self.remap(speech, using: mapping)
-            labelled += assigned
+            labelled += Merge.assign(transcript.segments, to: systemTurns,
+                                     fallback: Merge.namespaced("?", "system"))
         }
 
-        // The mic is the user. One step, no clustering, no doubt.
         if micHasSpeech {
-            tally.say("transcribing you")
+            // The mic is the user, unless it is the room. See `decideRoom`.
+            tally.say(room ? "transcribing the room" : "transcribing you")
             let transcript = try await asr.transcribe(recording.micURL) { fraction in
                 tally.update { $0.you = fraction }
             }
             wordLevel = wordLevel || transcript.hasWordTimings
-            Self.reportCuts(transcript, track: "you")
-            labelled += transcript.segments.map {
-                LabelledSegment(start: $0.start, end: $0.end,
-                                speaker: Self.userLabel, text: $0.text)
+            Self.reportCuts(transcript, track: room ? "room" : "you")
+
+            var mic: DiarizationOutput?
+            if room {
+                tally.say("identifying the people in the room")
+                do {
+                    try await diarizer.load { tally.say($0) }
+                    // No `expecting:` prior. How many people are around the
+                    // table is exactly the question being asked, and it is the
+                    // one number nothing here knows: the calendar counts
+                    // invitations, not chairs. See .agents/notes/speakers.md on
+                    // what a wrong prior does to a track.
+                    let diarization = try await diarizer.run(recording.micURL)
+                    mic = DiarizationOutput(
+                        turns: Merge.namespaced(diarization.turns, "room"),
+                        embeddings: Merge.namespaced(diarization.embeddings, "room"),
+                        speech: Merge.namespaced(diarization.speech, "room"))
+                } catch {
+                    log("the room was not separated: \(error.localizedDescription)")
+                }
+            }
+
+            // One voice on the microphone is the user, however this recording
+            // was read. That is the sentence that makes a generous room
+            // inference safe: a solo recording and a call both land here, the
+            // label is the same `Me` it has always been, and the difference is
+            // that the clustering was looked at rather than assumed.
+            // Counted over the turns rather than the embeddings, because a
+            // cluster the model produced no embedding for is still a voice that
+            // spoke, and reading the count off the bank would quietly file it
+            // under the user.
+            if var room = mic, Set(room.turns.map(\.label)).count > 1 {
+                // Assigned against every cluster, including the bled ones, and
+                // filtered afterwards. Dropping a cluster first would leave its
+                // sentences to fall through to the nearest surviving turn, which
+                // hands the far end's words to somebody in the room.
+                var assigned = Merge.assign(transcript.segments, to: room.turns,
+                                            fallback: Merge.namespaced("?", "room"))
+                let bled = Self.bleedClusters(room, against: systemTurns)
+                if !bled.isEmpty {
+                    let before = assigned.count
+                    assigned.removeAll { bled.contains($0.speaker) }
+                    for label in bled {
+                        room.embeddings[label] = nil
+                        room.speech[label] = nil
+                    }
+                    log("\(bled.count) voice(s) and \(before - assigned.count) "
+                        + "sentence(s) dropped from the microphone: the far end "
+                        + "coming back in through the speakers")
+                }
+                log("\(Set(room.turns.map(\.label)).subtracting(bled).count) "
+                    + "voice(s) in the room")
+
+                labelled += assigned
+                embeddings.merge(room.embeddings) { a, _ in a }
+                speech.merge(room.speech) { a, _ in a }
+            } else {
+                labelled += transcript.segments.map {
+                    LabelledSegment(start: $0.start, end: $0.end,
+                                    speaker: Self.userLabel, text: $0.text)
+                }
+                await printUser(recording, from: mic, into: &embeddings,
+                                speech: &speech, tally: tally)
             }
         }
 
@@ -246,6 +334,20 @@ actor Pipeline {
         // Interleave the two tracks by time. They were captured together, so
         // their clocks agree and sorting is all the alignment needed.
         labelled.sort { $0.start < $1.start }
+
+        // One alphabet for the whole meeting, handed out after the merge rather
+        // than per track. Both tracks can now arrive holding a cluster called 1,
+        // and letters given out per track would either collide or number the
+        // room's speakers as though the far end had spoken first.
+        //
+        // `Me` is spared, because it is not a cluster the letters are hiding: it
+        // is the one label in a transcript that is already an answer.
+        let mapping = Merge.relabel(&labelled, keeping: [Self.userLabel])
+        // Carry the voiceprints over to the letters the transcript uses,
+        // otherwise the embeddings are filed under labels nothing displays.
+        embeddings = Self.remap(embeddings, using: mapping)
+        speech = Self.remap(speech, using: mapping)
+
         var (cleaned, fired) = Merge.clean(labelled)
         if !fired.isEmpty { trace("cleanup fired: \(fired)") }
 
@@ -267,6 +369,154 @@ actor Pipeline {
         try write(stored, turns: Merge.turns(from: cleaned),
                   embeddings: embeddings, speech: speech, to: recording)
         return stored
+    }
+
+    // MARK: - Which side the microphone is on
+
+    /// Whether the microphone track holds a room rather than one person.
+    ///
+    /// **"The mic is the user" is a remote-call assumption, and a laptop on the
+    /// table in a meeting room breaks it.** There the microphone carries
+    /// everybody and the system track carries nobody, so labelling the whole
+    /// track `Me` files an entire meeting of four people under one name, with
+    /// nothing on screen suggesting anything went wrong.
+    ///
+    /// A person's answer wins where there is one and is never re-decided.
+    /// Everything else is inferred, from two facts the folder already holds:
+    /// nothing was on a call (`app_bundle_id`), and nothing sustained came out
+    /// of the speakers (`somebodyRemote`). Together those mean nobody was
+    /// remote, and a microphone with nobody remote is carrying the room.
+    ///
+    /// Inferred here rather than at capture, where it would be cheaper to ask,
+    /// because neither fact is settled while the recording runs: the call app
+    /// can appear minutes in (`Capture.noteApp`), and how much a track holds is
+    /// not known until it has stopped.
+    ///
+    /// **A solo recording infers "room" too, and that is deliberate.** Nothing
+    /// distinguishes one person at a desk from four at a table before the
+    /// microphone has been clustered, so the answer here is only "cluster it
+    /// and see". The mic pass treats one cluster as the user, which is exactly
+    /// what this used to assume without looking, so the inference being
+    /// generous costs a diarizer pass and never a wrong name.
+    ///
+    /// **It cannot call the hybrid meeting**, some people in the room and some
+    /// on the far end, because the system track holds speech either way. That
+    /// case is what the override is for, and it is the one the user has to know
+    /// about; every other case decides itself.
+    private func decideRoom(_ recording: Recording, somebodyRemote: Bool,
+                            micHasSpeech: Bool) -> Bool {
+        if recording.metadata.room_auto != true, let chosen = recording.metadata.room {
+            return chosen
+        }
+        // `appBundleID` rather than `metadata.app_bundle_id`, which is the trap
+        // recorded against that property: a recording made before the field
+        // existed keeps the identifier in `source`, and reading the field
+        // directly says "nobody was on a call" for the older half of the
+        // library. Every one of those would have been a candidate for being
+        // re-read as a room.
+        let inferred = micHasSpeech && recording.appBundleID == nil && !somebodyRemote
+
+        // Written down rather than re-derived by every reader, so the menu can
+        // show what happened and `listen show` can print it. Re-read before
+        // saving, for the reason `Capture.noteApp` re-reads: a recording can be
+        // renamed and tagged while the queue is working on it, and writing back
+        // the copy the job started with would undo that.
+        if var fresh = Recording.load(recording.folder) {
+            fresh.metadata.room = inferred
+            fresh.metadata.room_auto = true
+            try? fresh.save()
+        }
+        if inferred { log("\(recording.id): treating the microphone as a room") }
+        return inferred
+    }
+
+    /// Microphone clusters that are the far end coming back in through the
+    /// speakers.
+    ///
+    /// There is no echo cancellation on the microphone track: `MicRecorder`
+    /// taps the input node raw. So in a hybrid meeting played out loud, the far
+    /// end lands on both tracks. On the system track it is a clean copy; on the
+    /// microphone it is a second cluster holding the same sentences, and without
+    /// this one remote person would attend their own meeting twice.
+    ///
+    /// **A cluster, not a sentence**, because that is what separates the two
+    /// cases. A voice that speaks only while the system track is speaking is the
+    /// system track; somebody in the room who talks over the far end does it
+    /// occasionally rather than always. Dropping by overlap per sentence would
+    /// instead delete exactly the interruptions, which are the sentences a
+    /// reader most wants.
+    ///
+    /// 0.8 is chosen rather than measured, and it is deliberately not 1.0
+    /// because the two diarizations do not agree on boundaries to the
+    /// millisecond. Measuring it needs a hybrid meeting recorded on speakers,
+    /// which is why the count is logged on every run rather than traced.
+    private static func bleedClusters(_ mic: DiarizationOutput,
+                                      against system: [SpeakerTurn]) -> Set<String> {
+        guard !system.isEmpty else { return [] }
+        var total: [String: Double] = [:]
+        var covered: [String: Double] = [:]
+        for turn in mic.turns {
+            let length = turn.end - turn.start
+            guard length > 0 else { continue }
+            total[turn.label, default: 0] += length
+            // Clamped per turn, because system turns can overlap each other and
+            // a sum of overlaps can otherwise exceed the turn it is measuring.
+            var inside: Double = 0
+            for other in system {
+                inside += max(0, min(turn.end, other.end) - max(turn.start, other.start))
+            }
+            covered[turn.label, default: 0] += min(inside, length)
+        }
+        return Set(total.compactMap { label, seconds in
+            seconds > 0 && (covered[label] ?? 0) / seconds >= 0.8 ? label : nil
+        })
+    }
+
+    /// File one voiceprint for the user, from the microphone track.
+    ///
+    /// **Nothing used to.** The mic track was never diarized, so `Me` was the
+    /// one label in the library with no voice behind it: the bank could
+    /// recognise every person in a meeting except the person it belongs to. A
+    /// room recording needs precisely that print, because a room arrives as
+    /// letters and something has to say which letter is you, and this is where
+    /// it comes from. Two or three ordinary calls and the bank knows.
+    ///
+    /// `expecting: 1` is the case the prior is genuinely known for (see
+    /// `.agents/notes/speakers.md`), and it is what stops an hour of one person
+    /// being split into two voices. It costs one diarizer pass over the mic
+    /// track, which the system pass measured at about 7 seconds for an hour.
+    ///
+    /// `from` is the free clustering a room recording already paid for, reused
+    /// rather than re-run when it came back holding one voice. The prior would
+    /// have asked for exactly what it found.
+    ///
+    /// A room misread as a call writes a print averaged over several people,
+    /// which is the one way this puts something wrong into the bank. Correcting
+    /// the recording corrects the bank in the same gesture: a re-run rewrites
+    /// `embeddings.json` whole, so the mixed print is replaced by one per
+    /// person rather than left behind.
+    private func printUser(_ recording: Recording, from clustered: DiarizationOutput?,
+                           into embeddings: inout [String: [Float]],
+                           speech: inout [String: Double], tally: Tally) async {
+        do {
+            var mine = clustered
+            if mine == nil {
+                try await diarizer.load { tally.say($0) }
+                mine = try await diarizer.run(recording.micURL, expecting: 1)
+            }
+            guard let mine else { return }
+            // The longest cluster rather than the first. The prior asks for one
+            // and the diarizer has always given one, but "whichever the
+            // dictionary happened to yield" is not a rule, and what this picks
+            // is the user's own identity.
+            guard let label = mine.speech.max(by: { $0.value < $1.value })?.key
+                    ?? mine.embeddings.keys.first,
+                  let vector = mine.embeddings[label], !vector.isEmpty else { return }
+            embeddings[Self.userLabel] = vector
+            speech[Self.userLabel] = mine.speech[label] ?? 0
+        } catch {
+            log("no voiceprint for the microphone track: \(error.localizedDescription)")
+        }
     }
 
     /// Transcribe a bare file, with diarization but no track split.
@@ -371,6 +621,59 @@ actor Pipeline {
         var out: [String: T] = [:]
         for (key, value) in values { out[mapping[key] ?? key] = value }
         return out
+    }
+
+    /// Seconds of a track that carry signal, counted in one-second windows.
+    ///
+    /// **`isSilent` is a peak test and cannot answer this question.** Measured
+    /// on the 47-minute meeting this was written for, a laptop on a table with
+    /// three people around it:
+    ///
+    ///     system.wav  peak 0.364  rms 0.00094     7 of 2828 seconds over 0.01
+    ///     mic.wav     peak 1.376  rms 0.01199  2777 of 2828 seconds over 0.01
+    ///
+    /// The system track is an idle Mac with a notification chime in it. A peak
+    /// test called it "not silent", which read the meeting as a call with
+    /// somebody on the far end, and being wrong about that is what decides
+    /// whether the microphone is one person or four.
+    ///
+    /// A window rather than a sample is the whole point: what separates a chime
+    /// from a conversation is not how loud it got but how much of the hour it
+    /// occupied. 0.01 sits above the idle track's noise and below the
+    /// microphone's continuous speech, with three orders of magnitude of RMS
+    /// between them to place it in.
+    ///
+    /// Reads the file directly for the reason `isSilent` does: the writer's
+    /// format is known, so this is a scan of floats.
+    static func signalSeconds(_ url: URL, floor: Float = 0.01) -> Double {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 44), header.count == 44
+        else { return 0 }
+        // Offset 24 of a canonical header, which is what `WAVWriter` writes.
+        let rate = header.withUnsafeBytes { raw in
+            raw.loadUnaligned(fromByteOffset: 24, as: UInt32.self)
+        }
+        let window = Int(rate > 0 ? rate : UInt32(SAMPLE_RATE))
+        guard let data = try? handle.readToEnd(), data.count >= 4 else { return 0 }
+
+        var seconds = 0
+        data.withUnsafeBytes { raw in
+            let floats = raw.bindMemory(to: Float.self)
+            var start = 0
+            while start < floats.count {
+                let end = min(start + window, floats.count)
+                // Every tenth sample. A second of speech is not carried by one
+                // sample in ten, and this is read over a two-track hour.
+                var peak: Float = 0
+                for i in stride(from: start, to: end, by: 10) {
+                    peak = max(peak, abs(floats[i]))
+                }
+                if peak > floor { seconds += 1 }
+                start = end
+            }
+        }
+        return Double(seconds)
     }
 
     /// True when a track holds no signal worth transcribing.

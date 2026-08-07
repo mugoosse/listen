@@ -99,10 +99,12 @@ actor Diarizer {
 
     /// Diarize one track.
     ///
-    /// Called on the system track only. The microphone track is definitionally
-    /// the user, so running a clustering model over it would be spending ANE
-    /// time to rediscover something already known, and occasionally getting it
-    /// wrong by splitting one person into two.
+    /// The system track always, and the microphone track two ways: freely when
+    /// the recording is a room, and with `expecting: 1` on a call, where the
+    /// answer is known and the pass is run for the embedding rather than the
+    /// turns. The prior is the whole difference. Letting the clusterer loose on
+    /// a track that holds one person is how one person becomes two, which is the
+    /// most common diarization error there is.
     func run(_ url: URL, expecting: Int? = nil) async throws -> DiarizationOutput {
         let manager = try await manager(expecting: expecting)
         let result = try await manager.process(url)

@@ -114,18 +114,61 @@ enum Merge {
 
     // MARK: - Relabelling
 
+    /// Tag a diarizer's labels with the track they came from.
+    ///
+    /// Two tracks are clustered now rather than one, and each run numbers its
+    /// speakers from scratch: speaker 1 on the system track and speaker 1 on the
+    /// microphone are different people wearing the same name. Tagging keeps them
+    /// apart until `relabel` gives the whole meeting one alphabet, in the order
+    /// people first speak, which is the order a reader expects and is not the
+    /// order either track alone produces.
+    ///
+    /// These strings never reach disk. They exist between the diarizer and
+    /// `relabel`, and they are readable rather than opaque because they show up
+    /// in `LISTEN_DEBUG` traces in between.
+    static func namespaced(_ turns: [SpeakerTurn], _ track: String) -> [SpeakerTurn] {
+        turns.map {
+            SpeakerTurn(start: $0.start, end: $0.end, label: namespaced($0.label, track))
+        }
+    }
+
+    static func namespaced<T>(_ values: [String: T], _ track: String) -> [String: T] {
+        var out: [String: T] = [:]
+        for (label, value) in values { out[namespaced(label, track)] = value }
+        return out
+    }
+
+    static func namespaced(_ label: String, _ track: String) -> String {
+        track + ":" + label
+    }
+
     /// A, B, C... in order of first appearance.
     ///
     /// The diarizer's own labels are arbitrary and not stable between runs, so
     /// they are never shown. Returns the mapping as well as applying it, because
     /// that mapping is what carries the voiceprints over to the letters the
     /// transcript uses.
+    ///
+    /// `keeping` is for labels the pipeline already knows the meaning of, which
+    /// today is `Me` and nothing else. It maps to itself rather than being
+    /// skipped, so a caller can remap voiceprints through the result without
+    /// having to know which labels were spared, and it consumes no letter: with
+    /// the user first to speak, the first person after them is still A.
     @discardableResult
-    static func relabel(_ segments: inout [LabelledSegment]) -> [String: String] {
+    static func relabel(_ segments: inout [LabelledSegment],
+                        keeping: Set<String> = []) -> [String: String] {
         var mapping: [String: String] = [:]
+        var letters = 0
         for i in segments.indices {
             let raw = segments[i].speaker
-            if mapping[raw] == nil { mapping[raw] = letter(mapping.count) }
+            if mapping[raw] == nil {
+                if keeping.contains(raw) {
+                    mapping[raw] = raw
+                } else {
+                    mapping[raw] = letter(letters)
+                    letters += 1
+                }
+            }
             segments[i].speaker = mapping[raw]!
         }
         return mapping

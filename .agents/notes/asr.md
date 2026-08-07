@@ -205,17 +205,108 @@ preview clock: this state lasts under thirty seconds a track here and needs a
 meeting to reach, so without it the only way to look at the drawing is to catch
 it.
 
-## Only the system track is diarized
+## The microphone is a room or a person, and the pipeline has to ask which
 
-The microphone is the user by definition and the system output is everyone
-else, so clustering is run over the system track only and the mic track is
-labelled `Me` in one step. Running the diarizer over both would spend Neural
-Engine time rediscovering something already known, and would occasionally split
-the user into two people, which is the single most common diarization error.
+"The mic is the user and the system output is everyone else" is a **remote-call
+assumption**, and it held for as long as every recording was a call. A laptop on
+the table in a meeting room breaks it in the worst available way: the microphone
+carries four people, the system track carries nobody, and the whole meeting is
+filed under `Me` with nothing on screen suggesting anything went wrong. Reported
+from a 47-minute workshop whose transcript read `speakers: Me`.
 
-`Pipeline.isSilent` skips a track with no signal. A meeting where nobody
-touched the microphone leaves an hour of room noise, and Parakeet over room
-noise produces confident invented sentences attributed to the user.
+So `Pipeline.decideRoom` asks, once, at transcribe time. A person's answer wins
+(`metadata.room`, with `room_auto` cleared) and is never re-decided. Otherwise it
+is inferred from two facts the folder already holds: nothing was on a call, and
+nothing sustained came out of the speakers.
+
+Inferred at transcribe time rather than at capture, where it would be cheaper,
+because **neither fact is settled while the recording runs**: the call app can
+appear minutes in (`Capture.noteApp`), and how much a track holds is not known
+until it has stopped.
+
+Read `appBundleID`, never `metadata.app_bundle_id`. The older half of the library
+keeps the identifier in `source`, so the field on its own says "nobody was on a
+call" for every recording made before it existed, and each of those becomes a
+candidate for being re-read as a room.
+
+### A peak test cannot tell a chime from a conversation
+
+`isSilent` asks whether a track holds any signal at all, which is the right
+question for the microphone and the wrong one for this. Measured on that
+workshop:
+
+    system.wav  peak 0.364  rms 0.00094     7 of 2828 seconds over 0.01
+    mic.wav     peak 1.376  rms 0.01199  2777 of 2828 seconds over 0.01
+
+The system track is an idle Mac with a notification chime in it. Its **peak** is
+0.364, which any peak test calls "not silent", and reading that as somebody on
+the far end is what decides that the microphone holds one person. The question is
+not how loud a track got but how much of the hour it occupied, so
+`Pipeline.signalSeconds` counts one-second windows over 0.01, a floor with three
+orders of magnitude of RMS to sit in.
+
+Two thresholds off the one measurement, because the two decisions it feeds should
+fail in opposite directions. **Five seconds** is enough to transcribe a track:
+looking and finding nothing costs a pass, not looking costs whatever was said.
+**Thirty seconds** is what it takes to claim somebody was remote, because that
+claim is what turns four people into one.
+
+### One voice on the microphone is the user, whatever the flag says
+
+A solo recording at a desk is indistinguishable from a room before the audio has
+been clustered: no call app, quiet system track, speech on the mic. Both infer
+`room`. That is safe because the mic pass does not trust the flag past the
+clustering: **one cluster is labelled `Me`**, exactly as it always was, and only
+two or more become letters. A generous inference therefore costs one diarizer
+pass and can never cost a wrong name.
+
+Counted over the turns rather than the embeddings. A cluster the model produced
+no embedding for is still a voice that spoke, and counting the bank instead
+quietly files it under the user.
+
+On a call the mic pass still runs with `expecting: 1`, which is the prior being
+used where the answer is genuinely known. That is the difference between the two
+paths and it is the whole protection against splitting one person in two.
+
+Measured on the workshop: 5 voices, 180 turns, and turns that alternate the way
+a conversation does. Measured on a 33-minute Chrome call: `room: false`, `Me`
+and one letter, the same shape as before the change.
+
+### Both tracks are clustered, so the letters are handed out once
+
+Each diarizer run numbers its speakers from scratch, so speaker 1 on the system
+track and speaker 1 on the microphone are different people with the same name.
+Raw labels are namespaced per track (`Merge.namespaced`), kept namespaced through
+assignment, and turned into letters by a **single `Merge.relabel` after the two
+tracks are merged and sorted**. That also gives the letters in order of first
+speech across the whole meeting, which is what a reader expects and what neither
+track alone produces. `Me` is passed in `keeping:` and maps to itself.
+
+### The far end comes back in through the microphone
+
+There is no echo cancellation on the mic track: `MicRecorder` taps the input node
+raw. In a hybrid meeting played out loud the far end lands on both tracks, and
+without something in the way one remote person attends their own meeting twice.
+
+`Pipeline.bleedClusters` drops a **cluster** whose speech is 80% covered by
+system-track speech, not a segment. That is what separates the two cases: a voice
+that only ever speaks while the far end is speaking is the far end, while
+somebody in the room who talks over them does it occasionally. Dropping by
+overlap per sentence would delete exactly the interruptions, which are the
+sentences a reader most wants. The 0.8 is chosen, not measured, and the count is
+logged every run so that it can be.
+
+Only reachable through the override, since the inference never calls a hybrid
+meeting a room. On a call the mic's copy of the far end is still labelled `Me`,
+which is the pre-existing behaviour and is untouched here.
+
+### A silent system track used to be transcribed
+
+`Pipeline.isSilent` has skipped the microphone since the beginning, because
+Parakeet over room noise invents confident sentences attributed to the user. The
+system track was never asked, because a recording with a silent system track was
+assumed not to happen. An in-person meeting is exactly that recording, and it
+could grow a participant who was never in the room.
 
 ## The Whisper-era cleanup has not fired on Parakeet yet
 
@@ -241,6 +332,19 @@ reintroduce exactly the inconsistency the layout removes.
 One job at a time, on purpose. Parakeet is on the GPU and FluidAudio is on the
 Neural Engine, and two jobs contend for the same hardware rather than finishing
 sooner. `dashboard.py` reached the same conclusion.
+
+### A job that saves the copy it started with erases the hour it ran for
+
+`markTranscribed` re-reads `metadata.json` before writing, the same rule
+`Capture.noteApp` follows and for a sharper version of the same reason.
+Transcribing an hour is an hour of chances for the folder to have changed: the
+title and the tags are editable from the window while the queue works, and
+`Pipeline.decideRoom` writes to the file from inside the run.
+
+Found by watching the room decision disappear. The pipeline recorded what it had
+decided, the run finished, and `markTranscribed` saved a `Recording` value taken
+before any of it and put the old metadata back. The value type is what makes this
+invisible: nothing is stale-looking about a struct, and the write succeeds.
 
 ### A recording with no audio is not a job waiting to happen
 

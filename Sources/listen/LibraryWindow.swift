@@ -1061,13 +1061,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 extension LibraryWindow: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)):
+        case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)),
+             #selector(toggleRoomSelected):
             // Transcribing needs the audio, and on a Mac sharing a library with
             // the machine that recorded it there is none. Enabled, this would be
             // a control that does nothing and reports nothing, which is the
             // hardest kind of failure to attribute. Both copies of this item go
             // through here: the File menu's targets nil, and the toolbar's is
             // validated the same way.
+            //
+            // Recorded in the Room is here for the same reason rather than a
+            // different one: the tick is only worth anything because a re-run
+            // follows it, so where there is nothing to re-run there is nothing
+            // to tick.
             return selected?.hasAudio == true
         case #selector(exportSelected), #selector(revealSelected),
              #selector(renameSelected), #selector(deleteSelected),
@@ -1261,6 +1267,12 @@ extension LibraryWindow: NSMenuDelegate {
         add(menu, recording.hasTranscript ? "Transcribe Again" : "Transcribe",
             #selector(retranscribeSelected), "arrow.triangle.2.circlepath")
             .submenu = modelSubmenu(for: recording)
+        // Beside Transcribe Again because it is a re-run in all but name: it
+        // changes how the audio is read, not how the transcript is displayed.
+        // A tick rather than two items, because it is one recording's answer to
+        // one question, and the pipeline has usually already answered it.
+        add(menu, "Recorded in the Room", #selector(toggleRoomSelected),
+            "person.2.wave.2").state = recording.isRoom ? .on : .off
         add(menu, "Rename…", #selector(renameSelected), "pencil")
         // The one way in for a recording whose band is collapsed, which is a
         // live or untranscribed one: with no speakers and no tags there is no
@@ -1328,6 +1340,49 @@ extension LibraryWindow: NSMenuDelegate {
               let id = sender.representedObject as? String,
               let choice = ModelChoice.named(id) else { return }
         retranscribe(recording, using: choice)
+    }
+
+    /// Say the microphone was carrying a room, or take it back.
+    ///
+    /// The pipeline infers this and is right about the two ordinary cases, a
+    /// call and a laptop on the table. It cannot call the hybrid meeting, some
+    /// people in the room and some on the far end, because a system track with
+    /// speech in it looks the same from both. This is that answer, and once
+    /// given it is never inferred over again.
+    ///
+    /// **Toggling it alone changes nothing on screen**, because who said what
+    /// was decided when the transcript was made. A tick that appears to do
+    /// nothing is how a feature gets a reputation for being broken, so the
+    /// re-run is offered in the same gesture rather than left to be discovered.
+    @objc func toggleRoomSelected() {
+        guard var recording = selected else { return }
+        let room = !recording.isRoom
+        recording.metadata.room = room
+        // Cleared, so the pipeline stops inferring for this recording. A person
+        // has answered, and the answer has to outlive the next re-run.
+        recording.metadata.room_auto = nil
+        try? recording.save()
+        reload()
+
+        guard recording.hasTranscript else { return }
+        let alert = NSAlert()
+        alert.messageText = room
+            ? "Transcribe \(recording.metadata.title) again, listening for a room?"
+            : "Transcribe \(recording.metadata.title) again, with the microphone as you?"
+        var body = "Who said what is decided while the transcript is made, so this"
+            + " recording keeps the speakers it has until it is transcribed again."
+        // The same warning Transcribe Again gives, and only when there is
+        // something to lose. See `confirmOverwrite`.
+        if recording.hasHumanEdits {
+            body += " The names you gave the speakers, and any sentences you"
+                + " corrected, are part of the transcript that replaces."
+        }
+        alert.informativeText = body
+        alert.addButton(withTitle: "Transcribe Again")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Queue.shared.enqueue(recording.id, using: recording.asrModel)
+        reload()
     }
 
     private func retranscribe(_ recording: Recording, using choice: ModelChoice) {

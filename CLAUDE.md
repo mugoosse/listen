@@ -86,7 +86,7 @@ How audio gets onto disk. `Capture`, `SystemAudioRecorder`,
 - The app the call was in is a field, and never the title
 - Nothing asks "keep this recording?" any more
 
-### `.agents/notes/asr.md` (26k)
+### `.agents/notes/asr.md` (32k)
 
 How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 `TranscribingView`, and which model runs.
@@ -97,9 +97,14 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - Progress is counted, and there is no estimate anywhere
 - A job advancing is not a queue change
 - The head is a position, and it took three tries to say so
-- Only the system track is diarized
+- The microphone is a room or a person, and the pipeline has to ask which
+- A peak test cannot tell a chime from a conversation
+- One voice on the microphone is the user, whatever the flag says
+- Both tracks are clustered, so the letters are handed out once
+- The far end comes back in through the microphone
 - The Whisper-era cleanup has not fired on Parakeet yet
 - The transcription queue has no database
+- A job that saves the copy it started with erases the hour it ran for
 - A recording with no audio is not a job waiting to happen
 - The model belongs to the recording, and the language is not a setting
 - Transcribing again destroys hand corrections, and now says so
@@ -108,7 +113,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - mlx-audio prints to stdout, and stdout is the transcript
 - A silent track must not cost a transcript
 
-### `.agents/notes/speakers.md` (35k)
+### `.agents/notes/speakers.md` (37k)
 
 Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 `SpeakerName`, `VoiceBank`, `Enroll`, `Diarizer`, the legacy import.
@@ -133,6 +138,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Re-transcribing an import swaps Whisper for Parakeet, and v2 has no Dutch
 - The legacy m4a holds two tracks, and everything reads only the first
 - A known speaker count is a good prior, and a bad one applied to one track
+- The bank knew everybody except its owner
 
 ### `.agents/notes/calendar.md` (15k)
 

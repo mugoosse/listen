@@ -1347,6 +1347,11 @@ enum CLI {
                                  that recording already carries, or the default.
       --diarize                  label speakers in a bare audio file.
                                  Implied when the argument is a recording.
+      --room / --no-room         whether the microphone held a room of people
+                                 or just you. Remembered on the recording.
+                                 Only needed for a meeting that was partly in
+                                 the room and partly on a call: every other
+                                 kind is worked out from the audio.
 
     Running `listen` with no command starts the app.
     """
@@ -1368,12 +1373,20 @@ enum CLI {
         // happened to be that day.
         var chosen: ModelChoice?
         var diarize = false
+        // Three states again, and for the same reason as `chosen`: no flag
+        // leaves the pipeline to infer, which is right for almost every
+        // recording. Only a hybrid meeting needs telling.
+        var room: Bool?
 
         var i = 0
         while i < args.count {
             switch args[i] {
             case "--diarize":
                 diarize = true
+            case "--room":
+                room = true
+            case "--no-room":
+                room = false
             case "--format":
                 i += 1
                 guard i < args.count else { fail("--format needs a value: md, json or txt") }
@@ -1403,7 +1416,11 @@ enum CLI {
         // diarize the system track, label the mic track as the user, merge. A
         // bare audio file cannot take that path because it has no track split.
         if let recording = Recording.find(path) ?? Self.recordingFolder(path) {
-            await transcribeRecording(recording, format: format, chosen: chosen)
+            await transcribeRecording(recording, format: format, chosen: chosen, room: room)
+        }
+        if room != nil {
+            fail("--room applies to a recording, not to a bare file. A file has no"
+                 + " track split, so `--diarize` is the flag that finds its speakers.")
         }
 
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
@@ -1558,6 +1575,13 @@ enum CLI {
         let speakers = recording.speakers
             .map { automatic.contains($0) ? "\($0) (by voice)" : $0 }
         if !speakers.isEmpty { print("speakers: " + speakers.joined(separator: ", ")) }
+        // Only when it is true, and marked when nobody said so. This is the
+        // answer to "why is this whole meeting one speaker" and to its opposite,
+        // "why am I three people", and both questions are asked from here.
+        if recording.isRoom {
+            print("microphone: the room"
+                  + (recording.metadata.room_auto == true ? " (inferred)" : ""))
+        }
         let tags = Tags.of(recording)
         if !tags.isEmpty { print("tags: " + tags.joined(separator: ", ")) }
         print("")
@@ -2030,10 +2054,20 @@ enum CLI {
     /// two differ for exactly the recordings somebody has already had to
     /// correct, which are the ones most likely to be run again.
     private static func transcribeRecording(_ recording: Recording, format: String,
-                                            chosen: ModelChoice?) async -> Never {
+                                            chosen: ModelChoice?,
+                                            room: Bool? = nil) async -> Never {
         var updated = recording
         if let chosen, updated.metadata.asr_model != chosen.id {
             updated.metadata.asr_model = chosen.id
+            try? updated.save()
+        }
+        // Stored on the recording rather than passed to the run, the same shape
+        // as the model and for the same reason: the answer has to survive a
+        // crash and the relaunch that re-runs the job, and the folder is the
+        // only thing that does. `room_auto` cleared marks it as somebody's.
+        if let room, updated.metadata.room != room || updated.metadata.room_auto == true {
+            updated.metadata.room = room
+            updated.metadata.room_auto = nil
             try? updated.save()
         }
         let choice = chosen ?? updated.asrModel

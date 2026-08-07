@@ -19,8 +19,13 @@ import AppKit
 /// Nothing here is an estimate. The fill is pieces decoded over pieces to
 /// decode, so on a slower Mac it simply moves more slowly, which is the honest
 /// form of that information. The one thing that moves without new information is
-/// the glow at the head of the fill, and it says "working" rather than
+/// the pulse on the bar at the head, and it says "working" rather than
 /// "advancing": it pulses in place and never moves the edge forward.
+///
+/// **The head is a position, not an area, and it is a bar rather than a line.**
+/// Read and unread meet where the work has got to, with no band of half-lit bars
+/// behind it and no cursor ruled through the empty space above and below. Every
+/// mark in the picture is part of the waveform. See `drawHead`.
 @MainActor
 final class TranscribingView: NSView {
     /// The recording's envelope, as stored. Empty draws the lanes flat, which
@@ -217,13 +222,11 @@ final class TranscribingView: NSView {
         let upperX = width * CGFloat(min(max(upper, 0), 1))
         let lowerX = width * CGFloat(min(max(lower, 0), 1))
         Brand.accent.setFill()
-        fill(above.filter { $0.minX < upperX })
-        fill(below.filter { $0.minX < lowerX })
+        fill(above, upTo: upperX)
+        fill(below, upTo: lowerX)
 
-        drawEdge(above, upTo: upperX, active: upper > 0.0001 && upper < 0.9999,
-                 top: middle + laneGap + laneHeight, bottom: middle + laneGap)
-        drawEdge(below, upTo: lowerX, active: lower > 0.0001 && lower < 0.9999,
-                 top: middle - laneGap, bottom: middle - laneGap - laneHeight)
+        drawHead(above, at: upperX, active: upper > 0.0001 && upper < 0.9999)
+        drawHead(below, at: lowerX, active: lower > 0.0001 && lower < 0.9999)
 
         // Named, because two mirrored halves are only obvious once somebody has
         // been told what they are, and being told is one line of 11 point type.
@@ -239,15 +242,43 @@ final class TranscribingView: NSView {
         path.fill()
     }
 
-    /// The working edge: the bars just behind the head, brightened, and a hair
-    /// line at the head itself.
+    /// Fill the read part of a lane, cut off exactly at `x`.
     ///
-    /// **Brightened bars rather than a gradient over the rectangle they sit
-    /// in**, which is what this was first. A gradient across the lane paints the
-    /// gaps between the bars as well as the bars, so it came out as a solid blue
-    /// block sitting on top of the waveform, and the block was the first thing
-    /// the eye found in the whole picture. Tinting the bars keeps the silhouette,
-    /// which is what the picture is made of.
+    /// **Clipped, not filtered by bar.** Selecting the bars whose left edge is
+    /// behind the head means the colour can only change where a bar starts, so
+    /// the boundary advances three points at a time and a fill crossing the pane
+    /// takes its steps visibly. Clipping cuts the bar the head is standing in,
+    /// which costs one rounded corner on one bar and buys a boundary that moves
+    /// as smoothly as the number behind it.
+    private func fill(_ rects: [NSRect], upTo x: CGFloat) {
+        guard x > 0, !rects.isEmpty else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: x, height: bounds.height)).setClip()
+        fill(rects)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// The head: the one bar the colour is currently crossing, lit.
+    ///
+    /// **A position rather than an area**, which is the second try. This was a
+    /// band of brightened bars about 34 points wide behind the head, and a band
+    /// is read at its middle: it put the apparent value half a band short of the
+    /// reported one, and what it showed was something sweeping past rather than
+    /// somewhere reached. (The band itself was already the second answer to the
+    /// same question. A gradient over the lane rectangle came before it and was
+    /// worse still, because it paints the gaps between the bars as well as the
+    /// bars, so a solid blue block sat on top of the waveform and was the first
+    /// thing the eye found in the picture.) Two flat colours meeting need no
+    /// interpretation: where they meet is the answer.
+    ///
+    /// **Inside the silhouette, and never a line across the lane.** A hair line
+    /// spanning the full lane height was the version between those two, and it
+    /// is a ruled mark through empty space above and below the bars: it draws
+    /// the eye to a rectangle nothing is in, and it makes the picture look like
+    /// a chart with a cursor on it rather than a recording being read. Lighting
+    /// the bar instead keeps every mark in the picture part of the waveform.
+    /// The cost is that a head passing through a silence has only a 1.5 point
+    /// stub to light, which is the honest version of "there is nothing here".
     ///
     /// It pulses, and the pulse is the only thing here not driven by counted
     /// work. That is deliberate and it is the honest half of the trade: a chunk
@@ -255,16 +286,25 @@ final class TranscribingView: NSView {
     /// that is completely still for two seconds at a time is one people
     /// reasonably read as hung. It moves in brightness, never in position, so it
     /// cannot claim progress that has not happened.
-    private func drawEdge(_ rects: [NSRect], upTo x: CGFloat, active: Bool,
-                          top: CGFloat, bottom: CGFloat) {
+    private func drawHead(_ rects: [NSRect], at x: CGFloat, active: Bool) {
         guard active, x > 0 else { return }
         let pulse = 0.5 + 0.5 * sin(phase * 3.2)
-        let bright = Brand.accent.blended(withFraction: 0.2 + 0.35 * pulse, of: .white)
+        // Down to nearly the fill colour at the trough, so the bar visibly
+        // breathes. A narrower range around a pale value is a bar that just
+        // looks permanently lighter than its neighbours, which reads as a
+        // drawing mistake rather than as something happening.
+        let bright = Brand.accent.blended(withFraction: 0.12 + 0.5 * pulse, of: .white)
             ?? Brand.accent
         bright.setFill()
-        fill(rects.filter { $0.minX < x && $0.minX > x - 34 })
-        bright.withAlphaComponent(0.55).setFill()
-        NSRect(x: x - 0.5, y: bottom, width: 1, height: top - bottom).fill()
+        // One pitch back from the head, so it is the bar being crossed and at
+        // most the one before it. Clipped both sides: the near edge keeps the
+        // light off ground the work has not reached, and it is the same cut the
+        // fill under it makes, so the two cannot disagree by a pixel.
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: x - (barWidth + barGap), y: 0,
+                                  width: barWidth + barGap, height: bounds.height)).setClip()
+        fill(rects)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func caption(_ text: String, atTop: Bool, done: Bool) {

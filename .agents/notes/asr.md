@@ -164,10 +164,40 @@ Two details are the sort that only show up in use:
    piece takes a second or two, so the truth arrives in steps. Easing means the
    drawing always shows *at most* what has been reported: it lags and never
    leads, which is the only direction a progress bar may be wrong in.
-2. **The glow at the head pulses, and is the only thing not driven by counted
+2. **The bar at the head pulses, and is the only thing not driven by counted
    work.** It moves in brightness, never in position, so it cannot claim
    progress that has not happened. Without it a busy chunk on a small Mac is two
    seconds of a completely still picture, which people reasonably read as hung.
+
+### The head is a position, and it took three tries to say so
+
+Read and unread meet at the reported fraction and nothing else marks it. Three
+earlier versions each put something beside that boundary, and each was worse for
+it:
+
+1. **A gradient over the lane rectangle.** It paints the gaps between the bars
+   as well as the bars, so a solid blue block sat on top of the waveform and was
+   the first thing the eye found in the whole picture.
+2. **A band of brightened bars, about 34 points behind the head.** A band is
+   read at its middle, so the apparent value sat half a band short of the
+   reported one, and what it showed was something sweeping past rather than
+   somewhere reached.
+3. **A hair line across the full lane height.** Honest about the position, but
+   it is a ruled mark through the empty space above and below the bars: it draws
+   the eye to a rectangle nothing is in, and it makes the picture read as a
+   chart with a cursor on it rather than as a recording being read.
+
+What is left lights the one bar the boundary is crossing, so every mark in the
+picture is part of the waveform. The cost is that a head passing through a
+silence has only the 1.5 point minimum stub to light, which is the honest
+version of "there is nothing here".
+
+The fill is **clipped at the fraction, not filtered bar by bar**. Selecting the
+bars whose left edge is behind the head means the colour can only change where a
+bar starts, so the boundary moves in whole bars of 3 points and a fill crossing
+the pane takes its steps visibly. Clipping cuts the bar the head is standing in,
+which costs one rounded corner and buys a boundary as smooth as the number
+behind it.
 
 `LISTEN_PANEL=transcribing[:0.6]` puts it on screen on demand, against a real
 recording so the envelope is a real one. Same argument as the recording panel's

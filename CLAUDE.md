@@ -86,7 +86,7 @@ How audio gets onto disk. `Capture`, `SystemAudioRecorder`,
 - The app the call was in is a field, and never the title
 - Nothing asks "keep this recording?" any more
 
-### `.agents/notes/asr.md` (24k)
+### `.agents/notes/asr.md` (26k)
 
 How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 `TranscribingView`, and which model runs.
@@ -96,6 +96,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - One chunk length for every Mac, and it is the short one
 - Progress is counted, and there is no estimate anywhere
 - A job advancing is not a queue change
+- The head is a position, and it took three tries to say so
 - Only the system track is diarized
 - The Whisper-era cleanup has not fired on Parakeet yet
 - The transcription queue has no database

@@ -13,6 +13,32 @@ import CoreImage
 /// installed, rather than to an empty list that looks like a bug.
 final class DevicesPane: Pane {
     private var listStack: NSStackView?
+    private var poll: Timer?
+    /// What the list last drew, so a redraw only happens when something moved.
+    /// Rebuilding the rows every tick would take the mouse out from under a
+    /// button somebody was about to press.
+    private var drawn: String = ""
+
+    /// A device appears while this pane is open, not before it.
+    ///
+    /// The whole point of the screen is that you are looking at it while you
+    /// scan the code on your phone, so a list read once when the pane was built
+    /// is a list that is always one pairing out of date. `refresh` fires when
+    /// the pane is shown and nothing fires after that, so this polls the file
+    /// the agent writes.
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        fillList()
+        poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.fillList() }
+        }
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        poll?.invalidate()
+        poll = nil
+    }
 
     override func build() {
         heading("Add a device")
@@ -77,6 +103,7 @@ final class DevicesPane: Pane {
         stack.addArrangedSubview(list)
         widthCapped(list)
         listStack = list
+        drawn = ""
         fillList()
     }
 
@@ -94,9 +121,11 @@ final class DevicesPane: Pane {
 
     private func fillList() {
         guard let listStack else { return }
-        for view in listStack.arrangedSubviews { view.removeFromSuperview() }
-
         let devices = DeviceSync.devices()
+        let signature = devices.map { "\($0.id)\($0.revoked)\($0.lastSeen)" }.joined()
+        guard signature != drawn else { return }
+        drawn = signature
+        for view in listStack.arrangedSubviews { view.removeFromSuperview() }
         guard !devices.isEmpty else {
             let empty = NSTextField(labelWithString:
                 "No iPhone has connected yet. Scan the code above.")
@@ -164,7 +193,7 @@ final class DevicesPane: Pane {
         return line
     }
 
-    override func refresh() { fillList() }
+    override func refresh() { drawn = ""; fillList() }
 
     /// A QR, drawn at whole-pixel scale.
     static func qr(_ text: String, side: CGFloat) -> NSImage? {

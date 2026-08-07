@@ -95,12 +95,25 @@ final class RecordingIndicator {
     private var noButton: NSButton!
     private var neverButton: NSButton!
     private var stopButton: NSButton!
+    private var hideButton: NSButton!
     private var tick: Timer?
     private var pulse: Timer?
     private var bright = true
 
+    /// The panel has been put away by hand for the rest of this recording.
+    ///
+    /// Sticky, and it has to be: `show` is called again on every capture
+    /// change, and `AppDelegate.rebuildMenu` fires one for reasons that have
+    /// nothing to do with this panel. A dismissal the next menu rebuild undid
+    /// would not be a dismissal.
+    private(set) var isDismissed = false
+
     /// Stop the recording that is running.
     var onStop: (() -> Void)?
+
+    /// The panel was dismissed. Recording carries on; the caller's job is to
+    /// offer the way back, because this panel is no longer on screen to do it.
+    var onDismiss: (() -> Void)?
 
     /// A fixed clock for `LISTEN_PANEL=recording:<seconds>`, nil in every real
     /// run. The tick reads this instead of `Capture`, which in a preview launch
@@ -125,6 +138,11 @@ final class RecordingIndicator {
         static let gap: CGFloat = 10
         static let icon: CGFloat = 30
         static let dot: CGFloat = 9
+        /// Square, and larger than the 13-point glyph inside it: an image-only
+        /// borderless button is exactly as clickable as its image, and a
+        /// 13-point target beside a real button is a misclick on the real
+        /// button.
+        static let hide: CGFloat = 20
         static let minWidth: CGFloat = 236
         static let maxWidth: CGFloat = 460
     }
@@ -132,6 +150,12 @@ final class RecordingIndicator {
     // MARK: - Showing
 
     func show(_ state: State) {
+        // A question outranks a dismissal. The answer to "are you in a
+        // meeting?" decides whether this recording is kept, and this panel is
+        // the only place it can be given.
+        if state.asksAQuestion { isDismissed = false }
+        guard !isDismissed else { return }
+
         let p = panel ?? makePanel()
         panel = p
 
@@ -159,6 +183,9 @@ final class RecordingIndicator {
         // decides whether this recording is kept, and a Stop beside it would be
         // a third answer whose meaning nobody could guess.
         stopButton.isHidden = (state != .recording)
+        // Same argument as Stop's, one step further: the question has to be
+        // answered, so it cannot be put away either.
+        hideButton.isHidden = state.asksAQuestion
         if let app { neverButton.title = "Never for \(app)" }
 
         switch state {
@@ -189,7 +216,18 @@ final class RecordingIndicator {
     func hide() {
         stopTimers()
         panel?.orderOut(nil)
+        // A dismissal belongs to one recording. The next one starts visible,
+        // because "I did not want to see it during that call" is not "I never
+        // want to see it", and a recorder that runs with nothing on screen is
+        // only acceptable when somebody asked for it this time.
+        isDismissed = false
     }
+
+    /// Undo a dismissal.
+    ///
+    /// Clears the flag and nothing else: which state the panel should come
+    /// back in is the caller's to know, and the caller is about to say so.
+    func reveal() { isDismissed = false }
 
     // MARK: - Building
 
@@ -263,6 +301,20 @@ final class RecordingIndicator {
         // way to make it stop.
         stopButton = button("Stop", #selector(stop), in: bg)
 
+        // Put the panel away without stopping anything. A meeting recording
+        // runs for an hour and this floats over the top right corner of
+        // whatever the meeting is about, so the choice was between covering a
+        // screen share and stopping the recording, and neither is the one
+        // people want. Borderless, and quieter than Stop, because between the
+        // two controls on this panel the consequential one should be the one
+        // that looks like a button.
+        //
+        // The tooltip is not decoration. A minus beside "Recording" reads as
+        // "remove this recording" to anybody who has not clicked it before,
+        // and that is the guess this app can least afford them to test.
+        hideButton = symbolButton("minus.circle", in: bg)
+        hideButton.toolTip = "Hide this panel. The recording keeps running."
+
         p.contentView = bg
         return p
     }
@@ -273,6 +325,20 @@ final class RecordingIndicator {
         b.bezelStyle = .rounded
         b.controlSize = .small
         b.font = .systemFont(ofSize: 12)
+        b.isHidden = true
+        parent.addSubview(b)
+        return b
+    }
+
+    /// An image-only button, sized by `M.hide` rather than by its glyph.
+    private func symbolButton(_ name: String, in parent: NSView) -> NSButton {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Hide")?
+            .withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+        let b = NSButton(image: image ?? NSImage(), target: self, action: #selector(dismiss))
+        b.isBordered = false
+        b.imagePosition = .imageOnly
+        b.contentTintColor = .secondaryLabelColor
         b.isHidden = true
         parent.addSubview(b)
         return b
@@ -313,8 +379,11 @@ final class RecordingIndicator {
         subtitleLabel.sizeToFit()
         timeLabel.sizeToFit()
         stopButton.sizeToFit()
-        // Trailing furniture on the single-line states: the clock, then Stop.
-        let trailing = stopButton.isHidden ? 0 : stopButton.frame.width + 10
+        // Trailing furniture on the single-line states, in reading order after
+        // the clock: Stop, then the dismiss.
+        var trailing: CGFloat = 0
+        if !stopButton.isHidden { trailing += stopButton.frame.width + 10 }
+        if !hideButton.isHidden { trailing += M.hide + 8 }
 
         // The dot leads the title in the single-line states. In the detected
         // one the icon takes the left margin and the dot drops to the subtitle
@@ -372,13 +441,25 @@ final class RecordingIndicator {
             dot.frame = NSRect(x: M.pad, y: titleY + (titleH - M.dot) / 2,
                                width: M.dot, height: M.dot)
         }
+        // Right to left, so each piece of furniture only has to know its own
+        // width and the gap before it. The cursor ends where the clock ends,
+        // which is `trailing` measured rather than repeated.
+        var right = width - M.pad
+        if !hideButton.isHidden {
+            right -= M.hide
+            hideButton.frame = NSRect(x: right, y: titleY + (titleH - M.hide) / 2,
+                                      width: M.hide, height: M.hide)
+            right -= 8
+        }
         if !stopButton.isHidden {
-            stopButton.frame = NSRect(x: width - M.pad - stopButton.frame.width,
+            right -= stopButton.frame.width
+            stopButton.frame = NSRect(x: right,
                                       y: titleY + (titleH - stopButton.frame.height) / 2,
                                       width: stopButton.frame.width,
                                       height: stopButton.frame.height)
+            right -= 10
         }
-        timeLabel.frame = NSRect(x: width - M.pad - trailing - timeLabel.frame.width,
+        timeLabel.frame = NSRect(x: right - timeLabel.frame.width,
                                  y: titleY + (titleH - timeLabel.frame.height) / 2,
                                  width: timeLabel.frame.width,
                                  height: timeLabel.frame.height)
@@ -402,6 +483,13 @@ final class RecordingIndicator {
     @objc private func no() { onNo?() }
     @objc private func neverFor() { onNeverFor?() }
     @objc private func stop() { onStop?() }
+
+    @objc private func dismiss() {
+        isDismissed = true
+        stopTimers()
+        panel?.orderOut(nil)
+        onDismiss?()
+    }
 
     /// Top right, like Blackbox, on whichever screen has the mouse.
     ///

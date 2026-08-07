@@ -808,3 +808,57 @@ The mascot needed six points of left inset inside the masthead: with the sidebar
 collapsed the system draws that item on glass, a pill fits itself to the view
 inside it, and a filled circle reaches its own edge while the word beside it
 keeps the side bearing its letters come with.
+
+## The recording panel can be put away, and the dismissal has to survive a menu rebuild
+
+`RecordingIndicator` floats over the top right corner for the length of a
+meeting. That is the whole point of it: a menu bar item is 16 points wide, on a
+display nobody is looking at, and possibly behind a notch, and believing you are
+recording when you are not is the most expensive mistake this app can make. It
+is also the reason it gets in the way, because the top right corner of a call is
+where the other person's screen share puts the thing they are pointing at.
+
+So the panel carries a `minus.circle` at its trailing edge, after Stop, and
+pressing it orders the panel out for the rest of this recording. Three things
+about it are not free choices:
+
+1. **The dismissal is sticky, and it has to be.** `show(_:)` is called again on
+   every capture change, and `AppDelegate.rebuildMenu` fires one for reasons
+   that have nothing to do with this panel: the menu bar image, the sidebar, the
+   toolbar. A dismissal the next rebuild undid would last until the next timer
+   tick, which is not a dismissal. `isDismissed` guards the top of `show`, and
+   `hide()` clears it, so the flag belongs to one recording and the next one
+   starts visible.
+2. **A question outranks it.** `show` clears `isDismissed` when
+   `state.asksAQuestion`, and the minus is hidden in that state. "Are you in a
+   meeting?" decides whether the recording is kept, this panel is the only place
+   the answer can be given, and a suppressed question is a recording deleted or
+   kept by default with nobody asked.
+3. **The way back is a menu row, because the panel cannot offer one.** The
+   status menu grows "Show Recording Panel" under Stop Recording, and only while
+   `indicator.isDismissed`: a row offering to show what is already on screen is
+   noise. `showRecordingPanel` calls `reveal()` and then `rebuildMenu()`, so
+   nothing but `rebuildMenu` ever decides which state the panel comes back in.
+
+The button is image-only and borderless, and its frame is `M.hide` (20 points)
+rather than `sizeToFit`. An image-only borderless `NSButton` is exactly as
+clickable as its image, and a 13-point target sitting 8 points from Stop is a
+misclick on Stop, which ends the meeting. It is also deliberately quieter than
+Stop: between the two controls on this panel the consequential one should be the
+one that looks like a button.
+
+The tooltip is load-bearing. A minus beside the word "Recording" reads as
+"remove this recording", and that is the guess this app can least afford anybody
+to test, so it says "Hide this panel. The recording keeps running."
+
+The trailing furniture is now placed by a cursor walking right to left rather
+than by each control computing its own origin from `width`. Three items deep,
+the arithmetic in each frame had to know about every item after it, and that is
+how the first version of this panel put a label underneath a button.
+
+One thing this cannot be checked with: the panel is a borderless
+`.nonactivatingPanel` and does not appear in `AXWindows` at all, so the
+accessibility route in CLAUDE.md does not reach it. `LISTEN_PANEL=recording:598`
+plus a synthesised click at the button's screen point is what verified it, and
+the confirmation was the *installed* app's panel appearing underneath once the
+one under test ordered itself out.

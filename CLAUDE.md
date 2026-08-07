@@ -196,6 +196,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The to-do list is a lens, and deliberately not a status on every row
 - A hidden view held the divider, and the sidebar would not drag at all
 - The gear and the way out are in the title bar, and the rows they replaced are gone
+- The recording panel can be put away, and the dismissal has to survive a menu rebuild
 
 ### `.agents/notes/appkit.md` (19k)
 

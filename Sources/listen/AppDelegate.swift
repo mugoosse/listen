@@ -74,6 +74,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         indicator.onNo = { [weak self] in self?.answerMeeting(.no) }
         indicator.onNeverFor = { [weak self] in self?.answerMeeting(.never) }
         indicator.onStop = { [weak self] in self?.stopRecording() }
+        // The panel put itself away, so the menu is the only thing left that
+        // can offer it back. Rebuilt rather than left to `menuWillOpen`,
+        // because the menu bar icon is the other half of the same sentence.
+        indicator.onDismiss = { [weak self] in self?.rebuildMenu() }
         detector.refresh()
 
         // Anything with audio and no transcript is pending, so the queue is
@@ -296,6 +300,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stop.target = self
             stop.image = symbol("stop.circle")
             menu.addItem(stop)
+            // Only after somebody has put the panel away, because a row
+            // offering to show what is already on screen is noise. This is the
+            // whole route back: the panel dismissed itself and cannot be
+            // clicked to return.
+            if indicator.isDismissed {
+                let show = NSMenuItem(title: "Show Recording Panel",
+                                      action: #selector(showRecordingPanel), keyEquivalent: "")
+                show.target = self
+                show.image = symbol("eye")
+                menu.addItem(show)
+            }
         } else {
             let start = NSMenuItem(title: "Start Recording",
                                    action: #selector(startRecording), keyEquivalent: "")
@@ -489,6 +504,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func stopRecording() {
         guard let recording = Capture.shared.stop() else { return }
         finish(recording)
+    }
+
+    /// Bring back a panel that was dismissed by hand.
+    ///
+    /// `rebuildMenu` is what shows it, and it is also what decides whether the
+    /// panel should be the question or the clock. Nothing here needs to know
+    /// which.
+    @objc private func showRecordingPanel() {
+        indicator.reveal()
+        rebuildMenu()
     }
 
     /// Capture has stopped, so the recording joins the library.

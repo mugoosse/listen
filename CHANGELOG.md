@@ -8,6 +8,60 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.8.0 (2026-08-07)
+
+### Meetings recorded in a room
+
+Until now Listen assumed every recording was a call: the microphone is you, the
+system track is everyone else. Put the laptop on the table in a meeting room and
+that assumption files four people under your name, with nothing on screen
+suggesting anything went wrong. Reported from a 47-minute workshop whose
+transcript read "speakers: Me".
+
+Listen now works out which kind of recording it has, from the recording itself:
+nothing was on a call, and nothing sustained came out of the speakers, so nobody
+was remote, so the microphone is carrying the room. It then separates the people
+around the table the way it separates a call. That workshop re-transcribes as
+five voices across 180 turns instead of one.
+
+One voice on the microphone is still just you, so a recording made alone at a
+desk is unchanged, and so is every call.
+
+The one case it cannot decide is the meeting that is half in the room and half
+on a call, because a system track with speech in it looks the same either way.
+Right-click the recording and tick **Recorded in the Room**; it offers to
+transcribe again, which is when who said what is decided. `listen transcribe
+<id> --room` is the same thing from the terminal, and `listen show` prints which
+way a recording was read.
+
+### Listen now knows what you sound like
+
+Your own voice was the one thing the voice bank could not recognise. Nothing
+ever clustered the microphone track, so `Me` was a label with no voiceprint
+behind it, while every other participant had one.
+
+Calls now file one. A room recording is what needs it: the people around a table
+arrive as Speaker A and Speaker B, and a stored voiceprint is what lets Listen
+say which of them is you without asking. It takes one transcribed call to
+learn, so the first room meeting after updating will still ask. `listen enroll
+<id>` takes the print from a call you already have.
+
+### Worth knowing
+
+- **A short clip will not separate.** Two people in 17 seconds came back as one
+  voice: that is too little audio for the clustering model, and the exchange
+  also arrived as a single sentence with nothing to cut between. Speaker
+  labelling is still per sentence rather than per word.
+- **Existing recordings are not re-read.** The decision is made while a
+  transcript is built, so a meeting already transcribed keeps the speakers it
+  has until you transcribe it again.
+- **A silent system track is no longer transcribed.** An in-person meeting
+  leaves an hour of an idle Mac on that track, and running the speech model over
+  it could invent a participant who was never in the room.
+- Two fixes found on the way: renaming a recording while it was transcribing had
+  the old name written back at the end, and a recording made before Listen
+  stored which app a call was in could be misread as a room.
+
 ## 0.7.0 (2026-08-07)
 
 ### The recording panel can be put away

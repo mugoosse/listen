@@ -482,8 +482,21 @@ final class DetailView: NSView {
         // smaller of the two. A custom view has no intrinsic width to fall back
         // on, so without an equality here it would lay out at zero and the
         // picture would be invisible rather than merely narrow.
+        //
+        // **Below the split view's holding priorities, which are 250 and 260.**
+        // At `.defaultHigh` this equality outranked the constraint that holds
+        // the divider where it was dragged, and the engine had a cheaper way to
+        // satisfy it than the one intended: instead of narrowing this view to
+        // the 620 point cap, it narrowed the *pane*. Measured on the running
+        // window, in the recordings collection only: the content side was
+        // exactly 700 wide whatever the window did (620 plus the two 40 point
+        // margins), the sidebar took the rest, the divider would not move at
+        // all, and the window itself refused to grow past 1168 or shrink below
+        // 799. People and Notes dragged normally because this view is only in
+        // the recording pane, and it did it while hidden because a hidden view
+        // keeps its constraints as surely as it keeps its frame.
         let width = transcribing.widthAnchor.constraint(equalTo: widthAnchor, constant: -80)
-        width.priority = .defaultHigh
+        width.priority = NSLayoutConstraint.Priority(200)
         width.isActive = true
     }
 

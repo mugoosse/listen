@@ -711,3 +711,59 @@ already says so out loud.
 `Labelling` is where the predicate lives, and it does not read `metadata.state`.
 That measurement is in `.agents/notes/speakers.md`; the short version is that the
 field is wrong in both directions and `effectiveState` inherits it.
+
+## A hidden view held the divider, and the sidebar would not drag at all
+
+In the recordings collection only, the sidebar could not be resized. People and
+Notes dragged normally, so it read as something about the recording list, and it
+was not: it was `TranscribingView`, in the *other* pane, hidden.
+
+Measured on the running window with the accessibility API, which is what turned
+a vague "it will not drag" into a number. The split group's `AXSplitter` exposes
+a settable `AXValue`, so the position can be set from outside the app and read
+back, and the window's `AXSize` can be set the same way:
+
+| | divider | window width accepted |
+|---|---|---|
+| Recordings | 468, whatever it was set to | 799 to 1168 only |
+| People | anything from 280 to 468 | 700 to 1573 |
+
+A pane pinned to exactly 700 points, and a window that would not grow past 1168
+or shrink below 799, is not a divider that ignores a drag. It is a required
+width somewhere, and 700 is 620 plus two 40 point margins:
+
+```swift
+transcribing.widthAnchor.constraint(lessThanOrEqualToConstant: 620)   // required
+let width = transcribing.widthAnchor.constraint(equalTo: widthAnchor, constant: -80)
+width.priority = .defaultHigh                                          // 750
+```
+
+The intent was `Pane.widthCapped`'s trick: a soft equality against a required
+maximum resolves to the smaller of the two. What was missed is that the engine
+had a second way to satisfy the equality. With the pane at 900 the view wants
+820, the cap says 620, and the violation shrinks either by narrowing the view or
+by **narrowing the pane** to 700. The pane costs less, because the only thing
+holding it is the divider position, and `NSSplitViewItem` holds that at its
+`holdingPriority`: 250 and 260 here, both far below 750. So the constraint won
+every layout pass, silently: there is no "unable to satisfy" log, because
+nothing is unsatisfiable. It simply resizes something you did not mean.
+
+It also outranked `maximumThickness = 460`, which is why the sidebar sat at 468.
+
+**A hidden view keeps its constraints as surely as it keeps its frame.** This
+view is only visible while a recording is being transcribed, and it was doing
+this all the rest of the time. It was invisible in People and Notes because the
+view is only in the recording pane, and invisible while transcribing because
+then the picture is the width it asks for anyway.
+
+The fix is one line: `width.priority = NSLayoutConstraint.Priority(200)`, below
+both holding priorities. Verified the same way, in all three collections: the
+divider now moves between 298 and 468 and stays where it is put across a
+collection switch, and the window resizes freely again.
+
+**Anything constrained against a pane's own width is a candidate for this.**
+The others in this app are all inside a scroll view, which breaks the chain:
+`stack.width == scroll.width` cannot push back on the window because a document
+view does not size its scroll view. `transcribing` is a direct child of the
+pane, which is what made it different.
+

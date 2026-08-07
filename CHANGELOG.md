@@ -8,6 +8,28 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.7.0 (2026-08-07)
+
+### The recording panel can be put away
+
+The panel that floats in the top right corner for the length of a meeting now
+carries a minus button after Stop. Pressing it hides the panel and does nothing
+else: the recording carries on, and the menu bar icon still says so.
+
+That corner is also where a screen share tends to put the thing somebody is
+pointing at, and until now the only way to clear it was to stop recording.
+
+It comes back two ways. The menu bar grows a "Show Recording Panel" row under
+Stop Recording while the panel is hidden, and the next recording starts with the
+panel visible again: hiding it applies to the meeting you are in, not to every
+meeting after it. That is deliberate. A recorder running with nothing on screen
+is only acceptable when somebody asked for it this time.
+
+The one thing it will not hide is the question. When Listen has started
+recording because it detected a call and is asking whether you are in a meeting,
+the panel stays and the minus is not there, because that answer decides whether
+the recording is kept and the panel is the only place to give it.
+
 ## 0.6.0 (2026-08-07)
 
 ### Words are no longer lost or doubled where the transcript is stitched

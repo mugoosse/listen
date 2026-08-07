@@ -8,6 +8,122 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.6.0 (2026-08-07)
+
+### Words are no longer lost or doubled where the transcript is stitched
+
+Long recordings are transcribed in pieces, and every release until this one cut
+those pieces at a fixed number of seconds, which usually means cutting through
+the middle of a word. Listen now slides each boundary back up to ten seconds to
+the quietest 200 ms it can find, so a seam falls in a pause and the pieces need
+no overlap and no merging.
+
+Measured against 0.5.0 on a track of 300 numbered sentences at the same piece
+length: 56 sentences missing and 50 transcribed twice, against nothing missing
+and nothing duplicated. The known limitation carried since 0.1.0, about six
+corrupted words an hour on a large Mac and about 33 on a small one, is what this
+removes.
+
+It is also faster. Decode cost grows sharply with the length of a piece, so once
+a seam is free the reason to use a long one goes with it: every Mac now uses 120
+second pieces, three at a time, which on a 3643 second recording is about twice
+as fast as the 600 second pieces it replaces.
+
+### A transcription in progress shows the meeting being read
+
+The pane drew a spinner. It now draws the recording's own waveform in two lanes,
+everybody else above and you below, each filling as its pass decodes. The
+boundary is where the reading has got to, to the bar.
+
+There is no time estimate anywhere, deliberately. A throughput figure measured on
+one machine is a promise another cannot keep, so it counts pieces done out of
+pieces to do and says nothing it cannot know.
+
+### The speech model belongs to the recording
+
+Transcribe Again is a submenu now: Parakeet v2 or v3, per recording, recorded in
+the recording's own metadata rather than read from a setting that has since
+changed. Re-transcribing discards hand corrections, so it asks first, which it
+did not before.
+
+Worth knowing before you re-run an old import: v3 handles more languages, v2 is
+English only, and an imported recording transcribed elsewhere may have been in
+neither.
+
+### Voices are matched against everything known about a person
+
+A suggestion used to be scored against the single best recording of somebody's
+voice, which is only as good as that one recording. It is now scored against the
+average of all of them. Measured leave-one-out over this library: the same
+person scores +0.642 to +0.914 and different people up to +0.371, a wider gap
+than the numbers it replaces, which had scored a correct match at +0.603 because
+the one labelled recording of that voice was the least representative of five.
+
+The percentage is gone. It was a similarity score times a hundred on a scale
+whose whole useful range is 0.37 to 0.91, so a correct match displayed as "60%
+match" and read as a coin flip. It says how sure it is in words instead, and
+names the runner-up only when the margin is genuinely narrow.
+
+When a voice clears +0.75 and beats second place by +0.15, Listen names it
+without asking. At that cutoff 85% of true matches land and no wrong pair scores
+above it. Three things keep that safe: an automatic name is never used as
+evidence for the next one, so a mistake cannot spread; it is marked as automatic
+in the recording's metadata and in `listen show`; and `listen voices` prints the
+ranking, the margins and the thresholds, because a name applied without being
+asked has to leave something to argue with.
+
+### Hear a speaker before you name them
+
+The picker asked "who is this" and offered only inference: how long they spoke,
+what the voice bank thinks, who was on the invitation. It now has a Play button.
+Two seconds of the voice settles what all of that is circling, and it plays
+through the pane's own player, so the playhead moves and the transcript scrolls
+to them.
+
+Asking about somebody narrows the transcript to their turns, for exactly as long
+as the asking lasts: close the popover, by dismissing it or by naming them, and
+the whole meeting is back. The waveform greys everybody else at the same time,
+across the whole recording rather than only the part already played, which is
+how you find a quiet participant. This library holds a 97 minute call where one
+speaker talks for 0.0 minutes and another for 0.1, and both were on screen and
+invisible before this.
+
+You can also answer "that is me" from the picker on an imported recording, which
+has no microphone track to merge yourself into and so had no way to say it.
+
+### The recordings still waiting on a name
+
+A row above the sidebar list counts them, and is gone entirely when the count is
+zero. Clicking it shows those recordings; View > Recordings Needing a Speaker
+(⌘U) asks the same question when the row is not there to ask it from.
+
+It is a count of what is actually in the transcripts rather than of what the
+metadata claims, and those disagree: over the 31 transcribed recordings here the
+stored state says 17 where the truth is 13, in both directions, because it is
+only written by the window and half this library was labelled by a pipeline that
+never touched it.
+
+### Settings is in the title bar, and the sidebar drags again
+
+The gear sits at the top of the sidebar next to the control that collapses it,
+in all three collections, and the Settings row at the bottom of every list is
+gone: the lists run to the bottom edge now. Settings itself takes the same
+shape, its name where the app's name goes and the way back at the top right.
+
+The sidebar could not be resized at all in Recordings, and could be in People
+and Notes. That was a constraint belonging to the transcription picture above,
+which is hidden almost all the time and was quietly holding the content pane at
+exactly 700 points and the window between 799 and 1168. Both drag freely now,
+between 298 and 468 points of sidebar.
+
+### Still true
+
+Speaker labelling is per sentence rather than per word, so two people talking
+over each other inside one sentence come out as one speaker. Meeting detection
+is on by default: it starts recording, then asks on screen, and answering no
+deletes the audio straight away. Diarization runs on the system audio track
+only, because your own track is you by definition.
+
 ## 0.5.0 (2026-08-06)
 
 ### A meeting no longer records you as silence when you put on a headset

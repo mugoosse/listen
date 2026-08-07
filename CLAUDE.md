@@ -168,7 +168,7 @@ The three things written about a recording rather than extracted from it.
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
 
-### `.agents/notes/window.md` (41k)
+### `.agents/notes/window.md` (46k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -195,6 +195,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The waveform dims everybody but one, and that is where a quiet speaker is
 - The to-do list is a lens, and deliberately not a status on every row
 - A hidden view held the divider, and the sidebar would not drag at all
+- The gear and the way out are in the title bar, and the rows they replaced are gone
 
 ### `.agents/notes/appkit.md` (19k)
 

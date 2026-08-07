@@ -1,22 +1,12 @@
 import AppKit
 
-/// The way back to the library, as a row at the top of whichever sidebar has
-/// replaced the recording list.
-///
-/// It was a toolbar button, and in a window with a hidden title it sat directly
-/// over the pane's own heading: "General" was half behind "Library". A row
-/// inside the sidebar cannot overlap the content, and it puts the way out in
-/// the same column as the thing it takes you back to.
-@MainActor
-func sidebarBackRow(target: AnyObject, action: Selector) -> SidebarRow {
-    let button = SidebarRow(title: "Library", target: target, action: action,
-                            contentInset: 8)
-    button.image = NSImage(systemSymbolName: "chevron.backward",
-                           accessibilityDescription: "Back to the library")
-    button.contentTintColor = .secondaryLabelColor
-    button.toolTip = "Back to the library (Esc)"
-    return button
-}
+// The way back to the library was a row at the top of whichever sidebar had
+// replaced the recording list, aligned to the traffic lights by hand because
+// nothing else was on that line. People and Notes lost theirs when the
+// segmented control became the way between collections, and settings lost the
+// last one when the title bar took the pair: the word Settings on the left, the
+// way out on the right. The helper that built the row and the one that put it
+// on the traffic lights' line went with it.
 
 /// Any row that goes somewhere when you click it.
 ///
@@ -86,28 +76,6 @@ final class HoverRow: NSView {
     }
 }
 
-/// Put a sidebar row on the traffic lights' own line.
-///
-/// Measured from the buttons rather than guessed at: their size and spacing are
-/// the system's, they differ between window styles, and a constant that looks
-/// right on one Mac is a row sitting a few points low on another. Called from
-/// `viewDidLayout`, because the window does not exist when the view is built.
-@MainActor
-func alignToTrafficLights(row: NSView, top: NSLayoutConstraint,
-                          leading: NSLayoutConstraint, in view: NSView) {
-    guard let window = view.window,
-          let zoom = window.standardWindowButton(.zoomButton),
-          let content = window.contentView else { return }
-    let box = zoom.convert(zoom.bounds, to: content)
-    let centre = view.convert(NSPoint(x: box.midX, y: box.midY), from: content)
-    // Unflipped, so the distance from the top is measured downward from maxY.
-    let fromTop = view.bounds.maxY - centre.y
-    let wanted = fromTop - row.frame.height / 2
-    if abs(top.constant - wanted) > 0.5 { top.constant = wanted }
-    let gap = view.convert(NSPoint(x: box.maxX, y: 0), from: content).x + 12
-    if abs(leading.constant - gap) > 0.5 { leading.constant = gap }
-}
-
 /// Everybody the library knows, as the sidebar of People mode.
 ///
 /// The roster is the thing the feature was missing. A chip tells you who is in
@@ -173,9 +141,8 @@ final class PeopleNav: NSViewController {
             scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-        ] + sidebarSettingsRow(in: container, above: container.bottomAnchor,
-                               under: scroll, target: self,
-                               action: #selector(openSettings)))
+            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
         hover = TableHover(table, name: "people")
         view = container
     }
@@ -237,8 +204,6 @@ final class PeopleNav: NSViewController {
     }
 
     func focusSearch() { view.window?.makeFirstResponder(searchField) }
-
-    @objc private func openSettings() { LibraryWindow.shared.showSettings() }
 
     @objc private func searchChanged() {
         query = searchField.stringValue

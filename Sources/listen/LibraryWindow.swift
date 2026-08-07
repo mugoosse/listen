@@ -55,6 +55,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private var sidebarWasCollapsed = false
 
     private static let brandItem = NSToolbarItem.Identifier("listenBrand")
+    private static let settingsTitleItem = NSToolbarItem.Identifier("settingsTitle")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
     private static let settingsItem = NSToolbarItem.Identifier("openSettings")
     private static let peopleItem = NSToolbarItem.Identifier("openPeople")
@@ -104,20 +105,46 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         RecordButton(target: self, action: #selector(newRecording))
     }()
 
-    /// The way out of settings.
+    /// The way out of settings, at the top right of the sidebar.
     ///
     /// A custom view for the same reason the record control is one: the toolbar
     /// is `.iconOnly`, and a bare chevron with nowhere to say where it goes is
-    /// a button you have to click to find out what it does.
+    /// a button you have to click to find out what it does. It says "Back"
+    /// rather than "Library", because it now sits beside the word Settings and
+    /// a pair reading "Settings … Library" is two places named and no verb.
+    ///
+    /// Glass where the system has it, which is macOS 26 and later: a capsule
+    /// with the same material as the toolbar buttons in every other mode, so
+    /// the one control the title bar has here is not the one control in the app
+    /// drawn in the old bezel. `.rounded` below that, which is what it was.
     private lazy var backButton: NSButton = {
-        let b = NSButton(title: " Library", target: self, action: #selector(exitSettings))
-        b.bezelStyle = .rounded
+        let b = NSButton(title: "Back", target: self, action: #selector(exitSettings))
+        if #available(macOS 26.0, *) {
+            b.bezelStyle = .glass
+        } else {
+            b.bezelStyle = .rounded
+        }
         b.imagePosition = .imageLeading
         b.image = NSImage(systemSymbolName: "chevron.backward",
                           accessibilityDescription: "Back to the library")
         b.toolTip = "Back to the library (Esc)"
         b.sizeToFit()
         return b
+    }()
+
+    /// What the masthead says in settings: the name of the screen, in the slot
+    /// the app's own name has everywhere else.
+    ///
+    /// Settings is a mode of this window rather than a window of its own, so it
+    /// has no title bar to be titled by. The word was a label at the top of the
+    /// section list, one line under a "Library" row, which is a heading and a
+    /// way out stacked in the space the title bar was already leaving empty.
+    private lazy var settingsMark: NSTextField = {
+        let name = NSTextField(labelWithString: "Settings")
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.lineBreakMode = .byClipping
+        name.sizeToFit()
+        return name
     }()
 
     /// A calm masthead for the sidebar, not a new action. The toolbar's items
@@ -134,8 +161,23 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         mark.orientation = .horizontal
         mark.alignment = .centerY
         mark.spacing = 8
+        // Six points at each end. With the sidebar collapsed the system draws
+        // this item on glass, and a pill fits itself to the view inside it: the
+        // mascot is a filled circle that reaches its own edge and the last
+        // letter of the word is against the other end, so without these the
+        // capsule is a box around content with no margin at all.
+        mark.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
         mark.setAccessibilityLabel("Listen")
-        mark.frame = NSRect(x: 0, y: 0, width: 92, height: 28)
+        // Its own fitting width rather than a stated one, which is what pays
+        // for the insets. With the sidebar collapsed the toolbar gives the
+        // region before the tracking separator a fixed budget, and the
+        // masthead, the gear and the collapse control fit inside it by about
+        // six points: measured, 100 points of masthead keeps all three and 106
+        // puts the gear in the overflow menu at the far right of the window.
+        // The 92 this was stated at had exactly the eight points of slack the
+        // two insets now use, so the pill is the same size it always was.
+        mark.frame = NSRect(origin: .zero,
+                            size: NSSize(width: mark.fittingSize.width, height: 28))
         return mark
     }()
 
@@ -183,7 +225,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         let controller = LibrarySplitViewController()
 
         let side = NSSplitViewItem(sidebarWithViewController: sidebarHost)
-        side.minimumThickness = 200
+        // 200 was never reachable: the segmented control at the top of every
+        // collection is 280 points at its own intrinsic width, and a control
+        // resists compression harder than a divider holds a position, so the
+        // sidebar stopped there whatever this said.
+        //
+        // 290 is measured on the running window, and it is about the title bar
+        // rather than the list. The masthead, the gear and the collapse control
+        // are 100, 44 and 44 points side by side: below 290 the toolbar drops
+        // the gear into the overflow chevron, which parks it at the far right
+        // of the *content* pane, as far from the sidebar it belongs to as the
+        // window allows. So the sidebar stops ten points before that happens.
+        side.minimumThickness = 290
         side.maximumThickness = 460
         side.canCollapse = true
         // Higher than the detail pane's, so resizing the *window* moves the
@@ -283,7 +336,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // rename followed by a click on a speaker aborted the app.
         detail.onChanged = { [weak self] in self?.sidebar.reload() }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
-        sidebar.onSettings = { [weak self] in self?.showSettings() }
         peopleNav.onSelect = { [weak self] person in self?.personPane.show(person) }
         // One handler, three lists. Each carries its own copy of the same
         // control because the sidebar swaps its whole view controller, and they
@@ -723,7 +775,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
-         .flexibleSpace, Self.settingsItem,
+         .flexibleSpace, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.personActionsItem]
     }
 
@@ -760,18 +812,29 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // transcribe this again, delete this) and People is not a verb on a
             // recording: it is a peer collection of the whole library, and so
             // are notes.
-            return [Self.brandItem, .flexibleSpace, .toggleSidebar,
+            //
+            // The gear sits immediately left of the collapse control, in the
+            // sidebar's own region: both are about this pane rather than about
+            // the recording beside it. It replaces the row at the bottom of all
+            // three lists, which is where a gear goes when the title bar has no
+            // room for one, and this window's title bar has nothing else in it.
+            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                     .sidebarTrackingSeparator, .flexibleSpace, Self.actionsItem]
         case .settings:
-            // No back item: the way out is a row at the top of the section
-            // list. In a window with a hidden title, a toolbar button sat over
-            // the pane's own heading, so "General" read as half a word behind
-            // "Library".
-            // No toggle: settings locks the sidebar open, and a control that
-            // is always disabled is a control that should not be drawn. The
-            // way back takes its place, as a row in the sidebar level with the
-            // traffic lights.
-            return [.sidebarTrackingSeparator, .flexibleSpace]
+            // The same shape as every other mode: what this pane is on the
+            // left, one control on the right, both inside the sidebar's own
+            // region. The word "Settings" takes the masthead's slot because
+            // that is the only thing this screen is, and the way out takes the
+            // collapse control's slot because settings locks the sidebar open
+            // and a control that is always disabled should not be drawn.
+            //
+            // The back button was tried on the *content* side once, and it sat
+            // over the pane's own heading in a window with a hidden title: at
+            // 620 points of pane the words "General" and "Library" overlapped.
+            // Before the tracking separator it is over the sidebar, where there
+            // is nothing to collide with.
+            return [Self.settingsTitleItem, .flexibleSpace, Self.backItem,
+                    .sidebarTrackingSeparator, .flexibleSpace]
         case .people:
             // The person's actions live beside the way out, where every other
             // menu in this window lives, rather than as a button inside the
@@ -781,7 +844,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // The sidebar toggle is here now, unlike before: these modes no
             // longer lock the sidebar open, because the segmented control in it
             // is the navigation and collapsing is a choice like any other.
-            return [Self.brandItem, .flexibleSpace, .toggleSidebar,
+            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                     .sidebarTrackingSeparator, .flexibleSpace, Self.personActionsItem]
         case .notes:
             // Nothing on the right. A note has no verbs yet: it is deleted
@@ -791,7 +854,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // Switching is one click now, so a window whose title bar empties
             // as you move between segments reads as three different screens
             // rather than three views of one library.
-            return [Self.brandItem, .flexibleSpace, .toggleSidebar,
+            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                     .sidebarTrackingSeparator, .flexibleSpace]
         }
     }
@@ -817,8 +880,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Listen"
             item.view = brandMark
-            item.minSize = NSSize(width: 92, height: 28)
-            item.maxSize = NSSize(width: 92, height: 28)
+            item.minSize = brandMark.frame.size
+            item.maxSize = brandMark.frame.size
+            return item
+
+        case Self.settingsTitleItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Settings"
+            item.view = settingsMark
+            item.minSize = settingsMark.frame.size
+            item.maxSize = settingsMark.frame.size
             return item
 
         case Self.settingsItem:
@@ -855,7 +926,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         case Self.backItem:
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "Library"
+            item.label = "Back"
             item.view = backButton
             item.minSize = backButton.frame.size
             item.maxSize = backButton.frame.size

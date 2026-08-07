@@ -12,9 +12,6 @@ import AppKit
 @MainActor
 final class SettingsNavViewController: NSViewController {
     private var table: NSTableView!
-    private var back: SidebarRow!
-    private var backTop: NSLayoutConstraint!
-    private var backLeading: NSLayoutConstraint!
 
     /// Group headings and sections in one list, because that is what the table
     /// draws. `isGroupRow` picks them apart, exactly as the day headings do.
@@ -31,15 +28,19 @@ final class SettingsNavViewController: NSViewController {
 
     private(set) var selectedTab: SettingsTab = .general
 
+    /// Where the first group heading starts, measured from the top of the
+    /// sidebar.
+    ///
+    /// The heading and the way out are both in the title bar now, so this list
+    /// begins where the other collections' segmented control does: 42 points
+    /// down, clear of the traffic lights. There is no search field over it,
+    /// because nine sections in four groups is a list you scan, and a field
+    /// there would be a control that exists to be symmetrical with the other
+    /// sidebar.
+    private static let listTop: CGFloat = 42
+
     override func loadView() {
         let container = NSView()
-
-        // A label rather than a search field. Nine sections in four groups is a
-        // list you scan, and a search field over it would be a control that
-        // exists to be symmetrical with the other sidebar.
-        let title = NSTextField(labelWithString: "Settings")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.translatesAutoresizingMaskIntoConstraints = false
 
         table = NSTableView()
         table.headerView = nil
@@ -57,27 +58,10 @@ final class SettingsNavViewController: NSViewController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        back = sidebarBackRow(target: self, action: #selector(goBack))
-        container.addSubview(back)
-        container.addSubview(title)
         container.addSubview(scroll)
-        backTop = back.topAnchor.constraint(equalTo: container.topAnchor, constant: 12)
-        backLeading = back.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                                    constant: 78)
         NSLayoutConstraint.activate([
-            // Clear of the traffic lights, and level with the search field on
-            // the other side of the swap.
-            // Level with the traffic lights and just clear of them, in the
-            // place the collapse toggle occupies in library mode. These modes
-            // lock the sidebar open, so that button is not drawn here and the
-            // row costs no vertical space of its own.
-            backTop, backLeading,
-            back.heightAnchor.constraint(equalToConstant: 26),
-            title.topAnchor.constraint(equalTo: back.bottomAnchor, constant: 14),
-            title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            title.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                            constant: -10),
-            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 10),
+            scroll.topAnchor.constraint(equalTo: container.topAnchor,
+                                        constant: Self.listTop),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -85,13 +69,6 @@ final class SettingsNavViewController: NSViewController {
         view = container
         select(selectedTab)
     }
-
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        alignToTrafficLights(row: back, top: backTop, leading: backLeading, in: view)
-    }
-
-    @objc private func goBack() { LibraryWindow.shared.exitSettings() }
 
     /// Select a section, without calling back. The caller is the one asking.
     func select(_ tab: SettingsTab) {

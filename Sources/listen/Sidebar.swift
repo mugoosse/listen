@@ -64,12 +64,13 @@ final class SidebarViewController: NSViewController {
     private var todoHeight: NSLayoutConstraint!
     private var todoTop: NSLayoutConstraint!
 
-    /// Settings is the one row left here, at the bottom, because it is the
-    /// thing you reach for least. Record was the row above the list until it
-    /// became `RecordButton`: see there for why it left, which is that a
-    /// collapsed sidebar took the app's primary action off the screen with it.
-    ///
     /// Where a row's content starts, matching the app icons below.
+    ///
+    /// The to-do row is the only row left using it. Record was the row above the
+    /// list until it became `RecordButton`, and Settings was the row below it
+    /// until it became the gear in the title bar: see `RecordButton` for why the
+    /// first left, which is that a collapsed sidebar took the app's primary
+    /// action off the screen with it.
     ///
     /// An inset table indents its rows and `RecordingCell` insets its own
     /// content inside that. Measured against the result rather than added up
@@ -92,9 +93,6 @@ final class SidebarViewController: NSViewController {
     /// floating inside the same column.
     private static let rowEdge: CGFloat = 10
 
-    private var settingsButton: SidebarRow!
-
-    var onSettings: (() -> Void)?
     private var filterBar: NSView!
     private var filterStack: NSStackView!
 
@@ -195,10 +193,6 @@ final class SidebarViewController: NSViewController {
         filterBar.addSubview(filterStack)
         filterBar.isHidden = true
 
-        settingsButton = row("Settings", "gearshape", #selector(openSettings))
-        settingsButton.toolTip = "Settings (⌘,)"
-        settingsButton.contentTintColor = .secondaryLabelColor
-
         todoRow = row("", "person.crop.circle.badge.questionmark",
                       #selector(showUnnamed))
         todoRow.isHidden = true
@@ -208,13 +202,6 @@ final class SidebarViewController: NSViewController {
         container.addSubview(filterBar)
         container.addSubview(todoRow)
         container.addSubview(scroll)
-        // A hairline, so the list ends rather than appearing to run underneath
-        // the row pinned over it.
-        let footerRule = NSBox()
-        footerRule.boxType = .separator
-        footerRule.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(footerRule)
-        container.addSubview(settingsButton)
         filterHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
         // Collapses to nothing, spacing included. A hidden view keeps its
         // frame, so an unfiltered list would otherwise sit six points lower
@@ -255,18 +242,10 @@ final class SidebarViewController: NSViewController {
             scroll.topAnchor.constraint(equalTo: todoRow.bottomAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: footerRule.topAnchor),
-            footerRule.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            footerRule.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            footerRule.bottomAnchor.constraint(equalTo: settingsButton.topAnchor,
-                                               constant: -10),
-            settingsButton.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                                    constant: Self.rowEdge),
-            settingsButton.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                                     constant: -Self.rowEdge),
-            settingsButton.bottomAnchor.constraint(equalTo: container.bottomAnchor,
-                                                   constant: -14),
-            settingsButton.heightAnchor.constraint(equalToConstant: 32),
+            // To the bottom of the sidebar. The list used to stop at a hairline
+            // above the Settings row; both are gone, so the recordings run to
+            // the edge of the window the way the list in a mail app does.
+            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         hover = TableHover(table, name: "sidebar")
         view = container
@@ -624,8 +603,6 @@ final class SidebarViewController: NSViewController {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         return button
     }
-
-    @objc private func openSettings() { onSettings?() }
 
     private func rowMenu() -> NSMenu {
         let menu = NSMenu()

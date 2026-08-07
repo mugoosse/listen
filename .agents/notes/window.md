@@ -206,8 +206,8 @@ Five things it has to get right:
    ("Search recordings", "Search people", "Search notes"). Otherwise the first
    search in People returns people as a surprise rather than an expectation.
 2. **Settings is not a fourth segment.** The segments are which part of the
-   library you are looking at; settings is configuring the app. It keeps the
-   gear at the bottom left.
+   library you are looking at; settings is configuring the app. It keeps a gear
+   of its own, which is in the title bar beside the collapse control.
 3. **Each list carries its own copy of the control**, because the sidebar swaps
    its whole view controller through `PaneHost`. Same builder, same constraints,
    same position, so it does not appear to move. The cost is that they go out of
@@ -220,12 +220,14 @@ Five things it has to get right:
    moving the limits makes the split view redistribute and rewrite the saved
    width. `CLAUDE.md` already records this for the settings mode; a segmented
    control changes mode far more often than Settings does.
-5. **Every list needs the Settings row, not just the recordings one.** It was
-   the only list with a bottom row, because People was entered from the toolbar
-   and left by a back row. Peers behind one control, a gear in one of them means
-   being in People or Notes is being somewhere with no visible way to Settings.
-   Found by looking for it and it not being there. `sidebarSettingsRow` builds
-   the row, the hairline above it and its constraints once for all three.
+5. **Every list needs the way to Settings, not just the recordings one.** The
+   recording list was the only one with a bottom row, because People was entered
+   from the toolbar and left by a back row. Peers behind one control, a gear in
+   one of them means being in People or Notes is being somewhere with no visible
+   way to Settings. Found by looking for it and it not being there. It was one
+   builder making the row, the hairline above it and its constraints for all
+   three lists; it is one toolbar item in all three modes now, and the note
+   below on the title bar is why.
 6. **People and Notes no longer lock the sidebar open.** That lock existed
    because the roster was the only way out of the person page. The segmented
    control is now the way in and out of everything, so the lock was about
@@ -767,3 +769,42 @@ The others in this app are all inside a scroll view, which breaks the chain:
 view does not size its scroll view. `transcribing` is a direct child of the
 pane, which is what made it different.
 
+## The gear and the way out are in the title bar, and the rows they replaced are gone
+
+Every collection's sidebar used to end in a Settings row above a hairline, built
+by one `sidebarSettingsRow` helper, and settings mode began with a "Library" row
+hand-aligned to the traffic lights by `alignToTrafficLights`. Both are gone. The
+title bar holds them now, in the region before `sidebarTrackingSeparator`, which
+is the only way to reach the space over the sidebar:
+
+- **Recordings, People, Notes**: masthead, flexible space, gear, collapse
+  control. The gear is a peer of the collapse control because both are about
+  this pane rather than about the recording beside it.
+- **Settings**: the word "Settings" in the masthead's slot, flexible space, a
+  Back button in the collapse control's slot. Settings locks the sidebar open,
+  so that slot is free, and the screen has no other title.
+
+Three things measured on the running window:
+
+1. **The sidebar's minimum is 290 points now, and it is a title bar number.**
+   The masthead, the gear and the collapse control are 100, 44 and 44 points
+   side by side: below 290 the toolbar drops the gear into the overflow chevron,
+   which parks it at the far right of the *content* pane. The old 200 was never
+   reachable anyway, because the segmented control at the top of every
+   collection is 280 wide at its intrinsic size and a control resists
+   compression harder than a divider holds a position.
+2. **A collapsed sidebar gives that region a fixed budget**, and it is about
+   190 points. Measured: a 100 point masthead plus two 44 point buttons fits,
+   106 puts the gear in the overflow menu at the far right of the window. So the
+   masthead is `mark.fittingSize.width` rather than a stated number, and the six
+   points of inset at each end of the mascot and the word are paid for out of
+   the slack the hand-written `92` was carrying.
+3. **`NSBezelStyleGlass` is macOS 26 and later**, so the Back button asks for it
+   behind `if #available` and falls back to `.rounded`. It is the one button in
+   this window with a bezel, and drawing it in the old one beside a row of glass
+   toolbar items is worse than the availability check.
+
+The mascot needed six points of left inset inside the masthead: with the sidebar
+collapsed the system draws that item on glass, a pill fits itself to the view
+inside it, and a filled circle reaches its own edge while the word beside it
+keeps the side bearing its letters come with.

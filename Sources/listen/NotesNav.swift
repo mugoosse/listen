@@ -100,44 +100,13 @@ final class CollectionPicker: NSSegmentedControl {
     }
 }
 
-/// The Settings row pinned to the bottom of a sidebar, with its hairline.
-///
-/// One builder, three lists. Settings used to be reachable only from the
-/// recording list, because that was the only list with a bottom row: People was
-/// entered from the toolbar and left by a back row. Now that the three
-/// collections are peers behind one segmented control, a gear in only one of
-/// them means being in People or Notes is being somewhere with no visible way
-/// to Settings at all. Cmd-, still works, which is exactly the kind of "still
-/// works" nobody finds.
-@MainActor
-func sidebarSettingsRow(in container: NSView, above bottom: NSLayoutYAxisAnchor,
-                        under scroll: NSView, target: AnyObject,
-                        action: Selector) -> [NSLayoutConstraint] {
-    let button = SidebarRow(title: "Settings", target: target, action: action,
-                            contentInset: 12)
-    button.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
-    button.contentTintColor = .secondaryLabelColor
-    button.toolTip = "Settings (⌘,)"
-
-    // A hairline, so the list ends rather than appearing to run underneath the
-    // row pinned over it.
-    let rule = NSBox()
-    rule.boxType = .separator
-    rule.translatesAutoresizingMaskIntoConstraints = false
-    container.addSubview(rule)
-    container.addSubview(button)
-
-    return [
-        scroll.bottomAnchor.constraint(equalTo: rule.topAnchor),
-        rule.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-        rule.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-        rule.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -10),
-        button.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-        button.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-        button.bottomAnchor.constraint(equalTo: bottom, constant: -14),
-        button.heightAnchor.constraint(equalToConstant: 32),
-    ]
-}
+// The Settings row that used to be pinned to the bottom of all three sidebars,
+// with its hairline above it, is gone: the gear in the title bar is the one
+// visible way in, beside the collapse control and over the sidebar it belongs
+// to. The row existed because that was the only place to put a gear when the
+// toolbar's sidebar region held nothing but the masthead. Two of them is one
+// too many, and the one that cost a list 56 points of height at the bottom of
+// every collection is the one to lose.
 
 // ---------------------------------------------------------------------------
 
@@ -201,9 +170,8 @@ final class NotesNav: NSViewController {
             scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-        ] + sidebarSettingsRow(in: container, above: container.bottomAnchor,
-                               under: scroll, target: self,
-                               action: #selector(openSettings)))
+            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
         hover = TableHover(table, name: "notes")
         view = container
     }
@@ -269,8 +237,6 @@ final class NotesNav: NSViewController {
         query = searchField.stringValue
         reload()
     }
-
-    @objc private func openSettings() { LibraryWindow.shared.showSettings() }
 }
 
 extension NotesNav: NSTableViewDataSource, NSTableViewDelegate {

@@ -67,6 +67,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private var libraryStamps: [String: TimeInterval] = [:]
 
     private var recordTick: Timer?
+    /// Notices a recording arriving from an iPhone while this window is open.
+    private var libraryPoll: Timer?
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
     fileprivate var actionsMenu: NSMenu?
@@ -386,6 +388,23 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             name: NSApplication.didBecomeActiveNotification, object: nil)
         libraryStamps = Self.libraryStamps()
 
+        // And they may write to it while you are looking straight at it.
+        //
+        // Activation was enough when the only other writer was a second Mac
+        // syncing a folder: you would come back to the app and there it was.
+        // An iPhone uploading a recording is different, because you are holding
+        // the phone and watching this window at the same time, and a recording
+        // that arrived and transcribed a minute ago while the list sat still
+        // reads as a sync that did not work.
+        //
+        // A poll rather than a directory watch: `libraryStamps` is one listing
+        // with the dates prefetched, and a vnode source on `recordings/` fires
+        // when a folder appears but not when a transcript is written inside one
+        // afterwards, which is the half that matters most.
+        libraryPoll = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appBecameActive() }
+        }
+
         sidebarHost.show(sidebar)
         detailHost.show(detail)
     }
@@ -437,7 +456,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// That is the bug `reloading` and `renderTurns(scrollToTop:)` already exist
     /// to prevent, and it would have been reintroduced here for free.
     @objc private func appBecameActive() {
-        guard mode == .library else { return }
+        guard mode == .library, window?.isVisible == true else { return }
         let now = Self.libraryStamps()
         guard now != libraryStamps else { return }
 

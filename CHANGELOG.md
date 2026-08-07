@@ -8,7 +8,7 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
-## 0.9.0 (2026-08-07)
+## 0.9.0 (2026-08-08)
 
 ### Setup could not download a model, and did not say so
 

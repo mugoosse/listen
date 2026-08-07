@@ -8,6 +8,91 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.9.0 (2026-08-07)
+
+### Setup could not download a model, and did not say so
+
+Reported as "for some reason I can't download it", and then "nope" to whether
+any error had appeared. That second answer was the accurate one: nothing
+appeared.
+
+Pressing Download did start the fetch. About half a second later the button
+went back to reading "Download Parakeet v3 (2.51 GB)", because the setup pane
+repaints on a timer and put the old title back, so a download that was running
+looked like a press that had done nothing. Pressing again started a second
+fetch over the same directory. Two fetches clearing and repopulating one cache
+is how that Mac ended up being told `Key decoder.prediction.embed.weight not
+found in ParakeetModel`, which is what mlx-swift says when the weights it wants
+are not all there.
+
+The step now has a progress bar and a line saying what it is doing, for the
+whole of the download rather than for the first moment of it. The model buttons
+are disabled while bytes are arriving, so switching cannot leave 2.5 GB coming
+for a model nobody wants any more.
+
+Continue no longer trusts the size of a directory. It used to, which meant that
+after a failed attempt left something roughly the right size behind, pressing
+Try again walked straight past the model step to "You are set" holding a model
+that had just refused to load. Continue now loads the weights before moving on:
+a second or two from a warm cache, and the only check worth anything, because a
+directory of the right size still has to parse.
+
+A copy short of the measured size is deleted before a retry rather than
+accepted. A copy that is the right size and still will not load is replaced,
+but only after it has failed once and only when you press the button again.
+Throwing away 2.5 GB is not something to do on a hunch.
+
+If a broken copy is already on disk from before this release, transcribing now
+stops and says what is wrong and which button replaces it, instead of producing
+an empty transcript. MLX reads the missing part of a short file as zeros
+without complaining, so that failure had no other symptom.
+
+### Pair an iPhone with this Mac
+
+Settings has a Devices pane. It shows a QR code carrying the pairing key and
+this Mac's address, so there is nothing to type on the phone, and under it the
+phones that have connected, each with when it was last seen. There is a "Copy
+the code instead" button for when pointing a camera at the screen is not
+convenient.
+
+Whoever scans that code can read every transcript in this library. Treat it the
+way you would treat the screen it is on.
+
+Removing a device stops this Mac answering it. It does not reach into the phone
+to delete what already synced, and the pane says so rather than leaving you to
+assume either way. "Forget every device and start again" rotates the key and
+clears the list with it, because a list of phones that survived a key change is
+a list of phones that cannot connect, which is worse than an empty one: it looks
+like they still can.
+
+**Listen does not do the sync itself, and this release does not ship the parts
+that do.** A separate helper called `listen-sync` serves the library on your
+local network as a LaunchAgent, and it lives in another repository under
+another licence; the phone app is separate again. Until the helper is installed
+on this Mac there is nothing for a phone to pair with, and the pane explains
+that instead of showing an empty list that reads as a bug. What shipped here is
+the Mac's half of the pairing.
+
+### The window notices what arrives while you are looking at it
+
+The library list re-reads every 3 seconds while the window is visible, and the
+Devices list every 2. Both used to be read when they were built and again when
+you came back to the app, which was enough when the only other writer was a
+second Mac syncing a folder in the background. A phone is different: you are
+holding it and watching this window at the same time, and a recording that
+arrived and transcribed a minute ago while the list sat still reads as a sync
+that did not work.
+
+Only while the window is visible. A poll behind a closed window is work nobody
+asked for.
+
+### Worth knowing
+
+- **The "Showing only X" bar has stopped appearing on memos.** Narrowing a
+  transcript to the only speaker in it hides nothing and explains nothing, and
+  every recording with one voice was getting a bar announcing that all of the
+  transcript was visible.
+
 ## 0.8.0 (2026-08-07)
 
 ### Meetings recorded in a room

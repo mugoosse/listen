@@ -225,6 +225,17 @@ have to run first and only something seeing the whole list can arrange that.
 `Recording.speaks` and `SpeakerName.matches` moved here from `MCP.swift`, which
 is where they had been living for no reason but history.
 
+`needsSpeakers` is the fourth lens, and it is a question about the library rather
+than about something you arrived at holding: it narrows to the recordings with a
+voice nobody has named. It runs **first of the three that read `turns.json`**,
+which is where the ordering rule above puts it for two reasons. It is by far the
+most selective, taking 31 recordings to 13 on the development library, so
+`person` and `query` read less than half as many transcripts behind it. And it is
+the only one of the three answered from a cache, since `Labelling` keys on the
+file's modification date. See `.agents/notes/speakers.md` for why the predicate
+reads the transcript rather than `metadata.state`, and `.agents/notes/window.md`
+for the row that sets it.
+
 `RecordingFilter.parse` handles `tag:job hunt` by taking the longest run of
 following words that names a real tag, one word when none does, and the whole
 string when quoted. Matching against a known vocabulary is what makes a space in

@@ -482,3 +482,128 @@ neither is a thing to decide without being asked.
 *confirm* an automatic name, so its print stays out of the bank for good unless
 somebody renames that speaker. That is the safe direction and it is not the
 right end state.
+
+## Naming a voice nobody has heard was the whole difficulty
+
+Reported from real use, and it is the complaint the two sections above were
+circling without landing on. `SpeakerPicker` asks "Who is Speaker A?" and offers
+how long they spoke, what the voice bank ranks them against, and who was on the
+invitation. Every one of those is inference. The evidence that settles it in two
+seconds is the voice, and that was the one thing the popover did not offer.
+
+Getting it meant dismissing the popover, finding one of that speaker's
+paragraphs in the transcript and clicking it. On the recordings where this
+matters most that is a search rather than a click: measured on this library, one
+97 minute call has a speaker who talks for **0.0 minutes** and another for
+**0.1**, and a 43 minute call has one at 2.6%. Those are also exactly the
+speakers most likely to be a diarizer artefact rather than a person, which is a
+judgement nobody can make without listening.
+
+**The picker plays through the pane, and does not own a player.** `SpeakerPreview`
+is four closures handed down from `DetailView.editSpeaker`. The pane already has
+the recording open and its mixdown built or buildable, so a second `AVAudioPlayer`
+here would be a second audio path to keep in agreement with the first. The side
+effects are the argument as much as the saving: pressing Play moves the playhead
+below the popover, colours the scrubber, and scrolls the transcript.
+
+`isPlaying` deliberately reports **playing or about to be**, folding in
+`DetailView.preparing`. The first press on an hour-long meeting spends seconds
+mixing two tracks before there is a player at all, and a button that stays on
+"Play" throughout reads as a press that did nothing.
+
+The button is polled three times a second while the popover is open, which is
+not laziness. Playback stops **on its own** at the end of that speaker's last
+turn and nothing reports it back here, so a button drawn once would sit there
+offering to pause something already stopped.
+
+### Asking about a speaker narrows the page to them, for exactly as long as the asking lasts
+
+Clicking a chip shows only that speaker's turns and makes play run through them
+in order. Closing the popover, by dismissing it or by applying a name, puts the
+whole meeting back.
+
+**One lifetime, and therefore no control of its own.** The first version left the
+filter on after the popover closed, with a bar over the transcript carrying a
+"Show everybody" button, on the theory that dismissing by accident is common and
+throwing the narrowed view away would cost more than it saves. Wrong, and
+reported as wrong the first time it was used: the ordinary way out of a popover
+is to click away from it, so the ordinary outcome was a transcript with most of
+its paragraphs missing and nothing on screen still asking anything. The undo
+button did not rescue that, it just proved the state should not exist.
+
+So the popover in front of you **is** the off switch, and the bar states what is
+happening without offering to change it.
+
+Three things this decides:
+
+1. **Both kinds of chip go through it.** A named speaker's card gets the same
+   treatment as the unnamed picker, through `PersonPopover.show(closed:)`. "Click
+   a speaker to read only them" is one rule and two implementations of it would
+   be two rules by the next change. The named side gets no Play button of its
+   own, because the pane's own play already runs through their turns.
+2. **The undo hangs off `viewWillDisappear`, not off a delegate.** It is the one
+   hook both ways out go through: a `.transient` popover is dismissed by clicking
+   anywhere and tells nobody, and applying a name closes it from the inside.
+3. **There is no solo in any menu.** The chip's contextual menu had an "Only X in
+   This Transcript" item for one revision. It had to go with the button: it
+   soloed with no popover attached, which is exactly the orphaned filter this
+   design exists to make impossible.
+
+**The close is guarded by a token.** A transient popover reports its close
+whenever it gets round to it, and clicking a second chip opens one popover while
+closing another, so a late close from the one being replaced would clear the
+filter the new one had just set. `DetailView.soloWhile` takes the next token and
+hands back an undo that only fires for its own. Verified by driving the real
+window: chip B then chip A leaves 60 paragraphs of A on screen with "Who is
+Speaker A?" open, and the trace shows `setSolo(B)` then `setSolo(A)` with no
+`setSolo(nil)` between them.
+
+### Play starts at their first turn, not their longest
+
+The first version started at the longest thing they said, on the reasoning that
+identifying a voice wants continuous speech rather than important speech, and
+that ranking turns by length picks the most rambling one, which is useless as a
+summary and ideal as a voice sample. That reasoning is fine and the rule is still
+wrong, for a mechanical reason: `soloStep` only ever moves **forward**, so
+starting in the middle means the turns before it can never be reached, and two
+presses of Play give two different halves of the same person.
+
+One press plays all of them, from the beginning, which is the only behaviour that
+needs no explaining. There is no offset into the first turn either: the jumps
+between turns land on `start`, so an offset would make the first snippet the one
+clipped differently from the rest.
+
+Measured on a 48 minute call, one speaker with 50 turns: playback started at
+00:34, which is their first turn at 33.7 s, and 9.6 seconds of real time covered
+11 seconds of recording. The difference is exactly the gaps it skipped.
+
+### `metadata.state` cannot say who is waiting, and `effectiveState` inherits that
+
+`Labelling` puts the question to the transcript, and the reason is a measurement
+rather than a preference. Over the 31 transcribed recordings in the development
+library:
+
+| stored state | recordings | of those, actually holding an unnamed voice |
+|---|---|---|
+| `needs_labelling` | 14 | 10 |
+| `pending` | 3 | 3 |
+| `done` | 14 | 0 |
+
+So the field is wrong in **both** directions. It only becomes `done` when
+`TranscriptEditor.apply` runs, and the imported half of this library was labelled
+by a Python pipeline that never called it, so four recordings where every speaker
+has a real name go on claiming to be waiting for somebody. `effectiveState` is
+derived from the same field and reports 17 where the truth is 13.
+
+A speaker is waiting exactly when its label is one `Merge.letter` invented, which
+is what `VoiceBank.isPlaceholder` already answers, so that is the whole predicate.
+
+Cached against `turns.json`'s modification date, and both halves of that matter.
+The sidebar asks this of every recording on every reload, and a reload is every
+keystroke in the search field, so the uncached form is a full JSON decode of
+every transcript in the library per character typed. Keyed on the date rather
+than held for the life of the process, because naming somebody rewrites that
+file: a cache that never expired would be a to-do list that does not go down as
+the work is done, which is worse than no list. Behind an `NSLock`, which is the
+rule `MeetingCalendar` sets and for the same reason: the sidebar asks on the main
+thread and the MCP server asks through `RecordingFilter` on another.

@@ -608,3 +608,106 @@ now does it on a detached task and creates the `AVAudioPlayer` back on the main
 actor. The view keeps its own `position` rather than reading the player's, so
 scrubbing moves the playhead immediately and the player is told where to start
 when it finally exists.
+
+## The narrowed transcript is a view state, never a filtered array
+
+`DetailView.soloed` hides the turn views that are not that speaker's and leaves
+`turns`, `sentences` and `turnViews` whole and the same length.
+
+This is not tidiness, it is the bug the obvious implementation ships with.
+`refresh` finds the turn being spoken with `turns.firstIndex { ... }` and uses
+that index into `turnViews`, twenty times a second, and `TurnView` writes an
+edited sentence back by the segment index `Merge.sentences` gave it. Rebuild the
+stack from a filtered list and both of those are addressing different objects:
+the playhead highlights somebody else's paragraph, and a correction lands on the
+wrong segment. `NSStackView` collapses a hidden arranged subview for free, so
+there is nothing to gain by filtering the data.
+
+Two consequences that were nearly bugs:
+
+1. **`reveal` skips a hidden turn.** It runs from `refresh` to keep the playing
+   paragraph on screen, and while somebody is soloed most turns are hidden, so
+   without the guard the moment before a skip scrolls the reader to a collapsed
+   view somewhere else in the meeting.
+2. **`renderTurns` re-applies the solo at the end.** Correcting a sentence
+   re-renders, and a re-render that quietly put everybody back would undo a
+   filter nobody had asked to leave.
+
+`scrollTranscriptToTop` came out of `renderTurns` for this, and has to stay
+deferred: soloing hides most of the arranged subviews, and the stack has not
+shrunk to fit what is left until the next layout pass.
+
+Playback while soloed runs through that speaker's turns and skips what is between
+them, which is the only place in this app where pressing play does not play what
+comes next. It is therefore **stated on the bar over the transcript** rather than
+left in a tooltip: a player that silently jumps is one you stop trusting. The bar
+carries no button, because the filter lasts exactly as long as the popover that
+set it. See `.agents/notes/speakers.md` for why that is the whole design.
+
+## The waveform dims everybody but one, and that is where a quiet speaker is
+
+`WaveformView.soloed` draws that speaker's bars in their ink and everybody else's
+in `quaternaryLabelColor`.
+
+The bars have been coloured by speaker since `spans` arrived, which means a quiet
+participant was already on screen **and already invisible**. This library holds a
+97 minute call where one speaker talks for 0.0 minutes and another for 0.1: at a
+bar every three points that is a handful of pixels in one of five colours, and
+finding them was a scroll through the transcript. Greying the other four turns
+the scrubber into an index of exactly where that person is.
+
+**Applied to the unplayed bars as well as the played ones**, which is the whole
+point. The question is asked before anything has been listened to, so a highlight
+that reached only as far as the playhead would answer it nowhere. Inside the
+played part everybody else keeps the played grey rather than their own colour,
+because five colours next to each other is the picture that made a quiet speaker
+hard to find in the first place.
+
+`speakers(for:)` came out of `runs` so both passes walk the spans once and cannot
+disagree about which bar belongs to whom. It returns **empty** rather than a row
+of blanks when there is nothing to say, because a blank speaker means a silence
+between two turns and is a different claim: both callers test emptiness to fall
+back to the single accent fill, which is what a recording with no transcript, or
+one whose duration has not arrived yet, still gets.
+
+## The to-do list is a lens, and deliberately not a status on every row
+
+A row above the sidebar's list counts the recordings waiting on a name and is
+gone entirely when the count is zero.
+
+**A status on the rows is what this replaces, and it was removed on purpose.**
+`Recording.stateText` records why: an unnamed speaker reads as "Speaker A" in the
+transcript, which is legible on its own, so the list was telling people to go and
+fix something that did not look broken. That argument still holds. What was
+actually missing was never a badge on thirteen rows, it was one sentence saying
+the thirteen exist, and the difference between those is the difference between a
+to-do list and a nag.
+
+So it is `Lens.unnamed`, alongside the speaker and tag lenses and ANDed with
+them, and the row is one way to set it rather than a state of its own.
+
+Four things about the row:
+
+1. **Counted from the unfiltered library**, so it goes on saying how much work
+   there is while a search narrows the list to something else. A count that moved
+   with the search would read as zero the moment somebody typed.
+2. **Hidden while the lens is on**, because then the list *is* the answer and a
+   row offering to show what is already shown is a control that does nothing. The
+   lens pill is what turns it back off.
+3. **Collapses to nothing, spacing included**, the way the lens row above it
+   does. A hidden view keeps its frame, and a library with nothing outstanding
+   has to look exactly as it did before this row existed.
+4. **View gains a menu item too**, with ⌘U. The row is absent exactly when the
+   question can no longer be asked from it, and "which recordings do I still owe
+   a name to" is worth being able to ask of a library that currently answers
+   none.
+
+Verified against a scratch library of six recordings, four holding an unnamed
+voice and one with no transcript at all: the row read "4 recordings need a
+speaker", and the lens took the list to those four. The transcript-less one
+correctly does not count, because it is queued or it failed and the sidebar
+already says so out loud.
+
+`Labelling` is where the predicate lives, and it does not read `metadata.state`.
+That measurement is in `.agents/notes/speakers.md`; the short version is that the
+field is wrong in both directions and `effectiveState` inherits it.

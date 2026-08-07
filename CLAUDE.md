@@ -107,7 +107,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - mlx-audio prints to stdout, and stdout is the transcript
 - A silent track must not cost a transcript
 
-### `.agents/notes/speakers.md` (23k)
+### `.agents/notes/speakers.md` (35k)
 
 Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 `SpeakerName`, `VoiceBank`, `Enroll`, `Diarizer`, the legacy import.
@@ -123,6 +123,10 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Synthetic voices measured the model's ceiling, not the task
 - A suggestion is scored against the worst print, not the best evidence
 - A person is a centroid, the number is a word, and the sure ones name themselves
+- Naming a voice nobody has heard was the whole difficulty
+- Asking about a speaker narrows the page to them, for exactly as long as the asking lasts
+- Play starts at their first turn, not their longest
+- `metadata.state` cannot say who is waiting, and `effectiveState` inherits that
 - The legacy voiceprints are a different space with the same dimension
 - An imported recording has no mic track, and must not pretend otherwise
 - Re-transcribing an import swaps Whisper for Parakeet, and v2 has no Dutch
@@ -147,7 +151,7 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Onboarding has to ask, because nothing else will
 - `listen calendar` exists because matching leaves nothing behind
 
-### `.agents/notes/notes-tags-dictionary.md` (24k)
+### `.agents/notes/notes-tags-dictionary.md` (25k)
 
 The three things written about a recording rather than extracted from it.
 `Notes`, `Tags`, `CustomDictionary`, `RecordingFilter`, `MarkdownText`.
@@ -163,7 +167,7 @@ The three things written about a recording rather than extracted from it.
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
 
-### `.agents/notes/window.md` (35k)
+### `.agents/notes/window.md` (41k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -186,6 +190,9 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A peak envelope of a meeting is a solid block
 - Sentence highlighting is search, not arithmetic
 - Building the mixdown on the main thread froze the first press of play
+- The narrowed transcript is a view state, never a filtered array
+- The waveform dims everybody but one, and that is where a quiet speaker is
+- The to-do list is a lens, and deliberately not a status on every row
 
 ### `.agents/notes/appkit.md` (19k)
 

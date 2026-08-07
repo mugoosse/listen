@@ -184,6 +184,20 @@ actor ASR {
                 // where the transcript goes.
                 progressHandler: { _ in })
 
+            // Checked after the library says it is done, because the library's
+            // own idea of done is that a non-zero `.safetensors` exists. A copy
+            // that is short of the measured size is not loaded: MLX reads the
+            // missing part as zeros without complaining, and the result is a
+            // transcript with nothing in it. See `ModelChoice.isPartiallyDownloaded`
+            // for both measurements.
+            guard choice.isDownloaded else {
+                throw ASRError.modelUnavailable(
+                    "the copy of \(choice.title) on disk is incomplete"
+                    + " (\(ModelChoice.humanBytes(choice.installedBytes)) of"
+                    + " \(ModelChoice.humanBytes(choice.approxBytes))). Settings,"
+                    + " Models has a Download button that replaces it.")
+            }
+
             progress?("loading \(choice.title)")
             model = try await STT.loadModel(modelRepo: choice.repo)
         }

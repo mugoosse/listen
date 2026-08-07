@@ -112,6 +112,8 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - The cache root is not always `~/.cache/huggingface`
 - mlx-audio prints to stdout, and stdout is the transcript
 - A silent track must not cost a transcript
+- A model directory that exists is not a model, and both ways it can lie were measured
+- A copy of the right size that will not load has to be replaceable
 
 ### `.agents/notes/speakers.md` (37k)
 
@@ -203,6 +205,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A hidden view held the divider, and the sidebar would not drag at all
 - The gear and the way out are in the title bar, and the rows they replaced are gone
 - The recording panel can be put away, and the dismissal has to survive a menu rebuild
+- The poll owns every control on the setup pane, so nothing else may set one
+- Continue on the model step means the model loaded, not that a file is the right size
 
 ### `.agents/notes/appkit.md` (19k)
 
@@ -288,6 +292,35 @@ reason recorded against the popover crash. Useful shapes: press the status
 menu's Recent row to open a recording without hunting the sidebar table, set
 `kAXSelectedRowsAttribute` on a table to select a person, and read
 `AXFocusedUIElement` after a synthesised Tab to check a key view loop.
+
+### Running setup again without spending the real preferences
+
+`LISTEN_LIBRARY` moves the library and nothing else. `Settings.onboarded`, the
+model choice and everything else live in the `com.mgo.listen` defaults domain,
+so driving first-run setup in the real app both rewrites those and, on the model
+step, changes which model every future recording uses.
+
+The way round it is a second bundle identifier. Copy the app, set
+`CFBundleIdentifier` to something like `com.mgo.listen-uitest`, sign ad hoc, and
+launch it with `LISTEN_LIBRARY` and `HF_HOME` pointing at scratch directories:
+
+```sh
+cp -R Listen.app /tmp/T.app
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.mgo.listen-uitest" \
+    /tmp/T.app/Contents/Info.plist
+codesign --force --sign - --deep /tmp/T.app
+defaults delete com.mgo.listen-uitest        # between runs
+```
+
+It gets its own defaults domain, so setup runs from the top every time, and
+`HF_HOME` decides what the model step believes is on disk. The same trick on a
+copy of `/Applications/Listen.app` is how the download bug was shown to be in
+the shipped build rather than only in the reading of it, which is worth the two
+minutes: a claim about a released binary is not something to make from a diff.
+
+Do not press "Allow microphone" in that copy. A new bundle identifier is a new
+TCC subject, so it raises a real system prompt; "Skip" reaches the model step
+just as well.
 
 One gap to know about: `HoverRow` is a plain `NSView` with a target and action,
 so every popover list row in this app is invisible to accessibility. A row

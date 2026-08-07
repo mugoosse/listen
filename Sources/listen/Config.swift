@@ -235,8 +235,53 @@ struct ModelChoice {
     ///
     /// This needs mlx-audio's own copy, not just a populated hub cache: that
     /// still costs a local copy step, but seconds rather than minutes.
+    ///
+    /// The margin is generous rather than necessary: a finished copy is
+    /// `config.json`, `vocab.txt` and `model.safetensors`, and their sum is
+    /// exactly `approxBytes` for both models, measured on a download into an
+    /// empty cache. That exactness is what lets the two below treat a short
+    /// directory as damage rather than as a rounding difference.
     var isDownloaded: Bool {
         size(of: cacheDirectory) > Int64(Double(approxBytes) * 0.97)
+    }
+
+    /// Weights that are present, and too small to be the model.
+    ///
+    /// **mlx-audio's own check is presence, not size**: any non-zero
+    /// `.safetensors` beside a parseable `config.json` counts as downloaded, so
+    /// a copy that was interrupted, or deleted underneath a reader, is loaded
+    /// rather than fetched again. Both were measured through the CLI, and
+    /// neither says what is wrong:
+    ///
+    /// - 56% of the weights loads **without any error at all** and transcribes
+    ///   five seconds of clear speech to nothing. MLX reads past the end of the
+    ///   file as zeros rather than failing.
+    /// - Weights that are absent throw `Key <some weight> not found in
+    ///   ParakeetModel…`, naming whichever weight the model happened to ask for
+    ///   first. The name changes between runs, because it is a Swift dictionary
+    ///   order and not a fact about the checkpoint.
+    ///
+    /// So the size Listen already knows is the only thing standing between a
+    /// half-written directory and an empty transcript.
+    var isPartiallyDownloaded: Bool {
+        !isDownloaded && installedBytes > 0
+    }
+
+    /// What mlx-audio's copy actually weighs, for a message that has to say so.
+    var installedBytes: Int64 { size(of: cacheDirectory) }
+
+    /// Throw away a short copy so the next fetch starts from nothing.
+    ///
+    /// Called before starting a download rather than before loading: the
+    /// library streams into this directory, so a caller that cannot see whether
+    /// a download is in flight must not delete it. `ModelDownload` can see, and
+    /// it is the one that offers to try again.
+    func removePartialCopy() {
+        guard isPartiallyDownloaded else { return }
+        log("removing an incomplete copy of \(title)"
+            + " (\(Self.humanBytes(size(of: cacheDirectory))) of"
+            + " \(Self.humanBytes(approxBytes)))")
+        try? FileManager.default.removeItem(at: cacheDirectory)
     }
 
     /// What removing this model would give back.
@@ -291,6 +336,21 @@ enum ModelStatus {
         return nil
     }
 
+    /// The state without the numbers in it.
+    ///
+    /// Setup's `structuralKey` needs to know that downloading has begun or
+    /// ended without re-rendering the pane every time the byte count moves.
+    /// Percentages belong in a label that is updated in place.
+    var phaseKey: String {
+        switch self {
+        case .idle: return "idle"
+        case .downloading: return "downloading"
+        case .loading: return "loading"
+        case .ready: return "ready"
+        case .failed: return "failed"
+        }
+    }
+
     var summary: String {
         switch self {
         case .downloading(let total, let received, let fraction):
@@ -324,6 +384,17 @@ enum ModelStatus {
         }
         if raw.contains("No space") || raw.contains("ENOSPC") {
             return "not enough disk space for the model"
+        }
+        // Everything below here is the file rather than the network, because by
+        // this point the bytes have arrived. `Key <weight> not found in
+        // ParakeetModel…` is mlx-swift naming the first weight it looked for
+        // and did not find, and a tester received exactly that as the whole
+        // explanation of what had gone wrong. The others are what a
+        // half-written or unparseable checkpoint says. None of them should
+        // reach a setup window, and none of them is a download problem.
+        if raw.contains("not found in ParakeetModel") || raw.contains("incomplete")
+            || raw.contains("MLX Error") || raw.contains("parse error") {
+            return "the copy on disk could not be read. Downloading it again should fix it"
         }
         return "could not download the model"
     }

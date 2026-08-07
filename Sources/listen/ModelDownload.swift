@@ -37,12 +37,53 @@ final class ModelDownload {
 
     var isDownloading: Bool { status.isBusy }
 
+    /// Which model the current `.ready` is about.
+    ///
+    /// `.ready` on its own says a model loaded, not which one, so switching the
+    /// radio after a successful download would leave setup looking at a green
+    /// light belonging to the other model.
+    private(set) var readyID: String?
+
+    /// The model whose last attempt failed here.
+    ///
+    /// A second press replaces the copy on disk rather than loading it again
+    /// and failing the same way. Without it there is a state with no way out:
+    /// weights of exactly the right size that will not parse, where every Try
+    /// again reads the same broken file and reports the same thing.
+    private var failedID: String?
+
+    /// True when `choice` has been loaded, in this process, since it was last
+    /// asked for. The only honest answer to "is this model going to work",
+    /// because everything cheaper is a check on file size.
+    func isVerified(_ choice: ModelChoice) -> Bool {
+        if case .ready = status { return readyID == choice.id }
+        return false
+    }
+
     /// Fetch `choice`, reporting progress. Safe to call when it is already on
     /// disk: the library returns from a populated cache without touching the
     /// network, which is also what makes this usable as a "verify" button.
     func start(_ choice: ModelChoice) {
         guard !status.isBusy else { return }
         lastBytes = 0
+        readyID = nil
+
+        // Here rather than in `ASR.load`, and this is the only place that can
+        // safely do it: a short copy is either damage or a download somebody
+        // else is in the middle of, and this object is the only thing in the
+        // process that knows there is no download in flight. Without it,
+        // pressing Download again on a half-written directory is a no-op,
+        // because the library accepts what is already there.
+        choice.removePartialCopy()
+
+        // And a copy that is the right size but did not load is thrown away
+        // too, but only after it has failed once and only on an explicit press.
+        // Deleting 2.5 GB is not something to do on a hunch.
+        if failedID == choice.id, choice.isDownloaded {
+            log("replacing \(choice.title): the last attempt to load it failed")
+            try? FileManager.default.removeItem(at: choice.cacheDirectory)
+        }
+        failedID = nil
 
         if choice.isDownloaded {
             status = .loading
@@ -58,10 +99,12 @@ final class ModelDownload {
                 // would be a second thing to keep in agreement with it.
                 try await ASR().load(choice)
                 guard !Task.isCancelled else { return }
+                self?.readyID = choice.id
                 self?.finish(.ready)
             } catch {
                 guard !Task.isCancelled else { return }
                 log("model download failed: \(error)")
+                self?.failedID = choice.id
                 self?.finish(.failed(ModelStatus.describe(error)))
             }
         }
@@ -74,6 +117,7 @@ final class ModelDownload {
         task = nil
         stopWatch()
         lastBytes = 0
+        readyID = nil
         status = .idle
     }
 

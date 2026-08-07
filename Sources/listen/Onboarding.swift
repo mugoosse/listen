@@ -48,6 +48,21 @@ final class Onboarding: NSObject, NSWindowDelegate {
     private var lastKey = ""
     private var poll: Timer?
 
+    /// The model step's progress bar and status line, held so they can be
+    /// updated in place. Rule 2 above is why they are not simply re-rendered:
+    /// a percentage inside `structuralKey()` rebuilds the radio buttons under
+    /// the cursor once a second, for the length of a 2.5 GB download.
+    private var modelBar: NSProgressIndicator?
+    private var modelNote: NSTextField?
+
+    /// True between pressing the model step's button and an answer arriving.
+    ///
+    /// The answer is read from `ModelDownload`, which is polled rather than
+    /// subscribed to: its `onChange` is a single slot that the Settings pane
+    /// also claims, and two owners of one closure is a bug waiting for whoever
+    /// opens Settings and then runs setup again.
+    private var awaitingModel = false
+
     /// Start again from the first step.
     ///
     /// From the top, not from wherever the last visit ended: reaching for this
@@ -183,12 +198,19 @@ final class Onboarding: NSObject, NSWindowDelegate {
             String(Permissions.calendarAsked),
             Settings.modelChosen ? Settings.model.id : "none",
             String(Settings.model.isDownloaded),
+            // The phase, never the byte count. Starting, finishing and failing
+            // each change what the pane contains; a percentage only changes
+            // what one label says, and rule 2 is why that distinction matters.
+            ModelDownload.shared.status.phaseKey,
         ].joined(separator: "|")
     }
 
     private func render() {
         lastKey = structuralKey()
         for view in body.arrangedSubviews { view.removeFromSuperview() }
+        // Owned by the model step's body, so they die with it.
+        modelBar = nil
+        modelNote = nil
 
         switch step {
         case .welcome:
@@ -262,6 +284,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 // which is what lets this express "not yet asked".
                 radio.state = Settings.modelChosen && Settings.model.id == choice.id
                     ? .on : .off
+                // Off while the bytes are arriving. Switching mid-download
+                // leaves 2.5 GB coming for a model nobody wants any more, and
+                // the download it would have to cancel is the one thing on this
+                // pane that cannot be undone in a second.
+                radio.isEnabled = !ModelDownload.shared.isDownloading
                 body.addArrangedSubview(radio)
                 let detail = NSTextField(labelWithString:
                     choice.isSharedWithSpeak
@@ -272,6 +299,32 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 detail.textColor = .secondaryLabelColor
                 body.addArrangedSubview(detail)
             }
+
+            // A download with no visible progress is indistinguishable from a
+            // button that does nothing, and that is exactly how it was
+            // reported: "for some reason I can't download it", then "nope" to
+            // whether an error had appeared. Two and a half gigabytes take
+            // minutes, so the pane has to keep saying so for all of them.
+            let bar = NSProgressIndicator()
+            bar.isIndeterminate = false
+            bar.minValue = 0
+            bar.maxValue = 1
+            bar.controlSize = .small
+            bar.isHidden = true
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            bar.widthAnchor.constraint(equalToConstant: 460).isActive = true
+            body.addArrangedSubview(bar)
+            modelBar = bar
+
+            // Wrapping and capped at the same width the paragraphs use, for the
+            // reason recorded on `status`: a long line in a fixed-width label
+            // widens the whole window.
+            let line = NSTextField(wrappingLabelWithString: "")
+            line.font = .systemFont(ofSize: 12)
+            line.textColor = .secondaryLabelColor
+            line.preferredMaxLayoutWidth = 460
+            body.addArrangedSubview(line)
+            modelNote = line
 
         case .done:
             titleLabel.stringValue = "You are set"
@@ -352,27 +405,77 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // it costs a name, and the wording should not imply otherwise.
             secondary.title = "Not now"
         case .model:
+            // **This switch runs every 0.8 seconds, and whatever it assigns is
+            // what the button says.** That is what broke: `download()` used to
+            // set the title to "Downloading…" and disable the button itself,
+            // and the next poll put "Download Parakeet v3 (2.51 GB)" back and
+            // re-enabled it, about half a second later. So a download that had
+            // started looked like a press that had done nothing, and pressing
+            // again started a second one over the same directory. Two fetches
+            // clearing and repopulating one cache is how a tester ended up
+            // being told `Key decoder.prediction.embed.weight not found in
+            // ParakeetModel…`, which is what mlx-swift says when the weights it
+            // wants are not in the directory it was pointed at.
+            //
+            // Nothing here may be assigned from anywhere else. The state comes
+            // from `ModelDownload`, which owns the fetch, refuses to start a
+            // second one, and can be watched by Settings at the same time.
+            let status = ModelDownload.shared.status
+            let choice = Settings.model
+            updateModelProgress(status)
+
             // The button is the consent. It names the model and its size, so
             // nobody can start a 2.5 GB download without having read what it
             // costs.
-            let ready = Settings.modelChosen && Settings.model.isDownloaded
-            if !Settings.modelChosen {
+            if status.isBusy {
+                primary.title = status.phaseKey == "loading" ? "Loading…" : "Downloading…"
+                primary.isEnabled = false
+            } else if !Settings.modelChosen {
                 primary.title = "Choose a model"
                 primary.isEnabled = false
-            } else if Settings.model.isDownloaded {
+            } else if case .failed = status {
+                primary.title = "Try again"
+                primary.isEnabled = true
+            } else if choice.isDownloaded {
+                // "Continue" whether or not it has been loaded yet. Pressing it
+                // loads the weights before moving on, which takes a second or
+                // two from a warm cache and is the only check that means
+                // anything: a directory of the right size still has to parse.
                 primary.title = "Continue"
                 primary.isEnabled = true
             } else {
-                primary.title = "Download \(Settings.model.title) "
-                    + "(\(ModelChoice.humanBytes(Settings.model.approxBytes)))"
+                primary.title = "Download \(choice.title) "
+                    + "(\(ModelChoice.humanBytes(choice.approxBytes)))"
                 primary.isEnabled = true
             }
+
             // The one step where the second button is load-bearing: with
             // nothing chosen the primary is deliberately disabled, so this is
             // the only way past. Once the model is on disk the primary reads
-            // Continue and "Later" would be its twin.
-            secondary.isHidden = ready
+            // Continue and "Later" would be its twin. It stays during a
+            // download, because a download is the longest wait in setup and
+            // leaving is a reasonable thing to want; the fetch carries on in
+            // the background, where Settings, Models can follow it.
+            secondary.isHidden = Settings.modelChosen && choice.isDownloaded
+                && !status.isBusy
             secondary.title = "Later"
+
+            // Read here rather than in a callback, because the poll is already
+            // running and `ModelDownload.onChange` has one slot that Settings
+            // also wants. Only the press that started this is answered: a
+            // `.ready` left over from the Settings pane must not skip the step.
+            if awaitingModel, !status.isBusy {
+                switch status {
+                case .ready where ModelDownload.shared.isVerified(choice):
+                    awaitingModel = false
+                    advance()
+                case .failed(let why):
+                    awaitingModel = false
+                    reportModelFailure(why)
+                default:
+                    awaitingModel = false
+                }
+            }
         case .done:
             primary.title = "Start using Listen"
             primary.isEnabled = true
@@ -411,6 +514,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
     @objc private func back() {
         guard let previous = Step(rawValue: step.rawValue - 1) else { return }
+        awaitingModel = false
         step = previous
         render()
     }
@@ -454,8 +558,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
             }
             return
 
-        case .model where Settings.modelChosen && !Settings.model.isDownloaded:
-            download()
+        case .model where Settings.modelChosen:
+            startModel()
             return
 
         case .done:
@@ -486,31 +590,97 @@ final class Onboarding: NSObject, NSWindowDelegate {
     }
 
     private func advance() {
+        // Leaving the model step ends the wait for it. Pressing Later during a
+        // download does not cancel the download, so without this the answer
+        // would be delivered to a pane that has moved on, and coming back would
+        // skip the step on the strength of it.
+        awaitingModel = false
         let next = min(step.rawValue + 1, Step.allCases.count - 1)
         step = Step(rawValue: next) ?? .done
         render()
     }
 
-    private func download() {
+    /// Download the model if it is missing, load it either way, and move on
+    /// only when it has actually loaded.
+    ///
+    /// **Continue and Download are the same action on purpose.** They used to
+    /// differ: Download loaded the weights, and Continue believed
+    /// `isDownloaded`, which is a file size. So after a failure the button read
+    /// Try again, the failed attempt had left a directory of about the right
+    /// size behind, and pressing it walked straight past the model step to "You
+    /// are set" without ever loading anything. A tester reached the end of setup
+    /// that way, holding a model that had just refused to load.
+    ///
+    /// The task lives in `ModelDownload`, not here, for the reason its own note
+    /// gives and for one more: it refuses to start a second fetch while one is
+    /// running, and this window used to have no such guard at all.
+    private func startModel() {
         let choice = Settings.model
-        primary.isEnabled = false
-        primary.title = "Downloading \(choice.title)…"
-        Task {
-            do {
-                try await ASR().load(choice) { message in
-                    Task { @MainActor in self.primary.title = message }
-                }
-                self.advance()
-            } catch {
-                self.primary.isEnabled = true
-                self.primary.title = "Try again"
-                let alert = NSAlert()
-                alert.messageText = "Could not download the model"
-                alert.informativeText = error.localizedDescription
-                alert.window.level = .floating
-                alert.runModal()
+        // Loaded once already in this process, so there is nothing left to
+        // find out and no reason to spend a second on it.
+        if ModelDownload.shared.isVerified(choice) {
+            advance()
+            return
+        }
+        guard !ModelDownload.shared.isDownloading else { return }
+        awaitingModel = true
+        ModelDownload.shared.start(choice)
+        // Directly, because a press should show its consequence now rather than
+        // when the poll next fires. Safe here and not in `updateControls`: this
+        // is an action, and rule 2 is about the loop between those two.
+        render()
+    }
+
+    /// The bar and the line under the radio buttons, updated in place.
+    private func updateModelProgress(_ status: ModelStatus) {
+        if let bar = modelBar {
+            if let fraction = status.fraction {
+                bar.isHidden = false
+                bar.isIndeterminate = false
+                bar.stopAnimation(nil)
+                bar.doubleValue = fraction
+            } else if status.isBusy {
+                // No reading yet, or loading rather than fetching. A bar that
+                // sits at zero says stalled; a moving one says working, which
+                // is the truth in both cases.
+                bar.isHidden = false
+                bar.isIndeterminate = true
+                bar.startAnimation(nil)
+            } else {
+                bar.stopAnimation(nil)
+                bar.isHidden = true
             }
         }
+
+        guard let note = modelNote else { return }
+        switch status {
+        case .ready, .idle:
+            // Nothing to say. "Ready" under a model the pane already describes
+            // as being on disk is noise, and matches the Settings pane.
+            note.stringValue = ""
+        case .failed(let why):
+            note.stringValue = why
+            note.textColor = .systemRed
+        default:
+            note.stringValue = status.summary
+            note.textColor = .secondaryLabelColor
+        }
+    }
+
+    /// Said in a dialog as well as on the pane, because this is the one step
+    /// that can fail while nobody is watching it.
+    private func reportModelFailure(_ why: String) {
+        let alert = NSAlert()
+        // Not "Could not download the model". The download is only half of what
+        // this button does, and the failure a tester actually hit was the other
+        // half: the bytes had arrived and would not load.
+        alert.messageText = "Could not set up \(Settings.model.title)"
+        alert.informativeText = why.prefix(1).uppercased() + String(why.dropFirst()) + "."
+            + "\n\nThe button below now reads Try again. Setup can also carry on "
+            + "without it: Listen fetches the model again the first time it "
+            + "transcribes a recording."
+        alert.window.level = .floating
+        alert.runModal()
     }
 
     private func finish() {

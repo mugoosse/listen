@@ -862,3 +862,60 @@ accessibility route in CLAUDE.md does not reach it. `LISTEN_PANEL=recording:598`
 plus a synthesised click at the button's screen point is what verified it, and
 the confirmation was the *installed* app's panel appearing underneath once the
 one under test ordered itself out.
+
+## The poll owns every control on the setup pane, so nothing else may set one
+
+`Onboarding.updateControls()` runs on a 0.8 second timer, and whatever its
+switch assigns is what the button says half a second later. The model step used
+to be driven from two places: `download()` set the title to "Downloading…" and
+disabled the button, and the very next tick put "Download Parakeet v3 (2.51 GB)"
+back and re-enabled it.
+
+**What that looked like to somebody using it, in their words: "for some reason I
+can't download it", and no, no error message.** Two and a half gigabytes were
+arriving the whole time. Reproduced against the shipped 0.7.0 build through the
+accessibility API: the button reads its original title and is enabled 0.3 s,
+2 s and 5 s after being pressed.
+
+The rest follows from there. A button that looks unpressed gets pressed again,
+and setup had no guard against a second fetch: each press built its own `ASR`
+and its own `resolveOrDownloadModel` over one directory. The same run's log:
+
+    Downloading model mlx-community/parakeet-tdt-0.6b-v3...
+    Cached model appears incomplete, clearing cache...
+    Downloading model mlx-community/parakeet-tdt-0.6b-v3...
+    Cached model appears incomplete, clearing cache...
+    Downloading model mlx-community/parakeet-tdt-0.6b-v3...
+
+`clearCaches` is `removeItem` on the model directory. One task deletes what
+another is about to read, and the reader reports `Key <some weight> not found in
+ParakeetModel…`, which is what reached the tester as the entire explanation. A
+later task then finished, advanced the pane, and the failure alert appeared over
+"You are set".
+
+The step now reads its state from `ModelDownload`, which refuses to start a
+second fetch and can be watched by the Settings pane at the same time.
+Everything on the pane is derived in `updateControls` from that one status: the
+title, whether the button is enabled, whether the radio buttons are, the
+progress bar and the line under it. The bar and line are updated **in place**,
+never through `structuralKey()`: a percentage in that key rebuilds the radio
+buttons under the cursor once a second for the length of a download, which is
+the same trap the elapsed clock is kept out of it for.
+
+`ModelDownload.onChange` is deliberately not used here. It is a single slot and
+the Settings pane claims it, so two owners is a bug waiting for whoever opens
+Settings and then runs setup again. The poll was already running; it reads.
+
+## Continue on the model step means the model loaded, not that a file is the right size
+
+Setup used to check `isDownloaded`, which is a directory size. So after a failed
+attempt the primary read "Try again", the attempt had left a directory of about
+the right size behind, and pressing it walked past the model step to "You are
+set" without loading anything. A tester finished setup that way, holding a model
+that had just refused to load, and only found out at the first recording.
+
+Continue and Download are now the same action: resolve, load, and advance only
+on a load that returned. From a warm cache that costs a second or two, and it is
+the only check with any meaning behind it. Verified by staging a copy of exactly
+the right size whose header does not parse: the pane stays on the model step,
+says so in red, and offers Try again, which replaces the copy.

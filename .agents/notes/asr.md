@@ -563,3 +563,47 @@ in `Pipeline`, a transcript.
 Both now catch it. `Enroll` takes whatever the other track gives; `Pipeline`
 keeps the transcript and puts everybody under one label, because a transcript
 with imperfect speakers is worth enormously more than no transcript.
+
+## A model directory that exists is not a model, and both ways it can lie were measured
+
+mlx-audio decides a model is already downloaded by looking for **any non-zero
+`.safetensors` beside a parseable `config.json`**. It never checks a size, so
+every damaged copy on disk is adopted rather than replaced, and neither of the
+two ways that goes wrong says anything a person could act on. Both were
+staged through the CLI against Parakeet v3:
+
+- **Short.** 1.4 GB of the 2.5 GB file loads with **no error at all** and
+  transcribes five seconds of clear speech to nothing. MLX reads past the end
+  of the file as zeros rather than failing, which was confirmed separately in
+  Python: a safetensors cut to 60% still lists every key, and evaluating a
+  tensor that lies wholly past the end returns zeros.
+- **Absent.** A directory whose `model.safetensors` carries no tensors throws
+  `Key <some weight> not found in ParakeetModel…`. **The weight it names is
+  meaningless**: it is whichever one `items()` happened to yield first, and
+  Swift seeds dictionary hashing per process, so the same directory said
+  `joint.enc.weight` here and `decoder.prediction.embed.weight` on the Mac
+  where it was reported.
+
+So the size Listen already knows is the only thing between a half-written
+directory and an empty transcript. `ModelChoice.approxBytes` is exact rather
+than approximate, which is what makes this usable: a finished copy is
+`config.json`, `vocab.txt` and `model.safetensors`, and downloading into an
+empty cache reproduces the constant to the byte (2,508,579,601 for v3,
+2,471,601,146 for v2). `isDownloaded` keeps a 3% margin anyway.
+
+`ASR.load` now refuses to load anything short, **after** the library says it is
+done, and says how short. It does not delete: the library streams into that
+directory, and a caller that cannot see whether a download is in flight must
+not remove it. Deleting belongs to `ModelDownload`, which knows there is no
+download running because it is the only thing that starts one.
+
+## A copy of the right size that will not load has to be replaceable
+
+The size check above cannot see a file that is complete and corrupt, and there
+is no cheaper test than loading it. That leaves a state with no way out unless
+something explicitly breaks it: every retry reads the same bytes and reports
+the same thing.
+
+`ModelDownload` remembers the model whose last attempt failed, and a second
+press deletes the copy before fetching. Only after a failure, and only on a
+press: throwing away 2.5 GB on a hunch is worse than the problem.

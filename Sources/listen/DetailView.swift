@@ -1772,12 +1772,16 @@ final class DetailView: NSView {
             view.isHidden = soloed != nil && turns[index].speaker != soloed
         }
 
-        let showing = soloed != nil
+        // Narrowing to the only speaker there is hides nothing and explains
+        // nothing. A memo has exactly one speaker, so this bar was appearing on
+        // every one of them to announce that all of the transcript was visible.
+        let distinct = Set(turns.map(\.speaker)).count
+        let showing = soloed != nil && distinct > 1
         soloBar.isHidden = !showing
         soloHeight.constant = showing ? 22 : 0
         soloTop.constant = showing ? 10 : 0
 
-        guard let soloed else { return }
+        guard showing, let soloed else { return }
         let mine = soloTurns
         let spoken = Recording.length(mine.reduce(0) { $0 + max(0, $1.end - $1.start) })
         let counted = mine.count == 1 ? "1 turn" : "\(mine.count) turns"

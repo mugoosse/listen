@@ -17,7 +17,14 @@ DEST="/Applications/Listen.app"
 echo "built"
 
 # Quit the running copy so we are not overwriting a live binary.
-pkill -f "$DEST/Contents/MacOS/Listen" 2>/dev/null || true
+#
+# Anchored, because `pkill -f` matches the whole command line and other
+# processes carry this path as an *argument*. The sync agent runs as
+# `listen-sync serve --listen /Applications/Listen.app/Contents/MacOS/Listen`,
+# so an unanchored pattern killed the sync server on every install. Measured on
+# 2026-08-08: it fired 200 ms after an iPhone upload's `finish` and cost the
+# two recordings queued behind it. `Listen mcp` was collateral in the same way.
+pkill -f "^$DEST/Contents/MacOS/Listen$" 2>/dev/null || true
 sleep 1
 
 rm -rf "$DEST"

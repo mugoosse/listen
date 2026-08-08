@@ -86,16 +86,31 @@ final class DetailView: NSView {
     /// it. Held in a property rather than read back off the segmented control,
     /// which is `DictionaryPane`'s rule and for the same reason: a re-render
     /// would otherwise snap it back to whatever the control last drew.
-    private enum Showing { case transcript, notes, ask }
-    private var showing: Showing = .transcript
+    /// **The page, or the asking.** Transcript and Notes were peers here, which
+    /// made the two halves of one meeting into two places you had to choose
+    /// between: the notes you took and the record of what was said, one hidden
+    /// behind the other. They are one page now, notes above and transcript
+    /// below, and what is left of the picker is a way in and out of Ask.
+    private enum Showing { case page, ask }
+    private var showing: Showing = .page
 
     private let modeBar = NSView()
-    /// Three documents about one meeting: what was said, what you wrote, and
-    /// what you asked. Ask is last because it is the only one that is not
-    /// already there when the recording finishes.
+    /// One segment, and it toggles.
+    ///
+    /// It held three: Transcript, Notes and Ask. Two of those are the same page
+    /// now, so what is left is not a choice between documents but a way into the
+    /// one surface that is not a document at all. `.selectAny` rather than
+    /// `.selectOne`, so pressing it again is the way back, which a control with
+    /// nothing else to select cannot otherwise offer.
     private let modePicker = NSSegmentedControl(
-        labels: ["Transcript", "Notes", "Ask"], trackingMode: .selectOne,
+        labels: ["Ask"], trackingMode: .selectAny,
         target: nil, action: nil)
+    /// Names the transcript once the notes are above it.
+    ///
+    /// With Transcript as a tab the pane's title said which document you were
+    /// looking at. On one page nothing does, so a meeting with an empty note
+    /// would open on a wall of dialogue with no heading anywhere.
+    private let transcriptHeading = NSTextField(labelWithString: "Transcript")
     private let askView = AskView()
     /// Analog's artifact switcher, which is the part of their notes design worth
     /// copying: a recording has any number of notes and they are all the same
@@ -139,6 +154,20 @@ final class DetailView: NSView {
 
     private var modeTop: NSLayoutConstraint!
     private var modeHeight: NSLayoutConstraint!
+    private var notesHeight: NSLayoutConstraint!
+
+    /// The note takes what it needs between these two.
+    ///
+    /// The floor is three lines: an empty note is one line high, and a writing
+    /// surface you cannot see is one nobody writes in, which is the same
+    /// argument as the click-anywhere handler in `mouseDown`. The ceiling is
+    /// six, measured against the longest of the 11 notes in the development
+    /// library, which runs to five. Past it the note scrolls inside itself,
+    /// which is why it is a scroll view rather than a label.
+    private static let notesFloorHeight: CGFloat = 72
+    private static let notesCeilingHeight: CGFloat = 168
+    private var transcriptHeadingTop: NSLayoutConstraint!
+    private var transcriptHeadingHeight: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
     private var playerHeight: NSLayoutConstraint!
     private var noteInfoTop: NSLayoutConstraint!
@@ -323,9 +352,12 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             modeBar.addSubview(v)
         }
+        transcriptHeading.font = .systemFont(ofSize: 12, weight: .semibold)
+        transcriptHeading.textColor = .secondaryLabelColor
+
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  empty, emptyIcon, transcribing, live] {
+                  transcriptHeading, empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -355,8 +387,31 @@ final class DetailView: NSView {
         soloTop = soloBar.topAnchor.constraint(equalTo: playerCard.bottomAnchor,
                                                constant: 0)
         soloHeight = soloBar.heightAnchor.constraint(equalToConstant: 0)
-        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: scroll.topAnchor)
+        // The note starts the page, under the solo bar, and the transcript
+        // follows it rather than sharing its box.
+        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: soloBar.bottomAnchor,
+                                                    constant: 12)
         noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
+        // **The notes get a height, and the transcript gets the rest.**
+        //
+        // Not a split of the pane in some ratio: a note is usually a few lines
+        // and a transcript is usually an hour, so giving the note half the
+        // window would leave most of it white on almost every meeting. It takes
+        // what it needs up to a ceiling and the dialogue takes what is left.
+        //
+        // 168 points is six lines at the note's own size plus its insets,
+        // measured against the longest of the 11 notes in the development
+        // library, which runs to five. Past the ceiling it scrolls inside
+        // itself, which is why it is a scroll view and not a label.
+        // A constant, recomputed from the text by `sizeNotes`. An `NSScrollView`
+        // has no intrinsic height, so a pair of inequalities leaves the layout
+        // free to pick the ceiling: measured, a one-line note reserved the full
+        // 168 points and left a hand's width of nothing above the transcript.
+        notesHeight = notesScroll.heightAnchor.constraint(equalToConstant: Self.notesFloorHeight)
+        transcriptHeadingTop = transcriptHeading.topAnchor.constraint(
+            equalTo: notesScroll.bottomAnchor, constant: 14)
+        transcriptHeadingHeight = transcriptHeading.heightAnchor.constraint(
+            equalToConstant: 16)
         noteInfoHeight.priority = .defaultHigh
 
         // Speakers grow rightward from the title, tags grow leftward from the
@@ -447,7 +502,20 @@ final class DetailView: NSView {
             soloLabel.centerYAnchor.constraint(equalTo: soloBar.centerYAnchor),
             soloLabel.trailingAnchor.constraint(lessThanOrEqualTo: soloBar.trailingAnchor),
 
-            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
+            // **Its own scroller, under the notes rather than sharing them.**
+            //
+            // Playback scrolls this to the sentence being spoken. In one
+            // scroller with the note above it, following the playhead would drag
+            // the note off the top of the window while somebody has a caret in
+            // it, so the two halves of the page have to scroll independently.
+            transcriptHeadingTop,
+            transcriptHeadingHeight,
+            transcriptHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            transcriptHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                                        constant: -24),
+
+            scroll.topAnchor.constraint(equalTo: transcriptHeading.bottomAnchor,
+                                        constant: 6),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -456,7 +524,10 @@ final class DetailView: NSView {
             // because the bottom of it is a bar. Its own padding puts the note's
             // text where the transcript's would be, so the reading position does
             // not move when the recording stops and this is replaced.
-            live.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
+            //
+            // Level with the transcript it stands in for, so the note above
+            // stays put when a running recording finishes.
+            live.topAnchor.constraint(equalTo: transcriptHeading.bottomAnchor, constant: 6),
             live.leadingAnchor.constraint(equalTo: leadingAnchor),
             live.trailingAnchor.constraint(equalTo: trailingAnchor),
             live.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -468,7 +539,7 @@ final class DetailView: NSView {
             notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor, constant: 6),
             notesScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            notesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            notesHeight,
 
             // The same box the notes pane occupies, and for the same reason:
             // both are documents about the meeting whose title is above them.
@@ -695,17 +766,15 @@ final class DetailView: NSView {
         // itself. Every control in this pane does the same.
         endEditing()
         saveYours()
-        switch sender.selectedSegment {
-        case 1:  showing = .notes
-        case 2:  showing = .ask
-        default: showing = .transcript
-        }
+        // One segment, so its selected state is the whole answer: on is Ask and
+        // off is back to the page.
+        showing = sender.isSelected(forSegment: 0) ? .ask : .page
         // A transport nobody can see is a transport nobody can pause, which is
         // the rule `enter(.settings)` already follows for the same reason.
-        if showing != .transcript { stopPlayback() }
-        // Re-read on the way in rather than only on selection, so switching to
-        // Notes is also the gesture that refreshes them.
-        if showing == .notes { reloadNotes(reset: false) }
+        if showing == .ask { stopPlayback() }
+        // Re-read on the way back rather than only on selection, so returning to
+        // the page is also the gesture that refreshes the notes.
+        if showing == .page { reloadNotes(reset: false) }
         // Same argument for Ask: the CLI can write to `chat.json` too, and
         // switching to the pane is the moment somebody expects to see it.
         if showing == .ask { askView.reload() }
@@ -752,12 +821,12 @@ final class DetailView: NSView {
     /// work. The transcript is the meeting, and it is different.
     func showTranscript() {
         saveYours()
-        showing = .transcript
+        showing = .page
         applyShowing()
     }
 
     func showNote(_ slug: String?) {
-        showing = .notes
+        showing = .page
         if let slug, notes.contains(where: { $0.slug == slug }) {
             showingNote = slug
             rebuildNotePicker()
@@ -776,6 +845,10 @@ final class DetailView: NSView {
     func textDidChange(_ notification: Notification) {
         guard notification.object as AnyObject === notesText, showingYours else { return }
         notesPlaceholder.isHidden = !notesText.string.isEmpty
+        // Grow with the text, so the transcript is pushed down as the note is
+        // written rather than after it is saved. Cheap: the layout manager has
+        // already laid out this line to draw it.
+        sizeNotes()
         noteSaveTimer?.invalidate()
         noteSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
             Task { @MainActor in self.saveYours() }
@@ -863,7 +936,6 @@ final class DetailView: NSView {
         // mode, this line put it straight back, and the control snapped to
         // Transcript with nothing said. Asking for an empty pane on purpose is
         // allowed, and the empty pane is where it says what notes are.
-        if reset, showing == .notes, notes.isEmpty { showing = .transcript }
 
         let now = signature()
         guard now != notesSignature else { return }
@@ -947,11 +1019,32 @@ final class DetailView: NSView {
         // laid out at its full height and drawing nothing. A blank band where
         // the provenance goes reads as a note that has lost its own history.
         showProvenance()
+        // After the text is in and before anything is drawn, so arriving at a
+        // recording never shows the previous note's height for a frame.
+        sizeNotes()
         notesText.scroll(NSPoint(x: 0, y: 0))
     }
 
+    /// Give the note the height of its own text, between the floor and ceiling.
+    ///
+    /// Asked of the layout manager rather than measured off the frame: an
+    /// `NSTextView` in a scroll view is only as tall as its own text, and the
+    /// frame is whatever it was last given, so reading it back returns the
+    /// answer from before this note was put in it. `ensureLayout` first, because
+    /// `usedRect` is only true for glyphs that have been laid out and the text
+    /// was set in the same pass.
+    private func sizeNotes() {
+        guard let container = notesText.textContainer,
+              let manager = notesText.layoutManager else { return }
+        manager.ensureLayout(for: container)
+        let text = manager.usedRect(for: container).height
+        let wanted = text + Self.notesTopInset + Self.notesTextInset * 2
+        notesHeight.constant = min(max(wanted, Self.notesFloorHeight),
+                                   Self.notesCeilingHeight)
+    }
+
     private func showProvenance() {
-        noteInfo.isHidden = recording == nil || showing != .notes || noteInfo.string.isEmpty
+        noteInfo.isHidden = recording == nil || showing != .page || noteInfo.string.isEmpty
         // Collapsed as well as hidden: a hidden view keeps its frame, which is
         // the trap the chips row and the player already record.
         noteInfoHeight.isActive = noteInfo.isHidden
@@ -975,7 +1068,7 @@ final class DetailView: NSView {
         notesPlaceholder.stringValue =
             "What you are thinking. Only you write this, and an agent can read it."
         notesPlaceholder.isHidden = recording == nil
-            || showing != .notes
+            || showing != .page
             || !showingYours
             || !notesText.string.isEmpty
     }
@@ -1053,31 +1146,32 @@ final class DetailView: NSView {
 
     /// Put the chosen document on screen. The only place either pane is hidden.
     private func applyShowing() {
-        switch showing {
-        case .transcript: modePicker.selectedSegment = 0
-        case .notes:      modePicker.selectedSegment = 1
-        case .ask:        modePicker.selectedSegment = 2
-        }
-        // Collapsed for a note, and for a recording that is still running: that
-        // one already says so in the transcript area, and it would be wrong
+        modePicker.setSelected(showing == .ask, forSegment: 0)
+        // Collapsed while asking, and for a recording that is still running:
+        // that one already says so in the transcript area, and it would be wrong
         // besides, since its audio is on *this* Mac and simply is not finished.
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
-                  hidden: showing != .transcript || recording?.isLive == true)
-        scroll.isHidden = showing != .transcript
-        notesScroll.isHidden = showing != .notes
-        askView.isHidden = showing != .ask
+                  hidden: showing == .ask || recording?.isLive == true)
+        let page = showing == .page
+        scroll.isHidden = !page
+        // Both halves of the page, together. This is the change: a note and the
+        // dialogue it was taken during are one document, and choosing between
+        // them was never a choice anybody wanted to make.
+        notesScroll.isHidden = !page
+        transcriptHeading.isHidden = !page
+        askView.isHidden = page
         // A solo is a lens on the transcript, so it goes with the transcript.
-        // Leaving the bar up over a note would be a sentence about paragraphs
-        // that are not on screen, and the player it narrows is collapsed here
-        // anyway: switching to Notes already stops playback.
-        if showing != .transcript { setSolo(nil) }
+        // Leaving the bar up over Ask would be a sentence about paragraphs that
+        // are not on screen, and the player it narrows is collapsed there
+        // anyway: switching to Ask already stops playback.
+        if !page { setSolo(nil) }
         showProvenance()
         updatePlaceholder()
         // One note is still worth a switcher: it is also where the note's title
         // is written, and the pane would otherwise show a document with no name
         // on it.
-        notePicker.isHidden = showing != .notes || notes.isEmpty
+        notePicker.isHidden = !page || notes.isEmpty
         updateEmpty()
         // Last, and from the one place the mode is ever applied, so the window
         // cannot be told about a mode this pane has not finished entering.
@@ -1130,7 +1224,7 @@ final class DetailView: NSView {
     }
 
     func previewTranscribing(_ fraction: Double) {
-        showing = .transcript
+        showing = .page
         applyShowing()
         transcribing.progress = TranscriptionProgress(
             message: fraction < 0.5 ? "transcribing the other participants"
@@ -1219,7 +1313,12 @@ final class DetailView: NSView {
         var message: String
         var showPicture = false
         switch showing {
-        case .transcript:
+        case .page:
+            // The transcript's message, not the note's. The note half is never
+            // empty, because the user's own is always offered and an empty one
+            // is a cursor rather than a message: the placeholder inside the text
+            // view says what it is for. So the only half that can have nothing
+            // to show is the dialogue, and this sentence is about that.
             message = turns.isEmpty ? Self.emptyTranscriptMessage(recording) : ""
             // Whenever this recording is the running job, and deliberately not
             // only when there is no transcript yet.
@@ -1236,11 +1335,6 @@ final class DetailView: NSView {
             // costs a reader nothing and is the only acknowledgement the click
             // gets.
             showPicture = Queue.shared.running == recording.id
-        case .notes:
-            // Never empty any more: the user's own note is always offered, and
-            // an empty one is a cursor rather than a message. The placeholder
-            // inside the text view is what says what this is for.
-            message = ""
         case .ask:
             // Same argument. An empty conversation is a field with starter
             // questions over it, and a sentence in the middle of the pane
@@ -1260,7 +1354,7 @@ final class DetailView: NSView {
         transcribing.isHidden = !showPicture
         // The transcript goes away while the picture is up, or a re-run draws
         // the picture on top of the paragraphs it is in the middle of replacing.
-        scroll.isHidden = showing != .transcript || showPicture
+        scroll.isHidden = showing != .page || showPicture
         // Not just hidden: clearing the progress is what stops the thirty a
         // second timer inside it. Clicking from a transcribing recording to any
         // other one would otherwise leave it running against a view nobody can
@@ -1347,9 +1441,11 @@ final class DetailView: NSView {
             // has recordings, it would only turn a simple selection prompt into
             // decoration and make the detail pane feel less calm.
             emptyIcon.isHidden = !libraryIsEmpty
+            // "a recording" was the whole truth while the list held nothing
+            // else. It now holds notes and, while somebody is searching, people.
             empty.stringValue = libraryIsEmpty
                 ? "No recordings yet. Start a new recording from the sidebar."
-                : "Select a recording."
+                : "Select something from the list."
             return
         }
 
@@ -1481,7 +1577,7 @@ final class DetailView: NSView {
         // stopping is a request to see what was said. Left as Notes, pressing
         // Stop landed on the page you had just finished typing on and hid the
         // transcript arriving behind a tab.
-        if recording.isLive { showing = .transcript }
+        if recording.isLive { showing = .page }
         // Before `reloadNotes`, which can put the mode back to the transcript.
         // The pane has to be pointed at the new recording either way: it stops
         // any answer still running for the last one and loads that one's
@@ -2782,7 +2878,7 @@ extension DetailView: NSTextFieldDelegate, NSTextViewDelegate {
         // below it is scroll view that does nothing when clicked. Measured on
         // an empty note: the caret never appeared, which reads as a field that
         // is not really a field.
-        if showing == .notes, notesText.isEditable, !notesScroll.isHidden,
+        if showing == .page, notesText.isEditable, !notesScroll.isHidden,
            notesScroll.frame.contains(convert(event.locationInWindow, from: nil)) {
             window?.makeFirstResponder(notesText)
             // At the end rather than the start: a click below the text means

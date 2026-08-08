@@ -79,12 +79,17 @@ final class DetailView: NSView {
     /// it. Held in a property rather than read back off the segmented control,
     /// which is `DictionaryPane`'s rule and for the same reason: a re-render
     /// would otherwise snap it back to whatever the control last drew.
-    private enum Showing { case transcript, notes }
+    private enum Showing { case transcript, notes, ask }
     private var showing: Showing = .transcript
 
     private let modeBar = NSView()
+    /// Three documents about one meeting: what was said, what you wrote, and
+    /// what you asked. Ask is last because it is the only one that is not
+    /// already there when the recording finishes.
     private let modePicker = NSSegmentedControl(
-        labels: ["Transcript", "Notes"], trackingMode: .selectOne, target: nil, action: nil)
+        labels: ["Transcript", "Notes", "Ask"], trackingMode: .selectOne,
+        target: nil, action: nil)
+    private let askView = AskView()
     /// Analog's artifact switcher, which is the part of their notes design worth
     /// copying: a recording has any number of notes and they are all the same
     /// kind of thing, so the way to move between them is a list of their names.
@@ -312,8 +317,8 @@ final class DetailView: NSView {
             modeBar.addSubview(v)
         }
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
-                  soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, empty,
-                  emptyIcon, transcribing] {
+                  soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
+                  empty, emptyIcon, transcribing] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -448,6 +453,15 @@ final class DetailView: NSView {
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             notesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
+            // The same box the notes pane occupies, and for the same reason:
+            // both are documents about the meeting whose title is above them.
+            // Its own composer is pinned inside it, so this one reaches the
+            // bottom of the window rather than stopping short of it.
+            askView.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 8),
+            askView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            askView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            askView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+
             // Exactly where the caret will be, and derived rather than measured
             // so the two cannot come apart again: the text starts at the scroll
             // view's top inset plus the text view's own. An `NSTextView` has no
@@ -507,6 +521,16 @@ final class DetailView: NSView {
         modePicker.selectedSegmentBezelColor = Brand.tint
         modePicker.target = self
         modePicker.action = #selector(switchShowing)
+
+        // An answer saved from Ask is a note like any other, and the switcher
+        // in Notes has to know about it without being switched away from and
+        // back. Clearing the signature is what makes `reloadNotes` actually
+        // re-read: it skips the work when the list looks unchanged.
+        askView.onNoteWritten = { [weak self] in
+            self?.notesSignature = ""
+            self?.reloadNotes(reset: false)
+        }
+        askView.isHidden = true
 
         notePicker.target = self
         notePicker.action = #selector(pickNote)
@@ -654,14 +678,23 @@ final class DetailView: NSView {
         // itself. Every control in this pane does the same.
         endEditing()
         saveYours()
-        showing = sender.selectedSegment == 0 ? .transcript : .notes
+        switch sender.selectedSegment {
+        case 1:  showing = .notes
+        case 2:  showing = .ask
+        default: showing = .transcript
+        }
         // A transport nobody can see is a transport nobody can pause, which is
         // the rule `enter(.settings)` already follows for the same reason.
-        if showing == .notes { stopPlayback() }
+        if showing != .transcript { stopPlayback() }
         // Re-read on the way in rather than only on selection, so switching to
         // Notes is also the gesture that refreshes them.
         if showing == .notes { reloadNotes(reset: false) }
+        // Same argument for Ask: the CLI can write to `chat.json` too, and
+        // switching to the pane is the moment somebody expects to see it.
+        if showing == .ask { askView.reload() }
         applyShowing()
+        // Put the caret where somebody who just pressed Ask is about to type.
+        if showing == .ask { askView.focusField() }
     }
 
     @objc private func pickNote(_ sender: NSPopUpButton) {
@@ -1003,15 +1036,20 @@ final class DetailView: NSView {
 
     /// Put the chosen document on screen. The only place either pane is hidden.
     private func applyShowing() {
-        modePicker.selectedSegment = showing == .transcript ? 0 : 1
+        switch showing {
+        case .transcript: modePicker.selectedSegment = 0
+        case .notes:      modePicker.selectedSegment = 1
+        case .ask:        modePicker.selectedSegment = 2
+        }
         // Collapsed for a note, and for a recording that is still running: that
         // one already says so in the transcript area, and it would be wrong
         // besides, since its audio is on *this* Mac and simply is not finished.
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
-                  hidden: showing == .notes || recording?.isLive == true)
+                  hidden: showing != .transcript || recording?.isLive == true)
         scroll.isHidden = showing != .transcript
         notesScroll.isHidden = showing != .notes
+        askView.isHidden = showing != .ask
         // A solo is a lens on the transcript, so it goes with the transcript.
         // Leaving the bar up over a note would be a sentence about paragraphs
         // that are not on screen, and the player it narrows is collapsed here
@@ -1024,6 +1062,9 @@ final class DetailView: NSView {
         // on it.
         notePicker.isHidden = showing != .notes || notes.isEmpty
         updateEmpty()
+        // Last, and from the one place the mode is ever applied, so the window
+        // cannot be told about a mode this pane has not finished entering.
+        onShowingChanged?()
     }
 
     /// Show the meeting being read, or put the picture away.
@@ -1107,6 +1148,11 @@ final class DetailView: NSView {
             // Never empty any more: the user's own note is always offered, and
             // an empty one is a cursor rather than a message. The placeholder
             // inside the text view is what says what this is for.
+            message = ""
+        case .ask:
+            // Same argument. An empty conversation is a field with starter
+            // questions over it, and a sentence in the middle of the pane
+            // would be a third thing saying what the other two already do.
             message = ""
         }
         // The sentence and the picture are both centred in the pane, so they
@@ -1287,6 +1333,11 @@ final class DetailView: NSView {
         // worth the most: what somebody types during a call is exactly what no
         // transcript will ever contain.
         if recording.isLive { showing = .notes }
+        // Before `reloadNotes`, which can put the mode back to the transcript.
+        // The pane has to be pointed at the new recording either way: it stops
+        // any answer still running for the last one and loads that one's
+        // `chat.json`, and both have to happen whether or not Ask is up.
+        askView.show(recording)
         reloadNotes(reset: true)
         // Always, now that every recording has a note to type into. It used to
         // collapse when there was nothing to switch between, and there always
@@ -1295,13 +1346,28 @@ final class DetailView: NSView {
         applyShowing()
     }
 
+    /// Room to leave on the right of the Ask pane's input row, for the record
+    /// button that floats over this pane and belongs to the window.
+    func setAskClearance(_ points: CGFloat) { askView.trailingClearance = points }
+
+    /// True while the Ask pane is up, which is the one mode with a control of
+    /// its own in the bottom right corner.
+    var isAsking: Bool { showing == .ask }
+
+    /// Fired whenever the document on screen changes, so the window can decide
+    /// again whether its floating button belongs over this pane.
+    var onShowingChanged: (() -> Void)?
+
     private func setChromeHidden(_ hidden: Bool) {
         titleLabel.isHidden = hidden
         subtitleLabel.isHidden = hidden
         playerCard.isHidden = hidden
         scroll.isHidden = hidden
         notesScroll.isHidden = hidden
+        askView.isHidden = hidden
         if hidden {
+            // A running answer belongs to the recording that is going away.
+            askView.show(nil)
             // `clear` and not just the collapse: the strip would otherwise keep
             // the last recording's tags and its `＋` would offer to tag a
             // recording that is no longer selected.
@@ -2587,6 +2653,23 @@ final class DetailViewController: NSViewController {
     var onChanged: (() -> Void)? {
         get { detail.onChanged }
         set { detail.onChanged = newValue }
+    }
+
+    /// Forwarded so the window can tell the Ask pane how much room its floating
+    /// button needs, without reaching into the view hierarchy itself.
+    ///
+    /// None of these load the view. `detail` is a stored property built at
+    /// `init`, the way `onChanged` above already assumes, so there is nothing
+    /// to wait for; calling `loadViewIfNeeded` here instead forced the pane to
+    /// load before the window had put it in the hierarchy, which is how the
+    /// cross-hierarchy constraint this replaced came to be activated too early.
+    func setAskClearance(_ points: CGFloat) { detail.setAskClearance(points) }
+
+    var isAsking: Bool { detail.isAsking }
+
+    var onShowingChanged: (() -> Void)? {
+        get { detail.onShowingChanged }
+        set { detail.onShowingChanged = newValue }
     }
 
     override func loadView() {

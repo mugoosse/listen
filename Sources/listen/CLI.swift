@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts", "notes", "tags",
+        "calendar", "contacts", "notes", "tags", "ask",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -91,6 +91,8 @@ enum CLI {
             edit(rest)
         case "mcp":
             MCP.serve()
+        case "ask":
+            ask(rest)
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }
@@ -1264,6 +1266,19 @@ enum CLI {
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
+      ask [<question>]           put a question to Claude Code or Codex, which
+                                 reads the library through `listen mcp`. No
+                                 question reports what is installed.
+
+    ask options:
+      --claude, --codex          which CLI, when both are installed
+      --write                    let it write notes and tags. Read-only without.
+      --resume <session>         continue the session the last answer printed
+      --model <name>             pass a model through to the agent CLI
+      --stream                   type the answer out as it is written, which is
+                                 what the window does. Claude Code only.
+      --json                     the agent's own event stream, unread
+      --print-command            the command Listen would run, and nothing else
 
     calendar subcommands:
       status                     access, calendars and today. The default.
@@ -2246,6 +2261,205 @@ enum CLI {
         report("system", sys)
         // The folder, on stdout, so it composes: `listen transcribe $(listen record ...)`.
         print(recording.folder.path)
+        exit(0)
+    }
+
+    // MARK: - Asking an agent
+
+    /// `listen ask [<question>]`: put a question to Claude Code or Codex.
+    ///
+    /// This is the same engine the window uses, with a terminal in front of it,
+    /// and it exists first because of what it can show that a chat box cannot.
+    /// A wrong answer here has three possible causes: the agent could not be
+    /// found, the agent could not reach the library, or the agent read the
+    /// wrong part of it. `--print-command` settles the first, the tool calls on
+    /// stderr settle the second, and `--json` hands over the raw stream for the
+    /// third. None of those are visible from inside a window.
+    ///
+    /// The answer goes to stdout and everything else to stderr, which is the
+    /// rule `listen notes read` already follows, so `listen ask … > answer.md`
+    /// gets the answer and nothing else.
+    private static func ask(_ args: [String]) -> Never {
+        var backend: AgentBackend?
+        var allowWrites = false
+        var resume: String?
+        var model: String?
+        var rawStream = false
+        var printCommand = false
+        var streaming = false
+        var words: [String] = []
+
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            switch arg {
+            case "--claude":        backend = .claude
+            case "--codex":         backend = .codex
+            case "--write":         allowWrites = true
+            case "--stream":        streaming = true
+            case "--json":          rawStream = true
+            case "--print-command": printCommand = true
+            case "--resume":
+                index += 1
+                guard index < args.count else { fail("--resume needs a session id.") }
+                resume = args[index]
+            case "--model":
+                index += 1
+                guard index < args.count else { fail("--model needs a model name.") }
+                model = args[index]
+            default:
+                guard !arg.hasPrefix("--") else {
+                    fail("unknown option `\(arg)`. Try `listen help`.")
+                }
+                words.append(arg)
+            }
+            index += 1
+        }
+
+        // Joined with a space, the way `listen me` and `listen title` do, so
+        // the shell quoting is optional for a plain question.
+        let question = words.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { agentReport() }
+
+        let status: AgentStatus
+        if let backend {
+            status = AgentCLI.status(backend)
+            guard status.path != nil else {
+                fail("\(backend.name) is not installed. \(backend.installHint)")
+            }
+        } else if let chosen = AgentCLI.chosen() {
+            status = chosen
+        } else {
+            fail("no agent CLI found. `listen ask` with no question lists what "
+                 + "was looked for and where.")
+        }
+        guard let path = status.path else { fail("\(status.backend.name) is not installed.") }
+        if status.signedIn == false {
+            fail("\(status.backend.name) is installed but not signed in. "
+                 + status.backend.installHint)
+        }
+
+        let query = AgentRun.Question(text: question, backend: status.backend, path: path,
+                                      resume: resume, allowWrites: allowWrites, model: model,
+                                      streaming: streaming)
+
+        if printCommand {
+            // Quoted well enough to paste back into a shell, which is the only
+            // reason this exists: a flag that is wrong in Listen has to be
+            // reproducible outside it.
+            let quoted = ([path.path] + AgentRun.arguments(for: query)).map { part -> String in
+                // The empty string has to be quoted explicitly. `allSatisfy` is
+                // vacuously true for it, so `--tools ""` printed as `--tools`
+                // and the pasted command meant the opposite of what Listen runs.
+                guard !part.isEmpty else { return "''" }
+                return part.allSatisfy { $0.isLetter || $0.isNumber || "-_./=".contains($0) }
+                    ? part : "'" + part.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            }
+            print(quoted.joined(separator: " "))
+            exit(0)
+        }
+
+        if rawStream { runAgentRaw(query) }
+
+        log("\(status.backend.name) · \(question)")
+        let done = DispatchSemaphore(value: 0)
+        var failure: String?
+        // Not `.main`: this thread is about to block on the semaphore, and
+        // events delivered to the main queue would never be drained.
+        let events = DispatchQueue(label: "listen.ask")
+        let run = AgentRun(query, on: events) { event in
+            switch event {
+            case .started(let session):
+                log("session \(session)")
+            case .thinking:
+                break
+            case .toolCall(let name, let detail):
+                log("  · \(name)\(detail.isEmpty ? "" : " " + detail)")
+            case .toolResult:
+                break
+            case .note(let text):
+                log("  ! \(text)")
+            case .text(let text):
+                print(text)
+            case .textDelta(let text):
+                // Unbuffered and without a newline, because a delta is a few
+                // characters in the middle of a sentence. `print` would break
+                // the line and stdout would stop being the answer.
+                FileHandle.standardOutput.write(Data(text.utf8))
+            case .finished(let outcome):
+                if query.streaming { FileHandle.standardOutput.write(Data("\n".utf8)) }
+                var parts = ["\(outcome.toolCalls) tool call"
+                             + (outcome.toolCalls == 1 ? "" : "s")]
+                if let ms = outcome.durationMS {
+                    parts.append(String(format: "%.1fs", Double(ms) / 1000))
+                }
+                // No cost line. See `AgentRun.Outcome.costUSD`: it is metered
+                // API pricing, nobody reaching this is on metered pricing, and
+                // a number that is not a bill reads as one.
+                if let session = outcome.session {
+                    parts.append("continue with --resume \(session)")
+                }
+                log(parts.joined(separator: ", "))
+                failure = outcome.failure
+                done.signal()
+            }
+        }
+
+        do { try run.start() } catch {
+            fail("could not start \(path.path): \(error.localizedDescription)")
+        }
+        done.wait()
+        if let failure { fail(failure) }
+        exit(0)
+    }
+
+    /// `listen ask --json`: the agent's own event stream, untouched.
+    ///
+    /// Not routed through `AgentRun`, on purpose. This is the thing to look at
+    /// when `AgentRun`'s reading of the stream is what is suspected, so it must
+    /// not be the same code doing the reading.
+    private static func runAgentRaw(_ query: AgentRun.Question) -> Never {
+        let process = Process()
+        process.executableURL = query.path
+        process.arguments = AgentRun.arguments(for: query)
+        process.currentDirectoryURL = AgentRun.workspace
+        process.environment = AgentRun.childEnvironment(for: query.path)
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch {
+            fail("could not start \(query.path.path): \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        exit(process.terminationStatus)
+    }
+
+    /// `listen ask` with no question: what is installed, and what Listen would
+    /// use.
+    ///
+    /// Prints the paths it found rather than a yes or no. "Not installed" is
+    /// the answer somebody with two copies of the CLI needs least, and the path
+    /// is what tells them which one Listen picked.
+    private static func agentReport() -> Never {
+        for status in AgentCLI.statuses() {
+            // Padded by hand. `String(format: "%-12@", …)` does not honour the
+            // width for an object argument, so the columns did not line up.
+            let label = status.backend.name.padding(toLength: 12, withPad: " ", startingAt: 0)
+            print(label + "  " + status.summary)
+            if status.path == nil { log("  " + status.backend.installHint) }
+        }
+        print("")
+        guard let chosen = AgentCLI.chosen() else {
+            print("No usable agent, so the library cannot be asked anything yet.")
+            exit(1)
+        }
+        print("Listen would use \(chosen.backend.name).")
+        print("")
+        print("It reaches the library only through `listen mcp`, which means it can")
+        print("read transcripts, people, tags and notes, and can write nothing at all")
+        print("unless you pass --write, which adds notes and tags. Your own agent")
+        print("settings, hooks, plugins and other MCP servers are not loaded.")
         exit(0)
     }
 

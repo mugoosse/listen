@@ -284,6 +284,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             recordFAB.bottomAnchor.constraint(equalTo: detailHost.view.bottomAnchor,
                                               constant: -RecordButton.margin),
         ])
+        // The Ask pane is the one mode with a control of its own down here, so
+        // the button goes away while it is up unless it is the Stop control.
+        // See `updateRecordFAB`.
+        detail.onShowingChanged = { [weak self] in self?.updateRecordFAB() }
 
         let w = NSWindow(contentViewController: controller)
         w.title = "Listen"
@@ -1038,9 +1042,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             recordFAB.isHidden = false
             recordFAB.state = .stop(clock: Self.clock(Capture.shared.elapsed))
         } else {
-            recordFAB.isHidden = mode != .library
+            // Hidden over the Ask pane, which has an input row of its own in
+            // that corner. Two controls in one corner is one of them covering
+            // the other, and the one that loses is the one somebody is typing
+            // into.
+            //
+            // Only in the idle branch, deliberately. While a recording is
+            // running this button is Stop, and a meeting you cannot stop
+            // because you happened to be reading an answer is a worse bug than
+            // any amount of overlap.
+            recordFAB.isHidden = mode != .library || detail.isAsking
             recordFAB.state = .start
         }
+        // Which leaves the Stop case, where the button is over the Ask pane's
+        // input row and has to be. Measured from the button rather than fixed:
+        // it is a capsule around a label that grows from "Stop · 0:04" to
+        // "Stop · 1:23:45", and this runs once a second while recording, which
+        // is exactly when that width changes.
+        detail.setAskClearance(recordFAB.isHidden
+            ? 0 : recordFAB.fittingSize.width + RecordButton.margin + 12)
     }
 
     private static func clock(_ seconds: TimeInterval) -> String {

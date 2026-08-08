@@ -12,6 +12,7 @@ enum SettingsTab: CaseIterable {
     case general, storage, permissions
     case meetings, audio
     case models, dictionary
+    case agent
     case devices
     case developers, about
 
@@ -24,6 +25,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       return "Audio"
         case .models:      return "Models"
         case .dictionary:  return "Dictionary"
+        case .agent:       return "Agent"
         case .devices:     return "Devices"
         case .developers:  return "Developers"
         case .about:       return "About"
@@ -39,6 +41,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       return "mic"
         case .models:      return "cpu"
         case .dictionary:  return "character.book.closed"
+        case .agent:       return "bubble.left.and.text.bubble.right"
         case .devices:     return "iphone.and.arrow.forward"
         case .developers:  return "terminal"
         case .about:       return "info.circle"
@@ -56,6 +59,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       pane = AudioPane()
         case .models:      pane = ModelsPane()
         case .dictionary:  pane = DictionaryPane()
+        case .agent:       pane = AgentPane()
         case .devices:     pane = DevicesPane()
         case .developers:  pane = DevelopersPane()
         case .about:       pane = AboutPane()
@@ -90,7 +94,11 @@ enum SettingsGroup: CaseIterable {
         case .app:           return [.general, .storage, .permissions]
         case .recording:     return [.meetings, .audio]
         case .transcription: return [.models, .dictionary]
-        case .advanced:      return [.devices, .developers, .about]
+        // Agent sits beside Devices rather than under Transcription, because
+        // the two are the same kind of thing: an integration with something
+        // outside the app that has to be installed and signed into elsewhere
+        // before any of the switches here mean anything.
+        case .advanced:      return [.agent, .devices, .developers, .about]
         }
     }
 }

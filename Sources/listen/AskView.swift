@@ -1,0 +1,879 @@
+import AppKit
+
+/// The Ask pane: a conversation with an agent about one recording.
+///
+/// A third mode beside Transcript and Notes rather than a panel of its own, and
+/// the reason is the same one that put Notes there: these are three documents
+/// about the meeting you already have open, and a floating window would make
+/// the fourth thing you have to arrange on screen. The mode picker already
+/// exists and already survives a selection change, so reading down a list of
+/// meetings asking each one the same question is a mode, not a repeated
+/// gesture.
+///
+/// **The conversation is disposable and a note is not.** Everything here is
+/// kept in `chat.json` beside the recording, and `Save as note` is what
+/// promotes an answer into the library where the rest of the app can see it.
+/// Keeping the two apart is what lets this be cheap: you can ask a bad question
+/// without leaving anything behind.
+///
+/// The view owns no agent knowledge beyond `AgentRun`. It cannot tell which
+/// backend answered except by the label it is handed, which is deliberate: the
+/// two dialects are reconciled in `Agent.swift` and nothing above it should
+/// have to know that Codex counts tool calls differently.
+@MainActor
+final class AskView: NSView {
+    /// Questions worth putting on screen before anybody types.
+    ///
+    /// Four, and all four are about *this* meeting. A starter chip is a way of
+    /// saying what the pane is for, so a general one ("summarise") teaches less
+    /// than a specific one and costs the same. They disappear once there is a
+    /// conversation, because by then the pane has explained itself.
+    private static let starters: [(String, String)] = [
+        ("Summarise", "Summarise this meeting in a short paragraph, then the key points as bullets."),
+        ("Action items", "What did each person commit to in this meeting? Say who owns each one, and say so plainly if nobody did."),
+        ("Decisions", "What was actually decided in this meeting, and what was left open?"),
+        ("Catch me up", "I missed this meeting. Tell me what I need to know in under 150 words."),
+    ]
+
+    private let scroll = NSScrollView()
+    private let turns = NSStackView()
+    private let starterRow = NSStackView()
+    private let field = NSTextField()
+    private let sendButton = SendButton()
+    private let modelButton = NSButton()
+    private lazy var composer = ComposerWell(field: field, model: modelButton,
+                                             send: sendButton)
+    private let status = NSTextField(labelWithString: "")
+    private lazy var composerTrailing =
+        composer.trailingAnchor.constraint(equalTo: trailingAnchor)
+    /// Zero unless there is something to say. A hidden view still occupies its
+    /// frame, which is the rule `setChipsCollapsed` already records, so the
+    /// height goes too or the composer sits 14 points off the floor for ever.
+    private lazy var statusHeight = status.heightAnchor.constraint(equalToConstant: 0)
+
+    /// How much room to leave on the right of the input row.
+    ///
+    /// The record button floats over this pane and is the window's, not this
+    /// view's. It is hidden while Ask is up, so this is normally zero; the
+    /// exception is a recording in progress, when the button becomes Stop and
+    /// has to stay reachable however inconvenient that is.
+    ///
+    /// A number the window sets rather than a constraint against the button
+    /// itself, which was tried and is wrong twice over: the two views have no
+    /// common ancestor at the moment the window is built, so activating it
+    /// threw and the window never appeared at all, and `PaneHost.show` tears
+    /// the pane out of the hierarchy on every mode change, which would break
+    /// any such constraint later even if it could be made at the right time.
+    var trailingClearance: CGFloat = 0 {
+        didSet {
+            guard trailingClearance != oldValue else { return }
+            composerTrailing.constant = -trailingClearance
+        }
+    }
+
+    private var recording: Recording?
+    private var chat = Chat()
+    private var run: AgentRun?
+    /// The view being written into while an answer streams.
+    private var answering: AnswerTurn?
+
+    /// Told when a note is written, so the Notes mode can pick it up without
+    /// being switched to and back.
+    var onNoteWritten: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        build()
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    // MARK: - Layout
+
+    private func build() {
+        turns.orientation = .vertical
+        turns.alignment = .leading
+        turns.spacing = 18
+        turns.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        turns.translatesAutoresizingMaskIntoConstraints = false
+
+        // Flipped, for the reason `Pane` uses one: an unflipped document view
+        // puts a short conversation on the floor of the pane instead of at the
+        // top of it.
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(turns)
+
+        scroll.documentView = document
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        starterRow.orientation = .horizontal
+        starterRow.spacing = 6
+        starterRow.translatesAutoresizingMaskIntoConstraints = false
+
+        buildComposer()
+
+        status.font = .systemFont(ofSize: 10)
+        status.textColor = .tertiaryLabelColor
+        status.lineBreakMode = .byTruncatingTail
+        status.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [scroll, starterRow, composer, status] { addSubview(view) }
+
+        NSLayoutConstraint.activate([
+            document.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            turns.topAnchor.constraint(equalTo: document.topAnchor),
+            turns.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            turns.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            turns.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: starterRow.topAnchor, constant: -8),
+
+            starterRow.leadingAnchor.constraint(equalTo: leadingAnchor),
+            starterRow.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            starterRow.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
+
+            composer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            composerTrailing,
+            composer.heightAnchor.constraint(equalToConstant: ComposerWell.height),
+            composer.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
+
+            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            statusHeight,
+        ])
+    }
+
+    /// The input row: one glass capsule holding the field, the model chooser
+    /// and the send button.
+    ///
+    /// Bordered as a whole rather than as a text field, because a bezelled
+    /// `NSTextField` next to two separate buttons reads as a form, and this is
+    /// the one control on the pane.
+    private func buildComposer() {
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 15)
+        field.placeholderString = "Ask about this meeting…"
+        field.target = self
+        field.action = #selector(send)
+        field.delegate = self
+        field.translatesAutoresizingMaskIntoConstraints = false
+
+        // Which agent and which model, in the composer rather than only in
+        // Settings. It belongs here for the reason the mode picker belongs
+        // above the transcript: it is a property of the question being asked,
+        // and somebody who wants a better answer to *this* question should not
+        // have to leave the pane to ask for one.
+        modelButton.bezelStyle = .inline
+        modelButton.isBordered = false
+        modelButton.font = .systemFont(ofSize: 12)
+        modelButton.contentTintColor = .secondaryLabelColor
+        modelButton.imagePosition = .imageRight
+        // Empty rather than nil. An SF Symbol carries its own description, so
+        // nil leaves the chevron announcing itself and the button read as
+        // "Claude Code, go down".
+        modelButton.image = NSImage(systemSymbolName: "chevron.down",
+                                    accessibilityDescription: "")
+        modelButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
+        modelButton.target = self
+        modelButton.action = #selector(chooseModel)
+        modelButton.translatesAutoresizingMaskIntoConstraints = false
+
+        sendButton.onPress = { [weak self] in
+            guard let self else { return }
+            if self.isRunning { self.stopAndTidy() } else { self.send() }
+        }
+        // Everything inside is positioned by `ComposerWell.layout`, by frame,
+        // for the reason `RecordButton` does the same: on macOS 26 the middle
+        // view belongs to `NSGlassEffectView`, which places its content view
+        // itself, and constraints pinned across that boundary are two things
+        // fighting over one number.
+    }
+
+    // MARK: - Choosing the agent and the model
+
+    /// One menu for both choices, because to a reader they are one choice.
+    ///
+    /// The backend is a section heading and the models are its rows, so picking
+    /// "GPT-5.6-Sol" also switches to Codex. Two separate controls would be
+    /// truer to how the preferences are stored and worse to use: nobody thinks
+    /// "Codex, and within Codex, Sol".
+    @objc private func chooseModel() {
+        let menu = NSMenu()
+        for status in AgentCLI.cached ?? [] {
+            guard status.usable else { continue }
+            let header = NSMenuItem(title: status.backend.name, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+
+            let chosen = AgentCLI.cachedChosen()?.backend == status.backend
+            let current = Settings.agentModel(status.backend)
+            add(to: menu, status.backend, model: nil,
+                title: "Default", on: chosen && current == nil)
+            for model in status.models {
+                add(to: menu, status.backend, model: model.id,
+                    title: model.name, on: chosen && current == model.id)
+            }
+            if status.backend != (AgentCLI.cached ?? []).last(where: { $0.usable })?.backend {
+                menu.addItem(.separator())
+            }
+        }
+        if menu.items.isEmpty {
+            let empty = NSMenuItem(title: "No agent is set up", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: modelButton.bounds.height + 4), in: modelButton)
+    }
+
+    private func add(to menu: NSMenu, _ backend: AgentBackend, model: String?,
+                     title: String, on: Bool) {
+        let item = NSMenuItem(title: title, action: #selector(pickModel(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = on ? .on : .off
+        // Indented under the backend heading, which is what makes the heading
+        // read as a heading rather than as a disabled row.
+        item.indentationLevel = 1
+        item.representedObject = [backend.rawValue, model as Any] as [Any]
+        menu.addItem(item)
+    }
+
+    @objc private func pickModel(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Any],
+              let raw = pair.first as? String,
+              let backend = AgentBackend(rawValue: raw) else { return }
+        Settings.agentBackend = backend
+        Settings.setAgentModel(backend, pair.count > 1 ? pair[1] as? String : nil)
+        updateStatus()
+    }
+
+    /// What the composer's chooser says right now.
+    private func updateModelButton() {
+        guard let chosen = AgentCLI.cachedChosen() else {
+            modelButton.isHidden = true
+            return
+        }
+        modelButton.isHidden = false
+        let model = Settings.agentModel(chosen.backend)
+        let name = chosen.models.first { $0.id == model }?.name
+        // The backend's name when nothing is chosen, the model's when one is.
+        // Never both: the row is 11 point text in a 36 point well, and "Claude
+        // Code · Sonnet" is the kind of label that makes a composer look busy.
+        modelButton.title = name ?? chosen.backend.name
+        modelButton.setAccessibilityLabel(
+            "Agent and model: \(chosen.backend.name), \(name ?? "default")")
+        composer.needsLayout = true
+    }
+
+    // MARK: - What it is about
+
+    /// Point the pane at a recording, loading whatever was said about it before.
+    ///
+    /// A running answer belongs to the recording it was asked about, so
+    /// changing recordings stops it. Letting it finish would file its turn into
+    /// a conversation nobody is looking at, and its cost line would land under
+    /// somebody else's meeting.
+    func show(_ recording: Recording?) {
+        guard recording?.id != self.recording?.id else { return }
+        stop()
+        self.recording = recording
+        chat = recording.map(Chat.load(for:)) ?? Chat()
+        redraw()
+    }
+
+    /// Re-read from disk. The CLI can write to this file too.
+    func reload() {
+        guard let recording else { return }
+        guard run == nil else { return }
+        chat = Chat.load(for: recording)
+        redraw()
+    }
+
+    func focusField() { window?.makeFirstResponder(field) }
+
+
+    private func redraw() {
+        for view in turns.arrangedSubviews { view.removeFromSuperview() }
+        answering = nil
+        // The question each answer belongs to, tracked while walking the list so
+        // a conversation saved before `Chat.Turn.question` existed still titles
+        // its notes from the right place.
+        var asked = ""
+        for turn in chat.turns {
+            if turn.who == Chat.you { asked = turn.text }
+            addTurn(view(for: turn, asking: turn.question ?? asked))
+        }
+        drawStarters()
+        updateStatus()
+        scrollToEnd()
+    }
+
+    private func drawStarters() {
+        for view in starterRow.arrangedSubviews { view.removeFromSuperview() }
+        // Only on an empty conversation. Four chips under a page of answers is
+        // a toolbar, and this is an invitation.
+        guard chat.turns.isEmpty, recording != nil else {
+            starterRow.isHidden = true
+            return
+        }
+        starterRow.isHidden = false
+        for (label, prompt) in Self.starters {
+            starterRow.addArrangedSubview(StarterChip(label) { [weak self] in
+                self?.ask(prompt)
+            })
+        }
+    }
+
+    private func updateStatus() {
+        guard recording != nil else { say(""); return }
+
+        // From the cache, never by running detection. `AgentCLI.chosen()`
+        // spawns up to four processes, this runs on every recording selection,
+        // and calling it here froze the window on every click down the sidebar.
+        guard AgentCLI.cached != nil else {
+            say("Looking for Claude Code or Codex…")
+            field.isEnabled = false
+            updateSendButton()
+            updateModelButton()
+            // Once, and the callback puts the real line up.
+            AgentCLI.warmUp { [weak self] in self?.updateStatus() }
+            return
+        }
+        guard AgentCLI.cachedChosen() != nil else {
+            say("No agent is set up. Settings › Agent explains how.")
+            field.isEnabled = false
+            updateSendButton()
+            updateModelButton()
+            return
+        }
+        field.isEnabled = true
+        updateSendButton()
+        updateModelButton()
+        // Nothing at all when everything is working.
+        //
+        // It said "Answers come from your recordings only", which is true and
+        // was still the wrong thing to put under every question forever: it is
+        // a fact about the feature, not a fact about right now, and a standing
+        // line of small grey text is read once and then becomes furniture. The
+        // place for it is Settings › Agent, which says it in full.
+        //
+        // The label stays for the things that *are* about right now: looking
+        // for an agent, not finding one, and confirming a note was written.
+        say("")
+    }
+
+    /// Put a transient line under the composer, and take its space back when
+    /// there is nothing to say.
+    private func say(_ text: String) {
+        status.stringValue = text
+        statusHeight.constant = text.isEmpty ? 0 : 14
+    }
+
+    private func updateSendButton() {
+        sendButton.isStop = isRunning
+        sendButton.isReady = !isRunning && AgentCLI.cachedChosen() != nil
+            && !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        composer.needsLayout = true
+    }
+
+    /// Cancel a running answer and leave the pane in a state somebody can use.
+    private func stopAndTidy() {
+        guard let answer = answering else { return }
+        stop()
+        answer.finish(AgentRun.Outcome(session: chat.session, costUSD: nil,
+                                       durationMS: nil, toolCalls: 0,
+                                       failure: answer.body.isEmpty ? "Stopped." : nil))
+        // Kept, not thrown away. A half-written answer is still an answer, and
+        // the alternative is a stop button that also deletes what it stopped.
+        if !answer.body.isEmpty {
+            var turn = Chat.Turn(who: Chat.agent, text: answer.body,
+                                 tools: answer.toolLines, steps: answer.steps,
+                                 at: Metadata.iso(Date()))
+            turn.question = answer.question
+            chat.turns.append(turn)
+            persist()
+        }
+        updateStatus()
+    }
+
+    // MARK: - Asking
+
+    @objc private func send() {
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        field.stringValue = ""
+        ask(text)
+    }
+
+    private func ask(_ text: String) {
+        guard run == nil, let recording else { return }
+        guard let chosen = AgentCLI.cachedChosen(), let path = chosen.path else {
+            updateStatus()
+            return
+        }
+
+        // A backend change invalidates the session: a Codex thread id means
+        // nothing to Claude, and resuming with one is an error rather than a
+        // fresh conversation.
+        if chat.backend != chosen.backend.rawValue {
+            chat.session = nil
+            chat.backend = chosen.backend.rawValue
+        }
+
+        append(Chat.Turn(who: Chat.you, text: text, at: Metadata.iso(Date())))
+        starterRow.isHidden = true
+
+        // The answer carries the question that produced it. Looking the
+        // question up at save time takes the *latest* one instead, so pressing
+        // Save on an older answer filed it under a question asked afterwards,
+        // which was measured and is exactly as confusing as it sounds.
+        let answer = AnswerTurn(question: text) { [weak self] body, asked in
+            self?.saveAsNote(body, asked: asked)
+        }
+        answering = answer
+        addTurn(answer)
+        answer.begin(with: chosen.backend.name)
+        updateSendButton()
+        scrollToEnd()
+
+        start(text, backend: chosen.backend, path: path, resuming: chat.session)
+    }
+
+    /// Run one question. Split out because a failed resume runs it again.
+    private func start(_ text: String, backend: AgentBackend, path: URL,
+                       resuming: String?) {
+        // The question is asked *about* a recording, and the agent is given
+        // that as a sentence rather than as a hidden filter. It can still look
+        // at the rest of the library, which is the point: "is this the same
+        // thing we said last week" is a reasonable follow-up and a hard filter
+        // would make it unanswerable.
+        let scoped = resuming == nil && recording != nil
+            ? "About the recording `\(recording!.id)` (\(recording!.metadata.title)): \(text)"
+            : text
+        let question = AgentRun.Question(
+            text: scoped, backend: backend, path: path, resume: resuming,
+            // Writes are on because "write this up as a note" is a thing to ask
+            // a meeting assistant, and refusing it would mean the Save button
+            // is the only route to something the agent could do itself.
+            allowWrites: true, model: Settings.agentModel(backend), streaming: true)
+
+        var wroteAnything = false
+        let run = AgentRun(question) { [weak self] event in
+            guard let self, let answer = self.answering else { return }
+            switch event {
+            case .started(let session):
+                self.chat.session = session
+            case .thinking:
+                answer.thinking()
+            case .toolCall(let name, let detail):
+                answer.tool(name, detail)
+                self.scrollToEnd()
+            case .textDelta(let text):
+                wroteAnything = true
+                answer.append(text)
+                self.scrollToEnd()
+            case .text(let text):
+                wroteAnything = true
+                answer.appendBlock(text)
+                self.scrollToEnd()
+            case .note(let text):
+                answer.tool("note", text)
+            case .toolResult:
+                break
+            case .finished(let outcome):
+                // A resumed session that the agent no longer has is the one
+                // failure worth retrying by itself: the conversation is on
+                // screen, the file is on disk, and the only thing missing is
+                // the agent's own memory of it. Retried once, without the
+                // resume, and only when nothing had been written yet.
+                if outcome.failure != nil, resuming != nil, !wroteAnything {
+                    self.chat.session = nil
+                    answer.reset()
+                    self.start(text, backend: backend, path: path, resuming: nil)
+                    return
+                }
+                self.finish(outcome, answer)
+            }
+        }
+        self.run = run
+        do {
+            try run.start()
+        } catch {
+            answer(error.localizedDescription)
+        }
+    }
+
+    private func answer(_ failure: String) {
+        answering?.fail(failure)
+        run = nil
+    }
+
+    private func finish(_ outcome: AgentRun.Outcome, _ answer: AnswerTurn) {
+        run = nil
+        answering = nil
+        answer.finish(outcome)
+        var turn = Chat.Turn(who: Chat.agent, text: answer.body,
+                             tools: answer.toolLines, steps: answer.steps,
+                             at: Metadata.iso(Date()))
+        turn.question = answer.question
+        turn.durationMS = outcome.durationMS
+        turn.failure = outcome.failure
+        chat.turns.append(turn)
+        persist()
+        updateStatus()
+        scrollToEnd()
+    }
+
+    private func append(_ turn: Chat.Turn) {
+        chat.turns.append(turn)
+        addTurn(view(for: turn, asking: turn.text))
+        persist()
+    }
+
+    private func persist() {
+        guard let recording else { return }
+        chat.save(for: recording)
+    }
+
+    func stop() {
+        run?.cancel()
+        run = nil
+        answering = nil
+    }
+
+    /// Throw the conversation away. The recording keeps everything else.
+    func clear() {
+        guard let recording else { return }
+        stop()
+        Chat.forget(for: recording)
+        chat = Chat()
+        redraw()
+    }
+
+    var isEmpty: Bool { chat.turns.isEmpty }
+    var isRunning: Bool { run != nil }
+
+    // MARK: - Promoting an answer
+
+    /// Write one answer into the library as a note.
+    ///
+    /// Through `Notes.create` like everything else, and titled from the
+    /// question rather than from the answer: the question is what somebody will
+    /// be looking for in the note list, and an answer's first line is usually a
+    /// sentence rather than a name.
+    private func saveAsNote(_ body: String, asked: String) {
+        guard let recording else { return }
+        let asked = asked.isEmpty ? "Asked in Listen" : asked
+        let title = String(asked.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            _ = try Notes.create(title: title, body: body, source: .agent,
+                                 prompt: asked, recordings: [recording.id])
+            onNoteWritten?()
+            say("Saved as a note. It is in the Notes tab.")
+        } catch {
+            say(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Drawing a turn
+
+    /// Add a turn, full width.
+    ///
+    /// A leading-aligned vertical stack gives each row its intrinsic width, and
+    /// both turn views want the pane's width instead: the question bubble
+    /// right-aligns itself inside it, and the answer wraps its paragraphs to
+    /// it. Without this the answers wrapped at whatever width the pane happened
+    /// to be when the turn was built, which on a wide window was about half of
+    /// it.
+    private func addTurn(_ view: NSView) {
+        turns.addArrangedSubview(view)
+        view.widthAnchor.constraint(equalTo: turns.widthAnchor).isActive = true
+    }
+
+    private func view(for turn: Chat.Turn, asking: String) -> NSView {
+        if turn.who == Chat.you { return QuestionTurn(turn.text) }
+        let answer = AnswerTurn(question: asking) { [weak self] body, asked in
+            self?.saveAsNote(body, asked: asked)
+        }
+        answer.restore(turn)
+        return answer
+    }
+
+    private func scrollToEnd() {
+        // After layout, not before. A turn added this pass has no height yet,
+        // so scrolling now goes to where the end used to be.
+        layoutSubtreeIfNeeded()
+        guard let document = scroll.documentView else { return }
+        let bottom = max(0, document.frame.height - scroll.contentSize.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The two kinds of turn
+// ---------------------------------------------------------------------------
+
+/// What was asked: right-aligned, in a tinted bubble.
+///
+/// Right-aligned because that is what every chat does and the convention is
+/// worth more here than originality: it is the only cue that separates the two
+/// speakers at a glance when both are plain text.
+private final class QuestionTurn: NSView {
+    init(_ text: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let bubble = NSView()
+        bubble.wantsLayer = true
+        bubble.layer?.cornerRadius = 12
+        bubble.layer?.backgroundColor = Brand.accent.withAlphaComponent(0.16).cgColor
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 13)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(label)
+        addSubview(bubble)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -8),
+            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+
+            bubble.topAnchor.constraint(equalTo: topAnchor),
+            bubble.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
+            // Never the full width: a question that reaches the left edge stops
+            // reading as a bubble and starts reading as a paragraph.
+            bubble.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor,
+                                            constant: 60),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+}
+
+extension AskView: NSTextFieldDelegate {
+    /// The send button lights up on the first character and goes out on the
+    /// last one deleted.
+    func controlTextDidChange(_ notification: Notification) {
+        updateSendButton()
+    }
+}
+
+/// The glass capsule the question is typed into.
+///
+/// Liquid Glass where the OS has it and the same `.hudWindow` vibrancy below
+/// that, which is the pair `RecordButton` already uses. Those two are the only
+/// controls this app floats over its own content, and they should be made of
+/// the same thing.
+///
+/// Laid out by frame rather than by constraints, and that is not a style
+/// choice: `NSGlassEffectView` positions its `contentView` itself, so anything
+/// pinned across that boundary is two systems fighting over one number. See
+/// `RecordButton.layout`, which paid for this once already.
+final class ComposerWell: NSView {
+    /// Deliberately large. 36 was the first version and read as a search field;
+    /// this is the primary control of the pane and the thing the whole mode
+    /// exists for, so it is sized like one.
+    static let height: CGFloat = 52
+    private static let radius: CGFloat = height / 2
+    private static let inset: CGFloat = 20
+    private static let gap: CGFloat = 10
+    private static let send: CGFloat = 36
+
+    private let backdrop: NSView
+    private let content = NSView()
+    private let field: NSTextField
+    private let model: NSButton
+    private let sendButton: NSView
+
+    init(field: NSTextField, model: NSButton, send: NSView) {
+        self.field = field
+        self.model = model
+        self.sendButton = send
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = Self.radius
+            backdrop = glass
+        } else {
+            let vibrant = NSVisualEffectView()
+            vibrant.material = .hudWindow
+            vibrant.blendingMode = .withinWindow
+            vibrant.state = .active
+            vibrant.wantsLayer = true
+            vibrant.layer?.cornerRadius = Self.radius
+            vibrant.layer?.masksToBounds = true
+            backdrop = vibrant
+        }
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        content.addSubview(field)
+        content.addSubview(model)
+        content.addSubview(sendButton)
+
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            // The supported way in: the header says only `contentView` is
+            // guaranteed a place inside the effect.
+            glass.contentView = content
+            addSubview(glass)
+        } else {
+            addSubview(backdrop)
+            addSubview(content)
+            // Liquid Glass brings its own edge. Below it the capsule is a flat
+            // blur with nothing separating it from the answer above.
+            backdrop.layer?.borderWidth = 1
+            backdrop.layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    override func layout() {
+        super.layout()
+        backdrop.frame = bounds
+        content.frame = bounds
+        let b = content.bounds
+        let sendSize = Self.send
+        sendButton.frame = NSRect(x: b.width - sendSize - (Self.height - sendSize) / 2,
+                                  y: (b.height - sendSize) / 2,
+                                  width: sendSize, height: sendSize)
+        let modelSize = model.intrinsicContentSize
+        let modelWidth = model.isHidden ? 0 : ceil(modelSize.width)
+        model.frame = NSRect(x: sendButton.frame.minX - Self.gap - modelWidth,
+                             y: round((b.height - modelSize.height) / 2),
+                             width: modelWidth, height: ceil(modelSize.height))
+        let fieldSize = field.intrinsicContentSize
+        let fieldRight = model.isHidden ? sendButton.frame.minX : model.frame.minX
+        field.frame = NSRect(x: Self.inset,
+                             y: round((b.height - fieldSize.height) / 2),
+                             width: max(0, fieldRight - Self.gap - Self.inset),
+                             height: ceil(fieldSize.height))
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // A `CGColor` is a snapshot of what it was resolved from, so a light
+        // and dark switch leaves the old edge behind.
+        if !(backdrop is NSVisualEffectView) { return }
+        backdrop.layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+}
+
+/// The send button: a filled circle with a glyph in it, not a tinted symbol.
+///
+/// `arrow.up.circle.fill` in the accent colour was the first version and looked
+/// cheap next to everything else, because it is a picture of a button rather
+/// than one: the ring is drawn by the font, so it does not match the capsule's
+/// radius, does not fill, and has no pressed state.
+///
+/// It is also the stop control. A question that is running has to be
+/// interruptible, and the alternative is a second button that is disabled and
+/// meaningless for all but twenty seconds of the pane's life.
+final class SendButton: NSView {
+    var onPress: (() -> Void)?
+
+    var isReady = false { didSet { restyle() } }
+    var isStop = false { didSet { restyle() } }
+
+    private let glyph = NSImageView()
+    private var pressed = false { didSet { restyle() } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        glyph.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(glyph)
+        restyle()
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2
+        let side = round(bounds.height * 0.46)
+        glyph.frame = NSRect(x: round((bounds.width - side) / 2),
+                             y: round((bounds.height - side) / 2),
+                             width: side, height: side)
+    }
+
+    private func restyle() {
+        let name = isStop ? "stop.fill" : "arrow.up"
+        glyph.image = NSImage(systemSymbolName: name,
+                              accessibilityDescription: isStop ? "Stop" : "Ask")
+        glyph.symbolConfiguration = .init(pointSize: 13, weight: .bold)
+        // Dimmed when there is nothing to send, rather than hidden or disabled
+        // looking: the shape stays put so the capsule does not change width as
+        // somebody types the first character.
+        //
+        // The idle state is the accent faded, **not** a grey. `tertiaryLabelColor`
+        // as a *background* is a translucent white in dark mode, so the first
+        // version drew a white disc with a `secondaryLabelColor` arrow on it,
+        // which is light grey on near-white: the button read as a blank blob
+        // with no glyph at all. A label colour is for labels.
+        let live = isReady || isStop
+        let fade: CGFloat = live ? (pressed ? 0.75 : 1) : 0.3
+        layer?.backgroundColor = Brand.accent.withAlphaComponent(fade).cgColor
+        glyph.contentTintColor = Brand.onAccent.withAlphaComponent(live ? 1 : 0.55)
+        setAccessibilityLabel(isStop ? "Stop" : "Ask")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isReady || isStop else { return }
+        pressed = true
+        // Tracked to mouse-up rather than acting on the way down, so a press
+        // that slides off the button is a cancelled press.
+        var inside = true
+        while let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            let point = convert(next.locationInWindow, from: nil)
+            inside = bounds.contains(point)
+            pressed = inside
+            if next.type == .leftMouseUp { break }
+        }
+        pressed = false
+        if inside { onPress?() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyle()
+    }
+}
+
+/// A canned question, shaped like the tag chips it sits near.
+private final class StarterChip: NSButton {
+    private let onPress: () -> Void
+
+    init(_ title: String, onPress: @escaping () -> Void) {
+        self.onPress = onPress
+        super.init(frame: .zero)
+        self.title = title
+        bezelStyle = .rounded
+        controlSize = .large
+        font = .systemFont(ofSize: 12)
+        target = self
+        action = #selector(fire)
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    @objc private func fire() { onPress() }
+}

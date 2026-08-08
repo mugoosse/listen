@@ -240,6 +240,41 @@ this app, so read them before building any new window, menu or popover.
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
+### `.agents/notes/agent.md` (31k)
+
+Asking questions about the library through an agent CLI the user already has.
+`Agent`, `AgentCLI`, `AgentRun`, `AskView`, `AnswerTurn`, `AgentPane`,
+`listen ask`.
+
+- The model is the user's, and Listen never sees a key
+- The agent cannot reach the library except through `listen mcp`
+- Codex will predict a command's output rather than run it
+- Nothing of the user's own agent configuration runs
+- A GUI launch has no PATH, and neither CLI installs where one would look
+- `codex login status` says nothing on stdout
+- Codex has two approval gates, and the second one is the one that matters
+- The working directory is a choice, not a leftover
+- The brief is the retrieval ladder, and without it the first move is wrong
+- `delete_note` is on neither tool list
+- No cost is shown anywhere, and that is a decision rather than an omission
+- The Ask pane is a third mode, not a panel
+- The record button is hidden while it is up, except when it is Stop
+- Nothing on the main thread may run detection
+- An answer carries the question it came from
+- The model menu is asked, never hardcoded
+- The composer is Liquid Glass, and laid out by frame
+- The send button is a button, not a tinted symbol
+- Codex sends its preamble and its answer as separate messages
+- An answer is a clock, some blocks, and one line that changes
+- The shimmer is load-bearing, and it is layers not text
+- A selectable label throws its attributes away when you click it
+- Markdown built for a note is spaced wrong in a stack of labels
+- A rotated chevron is only aligned in one of its two states
+- Three ways a stack view lies about width, all in one pane
+- The conversation is a sidecar, and a note is not
+- Markdown is rendered at the end, not while streaming
+- `listen ask` is the test mechanism, and it is the same engine as the window
+
 ### `.agents/notes/release.md` (5k)
 
 `make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`.

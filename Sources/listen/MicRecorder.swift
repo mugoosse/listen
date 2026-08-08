@@ -18,11 +18,18 @@ import CoreAudio
 /// The other thing it does, and the reason this file is not thirty lines long,
 /// is survive the microphone changing underneath it. See `restart`.
 final class MicRecorder {
-    /// Rebuilt on every restart rather than reused. `AVAudioEngine` caches the
-    /// input format, and a device that has just changed format is exactly the
-    /// case where a stale cache produces a converter resampling from a rate the
-    /// hardware no longer has.
-    private var engine = AVAudioEngine()
+    /// The capture unit, rebuilt on every restart rather than reused.
+    ///
+    /// Not an `AVAudioEngine`, and that is not a style preference. See
+    /// `buildEngine` for the measurement: the engine picks its device the
+    /// instant `inputNode` is read, which is before this code has said which
+    /// microphone it wants, and the request that follows arrives too late.
+    private var unit: AudioUnit?
+
+    /// Where the unit renders, reused across slices. Rebuilt with the unit
+    /// because its format is the hardware's, which is the thing a restart is
+    /// usually reacting to.
+    private var scratch: AVAudioPCMBuffer?
     private var converter: AVAudioConverter?
     private var writer: WAVWriter?
     private let lock = NSLock()
@@ -58,10 +65,12 @@ final class MicRecorder {
 
     /// How long the track may deliver nothing before the engine is rebuilt.
     ///
-    /// Buffers arrive about ten times a second at 4096 frames, so two seconds is
-    /// roughly twenty missed ones and is not something jitter produces. It is
-    /// the backstop rather than the main mechanism: the listeners below react in
-    /// about a third of a second, and this catches whatever they do not.
+    /// Slices arrive at the device's own buffer size, measured at 512 frames on
+    /// this machine, which is about ninety a second at 48 kHz. Two seconds is
+    /// therefore some two hundred missed ones and is not something jitter
+    /// produces. It is the backstop rather than the main mechanism: the
+    /// listeners below react in about a third of a second, and this catches
+    /// whatever they do not.
     private let stallGrace: TimeInterval = 2
 
     /// Two listeners fire for one hardware change (nominal rate and stream
@@ -72,6 +81,22 @@ final class MicRecorder {
     private let target = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: SAMPLE_RATE,
         channels: 1, interleaved: false)!
+
+    /// Biggest slice the unit may hand the callback. `scratch` is sized from it
+    /// and the callback refuses anything larger rather than overrunning.
+    private static let maxFrames: UInt32 = 4096
+
+    /// The unit holds an unretained pointer back to this object, so it must not
+    /// outlive it even when nobody called `stop()`. Deliberately not going
+    /// through `control`: a `sync` from `deinit` deadlocks if the last reference
+    /// was released on that queue.
+    deinit {
+        if let unit {
+            AudioOutputUnitStop(unit)
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+        }
+    }
 
     // -----------------------------------------------------------------------
 
@@ -131,72 +156,140 @@ final class MicRecorder {
     // -----------------------------------------------------------------------
     // Engine lifecycle. All of this runs on `control`.
 
-    /// Builds a converter and a tap against whatever the input device is
-    /// reporting *now*, and starts rendering. The writer is deliberately not
-    /// touched: a restart appends to the same file.
+    /// Builds a capture unit already pointed at the chosen microphone, and
+    /// starts it. The writer is deliberately not touched: a restart appends to
+    /// the same file.
+    ///
+    /// The device is named *before* `AudioUnitInitialize`, and that order is the
+    /// point of the whole function. This used to be an `AVAudioEngine`, which
+    /// cannot do that: the engine binds its input the instant `inputNode` is
+    /// read, and it binds to a `CADefaultDeviceAggregate` wrapping the system
+    /// default devices rather than to a device. Measured in Speak, which had
+    /// the identical code, with music on a Bluetooth headset and the built-in
+    /// microphone chosen in Settings:
+    ///
+    /// - reading `inputNode` dropped the headset from 44100 Hz to 16000 Hz,
+    ///   which is the hands-free profile. The music went mono and the headset
+    ///   announced a call, before any preference had been expressed;
+    /// - the `CurrentDevice` request that followed returned `noErr` and did not
+    ///   take effect. The unit stayed on the aggregate and the first recording
+    ///   captured **0 buffers in 1.5 seconds**. The second one bound correctly,
+    ///   which is why nobody caught it.
+    ///
+    /// A HAL unit takes its device before it is initialised, so no default
+    /// device is ever opened. Measured after: the headset held 44100 Hz
+    /// throughout, its input never ran, and the first recording delivered
+    /// buffers.
+    ///
+    /// The device is re-resolved on every restart, which is what makes Listen
+    /// *follow* a microphone change rather than merely survive it:
+    /// `resolvedMicrophone` falls back to the system default, so plugging in a
+    /// headset mid-meeting moves the recording onto it.
     private func buildEngine() throws {
-        engine = AVAudioEngine()
-        let input = engine.inputNode
-        selectDevice(on: input)
+        guard let device = Settings.resolvedMicrophone else { throw CaptureError.noInputDevice }
 
-        // Read the format *after* selecting the device. Switching inputs
-        // changes the hardware sample rate, and a converter built from the
-        // format read before selection resamples from the wrong source rate,
-        // which records pitch-shifted and garbled.
-        let inFormat = input.inputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0 else { throw CaptureError.badFormat(0, 0) }
-        converter = AVAudioConverter(from: inFormat, to: target)
-        trace("mic format \(Int(inFormat.sampleRate)) Hz, \(inFormat.channelCount) ch")
+        var desc = AudioComponentDescription(
+            componentType: kAudioUnitType_Output,
+            componentSubType: kAudioUnitSubType_HALOutput,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0, componentFlagsMask: 0)
+        guard let component = AudioComponentFindNext(nil, &desc) else {
+            throw CaptureError.micUnitFailed(-1)
+        }
+        var made: AudioUnit?
+        let created = AudioComponentInstanceNew(component, &made)
+        guard created == noErr, let unit = made else {
+            throw CaptureError.micUnitFailed(created)
+        }
+        // Anything that throws from here on must not leak the unit, which holds
+        // the device open for the rest of the meeting if it survives.
+        var keep = false
+        defer { if !keep { AudioComponentInstanceDispose(unit) } }
 
-        // Pad *before* the tap exists, so no buffer can land between measuring
-        // the gap and filling it. See `padToWallClock` for why the gap has to be
-        // filled at all.
+        // A capture unit: input bus on, output bus off. Left on, the unit opens
+        // the default *output* device too, which on a Bluetooth headset is the
+        // other half of the same profile switch.
+        var on: UInt32 = 1
+        var off: UInt32 = 0
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+                             kAudioUnitScope_Input, 1, &on, UInt32(MemoryLayout<UInt32>.size))
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+                             kAudioUnitScope_Output, 0, &off, UInt32(MemoryLayout<UInt32>.size))
+
+        var id = device.id
+        let selected = AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard selected == noErr else { throw CaptureError.micUnitFailed(selected) }
+
+        // Read the format *after* selecting the device. Each device has its own
+        // sample rate, and a converter built from another one's format resamples
+        // from the wrong source rate, which records pitch-shifted and garbled.
+        var hardware = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                   kAudioUnitScope_Input, 1, &hardware, &size) == noErr
+        else { throw CaptureError.badFormat(0, 0) }
+        guard hardware.mSampleRate > 0, hardware.mChannelsPerFrame > 0,
+              let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                           sampleRate: hardware.mSampleRate,
+                                           channels: hardware.mChannelsPerFrame,
+                                           interleaved: false)
+        else { throw CaptureError.badFormat(hardware.mSampleRate, hardware.mChannelsPerFrame) }
+
+        // Ask for the format the converter is built from rather than describing
+        // the same thing twice. The down-mix to mono stays with
+        // `AVAudioConverter`, which is where it was when this was last known
+        // good.
+        var client = inFormat.streamDescription.pointee
+        guard AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                   kAudioUnitScope_Output, 1, &client,
+                                   UInt32(MemoryLayout<AudioStreamBasicDescription>.size)) == noErr
+        else { throw CaptureError.badFormat(hardware.mSampleRate, hardware.mChannelsPerFrame) }
+
+        var maxFrames = MicRecorder.maxFrames
+        AudioUnitSetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice,
+                             kAudioUnitScope_Global, 0, &maxFrames,
+                             UInt32(MemoryLayout<UInt32>.size))
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: inFormat,
+                                            frameCapacity: MicRecorder.maxFrames),
+              let conv = AVAudioConverter(from: inFormat, to: target)
+        else { throw CaptureError.badFormat(hardware.mSampleRate, hardware.mChannelsPerFrame) }
+        scratch = buffer
+        converter = conv
+        trace("mic format \(Int(hardware.mSampleRate)) Hz, \(hardware.mChannelsPerFrame) ch")
+
+        var callback = AURenderCallbackStruct(
+            inputProc: MicRecorder.render,
+            inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
+        AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback,
+                             kAudioUnitScope_Global, 0, &callback,
+                             UInt32(MemoryLayout<AURenderCallbackStruct>.size))
+
+        let initialised = AudioUnitInitialize(unit)
+        guard initialised == noErr else { throw CaptureError.micUnitFailed(initialised) }
+
+        // Pad *before* the unit runs, so no slice can land between measuring the
+        // gap and filling it. See `padToWallClock` for why the gap has to be
+        // filled at all. Safer here than it was with a tap: an initialised unit
+        // delivers nothing until it is started, so the window is closed rather
+        // than merely narrow.
         lock.lock()
         padToWallClock()
         lock.unlock()
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buf, _ in
-            guard let self, let conv = self.converter else { return }
-            let ratio = SAMPLE_RATE / inFormat.sampleRate
-            let capacity = AVAudioFrameCount(Double(buf.frameLength) * ratio) + 1024
-            guard let out = AVAudioPCMBuffer(pcmFormat: self.target, frameCapacity: capacity)
-            else { return }
-
-            var err: NSError?
-            var supplied = false
-            conv.convert(to: out, error: &err) { _, status in
-                if supplied { status.pointee = .noDataNow; return nil }
-                supplied = true
-                status.pointee = .haveData
-                return buf
-            }
-            guard err == nil, out.frameLength > 0, let ch = out.floatChannelData?[0]
-            else { return }
-
-            let chunk = Array(UnsafeBufferPointer(start: ch, count: Int(out.frameLength)))
-            self.lock.lock()
-            try? self.writer?.append(chunk)
-            self.lock.unlock()
-            if !self.sawAudio, chunk.contains(where: { abs($0) > 0.0001 }) {
-                self.sawAudio = true
-                trace("mic has signal")
-            }
-        }
-
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            // Undo the tap before rethrowing. `stop()` will not: it guards on
-            // `isRecording`, which is still false because the line above threw.
-            // A tap that outlives the failure means the next attempt installs a
-            // second one on the same bus, which AVAudioEngine does not allow,
-            // and one transient error then leaves capture broken until relaunch.
-            input.removeTap(onBus: 0)
-            engine.stop()
+        self.unit = unit
+        let started = AudioOutputUnitStart(unit)
+        guard started == noErr else {
+            self.unit = nil
+            AudioUnitUninitialize(unit)
             converter = nil
-            throw error
+            scratch = nil
+            throw CaptureError.deviceStartFailed(started)
         }
+        keep = true
+        trace("recording from \(device.name)")
 
         // Turning the listeners off is how the watchdog gets tested at all: it
         // is the backstop, the listeners always beat it to the same event, and a
@@ -204,41 +297,84 @@ final class MicRecorder {
         // `LISTEN_CHUNK`, and for users it does nothing but make recovery take
         // two seconds instead of a third of one.
         if ProcessInfo.processInfo.environment["LISTEN_MIC_NO_LISTENERS"] == nil {
-            watchHardware(on: input)
+            watchHardware(on: device.id)
         }
     }
 
+    /// Releases the device.
+    ///
+    /// Disposed rather than kept for the next restart. A unit that is merely
+    /// stopped still holds its device, so a Bluetooth headset would sit in
+    /// hands-free mode from the first meeting until Listen quit, and the next
+    /// `buildEngine` could not re-resolve onto a different microphone.
     private func teardownEngine() {
         removeListeners()
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if let unit {
+            AudioOutputUnitStop(unit)
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+        }
+        unit = nil
         converter = nil
+        scratch = nil
     }
 
-    /// Points the engine's input at the chosen device.
+    /// The audio thread. Renders one slice, converts it and appends it.
     ///
-    /// `AVAudioEngine` has no device property of its own on macOS; you reach
-    /// through to the input node's audio unit. Must happen before the engine
-    /// starts.
-    ///
-    /// Re-resolved on every restart, which is what makes Listen *follow* a
-    /// microphone change rather than merely survive it: `resolvedMicrophone`
-    /// falls back to the system default, so plugging in a headset mid-meeting
-    /// moves the recording onto it.
-    private func selectDevice(on input: AVAudioInputNode) {
-        guard let device = Settings.resolvedMicrophone, let unit = input.audioUnit else { return }
-        var id = device.id
-        let status = AudioUnitSetProperty(
-            unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-            &id, UInt32(MemoryLayout<AudioDeviceID>.size))
-        if status != noErr {
-            // Not fatal. Falling back to the default device records the meeting
-            // from the wrong microphone, which is recoverable; refusing to
-            // record does not record the meeting at all.
-            log("could not select \(device.name) (status \(status)), using the default input")
-        } else {
-            trace("recording from \(device.name)")
+    /// Unretained `self`: `teardownEngine` disposes the unit, and `deinit`
+    /// disposes it again for the case where nobody called `stop()`, so the unit
+    /// cannot outlive the object whose pointer it holds.
+    private static let render: AURenderCallback = { context, flags, timestamp, bus, frames, _ in
+        Unmanaged<MicRecorder>.fromOpaque(context).takeUnretainedValue()
+            .capture(flags, timestamp, bus, frames)
+    }
+
+    private func capture(_ flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
+                         _ timestamp: UnsafePointer<AudioTimeStamp>,
+                         _ bus: UInt32,
+                         _ frames: UInt32) -> OSStatus {
+        guard let unit, let scratch, let conv = converter else { return noErr }
+        guard frames <= scratch.frameCapacity else { return noErr }
+
+        // `frameLength` first, and nothing written into the buffer list by hand.
+        // `AVAudioPCMBuffer` derives the list's `mDataByteSize` from
+        // `frameLength` and recomputes it on *every* access to
+        // `mutableAudioBufferList`, so sizing the list through one call and then
+        // passing a second call's list to `AudioUnitRender` hands it a list
+        // claiming zero bytes. That is `paramErr` (-50) on every slice for ever:
+        // the device runs, so macOS shows the microphone indicator and the
+        // meeting looks like it is being recorded, while the track stays empty.
+        scratch.frameLength = frames
+
+        let status = AudioUnitRender(unit, flags, timestamp, bus, frames,
+                                     scratch.mutableAudioBufferList)
+        guard status == noErr else { return status }
+
+        let ratio = SAMPLE_RATE / scratch.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(frames) * ratio) + 1024
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity)
+        else { return noErr }
+
+        var err: NSError?
+        var supplied = false
+        conv.convert(to: out, error: &err) { _, status in
+            if supplied { status.pointee = .noDataNow; return nil }
+            supplied = true
+            status.pointee = .haveData
+            return scratch
         }
+        guard err == nil, out.frameLength > 0, let ch = out.floatChannelData?[0]
+        else { return noErr }
+
+        let chunk = Array(UnsafeBufferPointer(start: ch, count: Int(out.frameLength)))
+        lock.lock()
+        try? writer?.append(chunk)
+        lock.unlock()
+        if !sawAudio, chunk.contains(where: { abs($0) > 0.0001 }) {
+            sawAudio = true
+            trace("mic has signal")
+        }
+        return noErr
     }
 
     // -----------------------------------------------------------------------
@@ -254,19 +390,17 @@ final class MicRecorder {
     /// nothing at all: the tap simply stops being called, for ever, and an hour
     /// of the user's own voice is missing with no error anywhere. Core Audio's
     /// own property listeners do fire, at the instant of the change.
-    private func watchHardware(on input: AVAudioInputNode) {
-        // The device the audio unit settled on, read back rather than assumed:
-        // `selectDevice` may have failed, in which case the engine is on the
-        // default and that is the one whose format matters.
-        if let device = currentDevice(on: input) {
-            listen(to: device, kAudioDevicePropertyNominalSampleRate,
-                   reason: "the microphone's sample rate changed")
-            listen(to: device, kAudioDevicePropertyStreamFormat,
-                   scope: kAudioDevicePropertyScopeInput,
-                   reason: "the microphone's format changed")
-            listen(to: device, kAudioDevicePropertyDeviceIsAlive,
-                   reason: "the microphone went away")
-        }
+    private func watchHardware(on device: AudioDeviceID) {
+        // No read-back any more. Selecting the device is now fatal when it
+        // fails, so a unit that is running is a unit on this device, and there
+        // is no second case where the engine quietly sat on the default.
+        listen(to: device, kAudioDevicePropertyNominalSampleRate,
+               reason: "the microphone's sample rate changed")
+        listen(to: device, kAudioDevicePropertyStreamFormat,
+               scope: kAudioDevicePropertyScopeInput,
+               reason: "the microphone's format changed")
+        listen(to: device, kAudioDevicePropertyDeviceIsAlive,
+               reason: "the microphone went away")
         // Only when following the system default. Somebody who picked a specific
         // microphone in Settings meant it, and moving them off it because macOS
         // switched to a headset would be the opposite of what they asked for.
@@ -275,17 +409,6 @@ final class MicRecorder {
                    kAudioHardwarePropertyDefaultInputDevice,
                    reason: "the system's default microphone changed")
         }
-    }
-
-    private func currentDevice(on input: AVAudioInputNode) -> AudioDeviceID? {
-        guard let unit = input.audioUnit else { return nil }
-        var id = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                   kAudioUnitScope_Global, 0, &id, &size) == noErr,
-              id != 0
-        else { return nil }
-        return id
     }
 
     private func listen(to id: AudioObjectID, _ selector: AudioObjectPropertySelector,

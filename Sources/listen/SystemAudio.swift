@@ -333,6 +333,8 @@ enum CaptureError: Error, LocalizedError {
     case deviceNotReady
     case badFormat(Double, UInt32)
     case tapUnsupported
+    case noInputDevice
+    case micUnitFailed(OSStatus)
 
     var errorDescription: String? {
         switch self {
@@ -352,6 +354,10 @@ enum CaptureError: Error, LocalizedError {
         case .tapUnsupported:
             return "capturing system audio needs macOS 14.2 or later; "
                  + "recording the microphone only"
+        case .noInputDevice:
+            return "there is no microphone to record from"
+        case .micUnitFailed(let s):
+            return "could not create the microphone capture unit (status \(s))"
         }
     }
 }

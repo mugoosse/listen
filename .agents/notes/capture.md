@@ -32,8 +32,78 @@ bundle identifiers is the other way to record silence.
 Setting `kAudioOutputUnitProperty_CurrentDevice` to the aggregate either fails
 or yields silence, so `SystemAudioRecorder` drives
 `AudioDeviceCreateIOProcIDWithBlock` on the aggregate directly. The microphone
-path still uses `AVAudioEngine`, which is why there are two capture classes
-rather than one.
+path does not use `AVAudioEngine` either, for the separate reason below, so
+both classes now drive Core Audio directly and the split between them is about
+what they record rather than about which API they use.
+
+## AVAudioEngine picks the microphone before you can, and the first recording pays
+
+`MicRecorder` builds a `kAudioUnitSubType_HALOutput` unit rather than an
+`AVAudioEngine` because the engine chooses its input device the instant
+`inputNode` is read, and nothing can get in front of that. Measured in Speak,
+which ran the identical code, with music on a Bluetooth headset and the
+built-in microphone chosen in Settings:
+
+- reading `engine.inputNode` bound the unit to `CADefaultDeviceAggregate`,
+  which wraps the system default devices rather than being a device, and
+  dropped the headset from 44100 Hz to 16000 Hz. That is the hands-free
+  profile: the music went mono and the headset announced a call, before either
+  app had said which microphone it wanted;
+- the `AudioUnitSetProperty(kAudioOutputUnitProperty_CurrentDevice)` that
+  followed returned `noErr` **and did not take effect**. The unit stayed on the
+  aggregate and the tap delivered **0 buffers in 1.5 seconds**;
+- the second recording bound correctly, which is why this survived: anybody
+  testing by recording twice sees it work.
+
+For Listen the middle point is the expensive one. A meeting whose first minute
+went to a device nobody chose is not recoverable, and the watchdog does not
+help, because a track that never starts is not a track that stalled.
+
+A HAL unit takes its device before `AudioUnitInitialize`, so no default device
+is ever opened. Verified here across two consecutive `listen record` runs: the
+trace said `recording from MacBook Pro Microphone`, the headset held 44100 Hz
+throughout and its input never ran, and the mic track measured 6.22 s with a
+peak of -34.2 dBFS and 96.5% of samples above the noise floor, so it is real
+audio rather than a well-formed silent file.
+
+Three things hold this together and none is optional:
+
+- **Disable the output bus.** A HAL unit with output enabled opens the default
+  *output* device too, which on a Bluetooth headset is the other half of the
+  same profile switch.
+- **Dispose the unit in `teardownEngine`, do not keep it.** A merely stopped
+  unit still holds its device, so a headset would sit in hands-free mode from
+  the first meeting until Listen quit, and `restart` could not re-resolve onto
+  a different microphone.
+- **Selecting the device is fatal now.** It used to fall back to the default on
+  failure, which was the right call when the fallback was a working engine. It
+  is not the right call when the fallback is a unit with no device, and
+  `watchHardware` no longer reads the device back for the same reason: a
+  running unit is a unit on the device that was asked for.
+
+## `AVAudioPCMBuffer` rebuilds its buffer list, so do not size it by hand
+
+`AudioUnitRender` wants a buffer list whose `mDataByteSize` says how much room
+there is, and the obvious way to say so does not work:
+
+    let list = UnsafeMutableAudioBufferListPointer(scratch.mutableAudioBufferList)
+    for i in 0..<list.count { list[i].mDataByteSize = frames * 4 }
+    AudioUnitRender(unit, flags, ts, bus, frames, scratch.mutableAudioBufferList)
+
+`AVAudioPCMBuffer` derives `mDataByteSize` from `frameLength` and recomputes it
+on *every* access, so the second `mutableAudioBufferList` hands render a list
+claiming zero bytes and it answers `paramErr` (-50) on every slice for ever.
+Set `frameLength` first and touch nothing else:
+
+    scratch.frameLength = frames
+    AudioUnitRender(unit, flags, ts, bus, frames, scratch.mutableAudioBufferList)
+
+Worth knowing what this looks like from outside, because it looks like anything
+but a buffer bug. The device really is running, so macOS shows the microphone
+indicator in the menu bar and the meeting appears to be recording, while the
+track stays empty. `LISTEN_DEBUG=1` is the fastest way to tell the two apart:
+`mic has signal` is the line that means a sample above 0.0001 actually arrived,
+and its absence is the whole diagnosis.
 
 ## Changing the microphone mid-meeting silently ended the mic track
 

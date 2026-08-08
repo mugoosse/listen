@@ -1144,19 +1144,27 @@ final class AgentRun {
 // What was asked, and what came back
 // ---------------------------------------------------------------------------
 
-/// One recording's conversation, kept beside it as `chat.json`.
+/// One conversation, kept in the library as `chats/<id>.json`.
 ///
-/// A sidecar in the recording's own folder, which is the arrangement
-/// `turns.json` and `embeddings.json` already have and for the same reason:
-/// the folder is the recording, so deleting one in Finder cannot strand
-/// anything, and a conversation about a meeting that no longer exists cannot
-/// outlive it.
+/// **It used to be `chat.json` inside the recording's own folder**, on the
+/// argument `turns.json` and `embeddings.json` make: the folder is the
+/// recording, so nothing can be stranded and a conversation about a meeting
+/// cannot outlive it. Asking about the library is what settles that the other
+/// way. A question spanning four meetings has four bad homes and no good one,
+/// and a question about none of them has nowhere at all to go, which is exactly
+/// the argument that moved notes out of those folders before anything shipped.
 ///
-/// **Not a note.** A note is somebody's finished reading of a meeting and
-/// belongs to the library; this is the working-out, and belongs to the
-/// recording. The button that turns one into the other is the whole point of
-/// keeping them apart: everything here is disposable until somebody says
-/// otherwise.
+/// So `recordings` is an array all the way down and a conversation about one
+/// meeting is an array of one, which is `Notes`' arrangement for `Notes`'
+/// reasons. It also earns the back links for free: the conversations about a
+/// recording are the ones naming it, computed the way `Notes.sources` is
+/// computed in reverse.
+///
+/// **Still not a note.** A note is somebody's finished reading of a meeting and
+/// is listed in the library; this is the working-out, and is reached from the
+/// composer's own history instead. The button that turns one into the other is
+/// the whole point of keeping them apart: everything here is disposable until
+/// somebody says otherwise.
 struct Chat: Codable {
     /// One block of an answer, in the order it happened.
     ///
@@ -1208,36 +1216,165 @@ struct Chat: Codable {
     var backend: String?
     var turns: [Turn] = []
 
+    /// Everything below is `Optional`, and that is load-bearing rather than
+    /// tidy. Swift's synthesized decoder throws `keyNotFound` on a missing key
+    /// **even where the property has a default**, and `load` treats a file that
+    /// will not decode as absent, so a non-optional added here would silently
+    /// empty every conversation already on disk. Measured on `Metadata.tags`
+    /// and on `StoredTranscript.dictionary` before this, both times.
+    ///
+    /// The filename's stem. Absent in a file written before conversations moved
+    /// out of recording folders, and filled in by `migrate`.
+    var id: String?
+    /// The first question, which is what the history list shows. An answer's
+    /// opening line is usually a sentence rather than a name, so the question is
+    /// the half worth keeping: the same argument `saveAsNote` already makes when
+    /// it titles a note.
+    var title: String?
+    var created: String?
+    var updated: String?
+    /// The meetings this conversation is about. One for a question asked on a
+    /// recording's page, several for a question spanning them, none for a
+    /// question about the library.
+    var recordings: [String]?
+
     static let you = "you", agent = "agent"
+
+    var sources: [String] { recordings ?? [] }
+
+    /// What the history list calls it.
+    ///
+    /// Falls back to the first thing the user said, because every conversation
+    /// on disk before `title` existed has one and none of them have a title.
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        let asked = turns.first { $0.who == Chat.you }?.text ?? ""
+        return asked.isEmpty ? "Conversation" : String(asked.prefix(60))
+    }
 }
 
 extension Chat {
-    private static func url(for recording: Recording) -> URL {
-        recording.folder.appendingPathComponent("chat.json")
+    /// Beside `notes/`, and for the reason stated on the type.
+    static var directory: URL { Library.root.appendingPathComponent("chats") }
+
+    private static func url(id: String) -> URL {
+        directory.appendingPathComponent(id + ".json")
     }
 
-    /// The conversation about one recording, or an empty one.
+    /// A conversation by id, or nil.
     ///
     /// A file that will not decode is treated as absent rather than as an
-    /// error. The alternative is a detail pane that refuses to open because a
+    /// error. The alternative is a window that refuses to open because a
     /// disposable sidecar is malformed, and nothing here is worth that.
-    static func load(for recording: Recording) -> Chat {
-        guard let data = try? Data(contentsOf: url(for: recording)),
-              let chat = try? JSONDecoder().decode(Chat.self, from: data) else {
-            return Chat()
-        }
+    static func load(id: String) -> Chat? {
+        guard let data = try? Data(contentsOf: url(id: id)),
+              var chat = try? JSONDecoder().decode(Chat.self, from: data) else { return nil }
+        // The filename is the identity, so a file somebody renamed by hand is
+        // the id it now has rather than the one written inside it.
+        chat.id = id
         return chat
     }
 
-    func save(for recording: Recording) {
+    /// Every conversation, most recently touched first.
+    ///
+    /// Which is the order the history list wants and the opposite of the
+    /// library's: a conversation is picked up where it was left, so the one
+    /// edited last is the one being resumed, whereas a recording is filed under
+    /// the day it happened and never moves. This is the same reason `Note.date`
+    /// reads `created` and this reads `updated`.
+    static func all() -> [Chat] {
+        migration
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
+        return files
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .compactMap { load(id: $0.deletingPathExtension().lastPathComponent) }
+            .sorted { ($0.updated ?? "") > ($1.updated ?? "") }
+    }
+
+    /// The conversations about one recording, which is its back links.
+    ///
+    /// `Notes.sources` computed the other way round. A recording that has been
+    /// deleted simply matches nothing, so there is no orphan to tidy up, which
+    /// is the property the note store already relies on.
+    static func about(_ recordingID: String) -> [Chat] {
+        all().filter { $0.sources.contains(recordingID) }
+    }
+
+    /// Write it, filling in whatever identity it does not have yet.
+    ///
+    /// `mutating` so the caller keeps the id it was given: a conversation is
+    /// saved after every exchange, and one that took a fresh id each time would
+    /// leave a file per question behind it.
+    ///
+    /// `touch: false` writes without moving `updated`, which only the migration
+    /// wants. `all()` orders the history by that field, so stamping every
+    /// migrated conversation with the moment the migration happened to run would
+    /// land the whole history in one second and lose the order it is sorted by.
+    /// Measured on the first migrated conversation: `updated` came out as the
+    /// migration's own clock rather than the last thing said in it.
+    mutating func save(touch: Bool = true) {
+        let now = Metadata.iso(Date())
+        if id == nil { id = Metadata.makeID(Date()) }
+        if created == nil { created = now }
+        if title == nil || title?.isEmpty == true {
+            let asked = turns.first { $0.who == Chat.you }?.text ?? ""
+            if !asked.isEmpty { title = String(asked.prefix(60)) }
+        }
+        if touch || updated == nil { updated = now }
+
+        guard let id else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: Chat.directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(self) else { return }
-        try? data.write(to: Chat.url(for: recording), options: .atomic)
+        try? data.write(to: Chat.url(id: id), options: .atomic)
     }
 
-    static func forget(for recording: Recording) {
-        try? FileManager.default.removeItem(at: url(for: recording))
+    static func forget(id: String) {
+        try? FileManager.default.removeItem(at: url(id: id))
+    }
+
+    /// Once per process, from a `static let`, for the reason `Notes.migration`
+    /// records: there is no one startup path the CLI, the app and the pipeline
+    /// actor all go through, and a `static let` is initialised lazily and
+    /// exactly once by the runtime.
+    private static let migration: Int = migrate()
+
+    /// Move `recordings/<id>/chat.json` into `chats/`, naming its source.
+    ///
+    /// Idempotent, and free after the first run: with no `chat.json` in any
+    /// recording folder there is nothing to move. The conversation keeps its
+    /// turns, its session and its backend, so a migrated conversation can still
+    /// be followed up rather than only read.
+    @discardableResult
+    static func migrate() -> Int {
+        let fm = FileManager.default
+        guard let folders = try? fm.contentsOfDirectory(
+            at: Library.recordings, includingPropertiesForKeys: nil) else { return 0 }
+
+        var moved = 0
+        for folder in folders {
+            let old = folder.appendingPathComponent("chat.json")
+            guard fm.fileExists(atPath: old.path),
+                  let data = try? Data(contentsOf: old),
+                  var chat = try? JSONDecoder().decode(Chat.self, from: data) else { continue }
+
+            let recordingID = folder.lastPathComponent
+            chat.recordings = [recordingID]
+            // The recording's own id, so a migrated conversation sorts beside
+            // the meeting it came from rather than at whatever moment the
+            // migration happened to run.
+            chat.id = recordingID
+            chat.created = chat.created ?? chat.turns.first?.at
+            chat.updated = chat.updated ?? chat.turns.last?.at ?? Metadata.iso(Date())
+            chat.save(touch: false)
+            try? fm.removeItem(at: old)
+            moved += 1
+        }
+        return moved
     }
 }
 

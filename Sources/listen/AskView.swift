@@ -310,15 +310,39 @@ final class AskView: NSView {
         guard recording?.id != self.recording?.id else { return }
         stop()
         self.recording = recording
-        chat = recording.map(Chat.load(for:)) ?? Chat()
+        // The newest conversation about this meeting, or a fresh one. There can
+        // now be several, because a conversation is a library document naming
+        // its sources rather than one sidecar per folder, and `about` returns
+        // them most recently touched first.
+        chat = recording.flatMap { Chat.about($0.id).first } ?? Chat()
+        redraw()
+    }
+
+    /// Open a conversation from the history, whatever it is about.
+    ///
+    /// The recording is taken from the conversation rather than the other way
+    /// round, so resuming a question about four meetings does not silently
+    /// narrow it to one. A conversation about none leaves the recording nil,
+    /// which is the library-wide case.
+    func open(_ chat: Chat) {
+        stop()
+        self.chat = chat
+        recording = chat.sources.first.flatMap { Recording.find($0) }
+        redraw()
+    }
+
+    /// Start a new conversation, keeping whatever is on screen as its subject.
+    func startNew() {
+        stop()
+        chat = Chat()
         redraw()
     }
 
     /// Re-read from disk. The CLI can write to this file too.
     func reload() {
-        guard let recording else { return }
         guard run == nil else { return }
-        chat = Chat.load(for: recording)
+        guard let id = chat.id, let fresh = Chat.load(id: id) else { return }
+        chat = fresh
         redraw()
     }
 
@@ -605,9 +629,21 @@ final class AskView: NSView {
         persist()
     }
 
+    /// Write the conversation, naming what it is about.
+    ///
+    /// No `guard let recording`: a question asked with nothing selected is
+    /// about the library, and refusing to save it was the whole reason a
+    /// conversation could not exist without a folder to live in.
+    ///
+    /// The recording on screen is added to `recordings` rather than replacing
+    /// it, and only once. A follow-up asked on a second meeting is the same
+    /// conversation about both, which is what makes the back links on either
+    /// page true.
     private func persist() {
-        guard let recording else { return }
-        chat.save(for: recording)
+        if let id = recording?.id, !chat.sources.contains(id) {
+            chat.recordings = chat.sources + [id]
+        }
+        chat.save()
     }
 
     func stop() {
@@ -616,11 +652,11 @@ final class AskView: NSView {
         answering = nil
     }
 
-    /// Throw the conversation away. The recording keeps everything else.
+    /// Throw the conversation away. Everything it was about keeps everything
+    /// else: a conversation names its sources and owns none of them.
     func clear() {
-        guard let recording else { return }
         stop()
-        Chat.forget(for: recording)
+        if let id = chat.id { Chat.forget(id: id) }
         chat = Chat()
         redraw()
     }

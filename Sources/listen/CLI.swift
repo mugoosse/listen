@@ -33,8 +33,67 @@ enum CLI {
         return commands.contains(args[1]) || !args[1].hasPrefix("-")
     }
 
+    /// Start again as the real binary when we were launched through a symlink.
+    ///
+    /// The installed `listen` is a symlink in `~/.local/bin`, and `Bundle.main`
+    /// is derived from the path the process was launched by rather than the
+    /// binary it landed on. `AppInfo` already works around that for the version
+    /// string, but a workaround only helps the code that remembers to use it,
+    /// and **MLX does not**: `load_default_library` in mlx-swift's `device.cpp`
+    /// tries five locations for `default.metallib`, and the only one that ever
+    /// succeeds here is `NS::Bundle::allBundles()` reaching the main bundle's
+    /// `resourceURL`, which is `Listen.app/Contents/Resources`. Launched through
+    /// the symlink the main bundle is `~/.local/bin`, all five fail, and every
+    /// command that loads a model dies with "Failed to load the default
+    /// metallib".
+    ///
+    /// Measured on the shipped 0.9.0: the same binary on the same file
+    /// transcribed fine at `/Applications/Listen.app/Contents/MacOS/Listen` and
+    /// failed at `~/.local/bin/listen`, exiting 255. So `listen transcribe` had
+    /// never once worked through the installed command, which is every use of it
+    /// that follows the Developers pane's own instructions.
+    ///
+    /// It fails loudly, which is the one merciful part and worth not
+    /// misremembering: an early reading here called it a silent exit 0, and that
+    /// was a piped exit code being read (`… | tail` reports `tail`'s status).
+    /// Check `$?` on the unpiped command when judging how bad a CLI failure is.
+    ///
+    /// Fixed at the root rather than by teaching MLX where to look, because the
+    /// root is one line of process setup and there is no list of
+    /// commands-that-load-a-model to keep in agreement with reality. Everything
+    /// downstream, including `Settings`' bundle identifier, is simply correct
+    /// afterwards.
+    ///
+    /// `execv` rather than spawning a child: the process is replaced, so stdin,
+    /// stdout, the exit code and any signal handling belong to the real binary
+    /// with nothing to forward. The environment carries over, which is how
+    /// `LISTEN_LIBRARY` survives, and is also how the loop guard gets across.
+    /// If the exec fails there is nothing to do but carry on and be no worse
+    /// off than before.
+    private static func reexecAsRealBinary() {
+        // A binary that re-launches itself must be able to say it has already
+        // done so, or a resolve that disagrees with itself is an exec loop.
+        guard ProcessInfo.processInfo.environment["LISTEN_REEXEC"] == nil else { return }
+        guard let launched = Bundle.main.executablePath, !launched.isEmpty else { return }
+        let real = URL(fileURLWithPath: launched).resolvingSymlinksInPath().path
+        guard real != launched else { return }
+
+        setenv("LISTEN_REEXEC", "1", 1)
+        // Built from the real path rather than by patching `CommandLine`'s copy,
+        // so argv[0] agrees with the process image rather than with how the
+        // command was typed, and there is no index to be wrong about. The
+        // duplicated strings are never freed on purpose: either `execv` succeeds
+        // and the address space goes with it, or it failed and a few bytes are
+        // the least of it.
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup(real)]
+        argv += CommandLine.arguments.dropFirst().map { strdup($0) }
+        argv.append(nil)
+        execv(real, &argv)
+    }
+
     /// Runs the requested mode and exits. Never returns.
     static func run(_ args: [String]) async -> Never {
+        reexecAsRealBinary()
         let command = args.count > 1 ? args[1] : "help"
         let rest = Array(args.dropFirst(2))
 

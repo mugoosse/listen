@@ -259,7 +259,9 @@ this app, so read them before building any new window, menu or popover.
 
 - The CLI wrote its preferences into the wrong domain
 - An unknown command must not launch the app
+- Naming a recording had no owner, and no route outside the window
 - `Bundle.main` is wrong when the CLI is run through its symlink
+- A workaround only helps the code that remembers it, and MLX does not
 - An installed command that is not on the PATH says so
 - The MCP server owns stdout completely
 - A person filter has to match the name nobody stored

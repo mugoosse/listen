@@ -53,6 +53,47 @@ A symlink and not a copy, incidentally, for the same family of reason: a copy
 goes stale the first time Sparkle replaces the app, leaving a `listen` on the
 PATH that is an older version of the app it claims to be.
 
+### A workaround only helps the code that remembers it, and MLX does not
+
+The paragraph above was the whole story for a year, and it was not enough,
+because `AppInfo` fixes `Bundle.main` **for callers who go through `AppInfo`**.
+A dependency reading the main bundle directly is untouched by it.
+
+`load_default_library` in mlx-swift's `Source/Cmlx/mlx/mlx/backend/metal/device.cpp`
+tries five locations for `default.metallib`. The only one that ever succeeds in
+this app is `NS::Bundle::allBundles()` reaching the main bundle's `resourceURL`,
+which is `Listen.app/Contents/Resources`, holding `mlx-swift_Cmlx.bundle`.
+Launched through the symlink the main bundle is `~/.local/bin`, so all five miss
+and every command that loads a model dies with "Failed to load the default
+metallib. library not found" repeated once per attempt.
+
+Measured on shipped 0.9.0, same binary and same file:
+
+| launched as | result |
+|---|---|
+| `/Applications/Listen.app/Contents/MacOS/Listen` | transcribes |
+| `~/.local/bin/listen` | fails, exit 255 |
+
+So `listen transcribe` had never worked through the installed command, which is
+every use of it that follows the Developers pane's own instructions.
+
+`CLI.reexecAsRealBinary` fixes it at the root: if the launched path differs from
+its symlink-resolved self, `execv` the real one before dispatching. `execv` and
+not a child process, so stdin, stdout, the exit code and signals belong to the
+real binary with nothing to forward, and the environment carries over, which is
+how `LISTEN_LIBRARY` survives and how the `LISTEN_REEXEC` loop guard gets
+across. Everything downstream is then simply correct, including `Settings`'
+bundle identifier, rather than correct-where-somebody-remembered.
+
+Gated on nothing else on purpose. Restricting it to "commands that load a model"
+would be a second list to keep in agreement with reality, which is the failure
+this note is already about.
+
+Verify with the guard forced on, or the test proves nothing: `LISTEN_REEXEC=1
+listen transcribe x.wav` must still fail. And read `$?` from the **unpiped**
+command. An early reading here recorded a silent exit 0, which was `tail`'s
+status in a pipeline, not `listen`'s.
+
 ## An installed command that is not on the PATH says so
 
 `/usr/local/bin` does not exist on a Mac without Homebrew and creating it needs
@@ -64,6 +105,40 @@ Developers pane says to add it to the shell profile.
 
 A GUI launch inherits no shell environment, so `PATH` is empty there. The check
 falls back to the default login list rather than reporting a false negative.
+
+## Naming a recording had no owner, and no route outside the window
+
+`listen rename` is people. Nothing named a *recording*, so the one part of
+tidying a library that could not be scripted was the part a messy day needs
+most: six segments of one workshop, all reading "Untitled", each needing a
+trip to the window.
+
+`listen title <id> [<text> | --clear]` is that route, and the arguments are
+joined with a space the way `listen me` does rather than quoted the way
+`listen tags add` does. Both rules are right and the difference is the point: a
+tag joins a **derived vocabulary** where two spellings of one name split a group
+in half, and a title is free text belonging to one recording with nothing to
+disagree with. `--clear` is honoured only when it stands alone, so a recording
+may still be called `--clear`.
+
+The part worth reading before adding any command that writes metadata: this
+would have been the **sixth** hand-rolled `metadata.title = …; try? save()`, a
+count `Tags` already complains about in its own header. The trimming rule is
+what makes that dangerous rather than merely untidy, because "an empty field
+means `Untitled`" lived only in `DetailView.controlTextDidEndEditing`, and
+`isUntitled` is what `MeetingCalendar` checks before applying a name of its own.
+A second copy that trimmed differently would have produced recordings the
+calendar quietly renamed later.
+
+So `Recording.rename(to:)` owns it and both callers go through it. It returns
+**whether anything changed**, which is not a nicety: the window commits the
+title on every focus loss, so without it clicking away from an untouched field
+wrote the file and fired `onChanged` for nothing. `false` is not a failure, and
+a failed write throws.
+
+`MeetingCalendar` deliberately does **not** come through it. It writes a title
+derived from an event rather than one a person typed, under its own `isUntitled`
+guard, and trimming input nobody typed is a rule borrowed from the wrong caller.
 
 ## The MCP server owns stdout completely
 

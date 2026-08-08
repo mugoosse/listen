@@ -1257,7 +1257,11 @@ final class DetailView: NSView {
         // than as its name, so clicking the title gives an empty field to type
         // into instead of a word to delete first.
         titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
-        titleLabel.placeholderString = Metadata.untitled
+        // The display wording and never `Metadata.untitled`, which is a key
+        // rather than a word. See `Recording.displayTitle`. Not `displayTitle`
+        // itself, because this is the branch where the field is empty and the
+        // placeholder is the only thing that can be shown.
+        titleLabel.placeholderString = Metadata.untitledDisplay
 
         // Read once. `storedTranscript` decodes the whole file, which on an hour
         // of meeting is several hundred segments, and the subtitle and the

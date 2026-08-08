@@ -218,10 +218,17 @@ enum MeetingCalendar {
         var updated = recording
         updated.metadata.calendar_event_id = event.id
         updated.metadata.calendar_people = event.people
-        // Never over a name somebody typed. `isUntitled` is the whole guard:
-        // the moment a title is edited it stops being the placeholder, and
-        // nothing here matches again.
-        if updated.isUntitled { updated.metadata.title = title(from: event) }
+        // Never over a name somebody typed. `mayTitle` is the whole guard, and
+        // it used to be `isUntitled` on its own: still the placeholder, or a
+        // title this app derived from something the calendar outranks. The
+        // invitation is the strongest evidence there is, so a backfill that
+        // finds one later correctly replaces a title `AutoTitle` built out of
+        // the guest list, and still refuses the fourteen imported names, which
+        // have no source at all.
+        if updated.mayTitle(from: .calendar) {
+            updated.metadata.title = title(from: event)
+            updated.metadata.title_source = Metadata.TitleSource.calendar.rawValue
+        }
         try? updated.save()
         trace("calendar: \(recording.id) is \"\(event.title)\" (\(event.summary))")
         return updated

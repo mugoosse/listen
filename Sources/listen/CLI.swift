@@ -11,7 +11,7 @@ enum CLI {
     /// Subcommands that do something. Anything else that looks like a command
     /// is still handled here, so it can be told it is misspelled.
     private static let commands = [
-        "record", "list", "show", "transcribe", "export", "label", "calibrate", "mcp",
+        "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts", "notes", "tags", "ask",
         "help", "--help", "-h", "--version", "-v",
@@ -51,6 +51,8 @@ enum CLI {
             export(rest)
         case "label":
             label(rest)
+        case "title":
+            title(rest)
         case "people":
             people(rest)
         case "rename":
@@ -133,7 +135,7 @@ enum CLI {
             fail("voices needs a recording. `listen list` prints them.")
         }
 
-        print(recording.id + "  " + recording.metadata.title)
+        print(recording.id + "  " + recording.displayTitle)
         let automatic = Set(recording.metadata.auto_named ?? [])
         for speaker in recording.speakers.sorted() {
             let print_ = recording.voiceprints[speaker]
@@ -345,7 +347,7 @@ enum CLI {
             fail("`\(id)` has no start time to match against.")
         }
 
-        print("\(recording.metadata.title)")
+        print("\(recording.displayTitle)")
         // The length, because it is half the question: the second rule matches
         // a meeting that began before this recording ended, so a report that
         // did not say how long it ran would not explain its own answer.
@@ -448,17 +450,23 @@ enum CLI {
             }
 
             let how = during ? "  [began while recording]" : ""
-            if recording.isUntitled {
+            // The same question `attach` asks, asked the same way. This read
+            // `isUntitled` while `attach` had moved on to `mayTitle`, so a
+            // recording carrying a title `AutoTitle` derived was previewed as
+            // "keeps its name" and then renamed by the line below it. A dry run
+            // that disagrees with the apply is worse than no dry run, because it
+            // is the thing somebody reads before saying yes.
+            if recording.mayTitle(from: .calendar) {
                 renamed += 1
                 print(String(format: "  %@  %-28@ → %@%@", recording.id as NSString,
-                             recording.metadata.title as NSString,
+                             recording.displayTitle as NSString,
                              MeetingCalendar.title(from: event) as NSString,
                              how as NSString))
             } else {
                 keptOwnName += 1
                 print(String(format: "  %@  %-28@ (keeps its name; guest list attached)%@",
                              recording.id as NSString,
-                             recording.metadata.title as NSString,
+                             recording.displayTitle as NSString,
                              how as NSString))
             }
             if apply { MeetingCalendar.attach(to: recording, refresh: refresh) }
@@ -1248,6 +1256,11 @@ enum CLI {
       show <id>                  metadata and transcript
       export <id> [--format]     write a transcript out
       label <id> <speaker> ...   name, merge or discard a speaker
+      title <id> [<text>]        what one recording is called. --clear un-names
+                                 it. No text prints the current one.
+      title backfill [--apply]   name every unnamed recording after the people
+                                 in it. Prints and changes nothing without
+                                 --apply.
       edit <id> <old> <new>      correct one sentence of a transcript
       people [<name>]            who is in the library, or where one person is
       rename <name> <new name>   rename one person in every recording
@@ -1565,7 +1578,7 @@ enum CLI {
         for r in recordings {
             let state = r.metadata.stateValue == .done ? "" : "  \(r.metadata.state)"
             print("\(r.id.padding(toLength: width, withPad: " ", startingAt: 0))  "
-                  + "\(r.lengthText.isEmpty ? "-" : r.lengthText)  \(r.metadata.title)\(state)")
+                  + "\(r.lengthText.isEmpty ? "-" : r.lengthText)  \(r.displayTitle)\(state)")
         }
         exit(0)
     }
@@ -1575,7 +1588,12 @@ enum CLI {
         guard let id = args.first else { fail("show needs a recording id.") }
         guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
 
-        print(recording.metadata.title)
+        // Marked when the app named it, for the reason the speakers below are:
+        // an automatic name is otherwise indistinguishable from one somebody
+        // chose, and "why is this called Call with Céline when I never said so"
+        // has to be answerable from outside the window.
+        print(recording.displayTitle
+              + (recording.metadata.titleSourceValue.map { "  (\($0.phrase))" } ?? ""))
         // The model that produced the transcript, on the same line as the rest
         // of the provenance and in the same order as the detail pane. It is the
         // only fact that explains a transcript in the wrong language, and until
@@ -1787,7 +1805,7 @@ enum CLI {
                 .first { $0.label == person.label }
                 .map { Recording.length($0.seconds) } ?? ""
             print("  " + recording.id.padding(toLength: width, withPad: " ", startingAt: 0)
-                  + "  " + recording.metadata.title
+                  + "  " + recording.displayTitle
                   + (spoken.isEmpty ? "" : "  (\(spoken))"))
         }
     }
@@ -1890,6 +1908,139 @@ enum CLI {
     /// A preference, not an edit. The transcripts keep saying `Me` and this is
     /// resolved on the way to the screen, so it applies to every recording ever
     /// made and changing it again costs nothing.
+    /// `listen title <id> [<text> | --clear]`: what one recording is called.
+    ///
+    /// The window was the only way to name a recording, which made naming a
+    /// day's worth of them the one part of tidying a library that could not be
+    /// scripted. `listen rename` is people, and there was nothing for this.
+    ///
+    /// The remaining arguments are joined with a space rather than quoted, which
+    /// is `listen me`'s rule and the opposite of `listen tags add`'s. Both are
+    /// right: a tag joins a derived vocabulary where two spellings of one name
+    /// split a group in half, and a title is free text belonging to one
+    /// recording where there is nothing for it to disagree with.
+    ///
+    /// No argument prints the current title, so a script can read one back
+    /// without parsing `listen show`.
+    private static func title(_ args: [String]) -> Never {
+        // Before the id is resolved, and safe to do that way round: every id is
+        // a timestamp, so no recording can be called `backfill`. The same shape
+        // `listen calendar` uses, one level down, because a subcommand on
+        // `title` and a subcommand on `calendar` should not be two different
+        // ideas of a subcommand.
+        if args.first == "backfill" { titleBackfill(Array(args.dropFirst())) }
+
+        guard let id = args.first else {
+            fail("title needs a recording id. `listen list` shows them.")
+        }
+        guard var recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        let rest = Array(args.dropFirst())
+
+        guard let first = rest.first else {
+            // The stored string, deliberately, where `listen list` and
+            // `listen show` print `displayTitle`. This is the read-back the doc
+            // comment above calls the script path, so it has to answer with what
+            // is in `metadata.json` and keep answering the same thing when the
+            // placeholder is reworded. The hint below is where a person is told
+            // what it means.
+            print(recording.metadata.title)
+            if recording.isUntitled {
+                log("nobody has named this one. `listen title \(recording.id) <text>` does.")
+            } else if let source = recording.metadata.titleSourceValue {
+                // Which also says it is not yours yet: typing over it freezes
+                // it, and until somebody does the app keeps the name current.
+                log("\(source.phrase). Typing a name of your own replaces it for good.")
+            }
+            exit(0)
+        }
+        // Only when it stands alone, so a recording may still be called
+        // `--clear` by somebody determined to.
+        let clearing = first == "--clear" && rest.count == 1
+        guard clearing || !first.hasPrefix("-") else {
+            fail("unknown option `\(first)`. Try `listen help`.")
+        }
+
+        do {
+            let changed = try recording.rename(to: clearing ? "" : rest.joined(separator: " "))
+            print(recording.metadata.title)
+            if !changed { log("already called that. Nothing changed.") }
+        } catch {
+            fail(error.localizedDescription)
+        }
+        exit(0)
+    }
+
+    /// `listen title backfill`: name every recording its speakers can name.
+    ///
+    /// A dry run unless `--apply` is given, and deliberately not something that
+    /// happens at launch, which is the rule `listen calendar backfill` already
+    /// sets and for the same reason: renaming a library at once without being
+    /// asked is the surprise the rest of this app avoids.
+    ///
+    /// It exists because `AutoTitle` is driven by speaker edits, so a recording
+    /// whose speakers were all named before this feature existed will never see
+    /// one and would stay unnamed for ever with nothing explaining why.
+    ///
+    /// **Every recording is accounted for, including the ones it does nothing
+    /// to.** A backfill that printed only its hits would leave somebody
+    /// counting rows to work out what happened to the rest, and the answer per
+    /// recording is the useful half: waiting on a speaker is something they can
+    /// act on, nobody to name it after is not.
+    private static func titleBackfill(_ args: [String]) -> Never {
+        var apply = false
+        for arg in args {
+            switch arg {
+            case "--apply": apply = true
+            default:        fail("unknown option `\(arg)`.")
+            }
+        }
+
+        let library = Recording.all()
+        var named = 0, unnamed = 0, waiting = 0, nobody = 0, notOurs = 0
+        var outranked = 0, alreadyRight = 0
+
+        for recording in library.sorted(by: { $0.id < $1.id }) {
+            let outcome = AutoTitle.outcome(for: recording)
+            switch outcome {
+            case .name(let title):
+                named += 1
+                print(String(format: "  %@  %-30@ → %@", recording.id as NSString,
+                             recording.displayTitle as NSString, title as NSString))
+            case .unname:
+                unnamed += 1
+                print(String(format: "  %@  %-30@ → %@", recording.id as NSString,
+                             recording.displayTitle as NSString,
+                             Metadata.untitledDisplay as NSString))
+            case .waitingOnSpeakers(let count):
+                waiting += 1
+                print(String(format: "  %@  %-30@ (waiting on %d unnamed speaker%@)",
+                             recording.id as NSString, recording.displayTitle as NSString,
+                             count, (count == 1 ? "" : "s") as NSString))
+            case .nobodyToNameItAfter:  nobody += 1
+            case .notOurs:              notOurs += 1
+            case .outranked:            outranked += 1
+            case .nothingToDo:          alreadyRight += 1
+            }
+            if apply { AutoTitle.refresh(recording) }
+        }
+
+        print("")
+        print("\(library.count) recordings.")
+        if named > 0 { print("  \(named) would be named after their speakers") }
+        if unnamed > 0 { print("  \(unnamed) would go back to the placeholder") }
+        if waiting > 0 { print("  \(waiting) waiting on a speaker to be named") }
+        if nobody > 0 { print("  \(nobody) have nobody to name them after") }
+        if alreadyRight > 0 { print("  \(alreadyRight) already say what their speakers say") }
+        // "have a title" and never "named by hand": see `Outcome.notOurs`.
+        // Most of these are the legacy imports and the iPhone's dated memos,
+        // and calling those somebody's own work would be the app inventing a
+        // fact about its own library.
+        if notOurs > 0 { print("  \(notOurs) have a title already, left alone") }
+        if outranked > 0 { print("  \(outranked) named from the calendar, left alone") }
+        print(apply ? "\napplied." : "\nnothing was written. `--apply` does it.")
+        exit(0)
+    }
+
     private static func me(_ args: [String]) -> Never {
         guard let first = args.first else {
             print(Settings.userName ?? SpeakerName.you)

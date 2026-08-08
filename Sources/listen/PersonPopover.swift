@@ -370,7 +370,7 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
     }
 
     private func row(for recording: Recording) -> NSView {
-        let title = NSTextField(labelWithString: recording.metadata.title)
+        let title = NSTextField(labelWithString: recording.displayTitle)
         title.font = .systemFont(ofSize: 12)
         title.lineBreakMode = .byTruncatingTail
         title.textColor = recording.isUntitled ? .secondaryLabelColor : .labelColor

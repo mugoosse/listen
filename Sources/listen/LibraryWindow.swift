@@ -1406,8 +1406,8 @@ extension LibraryWindow: NSMenuDelegate {
         guard recording.hasTranscript else { return }
         let alert = NSAlert()
         alert.messageText = room
-            ? "Transcribe \(recording.metadata.title) again, listening for a room?"
-            : "Transcribe \(recording.metadata.title) again, with the microphone as you?"
+            ? "Transcribe \(recording.displayTitle) again, listening for a room?"
+            : "Transcribe \(recording.displayTitle) again, with the microphone as you?"
         var body = "Who said what is decided while the transcript is made, so this"
             + " recording keeps the speakers it has until it is transcribed again."
         // The same warning Transcribe Again gives, and only when there is
@@ -1446,7 +1446,7 @@ extension LibraryWindow: NSMenuDelegate {
     private func confirmOverwrite(_ recording: Recording, with choice: ModelChoice) -> Bool {
         guard recording.hasHumanEdits else { return true }
         let alert = NSAlert()
-        alert.messageText = "Transcribe \(recording.metadata.title) again"
+        alert.messageText = "Transcribe \(recording.displayTitle) again"
             + " with \(choice.title)?"
         // Name what goes and what does not. The audio is untouched and so are
         // the notes, and somebody deciding this in a hurry should not have to
@@ -1478,7 +1478,7 @@ extension LibraryWindow: NSMenuDelegate {
     @objc func deleteSelected() {
         guard let recording = selected else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete \(recording.metadata.title)?"
+        alert.messageText = "Delete \(recording.displayTitle)?"
         // Say what is actually lost. The audio is the irreplaceable part, and
         // what the user typed during the meeting is more irreplaceable still:
         // a call can in principle be had again, and a thought somebody had

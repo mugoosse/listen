@@ -95,23 +95,42 @@ capture has no length yet, so only the window rule applies there.
 
 ### The title is applied silently, and two guards are what make that safe
 
-`MeetingCalendar.attach` writes the title only when `Recording.isUntitled`, and
-`Metadata.calendar_event_id` doubles as the "already looked" flag so a second
-pass can never revisit a decision. `Capture` calls it twice: at `start`, so the
-live sidebar row carries the meeting's name for the hour it is running rather
-than saying "Untitled" throughout, and again at `stop` for the meeting that was
-put in the calendar after it began. The second call is a no-op whenever the
-first one found something, which is what protects a title edited mid-call.
+`MeetingCalendar.attach` writes the title only when
+`Recording.mayTitle(from: .calendar)`, and `Metadata.calendar_event_id` doubles
+as the "already looked" flag so a second pass can never revisit a decision.
+`Capture` calls it twice: at `start`, so the live sidebar row carries the
+meeting's name for the hour it is running rather than saying "Untitled"
+throughout, and again at `stop` for the meeting that was put in the calendar
+after it began. The second call is a no-op whenever the first one found
+something, which is what protects a title edited mid-call.
 
-**`isUntitled` is the literal placeholder and nothing cleverer**, and the
-consequence surfaced immediately: `listen calendar backfill` matched 14 of the
-50 recordings in the real library and renamed **none of them**, because every
-one already carried a title from the legacy Python import
-(`2607-17-Google Chrome` and the like). That is the right answer. Deciding which
-existing titles are "really" machine-generated would be a heuristic, and a
-heuristic that overwrites a meeting's name is the thing this design is avoiding.
-New recordings start as `Untitled` and are named; imported ones keep what they
-have and gain a guest list.
+That guard used to be `Recording.isUntitled`, and the consequence surfaced
+immediately: `listen calendar backfill` matched 14 of the 50 recordings in the
+real library and renamed **none of them**, because every one already carried a
+title from the legacy Python import (`2607-17-Google Chrome` and the like). That
+is still the right answer, and `mayTitle` still gives it. Deciding which existing
+titles are "really" machine-generated would be a heuristic, and a heuristic that
+overwrites a meeting's name is the thing this design is avoiding. New recordings
+start as `Untitled` and are named; imported ones keep what they have and gain a
+guest list.
+
+**What changed is that one bit could not answer the question any more.**
+`isUntitled` says "has this a name", which is enough while the calendar is the
+only automatic titler and is exactly why `DetailView` records that naming a
+recording after its app "would break calendar naming outright": any second
+writer puts a string here and locks the calendar out for ever. `AutoTitle` is
+that second writer, so the answer moved to `Metadata.title_source`, and
+`mayTitle` reads it. See `.agents/notes/titles.md`. The rule that matters here:
+a calendar title outranks a derived one, so a backfill finding the invitation
+months later correctly replaces "Call with Céline", and a typed title has no
+source at all, which is what freezes it.
+
+Anything asking "will the calendar name this" has to ask `mayTitle` and not
+reimplement it. The backfill preview did not, for one build: it still read
+`isUntitled`, so a recording carrying a derived title printed as "keeps its
+name" and was then renamed by the next line. A dry run that disagrees with the
+apply is worse than no dry run, because it is the thing somebody reads before
+saying yes. `verify_title.sh` asserts the two agree.
 
 `backfill` is a dry run without `--apply`, and is deliberately not something
 that happens at launch. Renaming fourteen recordings at once without being asked

@@ -89,7 +89,11 @@ struct RecordingFilter {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty {
             out = out.filter {
-                $0.metadata.title.lowercased().contains(q)
+                // `displayTitle`, so a search matches the words on the row it
+                // is looking at. Against the stored title, typing what an
+                // unnamed recording visibly says would find nothing, and typing
+                // the key it happens to be stored under would find every one.
+                $0.displayTitle.lowercased().contains(q)
                     // The transcript too, which is the reason anybody searches a
                     // meeting library: you remember what was said, not what the
                     // recording was called.

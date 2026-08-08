@@ -125,6 +125,29 @@ struct Metadata: Codable {
     /// re-decided, so the answer survives Transcribe Again.
     var room_auto: Bool?
 
+    /// Where the title came from, when nobody typed it.
+    ///
+    /// The same split as `auto_named` and `room_auto`, and here it is what makes
+    /// a second automatic titler possible at all. `isUntitled` used to be the
+    /// whole guard, and one bit can only answer "has this a name", which is why
+    /// `DetailView` records that naming a recording after its app "would break
+    /// calendar naming outright": any writer that puts a string here locks the
+    /// calendar out for ever, because the placeholder is gone and nothing can
+    /// tell the app's guess from a person's decision.
+    ///
+    /// So: `nil` on a titled recording means somebody chose it, and nothing
+    /// automatic ever writes over that. A value means the app derived it, and a
+    /// source of the same rank or higher may derive it again. See
+    /// `Recording.mayTitle(from:)` for the ordering and what it protects.
+    ///
+    /// `nil` also covers every recording that predates this field, including the
+    /// fourteen the legacy Python import named `2607-17-Google Chrome`. Freezing
+    /// those is the right answer and the one `listen calendar backfill` already
+    /// gives: deciding which existing titles are "really" machine-generated
+    /// would be a heuristic, and a heuristic that overwrites a meeting's name is
+    /// the thing this design is avoiding.
+    var title_source: String?
+
     // The calendar, app, tag and model fields are all `Optional`, and that is
     // what makes them safe to add to a struct with 47 files already on disk.
     //
@@ -150,6 +173,46 @@ struct Metadata: Codable {
 
     var stateValue: State { State(rawValue: state) ?? .pending }
 
+    /// The automatic titlers, worst evidence first.
+    ///
+    /// The order is the whole point, so it is declared once here rather than
+    /// left implicit in the order things happen to run. A calendar title is a
+    /// sentence somebody wrote in an invitation, a model title is a guess about
+    /// the subject, and a people title is a list of who spoke: each is better
+    /// evidence of what a recording *is* than the one below it, and each may
+    /// therefore write over the one below it.
+    ///
+    /// The rank is the declaration order rather than a number written beside
+    /// each case, because two numbers can disagree with the list they annotate
+    /// and a list cannot disagree with itself. The raw values are what land in
+    /// `metadata.json`, so they are the one thing here that may never be
+    /// reordered or renamed.
+    enum TitleSource: String, CaseIterable {
+        /// Who spoke, once they all have names. `AutoTitle`.
+        case people
+        /// What was said, from a language model. Not yet written by anything.
+        case model
+        /// The meeting's own name. `MeetingCalendar.attach`.
+        case calendar
+
+        var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+
+        /// How the app says it named this, where somebody reads it.
+        ///
+        /// Here rather than at each printer, because there is more than one of
+        /// them already and a title that explains itself one way in the CLI and
+        /// another in the window explains itself twice.
+        var phrase: String {
+            switch self {
+            case .people:   return "named after the speakers"
+            case .model:    return "named from what was said"
+            case .calendar: return "named from the calendar"
+            }
+        }
+    }
+
+    var titleSourceValue: TitleSource? { title_source.flatMap(TitleSource.init) }
+
     /// What a recording is called until somebody names it.
     ///
     /// Stored rather than left empty, so every reader outside this app, the
@@ -157,7 +220,19 @@ struct Metadata: Codable {
     /// blank. It used to be "Recording, 5 Aug 2026 at 14:31", which repeated
     /// the day heading and the time already printed on the same row and made an
     /// unnamed recording look named.
+    ///
+    /// **This is a key and not a word.** `Recording.isUntitled` compares against
+    /// it, and `mayTitle` gates the calendar and `AutoTitle` on that comparison,
+    /// so changing this string does not rename anything: it orphans every
+    /// recording already carrying the old one, which then reads as a title
+    /// somebody typed and is never named automatically again. What is shown is
+    /// `untitledDisplay`, which is free.
     static let untitled = "Untitled"
+
+    /// The same thing as a person reads it, and the only one of the two that
+    /// may be changed at will. Every drawing of it goes through
+    /// `Recording.displayTitle`, which is where the split is argued.
+    static let untitledDisplay = "New recording"
 
     static func makeID(_ date: Date) -> String {
         let f = DateFormatter()
@@ -396,6 +471,79 @@ struct Recording {
         // The copy in hand is a moment old once it has run.
         VoiceBank.autoAssign(in: self)
         if let fresh = Recording.find(id) { self = fresh }
+
+        // A transcript can arrive with every speaker already named, in which
+        // case no rename ever happens and the hook in `TranscriptEditor` never
+        // fires. An import is the case that reaches this. On the ordinary path
+        // `autoAssign` has just been through that hook for each voice it
+        // recognised, so this is a re-derivation of the string already on disk
+        // and `refresh` writes nothing.
+        if let titled = AutoTitle.refresh(self) { self = titled }
+    }
+
+    /// Name this recording, or clear it back to the placeholder.
+    ///
+    /// The one place a person's chosen title is written. `Tags` records that
+    /// until it existed nothing owned a metadata edit at all and
+    /// `metadata.title = …; try? save()` was written out in five places; this is
+    /// that rule applied to the field the comment names. The window and
+    /// `listen title` are the two callers, and the trimming below is why they
+    /// have to share: a second implementation of "empty means Untitled" agrees
+    /// with the first right up until it does not, and there is no test target to
+    /// catch the day it stops.
+    ///
+    /// Clearing un-names the recording rather than leaving a row with nothing to
+    /// click: the placeholder goes back on disk, which is the state it was in
+    /// before anybody named it, and `isUntitled` is what the calendar checks
+    /// before it applies a name of its own.
+    ///
+    /// Returns whether anything changed, so a caller that redraws on a rename
+    /// does not redraw on a click that committed the same string. `false` is not
+    /// a failure; a failed write throws.
+    ///
+    /// `MeetingCalendar` deliberately does not come through here. It writes a
+    /// title derived from an event rather than one a person typed, under its own
+    /// `isUntitled` guard, and trimming input nobody typed would be a rule
+    /// borrowed from the wrong caller.
+    @discardableResult
+    mutating func rename(to typed: String) throws -> Bool {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? Metadata.untitled : trimmed
+        guard name != metadata.title else { return false }
+        metadata.title = name
+        // A title somebody typed has no source, and that absence is what freezes
+        // it: `mayTitle` refuses every automatic writer against a title with no
+        // source. Cleared unconditionally rather than only when a name was
+        // given, so clearing the field leaves the recording exactly as
+        // titleable as it was before anybody named it, which is what the
+        // comment above promises.
+        metadata.title_source = nil
+        try save()
+        return true
+    }
+
+    /// Whether `source` may write this recording's title.
+    ///
+    /// The one place the ordering in `Metadata.TitleSource` is enforced, so the
+    /// calendar, `AutoTitle` and anything added later cannot come to different
+    /// conclusions about whose name wins. Three answers, in the order they are
+    /// asked:
+    ///
+    /// 1. **Nobody has named it**, so anything may. This is the old
+    ///    `isUntitled` guard, unchanged, and it is still the common case.
+    /// 2. **A person named it**, and nothing automatic ever writes over that.
+    ///    A typed title has no `title_source`, which is what makes this the
+    ///    same test as "was this derived", and it is why `rename` clears the
+    ///    field rather than setting it to a `user` case.
+    /// 3. **The app named it**, and a source may write over one that ranks
+    ///    below it or refresh one of its own. Refreshing its own is what lets a
+    ///    people title follow the speakers as they are labelled; the ranking is
+    ///    what stops that same title outranking the meeting it belongs to when
+    ///    `listen calendar backfill` finds the invitation later.
+    func mayTitle(from source: Metadata.TitleSource) -> Bool {
+        if isUntitled { return true }
+        guard let current = metadata.titleSourceValue else { return false }
+        return source.rank >= current.rank
     }
 
     func delete() throws {

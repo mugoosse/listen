@@ -647,7 +647,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
             return
         }
         for recording in person.recordings {
-            let title = NSTextField(labelWithString: recording.metadata.title)
+            let title = NSTextField(labelWithString: recording.displayTitle)
             title.font = .systemFont(ofSize: 13)
             title.lineBreakMode = .byTruncatingTail
             title.textColor = recording.isUntitled ? .secondaryLabelColor : .labelColor

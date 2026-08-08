@@ -385,7 +385,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
             menu.addItem(info("Recent"))
             for recording in recent {
-                var title = recording.metadata.title
+                var title = recording.displayTitle
                     .replacingOccurrences(of: "\n", with: " ")
                 if title.count > 52 { title = String(title.prefix(51)) + "…" }
                 // A recording whose `recorded_at` will not parse gets its title

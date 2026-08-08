@@ -151,6 +151,7 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Ten minutes, and the measurement that fixed it there
 - Joining early is not in that table, and it is what a link invites
 - The title is applied silently, and two guards are what make that safe
+  (the guard is now `mayTitle`, see `titles.md`)
 - The meeting link is in the notes, not in `event.url`
 - An attendee's name is usually their email address
 - `bestName` read the snapshot before the book, so a rename never reached it
@@ -159,6 +160,20 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Optional fields do not need a hand-written `init(from:)`
 - Onboarding has to ask, because nothing else will
 - `listen calendar` exists because matching leaves nothing behind
+
+### `.agents/notes/titles.md` (8k)
+
+What a recording is called, and which of the things that name it may write over
+which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`,
+`Recording.displayTitle`.
+
+- One bit could not hold two titlers
+- The placeholder is a key on disk and a word on screen
+- The people title waits for the last speaker, and that is measured
+- It is a view over the speakers, not a decision taken once
+- "Call with" is a claim, and `app_bundle_id` is the evidence
+- The backfill exists because the deriver is driven by edits
+- What is deliberately not here: no model title
 
 ### `.agents/notes/notes-tags-dictionary.md` (25k)
 
@@ -302,6 +317,18 @@ Asking questions about the library through an agent CLI the user already has.
 There is no test target, matching Speak. Verification is manual through the CLI
 plus debug tracing. If you add one, note that MLX needs the Metal toolchain, so
 tests must run through `xcodebuild`, not `swift test`.
+
+One script stands in for one, over the app built in the working directory:
+
+```sh
+./verify_title.sh    # every claim in .agents/notes/titles.md, as assertions
+```
+
+It builds a scratch `LISTEN_LIBRARY` out of copies of five real recordings and
+never opens the real one for writing, which is the shape described below. It
+earns its place: the `calendar backfill` preview disagreeing with `--apply` was
+found by writing it, not by reading the code that had just been changed. Run
+`./build.sh && ./make_app.sh` first, or it tests the last build.
 
 ### Driving the built app against a scratch library, without wrecking the real one
 

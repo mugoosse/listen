@@ -772,7 +772,7 @@ final class RecordingCell: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ recording: Recording) {
-        title.stringValue = recording.metadata.title
+        title.stringValue = recording.displayTitle
         // The column is reserved whether or not there is an icon to put in it,
         // so every title in the list starts at the same place. Indenting only
         // the rows that have one gives the list a ragged left edge that moves

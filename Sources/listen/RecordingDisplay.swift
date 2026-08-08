@@ -28,6 +28,29 @@ extension Recording {
     /// A recording nobody has named yet.
     var isUntitled: Bool { metadata.title == Metadata.untitled }
 
+    /// The title as a person reads it.
+    ///
+    /// **The placeholder is worded here and stored as `Untitled`, and the two
+    /// must not be reconciled into one string.** `Metadata.untitled` is not a
+    /// word on screen, it is the identity `isUntitled` compares against, which
+    /// is what `mayTitle` gates every automatic titler on. Renaming the constant
+    /// renames nothing already on disk, so every recording carrying the old
+    /// string would stop reading as unnamed and become frozen: indistinguishable
+    /// from a title somebody typed, and never named by the calendar or by its
+    /// speakers again. That is exactly the failure this file's header exists to
+    /// prevent, "so that changing the wording never risks changing the format".
+    ///
+    /// The wording is therefore free to change as often as anybody likes, and no
+    /// migration is ever owed for it.
+    ///
+    /// Screen and the CLI's human output. `listen title <id>` read back, the
+    /// MCP server and an export all print the stored string instead: a script
+    /// comparing against `Untitled` and a file being written are not places a
+    /// change of wording may reach.
+    var displayTitle: String {
+        isUntitled ? Metadata.untitledDisplay : metadata.title
+    }
+
     /// The app the call was in, as somebody reads it. Nil when nothing was on
     /// a call, which is most recordings made by pressing Record in a quiet
     /// room, and every one imported from a recorder that did not note it.

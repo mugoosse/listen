@@ -141,6 +141,17 @@ enum TranscriptEditor {
             ? Metadata.State.done.rawValue
             : Metadata.State.needsLabelling.rawValue
         try? updated.save()
+
+        // Here rather than in `apply`, so it covers a merge and a discard as
+        // well as a rename: all three change who is in this recording, and the
+        // people title is a view over exactly that. `.retext` reaches this line
+        // too and derives the same string it derived last time, which `refresh`
+        // recognises and does not write.
+        //
+        // After the save, for the reason `markTranscribed` gives about the same
+        // pair of writes: `refresh` re-reads, and the state it should re-read
+        // is the one this edit has just settled.
+        AutoTitle.refresh(updated)
         return true
     }
 }

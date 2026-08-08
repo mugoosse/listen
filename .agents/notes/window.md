@@ -601,6 +601,49 @@ Sentences and not words because that is the finest timing mlx-audio exposes.
 See the note above; if word timings ever arrive, this function takes a finer
 input rather than being replaced.
 
+## The sentence field wraps, and still opened one line high
+
+Right-clicking a sentence and choosing Edit Sentence puts an `NSTextField` where
+that sentence was. It was built with `usesSingleLineMode = false`,
+`lineBreakMode = .byWordWrapping`, `cell.wraps = true` and
+`maximumNumberOfLines = 0`, which is the whole list, and a sentence longer than
+the pane still opened as **one line with the rest scrolled out of sight**: the
+field editor held all of it, so arrowing through moved a caret over text nobody
+could see, and correcting a word in the first line of a three-line sentence
+meant editing blind.
+
+Those settings say how the text wraps. They do not say how tall the field is.
+That comes from `intrinsicContentSize`, and an `NSTextField` measures one line
+unless it is told how wide the text may run, which is `preferredMaxLayoutWidth`
+and is exactly the trap already recorded against the empty-state label in
+`DetailView`. The field is handed its width by the stack it goes into, so there
+is nothing to set it from at the moment it is built.
+
+`SentenceField` is the fix and it is three overrides:
+
+- `layout` keeps `preferredMaxLayoutWidth` level with `bounds.width`, before
+  `super`, so the height reported this pass is the one for the width this pass
+  was given. This is what makes the field re-wrap and grow when the window is
+  narrowed underneath it.
+- `intrinsicContentSize` measures a **copy** of the cell, loaded with the field
+  editor's string. While an editor is up the cell still holds the text editing
+  began with, so measuring the cell itself would freeze the field at the height
+  the sentence had before a word was typed. The copy carries the font, the bezel
+  and `wraps`, so `cellSize(forBounds:)` comes back with the insets included.
+- `textDidChange` invalidates it, because the wrapped line count changes as
+  somebody types.
+
+`beginEditing` also sets `preferredMaxLayoutWidth` from `body.bounds.width`
+before the field is added. The body has been on screen for as long as the
+paragraph has, so its width is the one the field is about to be given, and
+saying it there is what makes the field *open* at the right height instead of
+appearing as one line and growing a pass later.
+
+Measured on the built app against a scratch library, three lines of sentence in
+a 1022-point window: opens three lines tall, grows to four as text is typed with
+the caret and the dimmed context below both following, re-wraps to six when the
+window is dragged to 760, and a short sentence still opens as a single line.
+
 ## Building the mixdown on the main thread froze the first press of play
 
 `Mixdown.make` reads both tracks and encodes an m4a, which for an hour-long

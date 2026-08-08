@@ -2154,6 +2154,54 @@ final class TranscriptFieldEditor: NSTextView {
     override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 }
 
+/// The field one sentence is corrected in.
+///
+/// A subclass because an editable `NSTextField` does not grow to the text it
+/// holds. `wraps` makes the words wrap, and all of them are in the field
+/// editor, but the field's own height comes from `intrinsicContentSize`, which
+/// measures one line unless the field is told how wide the text may run. So a
+/// sentence longer than the pane opened as a single line with the rest scrolled
+/// out of sight, and the only way to read what you were correcting was to
+/// arrow through it.
+///
+/// The width is not known when the field is built, because the stack hands it
+/// out, so `preferredMaxLayoutWidth` is kept level with the bounds here and the
+/// height is measured again on every keystroke: the wrapped line count changes
+/// as somebody types.
+@MainActor
+final class SentenceField: NSTextField {
+    override func layout() {
+        // Before `super`, so the height this pass reports is the one for the
+        // width this pass was given.
+        if preferredMaxLayoutWidth != bounds.width {
+            preferredMaxLayoutWidth = bounds.width
+            invalidateIntrinsicContentSize()
+        }
+        super.layout()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let width = preferredMaxLayoutWidth > 0 ? preferredMaxLayoutWidth : bounds.width
+        guard width > 0, let measure = cell?.copy() as? NSTextFieldCell else {
+            return super.intrinsicContentSize
+        }
+        // A copy of the cell, given the editor's text: while a field editor is
+        // up the cell still holds the string editing began with, so measuring
+        // the cell itself would leave the field at the height the sentence had
+        // before a word was typed into it. The copy carries the font, the bezel
+        // and `wraps`, so what comes back includes the insets.
+        measure.stringValue = (currentEditor() as? NSTextView)?.string ?? stringValue
+        let box = NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)
+        return NSSize(width: NSView.noIntrinsicMetric,
+                      height: ceil(measure.cellSize(forBounds: box).height))
+    }
+
+    override func textDidChange(_ note: Notification) {
+        super.textDidChange(note)
+        invalidateIntrinsicContentSize()
+    }
+}
+
 /// One speaker turn in the transcript.
 @MainActor
 final class TurnView: NSView {
@@ -2353,7 +2401,7 @@ final class TurnView: NSView {
         let before = whole.substring(to: sentence.range.location)
         let after = whole.substring(from: NSMaxRange(sentence.range))
 
-        let field = NSTextField(string: whole.substring(with: sentence.range))
+        let field = SentenceField(string: whole.substring(with: sentence.range))
         field.font = .systemFont(ofSize: 13)
         field.delegate = self
         field.usesSingleLineMode = false
@@ -2361,6 +2409,12 @@ final class TurnView: NSView {
         field.maximumNumberOfLines = 0
         field.cell?.wraps = true
         field.cell?.isScrollable = false
+        // The body has been laid out for as long as the paragraph has been on
+        // screen, so its width is the one the field is about to be given. Said
+        // here as well as in `layout` so the field opens at the height of the
+        // whole sentence rather than appearing as one line and growing a pass
+        // later.
+        field.preferredMaxLayoutWidth = body.bounds.width
         editField = field
 
         var pieces: [NSView] = []

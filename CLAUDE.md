@@ -198,6 +198,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
 - Sentence highlighting is search, not arithmetic
+- The sentence field wraps, and still opened one line high
 - Building the mixdown on the main thread froze the first press of play
 - The narrowed transcript is a view state, never a filtered array
 - The waveform dims everybody but one, and that is where a quiet speaker is

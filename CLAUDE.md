@@ -207,6 +207,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The recording panel can be put away, and the dismissal has to survive a menu rebuild
 - The poll owns every control on the setup pane, so nothing else may set one
 - Continue on the model step means the model loaded, not that a file is the right size
+- The notes prompt is not inside the notes pane, and stayed up over an empty one
 
 ### `.agents/notes/appkit.md` (19k)
 

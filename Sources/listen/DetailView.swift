@@ -901,7 +901,7 @@ final class DetailView: NSView {
     }
 
     private func showProvenance() {
-        noteInfo.isHidden = showing != .notes || noteInfo.string.isEmpty
+        noteInfo.isHidden = recording == nil || showing != .notes || noteInfo.string.isEmpty
         // Collapsed as well as hidden: a hidden view keeps its frame, which is
         // the trap the chips row and the player already record.
         noteInfoHeight.isActive = noteInfo.isHidden
@@ -914,10 +914,18 @@ final class DetailView: NSView {
     /// two do not change together: switching to the Notes tab does not
     /// re-render a note whose text has not changed, and the first version hid
     /// the prompt on the way past and never put it back.
+    ///
+    /// `recording == nil` is in the condition because this label is a sibling
+    /// of the text view rather than a subview of it, so hiding the notes pane
+    /// does not take it with them. Stopping a recording leaves the pane in
+    /// Notes with nothing selected, and the prompt stayed on screen above
+    /// "Select a recording.": an invitation to type into a note belonging to no
+    /// meeting, over a sentence saying no meeting is open.
     private func updatePlaceholder() {
         notesPlaceholder.stringValue =
             "What you are thinking. Only you write this, and an agent can read it."
-        notesPlaceholder.isHidden = showing != .notes
+        notesPlaceholder.isHidden = recording == nil
+            || showing != .notes
             || !showingYours
             || !notesText.string.isEmpty
     }
@@ -1304,6 +1312,14 @@ final class DetailView: NSView {
             // rather than leaving the last recording's solo announced over an
             // empty pane.
             applySolo()
+            // The two pieces of the notes pane that are not inside it. Both are
+            // siblings of `notesScroll` rather than subviews, so hiding the
+            // scroll view leaves them drawn: they have to be asked again, and
+            // both now answer "nothing selected" first. This is the only route
+            // that skips `applyShowing`, which is where they are otherwise
+            // decided.
+            updatePlaceholder()
+            showProvenance()
         }
     }
 

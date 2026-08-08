@@ -919,3 +919,36 @@ on a load that returned. From a warm cache that costs a second or two, and it is
 the only check with any meaning behind it. Verified by staging a copy of exactly
 the right size whose header does not parse: the pane stays on the model step,
 says so in red, and offers Try again, which replaces the copy.
+
+## The notes prompt is not inside the notes pane, and stayed up over an empty one
+
+Stopping a recording left "What you are thinking. Only you write this, and an
+agent can read it." across the top of a detail pane whose middle read "Select a
+recording." Two separate facts have to line up to produce it, which is why
+neither half looked wrong on its own.
+
+A live recording forces the pane into Notes (`show`), because a meeting being
+made now has no transcript and cannot have one for an hour, so the note is the
+only thing on that screen anybody can use. The mode then survives the selection
+change, deliberately: reading notes down a list of meetings is a mode, not a
+choice to repeat. When the recording stops, `LibraryWindow.reload` finds nothing
+selected in the sidebar and calls `detail.show(nil)`, so the pane is in Notes
+with no recording.
+
+`setChromeHidden(true)` is what that path uses to clear the pane, and it hides
+`notesScroll`. But `notesPlaceholder` and `noteInfo` are **siblings** of the
+scroll view rather than subviews of it: the placeholder is a label positioned
+behind the text view's caret (an `NSTextView` has no placeholder of its own),
+and the provenance line is above it by the same argument that keeps it out of
+the editable text. Hiding the scroll view therefore takes neither with it.
+
+`show(nil)` is also the only route that never reaches `applyShowing`, which is
+where both are otherwise decided. So they kept whatever the last recording left
+them at, and for a recording being made that is "visible": an invitation to type
+into a note belonging to no meeting, over a sentence saying no meeting is open.
+
+Both now answer `recording == nil` first, and `setChromeHidden` calls
+`updatePlaceholder` and `showProvenance` in its hidden branch rather than
+setting `isHidden` on them itself, so the two functions stay the only owners of
+those views. The general shape is worth remembering past this pane: a view that
+is *positioned against* another view is not hidden by it.

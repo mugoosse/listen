@@ -36,12 +36,14 @@ import AppKit
 final class RecordButton: NSView {
     /// What pressing it does right now.
     ///
-    /// The clock arrives already formatted, from `LibraryWindow.clock`, so the
-    /// window and this button cannot come to disagree about what 1h 5m looks
-    /// like.
+    /// `stop` carries nothing. It used to carry the elapsed clock and read
+    /// "Stop 0:58", which put a second copy of that number a few hundred points
+    /// from the row already printing it. See `window.md`: the row is the one
+    /// clock that always counts, because it is about the recording, and this
+    /// button is about the verb.
     enum State: Equatable {
         case start
-        case stop(clock: String)
+        case stop
     }
 
     var state: State = .start {
@@ -128,13 +130,11 @@ final class RecordButton: NSView {
 
         icon.imageScaling = .scaleProportionallyUpOrDown
 
-        // Monospaced digits in both states, not only in the one with a clock in
-        // it. The glyphs are the system font's for everything except digits, so
-        // "New Recording" is unaffected, and the stop clock does not change
-        // width as it counts. `RecordingIndicator` paid for the other version:
-        // a clock that grows by a character mid-meeting either jitters or, if
-        // nothing re-measures, is drawn one character short from ten minutes in.
-        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        // Plain system digits are enough now that neither label has a digit in
+        // it. This was `monospacedDigitSystemFont` for the whole life of the
+        // stop clock, which is the defence `RecordingIndicator` still needs and
+        // this button no longer does.
+        label.font = .systemFont(ofSize: 13, weight: .medium)
 
         wash.wantsLayer = true
         wash.layer?.cornerRadius = M.radius
@@ -188,8 +188,8 @@ final class RecordButton: NSView {
             label.stringValue = "New Recording"
             symbol = "record.circle"
             toolTip = "Record this Mac's audio and your microphone (⌘N)"
-        case .stop(let clock):
-            label.stringValue = "Stop " + clock
+        case .stop:
+            label.stringValue = "Stop"
             symbol = "stop.fill"
             toolTip = "Stop recording"
         }
@@ -199,11 +199,10 @@ final class RecordButton: NSView {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: M.icon, weight: .regular))
         setAccessibilityLabel(label.stringValue)
-        // The width is the label's, so it has to be re-asked for every second
-        // the clock passes a digit. Without this the capsule keeps the width it
-        // had when the state changed and clips its own clock, which is the bug
-        // `RecordingIndicator.setElapsed` exists to avoid one floating control
-        // over.
+        // The width is the label's, and the two labels are different lengths.
+        // Without this the capsule keeps the width it had before the state
+        // changed, which is how "New Recording" came to be drawn in the space
+        // "Stop" had left.
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
@@ -214,8 +213,7 @@ final class RecordButton: NSView {
     /// constraints pinned across that boundary are a fight over the same
     /// number, which is the trap the sidebar width already paid for once.
     override var intrinsicContentSize: NSSize {
-        NSSize(width: M.pad + M.icon + M.gap + ceil(label.intrinsicContentSize.width) + M.pad,
-               height: M.height)
+        NSSize(width: M.pad + M.icon + M.gap + labelWidth + M.pad, height: M.height)
     }
 
     override func layout() {
@@ -228,10 +226,27 @@ final class RecordButton: NSView {
         wash.frame = b
         icon.frame = NSRect(x: M.pad, y: (b.height - M.icon) / 2,
                             width: M.icon, height: M.icon)
-        let size = label.intrinsicContentSize
+        let height = ceil(label.intrinsicContentSize.height)
         label.frame = NSRect(x: M.pad + M.icon + M.gap,
-                             y: round((b.height - size.height) / 2),
-                             width: ceil(size.width), height: ceil(size.height))
+                             y: round((b.height - height) / 2),
+                             width: labelWidth, height: height)
+    }
+
+    /// How wide the words actually need to be drawn.
+    ///
+    /// `cellSize` and **not** `intrinsicContentSize`, which is the narrower of
+    /// the two and was clipping the last glyph. Measured here, on this font, at
+    /// 13 point medium: "Stop" asks 29.00 as an intrinsic size and 32.97 as a
+    /// cell, "New Recording" 94.50 against 98.02, "Stop 1:02:05" 79.50 against
+    /// 83.48. Four points every time, which is the cell's own padding, and it
+    /// is the padding the text is drawn inside.
+    ///
+    /// It cost the `p` of "Stop": a digit ending a string loses two points of
+    /// nothing, and a round bowl loses part of itself. `sizeToFit` uses
+    /// `cellSize` for exactly this reason, and this button cannot call it
+    /// because the label's frame is set by hand.
+    private var labelWidth: CGFloat {
+        ceil(label.cell?.cellSize.width ?? label.intrinsicContentSize.width)
     }
 
     private func restyle() {

@@ -53,6 +53,33 @@ the place of People and Actions rather than the leading edge of the content: a
 running recording has no transcript to export and no speakers to open, so on that
 one screen stopping it is the only verb there is.
 
+The toolbar's control said "Stop 0:58" for a while, which was the third copy
+coming back by another door: the row two hundred points to its left was already
+counting the same seconds. `RecordButton.State.stop` carries nothing now and the
+button says "Stop". Two things went with the clock, and both are the point of
+recording this rather than the label:
+
+- The per-second timer in `recordingChanged` no longer calls `updateRecordFAB`.
+  It exists for `sidebar.tickLive()`, which is the row, and a button with no
+  digits in it has nothing to tick.
+- `syncRecordItem` stopped sizing the item from `fittingSize` with a floor of
+  132. The floor was free while the shortest label was "Stop 0:58"; around the
+  word "Stop" it drew a 132 point capsule with the icon and the word packed
+  against the left edge, because `RecordButton.layout` measures from the leading
+  inset and never centres. The floor was there because `fittingSize` is zero
+  before the first layout pass and an unsized custom-view item is drawn as
+  nothing at all. `intrinsicContentSize` needs no layout pass, so the item is
+  sized from that and the number is gone.
+
+`monospacedDigitSystemFont` went too. It was there so the clock could not change
+width as it counted, and neither label has a digit in it now.
+
+Then the `p` of "Stop" came out clipped, which is `appkit.md`'s
+"`intrinsicContentSize` is four points narrower than the text": the label's
+frame is set by hand here, and it was being set to the narrower of the two
+measurements. It is the same four points on every string, and only a glyph with
+something on its right edge shows it.
+
 The sidebar's row stops being a control at all. It used to become a red Stop row
 with a clock in it; it now keeps the words "New Recording" and greys, because the
 only thing true of it during a meeting that is not said anywhere else is that
@@ -995,3 +1022,42 @@ Both now answer `recording == nil` first, and `setChromeHidden` calls
 setting `isHidden` on them itself, so the two functions stay the only owners of
 those views. The general shape is worth remembering past this pane: a view that
 is *positioned against* another view is not hidden by it.
+
+### Stopping a recording is a reload, and it wiped the name being typed
+
+Reported from a real recording: a title and a note were typed while it ran, Stop
+was pressed, and only the note survived.
+
+Three things are true at once, and the bug is their product:
+
+1. A title is written on the commit and a note is written on every keystroke.
+   `controlTextDidEndEditing` is the only caller of `Recording.rename` from the
+   window, and it fires when the field gives up focus.
+2. Nothing outside the pane takes that focus away. The rule in `appkit.md` is
+   that a text field does not stop editing because you clicked away, and every
+   control *inside* the pane calls `endEditing` for it. The toolbar, the menu
+   bar and the floating panel are not inside the pane, so pressing Stop left the
+   caret exactly where it was.
+3. `LibraryWindow.reload` re-shows the selected recording from disk, and
+   `DetailView.show` assigned `titleLabel.stringValue` unconditionally. Stopping
+   a recording calls `reload` twice over, so the field was overwritten with the
+   stored title while somebody was typing into it.
+
+`saveYours()` had been at the top of `show` since the notes pane existed, which
+is exactly why the note came through. The title had no equivalent.
+
+Three changes, and each one closes a different half:
+
+- `show` calls `endEditingTitle()` before `self.recording` moves, but **only
+  when the recording is actually changing**. Committing on every refresh would
+  take the caret out of the field mid-word.
+- `show` leaves `titleLabel.stringValue` alone when the same recording is being
+  re-shown and the field has an editor. A refresh is not an instruction to
+  discard what is in a field.
+- `stopRecording` calls `LibraryWindow.commitEdits()` **before** `Capture.stop`.
+  Order matters: `stop` re-reads `metadata.json` precisely so a title typed
+  during the meeting survives, so the name has to be on disk before it looks.
+
+The general shape: a pane that re-reads from disk on a timer or a notification
+has to know the difference between "show me this recording" and "show me this
+recording again", and only the first one may overwrite a field.

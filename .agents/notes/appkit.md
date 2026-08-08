@@ -345,3 +345,29 @@ Two things are easy to get backwards after that:
 
 Verified by writing a width of 380 into the autosaved defaults, relaunching and
 reading it back.
+
+## `intrinsicContentSize` is four points narrower than the text
+
+An `NSTextField` label reports two different widths and they are not
+interchangeable. Measured here, system font at 13 point medium:
+
+| string | `intrinsicContentSize` | `cell.cellSize` |
+|---|---|---|
+| `Stop` | 29.00 | 32.97 |
+| `New Recording` | 94.50 | 98.02 |
+| `Stop 1:02:05` | 79.50 | 83.48 |
+
+Four points every time, on every string, and `cellSize` is the one the text is
+drawn inside: `sizeToFit` uses it. A label whose frame is set by hand from
+`intrinsicContentSize` is therefore two points short at each edge, and clips.
+
+It hides for a long time, because two points off a digit or a stem is two points
+of nothing. `RecordButton` carried it invisibly for the whole life of a label
+ending in a clock, and the first character to end a string with a round bowl on
+its right, the `p` of "Stop", came out cut in half.
+
+Nothing warns about this: both properties return a plausible size and neither is
+documented as the drawing width. The rule is that a hand-placed label is sized
+from `cellSize`, and the only reason to touch `intrinsicContentSize` is when
+Auto Layout is placing the label for you, where AppKit adds the same padding
+back itself.

@@ -232,13 +232,8 @@ final class AgentPane: Pane {
 
     /// The command that would fix this row, or nil when nothing needs fixing.
     private func fixFor(_ status: AgentStatus) -> String? {
-        if status.path == nil {
-            return status.backend == .claude
-                ? "npm install -g @anthropic-ai/claude-code" : "brew install codex"
-        }
-        if status.signedIn == false {
-            return status.backend == .claude ? "claude auth login" : "codex login"
-        }
+        if status.path == nil { return status.backend.installCommand }
+        if status.signedIn == false { return status.backend.signInCommand }
         return nil
     }
 

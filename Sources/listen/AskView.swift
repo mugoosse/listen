@@ -38,6 +38,11 @@ final class AskView: NSView {
     private let scroll = NSScrollView()
     private let turns = NSStackView()
     private let starterRow = NSStackView()
+    private let notice = SetupNotice()
+    /// The chips and the setup notice, in one slot above the composer. They are
+    /// alternatives rather than neighbours: one invites a question and the other
+    /// says why there is nobody to ask.
+    private let invitation = NSStackView()
     private let field = NSTextField()
     private let sendButton = SendButton()
     private let modelButton = NSButton()
@@ -114,6 +119,16 @@ final class AskView: NSView {
         starterRow.spacing = 6
         starterRow.translatesAutoresizingMaskIntoConstraints = false
 
+        notice.isHidden = true
+        notice.onCheckAgain = { [weak self] in self?.recheck() }
+
+        invitation.orientation = .vertical
+        invitation.alignment = .leading
+        invitation.spacing = 8
+        invitation.translatesAutoresizingMaskIntoConstraints = false
+        invitation.addArrangedSubview(starterRow)
+        invitation.addArrangedSubview(notice)
+
         buildComposer()
 
         status.font = .systemFont(ofSize: 10)
@@ -121,7 +136,13 @@ final class AskView: NSView {
         status.lineBreakMode = .byTruncatingTail
         status.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [scroll, starterRow, composer, status] { addSubview(view) }
+        for view in [scroll, invitation, composer, status] { addSubview(view) }
+
+        // Never wider than its text wants, and never wider than the pane.
+        // Required against the pane, high against the number, so a narrow
+        // window shrinks the card instead of breaking the layout.
+        let wide = notice.widthAnchor.constraint(equalToConstant: SetupNotice.maxWidth)
+        wide.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             document.widthAnchor.constraint(equalTo: scroll.widthAnchor),
@@ -133,11 +154,13 @@ final class AskView: NSView {
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: starterRow.topAnchor, constant: -8),
+            scroll.bottomAnchor.constraint(equalTo: invitation.topAnchor, constant: -8),
 
-            starterRow.leadingAnchor.constraint(equalTo: leadingAnchor),
-            starterRow.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            starterRow.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
+            invitation.leadingAnchor.constraint(equalTo: leadingAnchor),
+            invitation.trailingAnchor.constraint(equalTo: trailingAnchor),
+            invitation.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
+            notice.widthAnchor.constraint(lessThanOrEqualTo: invitation.widthAnchor),
+            wide,
 
             composer.leadingAnchor.constraint(equalTo: leadingAnchor),
             composerTrailing,
@@ -313,7 +336,8 @@ final class AskView: NSView {
             if turn.who == Chat.you { asked = turn.text }
             addTurn(view(for: turn, asking: turn.question ?? asked))
         }
-        drawStarters()
+        // The chips are drawn by `updateStatus`, which is the only thing that
+        // knows whether there is anything to ask.
         updateStatus()
         scrollToEnd()
     }
@@ -322,7 +346,13 @@ final class AskView: NSView {
         for view in starterRow.arrangedSubviews { view.removeFromSuperview() }
         // Only on an empty conversation. Four chips under a page of answers is
         // a toolbar, and this is an invitation.
-        guard chat.turns.isEmpty, recording != nil else {
+        //
+        // And only when a question would actually go somewhere. They were shown
+        // whatever detection had found, so with no CLI installed the pane
+        // offered four buttons that silently did nothing: `ask` returns at the
+        // first guard, and the pane looks exactly as it did before the press.
+        guard chat.turns.isEmpty, recording != nil,
+              AgentCLI.cachedChosen() != nil else {
             starterRow.isHidden = true
             return
         }
@@ -335,30 +365,38 @@ final class AskView: NSView {
     }
 
     private func updateStatus() {
-        guard recording != nil else { say(""); return }
+        guard recording != nil else {
+            say("")
+            notice.isHidden = true
+            drawStarters()
+            return
+        }
 
         // From the cache, never by running detection. `AgentCLI.chosen()`
         // spawns up to four processes, this runs on every recording selection,
         // and calling it here froze the window on every click down the sidebar.
-        guard AgentCLI.cached != nil else {
+        guard let found = AgentCLI.cached else {
+            // The line rather than the card, because "still looking" is not yet
+            // bad news. Putting the card up here and taking it down a second
+            // later would flash a setup notice at everybody who has an agent.
             say("Looking for Claude Code or Codex…")
-            field.isEnabled = false
-            updateSendButton()
-            updateModelButton()
-            // Once, and the callback puts the real line up.
+            notice.isHidden = true
+            setAskable(false)
+            // Once, and the callback puts the real state up.
             AgentCLI.warmUp { [weak self] in self?.updateStatus() }
             return
         }
         guard AgentCLI.cachedChosen() != nil else {
-            say("No agent is set up. Settings › Agent explains how.")
-            field.isEnabled = false
-            updateSendButton()
-            updateModelButton()
+            // The card says all of it, so the line under the composer stays
+            // empty: two messages about one problem, six points apart, and the
+            // small grey one is the one nobody reads.
+            say("")
+            notice.show(found)
+            setAskable(false)
             return
         }
-        field.isEnabled = true
-        updateSendButton()
-        updateModelButton()
+        notice.isHidden = true
+        setAskable(true)
         // Nothing at all when everything is working.
         //
         // It said "Answers come from your recordings only", which is true and
@@ -370,6 +408,33 @@ final class AskView: NSView {
         // The label stays for the things that *are* about right now: looking
         // for an agent, not finding one, and confirming a note was written.
         say("")
+    }
+
+    /// Everything that has to agree about whether a question can be asked.
+    ///
+    /// The chips are in here rather than in `redraw` because they are one of
+    /// those things. Detection finishing is what brings them back, and it
+    /// arrives on a callback rather than on a selection.
+    private func setAskable(_ on: Bool) {
+        field.isEnabled = on
+        updateSendButton()
+        updateModelButton()
+        drawStarters()
+    }
+
+    /// Look again, for somebody who has just installed or signed in elsewhere.
+    ///
+    /// The cached login-shell `PATH` is forgotten first, for the reason the
+    /// Agent pane's button forgets it: an npm install that landed in a
+    /// directory this process has never heard of is exactly the case being
+    /// checked for.
+    private func recheck() {
+        notice.isBusy = true
+        AgentCLI.forgetCachedPaths()
+        AgentCLI.statuses { [weak self] _ in
+            self?.notice.isBusy = false
+            self?.updateStatus()
+        }
     }
 
     /// Put a transient line under the composer, and take its space back when
@@ -854,6 +919,140 @@ final class SendButton: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         restyle()
+    }
+}
+
+/// What the pane says when there is nothing to ask with.
+///
+/// It stands in the starter chips' place rather than over the conversation, and
+/// that placement is the point: a recording can hold answers saved before the
+/// CLI was removed or logged out, and those are still worth reading. A block in
+/// the middle of the pane would cover them.
+///
+/// Both buttons earn their space. Every state this appears in is fixed in a
+/// terminal rather than in Listen, and `AgentCLI` caches its answer for the life
+/// of the process, so without "Check again" the reward for installing something
+/// is having to quit the app. "Open Agent settings" goes to the pane that
+/// already lists both commands with a copy button beside each, which is why this
+/// card does not try to be that pane.
+private final class SetupNotice: NSView {
+    var onCheckAgain: (() -> Void)?
+
+    /// Detection is running. The button says so itself rather than leaving a
+    /// press unacknowledged for the second or so a sweep takes.
+    var isBusy = false {
+        didSet {
+            check.isEnabled = !isBusy
+            check.title = isBusy ? "Looking…" : "Check again"
+        }
+    }
+
+    /// Capped where the settings panes cap theirs, and for the same reason: a
+    /// paragraph as wide as a full-screen window is one nobody finishes.
+    static let maxWidth: CGFloat = 560
+
+    private let heading = NSTextField(wrappingLabelWithString: "")
+    private let body = NSTextField(wrappingLabelWithString: "")
+    private let check = NSButton(title: "Check again", target: nil, action: nil)
+    private let settings = NSButton(title: "Open Agent settings",
+                                    target: nil, action: nil)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+
+        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        body.font = .systemFont(ofSize: 12)
+
+        for button in [settings, check] {
+            button.bezelStyle = .rounded
+            button.font = .systemFont(ofSize: 12)
+        }
+        settings.target = self
+        settings.action = #selector(openSettings)
+        check.target = self
+        check.action = #selector(checkAgain)
+
+        let buttons = NSStackView(views: [settings, check])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        let column = NSStackView(views: [heading, body, buttons])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 8
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            // Both labels wrap to the card rather than to their own strings. A
+            // vertical stack gives an arranged subview the width it asks for,
+            // and a wrapping label asks for its whole sentence on one line.
+            heading.widthAnchor.constraint(equalTo: column.widthAnchor),
+            body.widthAnchor.constraint(equalTo: column.widthAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    /// Say the shortest true thing about why nothing can be asked.
+    ///
+    /// A CLI that is installed and never signed into wins over a missing one
+    /// whenever both are true. `usable` treats the two the same, but they are
+    /// one command apart and the wrong sentence sends somebody to install
+    /// something they already have.
+    func show(_ statuses: [AgentStatus]) {
+        isHidden = false
+        let out = statuses.filter { $0.path != nil && $0.signedIn == false }
+        guard !out.isEmpty else {
+            heading.stringValue = "Ask needs Claude Code or Codex"
+            say("Neither is installed on this Mac. The model is yours and so is "
+                + "the subscription: there is no Listen account and no key to "
+                + "paste.\n\nAgent settings has the command for each, ready to copy.")
+            return
+        }
+        let names = out.map(\.backend.name)
+        heading.stringValue = names.joined(separator: " and ")
+            + (out.count == 1 ? " is" : " are") + " installed but not signed in"
+        say("Run " + out.map { "`\($0.backend.signInCommand)`" }
+                .joined(separator: " or ")
+            + " in a terminal, then check again.")
+    }
+
+    /// The app's own renderer, for the one thing the copy needs it for: a
+    /// command in a sentence, set in the face a command is set in.
+    private func say(_ markdown: String) {
+        let text = NSMutableAttributedString(
+            attributedString: MarkdownText.attributed(markdown, width: 12))
+        // Every paragraph carries the newline it ended with, and the last one
+        // would be a blank line inside the card.
+        while let last = text.string.last, last.isNewline {
+            text.deleteCharacters(in: NSRange(location: text.length - 1, length: 1))
+        }
+        text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                          range: NSRange(location: 0, length: text.length))
+        body.attributedStringValue = text
+    }
+
+    @objc private func openSettings() { LibraryWindow.shared.showSettings(.agent) }
+
+    @objc private func checkAgain() { onCheckAgain?() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // A `CGColor` is a snapshot of what it was resolved from, so without
+        // this the light edge stays behind after a switch to dark. The text
+        // needs no such help: an attributed string holds the `NSColor` itself,
+        // and a semantic one resolves when it is drawn.
+        layer?.borderColor = NSColor.separatorColor.cgColor
     }
 }
 

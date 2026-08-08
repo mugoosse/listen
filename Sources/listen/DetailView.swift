@@ -1097,6 +1097,21 @@ final class DetailView: NSView {
     /// can put on screen on demand is a picture nobody checks. It is also the
     /// only way to see the two lanes at different fills, which is the frame most
     /// likely to be laid out wrongly.
+    /// Open the pane on the Ask mode. `LISTEN_PANEL=ask`, and nothing else
+    /// calls it.
+    ///
+    /// It exists for the state that has no agent to talk to, which is the one
+    /// nobody can reach without uninstalling both CLIs first. Point the app at
+    /// a scratch defaults domain whose `agentPath_claude` and `agentPath_codex`
+    /// name files that do not exist, and the setup notice is on screen: an
+    /// explicit path wins in `AgentCLI.locate` even when it is wrong, which is
+    /// what makes "not installed" reproducible on a Mac that has both.
+    func previewAsk() {
+        showing = .ask
+        askView.reload()
+        applyShowing()
+    }
+
     func previewTranscribing(_ fraction: Double) {
         showing = .transcript
         applyShowing()
@@ -1224,12 +1239,22 @@ final class DetailView: NSView {
     // MARK: - Showing
 
     func show(_ recording: Recording?) {
+        // Which recording is on screen *now*, because two things below depend
+        // on whether this is a different one or the same one again.
+        let previous = self.recording?.id
         // Stop the player when the selection changes. Leaving one meeting
         // playing while reading another is never what anyone meant.
         stopPlayback()
         // Before `self.recording` moves, or a half-typed note is written to the
         // recording that arrives next.
         saveYours()
+        // The same rule for the title, and the asymmetry cost a name: a note is
+        // written on every keystroke and a title only when the field gives up
+        // focus, so a title typed and left open belonged to nothing once the
+        // pane moved on. `endEditingTitle` is a no-op unless the field is
+        // actually being edited, and it commits against `self.recording`, which
+        // is still the recording the name was typed for.
+        if recording?.id != previous { endEditingTitle() }
         // A lens on one transcript, so it does not travel to the next one. The
         // sidebar's lenses are the opposite and deliberately survive a selection
         // change: those narrow the library, and this narrows one meeting.
@@ -1256,7 +1281,17 @@ final class DetailView: NSView {
         // An unnamed recording shows the placeholder as a placeholder rather
         // than as its name, so clicking the title gives an empty field to type
         // into instead of a word to delete first.
-        titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
+        //
+        // Never over an open edit of the same recording. `reload()` re-shows
+        // whatever is selected on every capture change, every queue tick and
+        // every activation, and each one used to put the stored title back into
+        // a field somebody was typing in. Naming a recording while it ran was a
+        // race against the next reload, and stopping it is itself a reload:
+        // press Stop with the caret still in the field and the name went with
+        // the redraw.
+        if recording.id != previous || titleLabel.currentEditor() == nil {
+            titleLabel.stringValue = recording.isUntitled ? "" : recording.metadata.title
+        }
         // The display wording and never `Metadata.untitled`, which is a key
         // rather than a word. See `Recording.displayTitle`. Not `displayTitle`
         // itself, because this is the branch where the field is empty and the
@@ -2669,6 +2704,10 @@ final class DetailViewController: NSViewController {
     /// cross-hierarchy constraint this replaced came to be activated too early.
     func setAskClearance(_ points: CGFloat) { detail.setAskClearance(points) }
 
+    /// Commit whatever field is open, for something outside this pane that is
+    /// about to change what the pane is showing.
+    func endEditing() { detail.endEditing() }
+
     var isAsking: Bool { detail.isAsking }
 
     var onShowingChanged: (() -> Void)? {
@@ -2709,6 +2748,11 @@ final class DetailViewController: NSViewController {
     func showProgress() {
         guard isViewLoaded else { return }
         detail.showProgress()
+    }
+
+    func previewAsk() {
+        loadViewIfNeeded()
+        detail.previewAsk()
     }
 
     func previewTranscribing(_ fraction: Double) {

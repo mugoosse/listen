@@ -191,7 +191,7 @@ The three things written about a recording rather than extracted from it.
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
 
-### `.agents/notes/window.md` (46k)
+### `.agents/notes/window.md` (61k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -224,8 +224,9 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The poll owns every control on the setup pane, so nothing else may set one
 - Continue on the model step means the model loaded, not that a file is the right size
 - The notes prompt is not inside the notes pane, and stayed up over an empty one
+- Stopping a recording is a reload, and it wiped the name being typed
 
-### `.agents/notes/appkit.md` (19k)
+### `.agents/notes/appkit.md` (20k)
 
 Things AppKit does that no documentation warns about. These generalise past
 this app, so read them before building any new window, menu or popover.
@@ -242,6 +243,7 @@ this app, so read them before building any new window, menu or popover.
 - An app with no nib has no key view loop either, and that one is quieter
 - Cmd-Q is intercepted ahead of the menu, not rebound in it
 - The sidebar width fought the split view
+- `intrinsicContentSize` is four points narrower than the text
 
 ### `.agents/notes/cli-mcp.md` (6k)
 
@@ -255,7 +257,7 @@ this app, so read them before building any new window, menu or popover.
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
-### `.agents/notes/agent.md` (31k)
+### `.agents/notes/agent.md` (34k)
 
 Asking questions about the library through an agent CLI the user already has.
 `Agent`, `AgentCLI`, `AgentRun`, `AskView`, `AnswerTurn`, `AgentPane`,
@@ -275,6 +277,8 @@ Asking questions about the library through an agent CLI the user already has.
 - The Ask pane is a third mode, not a panel
 - The record button is hidden while it is up, except when it is Stop
 - Nothing on the main thread may run detection
+- Four chips that do nothing were the whole no-agent state
+- `LISTEN_PANEL=ask` is how the no-agent pane gets on screen
 - An answer carries the question it came from
 - The model menu is asked, never hardcoded
 - The composer is Liquid Glass, and laid out by frame

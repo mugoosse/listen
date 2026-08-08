@@ -87,6 +87,27 @@ enum AgentBackend: String, CaseIterable {
         }
     }
 
+    /// The single command that installs it, and the single command that signs
+    /// it in.
+    ///
+    /// Separate from `installHint` because two places offer them as something
+    /// to *run* rather than to read: the Agent pane's copy button and the Ask
+    /// pane's setup notice. A command that differs between the two is a command
+    /// one of them is wrong about.
+    var installCommand: String {
+        switch self {
+        case .claude: return "npm install -g @anthropic-ai/claude-code"
+        case .codex:  return "brew install codex"
+        }
+    }
+
+    var signInCommand: String {
+        switch self {
+        case .claude: return "claude auth login"
+        case .codex:  return "codex login"
+        }
+    }
+
     /// Claude first when both are present, for the tool-isolation reason in the
     /// type comment above.
     static var preferenceOrder: [AgentBackend] { [.claude, .codex] }

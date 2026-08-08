@@ -163,6 +163,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let fraction = Double(want.dropFirst("transcribing".count)
                                       .drop { $0 == ":" }) ?? 0.35
             LibraryWindow.shared.previewTranscribing(fraction)
+        case "ask":
+            LibraryWindow.shared.previewAsk()
         case let want where want.hasPrefix("settings"):
             // `settings`, or `settings:developers` for a particular tab.
             let name = want.dropFirst("settings".count).drop { $0 == ":" }
@@ -502,6 +504,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func stopRecording() {
+        // First, and it has to be first: `Capture.stop` re-reads
+        // `metadata.json` to pick up a title typed during the meeting, so a
+        // name still sitting in the field has to be on disk by then. Stopping
+        // is reached from the toolbar, the menu bar and the floating panel, and
+        // none of those take the pane's first responder away.
+        LibraryWindow.shared.commitEdits()
         guard let recording = Capture.shared.stop() else { return }
         finish(recording)
     }

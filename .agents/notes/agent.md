@@ -250,8 +250,71 @@ click and the window froze for each one.
 
 Everything on the main thread now reads `AgentCLI.cachedChosen()`, and
 `warmUp()` fills the cache once in the background. `cached == nil` and
-`cachedChosen() == nil` are different states with different sentences: "Looking
-for Claude Code or Codex…" and "No agent is set up."
+`cachedChosen() == nil` are different states with different sentences, and the
+next note is about what each of them puts on screen.
+
+### Four chips that do nothing were the whole no-agent state
+
+With neither CLI installed the pane showed the starter chips, an empty field and
+one line of grey text under the composer saying "No agent is set up. Settings ›
+Agent explains how." Three things were wrong with that and all three were
+visible on the first screenshot anybody took of it:
+
+- The chips stayed up and stayed pressable. `ask` returns at its first guard, so
+  pressing Summarise redrew the same status line and nothing else happened. An
+  invitation that is dead on contact is worse than no invitation.
+- "Settings › Agent" was prose inside a truncating label, not a route. The one
+  thing to do next had no button.
+- `usable` is `path != nil && signedIn != false`, so an installed CLI that was
+  never signed into got the same sentence as a missing one. Those are one
+  command apart, and "not set up" sends somebody to install what they have.
+
+`SetupNotice` replaces it: a bordered card in the chips' slot, with the shortest
+true heading, a paragraph, and two buttons. Signed-out wins over not-installed
+whenever both are true, and it names the backends and their `signInCommand` in
+the sentence rather than sending everybody to the same pane. `drawStarters` now
+also requires `cachedChosen() != nil`, so the chips are only up when a press
+would go somewhere, and `updateStatus` owns them for that reason.
+
+The card is in the chips' slot rather than over the conversation. A recording
+can hold answers saved before the CLI was removed, and those are still worth
+reading, so a block in the middle of the pane would cover exactly the thing the
+user still has. The status line stays empty while the card is up: two messages
+about one problem, six points apart, and the small grey one is the one nobody
+reads.
+
+"Check again" is not a nicety either. Every state the card appears in is fixed
+in a terminal, and `AgentCLI` caches its answer for the life of the process, so
+without it the reward for installing Claude Code is having to quit Listen. It
+calls `forgetCachedPaths()` first, as the Agent pane's button does, because an
+npm install that landed somewhere this process has never heard of is exactly the
+case being checked for.
+
+`installCommand` and `signInCommand` live on `AgentBackend` because two places
+now offer them: the Agent pane's copy button and this card. A command that
+differs between them is a command one of them is wrong about.
+
+### `LISTEN_PANEL=ask` is how the no-agent pane gets on screen
+
+The state above is unreachable on a Mac that has both CLIs, which is every Mac
+that develops this. Two things together make it reproducible, and neither is a
+code change:
+
+```sh
+defaults write com.mgo.listen-uitest agentPath_claude -string /nonexistent/claude
+defaults write com.mgo.listen-uitest agentPath_codex  -string /nonexistent/codex
+LISTEN_LIBRARY=… LISTEN_PANEL=ask LISTEN_SHOT=/tmp/ask T.app/Contents/MacOS/Listen
+```
+
+`AgentCLI.locate` returns nil for an explicit path that is not executable, on
+purpose: "an explicit setting wins even when it is wrong". That is what turns
+"uninstall both CLIs" into one line of `defaults`. The signed-in-but-not-really
+half needs a shim on disk instead: a shell script answering `--version`, and
+`auth status` with `{"loggedIn": false}` or `login status` with a non-zero exit.
+
+`LISTEN_PANEL=ask` is in the same family as `LISTEN_PANEL=live`, and exists for
+the same stated reason: a state that cannot be put on screen on demand is a
+state nobody checks.
 
 ### An answer carries the question it came from
 

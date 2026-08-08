@@ -685,6 +685,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
     }
 
+    /// Commit any field the detail pane has open.
+    ///
+    /// For the controls that are not in the pane and therefore never take its
+    /// first responder away: the toolbar, the menu bar and the floating panel.
+    /// Stopping a recording is the one that mattered, because it both ends the
+    /// edit's subject and triggers a reload of it.
+    func commitEdits() {
+        guard window != nil else { return }
+        detail.endEditing()
+    }
+
     /// Nothing is selected while settings is open, so the Actions menu says so
     /// and the File menu greys out rather than acting on a row nobody can see.
     var selected: Recording? { mode == .library ? sidebar.selectedRecording : nil }
@@ -751,6 +762,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// envelope: the drawing is a picture of an hour of somebody's meeting, and
     /// checking it against a flat line would miss exactly the bugs worth
     /// catching. The most recent one, because it is the one already selected.
+    /// Open the library on a recording with the Ask pane up.
+    /// `LISTEN_PANEL=ask`, and nothing else calls it. See
+    /// `DetailView.previewAsk` for the state this is really for.
+    func previewAsk() {
+        show()
+        if let first = Recording.all().first { sidebar.select(first.id) }
+        detail.previewAsk()
+    }
+
     func previewTranscribing(_ fraction: Double) {
         show()
         if let first = Recording.all().first { sidebar.select(first.id) }
@@ -1011,15 +1031,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 sidebar.select(live.id)
             }
 
-            // Once a second, because the button shows seconds. The floating
+            // Once a second, because the row shows seconds. It is the only
+            // thing left counting on this screen: the record control says
+            // "Stop" and nothing else, so it has nothing to tick. The floating
             // panel ticks twice a second for its own clock; this one does not
             // need to.
             recordTick = Timer.scheduledTimer(withTimeInterval: 1,
                                               repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    self?.updateRecordFAB()
-                    self?.sidebar.tickLive()
-                }
+                Task { @MainActor in self?.sidebar.tickLive() }
             }
         } else {
             selectedLive = nil
@@ -1040,7 +1059,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private func updateRecordFAB() {
         if Capture.shared.isRecording {
             recordFAB.isHidden = false
-            recordFAB.state = .stop(clock: Self.clock(Capture.shared.elapsed))
+            recordFAB.state = .stop
         } else {
             // Hidden over the Ask pane, which has an input row of its own in
             // that corner. Two controls in one corner is one of them covering
@@ -1061,12 +1080,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // is exactly when that width changes.
         detail.setAskClearance(recordFAB.isHidden
             ? 0 : recordFAB.fittingSize.width + RecordButton.margin + 12)
-    }
-
-    private static func clock(_ seconds: TimeInterval) -> String {
-        let t = Int(seconds)
-        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
-                         : String(format: "%d:%02d", t / 60, t % 60)
     }
 
     /// Focus the search field, for Cmd-F.

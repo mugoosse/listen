@@ -348,3 +348,158 @@ Helper bundle identifiers resolve to the parent, so Chrome is `com.google.Chrome
 and not `com.google.Chrome.helper.renderer`. Without it the prompt names
 something unrecognisable, and worse, the skip list stores a per-renderer
 identifier that skips nothing the next time.
+
+## A closed lid switches the built-in microphone off and reports it healthy
+
+The failure that cost an hour of a real WhatsApp call. The laptop was carried
+to a desk, plugged into a monitor and an external microphone, and the lid was
+shut. Listen was following the **system default input**, which macOS leaves
+pointing at the built-in microphone, so it recorded 58 minutes of that.
+
+Measured on the recording itself: `mic.wav` held 56,239,952 samples and not one
+of them was nonzero, while `system.wav` was healthy throughout (99% nonzero,
+-5.0 dBFS peak). The far side transcribed perfectly and was filed as a
+one-speaker meeting at 99%.
+
+**Nothing in Core Audio reports this.** With the lid shut the device stays in
+`AudioDevices.inputs()`, stays the system default, and answers
+`kAudioDevicePropertyDeviceIsAlive = 1`, `kAudioDevicePropertyMute = 0`,
+volume `0.27`, 48 kHz mono, exactly as it does when it works. So:
+
+- none of `MicRecorder.watchHardware`'s four listeners fire, because nothing
+  they watch changes;
+- `checkForStall` sees the file growing perfectly, because buffers arrive at the
+  full rate. They are simply full of zeros.
+
+The lid is the only thing that tells you, and it is not a Core Audio property.
+`AudioDevices.lidClosed` reads `AppleClamshellState` off `IOPMrootDomain` in the
+IO registry. It is absent on a desktop, which reads as false and is right.
+
+Confirmed it is the lid and not a broken microphone by testing four ways in two
+processes: the AT2020 over USB gave -44.7 dBFS through Listen's own HAL path and
+-50.1 dBFS through `ffmpeg -f avfoundation`, while the built-in gave bit-exact
+silence through both. TCC was never involved, which the USB result proves: a
+denied app gets silence from every device, not one.
+
+Two defences, and they are answering different questions.
+
+**Proactive.** `Settings.chooseMicrophone` declines the built-in microphone
+while `lidClosed`, which is the only fix that costs nothing: the recording never
+starts on a device that cannot record. This is the one place a device chosen in
+Settings is overridden, and that is not a contradiction of "somebody who picked
+a microphone meant it". That rule is about not moving somebody off a *working*
+device. A device that cannot record is a fault, not a preference.
+
+**Reactive.** `MicRecorder.checkForSilence` watches for a running device
+delivering nothing and moves to the next candidate. Three things about it are
+measured rather than chosen:
+
+1. **The test is a floor, not a level.** Bit-exact zero was the first version
+   and it is certain but not sufficient: a USB webcam microphone picking up
+   nothing delivers dither around -85 dBFS, and `!= 0` called that "picking up
+   again" and stopped looking. `signalFloor` is 0.0001, about 35 dB below a real
+   microphone in a silent office, so no analogue front end sits under it and
+   nobody can go quiet enough to fall under it either.
+2. **A device is only ever abandoned before it has been heard from.**
+   `heardSinceOpen` gates the switch. Once a microphone has produced audible
+   audio a later silence is somebody listening, and moving them off a working
+   mic mid-sentence would be a worse bug than the one being fixed. It also
+   disposes of macOS Voice Isolation, which gates hard enough that a pause can
+   look like a dead input until the first word.
+3. **Silence is cleared by hearing something, never by the counter resetting.**
+   `buildEngine` zeroes `silentFrames`, so the obvious test reports every device
+   switch as a recovery: the tick after a switch sees a fresh counter and
+   announces a working microphone over a file of bit-exact zeros. That shipped
+   for ten minutes and the log said "picking up again" while `mic.wav` held not
+   one nonzero sample.
+
+The candidate filter is the dangerous half, because the input list on a working
+Mac is full of things that are not microphones. On the machine this was written
+for, "Microsoft Teams Audio" is a virtual loopback input: present, alive, and
+every bit as silent as a closed lid. Switching onto it would have replaced one
+hour of nothing with another and reported success. `AudioDevices.rank` therefore
+allows only physical transports, and excludes Continuity Capture as well, which
+works but means reaching across to somebody's phone unasked.
+
+`exhausted` grows and never shrinks within a recording, which is what bounds
+this: every failure removes one device from `candidates`, so a Mac where nothing
+works tries each input once and then stops rather than cycling for an hour.
+`Capture.stop` writes `mic_silent: true` when the track ended up holding
+nothing, because after the audio is on disk a silent track and a meeting where
+the user never spoke are byte-identical.
+
+## The recording panel could not show any of this, because nothing on it moved
+
+The clock was the only moving thing on screen for the whole hour. A clock
+counting up looks exactly the same whether or not anybody's voice is arriving,
+which is the lesson Speak already had written down and Listen's own iOS
+`LevelMeter` states outright: "a muted microphone, a case over it and a headset
+that walked out of range all produce a file of exactly the right length
+containing silence, and all three look identical to a clock that is counting
+up." A shut lid is the fourth item on that list.
+
+`Meters.swift` is Speak's `Meters.swift`, ported with its constants intact: dB
+mapping rather than linear (-55 to -14 dBFS onto 0...1), 32 ms windows rather
+than per buffer, `Envelope`'s fast attack and slow release, and the level
+callback reaching the main actor through `DispatchQueue.main.async` and never
+`Task {}`, because a strip is a queue and a reordered sample is a bar in the
+wrong place. It is a port rather than a rewrite on purpose: the two apps are
+expected to merge, and two meters that disagree about what a level means would
+make that a reconciliation instead of a move.
+
+Two things Listen needs that Speak did not:
+
+- **Two lanes, labelled.** The label is the diagnosis. One strip moving while
+  the other is flat says which half of the recording is broken with nothing to
+  remember; the same two strips unlabelled say only that something is wrong.
+  Upper is the far side and lower is you, matching `TranscribingView`, so the
+  picture does not change meaning when capture ends and reading begins.
+- **An hour, not six seconds.** `RecordingView.end` and `setChromeHidden` both
+  drop the level subscription and stop the strips, because a 60 Hz redraw of a
+  view nobody can see is an hour of wakeups. `Capture.addLevelSink` is keyed by
+  owner for the same reason: the screen and the panel both draw these tracks and
+  neither is guaranteed to be visible.
+
+There is no silence detector on the system track and that asymmetry is
+deliberate. Bit-exact zero from a process tap is the ordinary state of a Mac
+with nothing playing, so the test that is certain for a microphone means nothing
+there. A quiet far side is a quiet far side.
+
+`LISTEN_PANEL=live` and `LISTEN_PANEL=live:silent` put the screen up driven by a
+synthetic speech envelope, in the same family as `transcribing:0.6`. The silent
+one is the state this was all built for and the one no machine reproduces on
+demand unless somebody shuts a laptop lid on it. The envelope is syllables
+inside words inside phrases rather than a sine wave, because a sine exercises
+neither the attack nor the release, which is the whole reason `Envelope` exists.
+
+### Checking any of this without holding a meeting
+
+Four affordances, all in the `LISTEN_PANEL` / `LISTEN_SHOT` family, because
+every state worth checking here lasts under a minute and needs a real call
+first:
+
+```sh
+LISTEN_PANEL=live:silent  LISTEN_SHOT=/tmp/s ./.xcbuild/.../listen   # the screen
+LISTEN_PANEL=recording:3725:silent LISTEN_SHOT=/tmp/p ...            # the panel, widest and tallest
+LISTEN_PANEL=detected:silent LISTEN_SHOT=/tmp/d ...                  # the panel's tallest state
+listen record --seconds 10                                           # the real path, no window
+```
+
+`NSView.writeShot` draws into a bitmap rather than photographing the screen, so
+all of this works with the lid shut, which is the condition the bug happens
+under and the one `screencapture` cannot see.
+
+`recording:3725:silent` sets the clock **and** the silence, and that is not
+convenience. The clock decides the panel's width and the warning line decides
+its height, so a preview that shows one at a time leaves the combination nobody
+has looked at. `TrackMeter.labelWidth` was found this way: measured from the
+bare string it clipped the "m" off "Them", because `NSTextField.sizeToFit`
+reports wider than the string it holds.
+
+`listen record` prints `levels: you 0.770, them 0.000 (peak, 0...1)` beside the
+file sizes, and that line exists because **"the audio arrived" and "the meter
+moved" are separate claims**. They leave the same callback by different routes,
+and a broken sink draws a flat strip over a perfectly good recording, which on
+screen is indistinguishable from the dead microphone the strips exist to report.
+A peak of 0 on a track whose file has audio in it means the meter is broken, not
+the microphone.

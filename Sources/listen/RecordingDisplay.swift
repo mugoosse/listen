@@ -128,6 +128,15 @@ extension Recording {
     @MainActor
     var isLive: Bool { Capture.shared.current?.id == id }
 
+    /// The microphone track was captured and holds no audio at all.
+    ///
+    /// Worth saying on every surface that describes a recording, because the
+    /// transcript itself cannot. A meeting with a silent mic track produces one
+    /// that reads exactly like a conversation in which the other person did all
+    /// the talking, with nothing in it to suggest a second person was ever
+    /// there. See `Metadata.mic_silent`.
+    var micWasSilent: Bool { metadata.mic_silent == true }
+
     /// What produced this transcript, as somebody reads it.
     ///
     /// The transcript's own record of what ran, never the recording's choice for

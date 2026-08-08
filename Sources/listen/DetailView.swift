@@ -72,6 +72,13 @@ final class DetailView: NSView {
     private let transcribing = TranscribingView()
     private let emptyIcon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
 
+    /// The recording as it happens: a page to write on and both tracks moving.
+    ///
+    /// Takes the whole pane below the header while capture runs, with the mode
+    /// picker collapsed, because there is nothing to switch between yet. See
+    /// `RecordingView`.
+    private let live = RecordingView()
+
     /// Which document this pane is showing.
     ///
     /// A mode rather than two panes side by side: the transcript and a note are
@@ -318,10 +325,11 @@ final class DetailView: NSView {
         }
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  empty, emptyIcon, transcribing] {
+                  empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        live.isHidden = true
 
         chipsTop = chips.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor,
                                               constant: 10)
@@ -443,6 +451,15 @@ final class DetailView: NSView {
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            // Flush to the pane's edges rather than inset like the transcript,
+            // because the bottom of it is a bar. Its own padding puts the note's
+            // text where the transcript's would be, so the reading position does
+            // not move when the recording stops and this is replaced.
+            live.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
+            live.leadingAnchor.constraint(equalTo: leadingAnchor),
+            live.trailingAnchor.constraint(equalTo: trailingAnchor),
+            live.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             noteInfoTop,
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -1130,6 +1147,29 @@ final class DetailView: NSView {
         scroll.isHidden = true
     }
 
+    /// `LISTEN_PANEL=live`. Puts the recording screen up on the selected
+    /// recording, which in a preview launch is not being captured at all, so the
+    /// live branch in `updateEmpty` would never fire for it.
+    func previewRecording(silent: Bool) {
+        setModeBarCollapsed(true)
+        // A preview points at a *finished* recording, which has audio and
+        // therefore a player. A live one has neither, so leaving it up would be a
+        // picture of a state the app is never in.
+        setPlayerCollapsed(true)
+        scroll.isHidden = true
+        notesScroll.isHidden = true
+        noteInfo.isHidden = true
+        notesPlaceholder.isHidden = true
+        askView.isHidden = true
+        transcribing.isHidden = true
+        transcribing.progress = nil
+        empty.isHidden = true
+        emptyIcon.isHidden = true
+        if let recording { live.configure(recording) }
+        live.isHidden = false
+        live.preview(silent: silent)
+    }
+
     /// What this pane says when it has nothing to show, per mode.
     ///
     /// One owner for the whole empty area, which is why the picture is chosen
@@ -1139,6 +1179,43 @@ final class DetailView: NSView {
     /// the same time as the sentence it replaces.
     private func updateEmpty() {
         guard let recording else { return }
+
+        // While capture is running, the whole pane below the header is the
+        // recording screen and the mode picker collapses.
+        //
+        // There is nothing to switch between yet: no transcript, nothing to ask
+        // about, and the only document that can exist is the note somebody is
+        // writing. Three tabs offering two empty documents and the sentence
+        // "Recording. The transcript appears when you stop." was chrome charged
+        // against the only minutes of a meeting that cannot be redone later.
+        //
+        // `begin` is idempotent, which it has to be: this runs again on every
+        // capture change and every menu rebuild, and restarting the strips on
+        // each one would wipe their history several times a second.
+        if recording.isLive {
+            live.configure(recording)
+            live.begin()
+            live.isHidden = false
+            setModeBarCollapsed(true)
+            scroll.isHidden = true
+            notesScroll.isHidden = true
+            noteInfo.isHidden = true
+            notesPlaceholder.isHidden = true
+            askView.isHidden = true
+            transcribing.isHidden = true
+            // Clearing the progress is what stops the timer inside it, the same
+            // reason the non-live path below does it.
+            transcribing.progress = nil
+            empty.isHidden = true
+            emptyIcon.isHidden = true
+            return
+        }
+        // Ends the strips *and writes the note down*, so the transition from
+        // recording to reading cannot drop what somebody typed in the last
+        // seconds of the call. See `RecordingView.end`.
+        live.end()
+        live.isHidden = true
+
         var message: String
         var showPicture = false
         switch showing {
@@ -1316,10 +1393,38 @@ final class DetailView: NSView {
         // by the English-only model read as fluent nonsense with no fact on
         // screen to explain it, and the model that did it was the default. A
         // fact that only appears sometimes is one nobody learns to read.
-        subtitleLabel.stringValue = [recording.when, recording.lengthText,
-                                     recording.appLabel ?? "",
-                                     stored.map { Recording.modelName($0.model) } ?? ""]
+        let facts = [recording.when, recording.lengthText,
+                     recording.appLabel ?? "",
+                     stored.map { Recording.modelName($0.model) } ?? ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
+
+        // The fifth fact, and the only one that is a warning. It goes on this
+        // line rather than in a banner of its own because it is a fact about the
+        // recording, which is what this line is for, and orange on the clause
+        // alone is the rule the sidebar row already follows: a permanently
+        // coloured line is decoration, one clause that turns orange is a state.
+        //
+        // It cannot be left to the transcript to imply. A meeting whose mic track
+        // is silent transcribes into something that reads like an ordinary
+        // one-sided conversation, and the recording this was written for was
+        // filed as a 99%-one-speaker meeting with nothing anywhere disagreeing.
+        if recording.micWasSilent {
+            let font = subtitleLabel.font ?? .systemFont(ofSize: 11)
+            let line = NSMutableAttributedString(
+                string: facts.isEmpty ? "" : facts + " · ",
+                attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: font])
+            line.append(NSAttributedString(
+                string: "your microphone caught nothing",
+                attributes: [.foregroundColor: NSColor.systemOrange, .font: font]))
+            subtitleLabel.attributedStringValue = line
+        } else {
+            // Reset the colour as well as the text: a field that has held an
+            // attributed string keeps nothing of its own styling, so selecting a
+            // healthy recording after a silent one would otherwise inherit
+            // whatever the last one was drawn with.
+            subtitleLabel.stringValue = facts
+            subtitleLabel.textColor = .secondaryLabelColor
+        }
 
         // Who is in this recording and what it is about, on one line above the
         // player. Collapsed to nothing when there is neither, so a live or
@@ -1366,12 +1471,17 @@ final class DetailView: NSView {
         // Notes first, so the default for a recording with nothing else to show
         // is decided against a list that exists.
         //
-        // A recording being made now has no transcript and cannot have one for
-        // an hour, so Transcript is an empty pane and Notes is the only thing
-        // on this screen anybody can use. It is also the moment the note is
-        // worth the most: what somebody types during a call is exactly what no
-        // transcript will ever contain.
-        if recording.isLive { showing = .notes }
+        // Transcript, and this used to be Notes.
+        //
+        // The reasoning was that a live recording has no transcript for an hour,
+        // so Notes was the only usable tab. `RecordingView` took that job over
+        // and does it better, with the note and both meters on one screen and no
+        // tabs at all, so the mode is no longer what somebody looks at *during*
+        // the recording. It is what they are left on the instant it stops, and
+        // stopping is a request to see what was said. Left as Notes, pressing
+        // Stop landed on the page you had just finished typing on and hid the
+        // transcript arriving behind a tab.
+        if recording.isLive { showing = .transcript }
         // Before `reloadNotes`, which can put the mode back to the transcript.
         // The pane has to be pointed at the new recording either way: it stops
         // any answer still running for the last one and loads that one's
@@ -1405,6 +1515,11 @@ final class DetailView: NSView {
         notesScroll.isHidden = hidden
         askView.isHidden = hidden
         if hidden {
+            // Deselecting while a meeting is being recorded is ordinary: the
+            // recording carries on, so the note has to be written down and the
+            // 60 Hz strips have to stop redrawing a view nobody can see.
+            live.end()
+            live.isHidden = true
             // A running answer belongs to the recording that is going away.
             askView.show(nil)
             // `clear` and not just the collapse: the strip would otherwise keep
@@ -2603,14 +2718,11 @@ extension DetailView: NSTextFieldDelegate, NSTextViewDelegate {
     func controlTextDidEndEditing(_ note: Notification) {
         guard var current = recording else { return }
         let typed = titleLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Clearing the field un-names the recording rather than leaving a row
-        // with nothing to click: the placeholder goes back on disk, which is
-        // the same state it was in before anyone named it.
-        let name = typed.isEmpty ? Metadata.untitled : typed
         titleLabel.stringValue = typed
-        guard name != current.metadata.title else { return }
-        current.metadata.title = name
-        try? current.save()
+        // `Recording.rename` owns what an empty field means and answers whether
+        // anything changed, so committing the same string again is not a write
+        // and not a redraw. It is shared with `listen title` on purpose.
+        guard (try? current.rename(to: typed)) == true else { return }
         recording = current
         onChanged?()
     }
@@ -2758,6 +2870,11 @@ final class DetailViewController: NSViewController {
     func previewTranscribing(_ fraction: Double) {
         loadViewIfNeeded()
         detail.previewTranscribing(fraction)
+    }
+
+    func previewRecording(silent: Bool) {
+        loadViewIfNeeded()
+        detail.previewRecording(silent: silent)
     }
 
     func showNote(_ slug: String?) {

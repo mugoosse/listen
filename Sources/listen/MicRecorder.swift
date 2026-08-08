@@ -43,6 +43,75 @@ final class MicRecorder {
     private(set) var isRecording = false
     private(set) var sawAudio = false
 
+    /// The newest loudness, 0 for a silent room and 1 for shouting, about thirty
+    /// times a second. Called on the audio thread: the consumer hops to the main
+    /// actor with `DispatchQueue.main.async` and not `Task {}`, because the
+    /// waveform is a queue and a reordered sample is a bar drawn in the wrong
+    /// place. Same ordering trap as `installHotkey` in Speak.
+    var onLevel: (@Sendable (Float) -> Void)?
+
+    /// True while the device is running and handing over bit-exact silence.
+    ///
+    /// This is the state the rest of the silence handling exists to reach, and
+    /// the one the UI has to show, because it is the only one the user can do
+    /// something about. Reported rather than merely acted on: the switch below
+    /// cannot always find somewhere to go.
+    private(set) var isSilent = false
+
+    /// Fires when `isSilent` changes, so the recording screen and the panel can
+    /// say so while there is still time to fix it.
+    var onSilenceChange: (@Sendable (Bool) -> Void)?
+
+    /// What is being recorded from, and why it is not the obvious choice.
+    /// `deviceNote` is nil whenever the answer needs no explaining.
+    private(set) var deviceName: String?
+    private(set) var deviceNote: String?
+    private(set) var currentUID: String?
+
+    /// Whether the device in use is the Mac's own microphone.
+    ///
+    /// Asked so a warning can name the right cause. "Off while the lid is shut"
+    /// is only true of the built-in one, and it was said about a USB microphone
+    /// that had been unplugged mid-recording, which sends somebody to open a lid
+    /// that was never the problem.
+    private(set) var deviceIsBuiltIn = false
+
+    /// Devices this recording has already watched deliver nothing.
+    ///
+    /// Grows, never shrinks, which is what bounds the switching: every failure
+    /// takes one device out of `candidates`, so a machine where nothing works
+    /// tries each input once and then stops rather than cycling for an hour.
+    private var exhausted: Set<String> = []
+
+    /// Captured frames since the last sample above `signalFloor`. Written on the
+    /// audio thread under `lock`, read by the watchdog on `control`.
+    ///
+    /// Pad frames are deliberately not counted. `padToWallClock` writes zeros
+    /// too, and counting those would call a device silent for the length of a
+    /// gap it had just recovered from.
+    private var silentFrames = 0
+
+    /// Whether *this* device has produced audible audio since it was opened.
+    ///
+    /// Separate from `sawAudio`, which is about the whole recording. This one
+    /// resets on every `buildEngine`, and it is what makes switching devices
+    /// safe: see `checkForSilence`.
+    private var heardSinceOpen = false
+
+    /// Below this, treat a sample as nothing.
+    ///
+    /// Bit-exact zero was the first version and it is certain but not
+    /// sufficient. Measured while testing this very code: a closed lid makes the
+    /// built-in microphone deliver arithmetic zero, but a USB webcam microphone
+    /// that is picking up nothing delivers dither around -85 dBFS instead, and an
+    /// `!= 0` test called that "picking up again" and stopped looking.
+    ///
+    /// -80 dBFS is one ten-thousandth of full scale. It is roughly 35 dB below a
+    /// real microphone in a silent office (the AT2020 measured -44.7 dBFS peak
+    /// with nobody talking), so no analogue front end sits under it, and it is
+    /// the same constant `sawAudio` has always used.
+    private let signalFloor: Float = 0.0001
+
     /// How many times the engine had to be rebuilt mid-recording. Reported
     /// rather than hidden: this is the user's own voice going missing for a few
     /// seconds, and the only other evidence is a gap in a file nobody will
@@ -78,6 +147,15 @@ final class MicRecorder {
     /// one headset connecting rebuilds the engine four times.
     private let restartDebounce: TimeInterval = 0.75
 
+    /// How long a running device may hand over bit-exact silence before it is
+    /// treated as not recording at all.
+    ///
+    /// Three seconds, because the test below is certain rather than statistical
+    /// and does not need to accumulate evidence. It only has to outlast a device
+    /// coming up cold, which `AppDelegate.startDictation` in Speak already
+    /// waits a beat for.
+    private let silentGrace: TimeInterval = 3
+
     private let target = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: SAMPLE_RATE,
         channels: 1, interleaved: false)!
@@ -110,6 +188,13 @@ final class MicRecorder {
         try control.sync {
             sawAudio = false
             restarts = 0
+            // Per recording, not per launch. A microphone that was unplugged
+            // during this morning's call has to be allowed back this afternoon.
+            exhausted = []
+            isSilent = false
+            deviceName = nil
+            deviceNote = nil
+            currentUID = nil
             self.url = url
             let now = Date()
             startedAt = origin
@@ -186,7 +271,28 @@ final class MicRecorder {
     /// `resolvedMicrophone` falls back to the system default, so plugging in a
     /// headset mid-meeting moves the recording onto it.
     private func buildEngine() throws {
-        guard let device = Settings.resolvedMicrophone else { throw CaptureError.noInputDevice }
+        // `chooseMicrophone`, not `resolvedMicrophone`. This is the line that
+        // refuses a device macOS has disabled, which is the whole proactive half
+        // of the fix: with the lid shut, the built-in microphone is still the
+        // system default input and still reports itself healthy, so the only
+        // way not to record an hour of nothing from it is to decline it here.
+        //
+        // The fallback keeps a hopeless machine recording rather than throwing:
+        // when every input has been tried and none delivers anything, a file of
+        // silence with `isSilent` set and the UI saying so beats no file, and
+        // `checkForSilence` stops switching once `candidates` is empty.
+        guard let choice = Settings.chooseMicrophone(excluding: exhausted)
+                ?? Settings.resolvedMicrophone.map({ MicChoice(device: $0, rejected: nil) })
+        else { throw CaptureError.noInputDevice }
+        let device = choice.device
+        deviceName = device.name
+        deviceNote = choice.rejected
+        currentUID = device.uid
+        deviceIsBuiltIn = AudioDevices.isBuiltIn(device)
+        heardSinceOpen = false
+        lock.lock()
+        silentFrames = 0
+        lock.unlock()
 
         var desc = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
@@ -289,7 +395,15 @@ final class MicRecorder {
             throw CaptureError.deviceStartFailed(started)
         }
         keep = true
-        trace("recording from \(device.name)")
+        if let note = choice.rejected {
+            // stderr rather than `trace`, for the reason the restart message is:
+            // this is Listen declining the device the user or the system asked
+            // for, and an override nobody is told about is the thing this whole
+            // change exists to remove.
+            log("microphone: \(note); recording from \(device.name)")
+        } else {
+            trace("recording from \(device.name)")
+        }
 
         // Turning the listeners off is how the watchdog gets tested at all: it
         // is the backstop, the listeners always beat it to the same event, and a
@@ -367,14 +481,71 @@ final class MicRecorder {
         else { return noErr }
 
         let chunk = Array(UnsafeBufferPointer(start: ch, count: Int(out.frameLength)))
+
+        // "Nothing at all", measured against a floor 35 dB below any real
+        // microphone rather than against a level somebody could fall under by
+        // going quiet. See `signalFloor`. A dead input reads zero or dither; a
+        // room with nobody talking in it still reads its own noise floor, so this
+        // separates the two without ever having to guess at how quiet a quiet
+        // person is.
+        let live = chunk.contains { abs($0) > signalFloor }
         lock.lock()
         try? writer?.append(chunk)
+        silentFrames = live ? 0 : silentFrames + chunk.count
         lock.unlock()
-        if !sawAudio, chunk.contains(where: { abs($0) > 0.0001 }) {
-            sawAudio = true
-            trace("mic has signal")
+        if live {
+            heardSinceOpen = true
+            if !sawAudio {
+                sawAudio = true
+                trace("mic has signal")
+            }
         }
+        report(chunk)
         return noErr
+    }
+
+    /// Splits one captured buffer into short windows and reports each one's
+    /// loudness.
+    ///
+    /// Ported from Speak's `Recorder.report`, constants and all, because Speak
+    /// and Listen are expected to become one app and two meters that disagree
+    /// about what a level means would be a merge conflict rather than a move.
+    ///
+    /// Per window rather than per buffer: a buffer is tens of milliseconds and
+    /// twelve updates a second reads as a meter struggling rather than
+    /// listening. 32 ms windows give about thirty, which is enough for the
+    /// animation to interpolate between real measurements instead of inventing
+    /// motion between stale ones.
+    private func report(_ chunk: [Float]) {
+        guard let onLevel else { return }
+        let window = Int(SAMPLE_RATE / 31)      // ~32 ms
+        var i = 0
+        while i < chunk.count {
+            let end = min(i + window, chunk.count)
+            onLevel(MicRecorder.loudness(chunk[i..<end]))
+            i = end
+        }
+    }
+
+    /// RMS mapped onto 0...1 through decibels rather than linearly.
+    ///
+    /// Speech through a laptop microphone peaks around 0.05 of full scale, so a
+    /// linear meter lives in the bottom twentieth of its range and reads as
+    /// nothing happening while somebody talks. The window is Speak's measured
+    /// one on this same capture path: -55 dBFS is a quiet room and -14 is
+    /// shouting.
+    ///
+    /// Listen's iOS app uses `(db + 55) / 55` with a visible floor instead.
+    /// That is the right call for a meter one bar wide on a phone and the wrong
+    /// one here, where a floor would draw a live strip for a dead microphone.
+    static func loudness(_ window: ArraySlice<Float>) -> Float {
+        guard !window.isEmpty else { return 0 }
+        var sum: Float = 0
+        for s in window { sum += s * s }
+        let rms = (sum / Float(window.count)).squareRoot()
+        guard rms > 0 else { return 0 }
+        let db = 20 * log10f(rms)
+        return min(1, max(0, (db + 55) / 41))
     }
 
     // -----------------------------------------------------------------------
@@ -438,7 +609,15 @@ final class MicRecorder {
     private func startWatchdog() {
         let timer = DispatchSource.makeTimerSource(queue: control)
         timer.schedule(deadline: .now() + stallGrace, repeating: 0.5)
-        timer.setEventHandler { [weak self] in self?.checkForStall() }
+        // Two questions, and they are not the same one. `checkForStall` asks
+        // whether anything is arriving; `checkForSilence` asks whether what
+        // arrives is audio. A disabled device answers yes to the first and no to
+        // the second, which is exactly the case that shipped as an hour of
+        // nothing.
+        timer.setEventHandler { [weak self] in
+            self?.checkForStall()
+            self?.checkForSilence()
+        }
         timer.resume()
         watchdog = timer
     }
@@ -464,6 +643,86 @@ final class MicRecorder {
                 + String(format: "%.1f", Date().timeIntervalSince(lastGrowth)) + "s")
     }
 
+    /// The device is running, the file is growing, and every sample of it is
+    /// zero.
+    ///
+    /// The failure `checkForStall` cannot see, and the more common of the two.
+    /// A microphone that stops delivering announces itself: the writer stops
+    /// growing and something is obviously wrong. A microphone macOS has switched
+    /// off keeps delivering, at the right rate, in the right format, and the
+    /// only thing wrong with it is the content. Every property a recorder would
+    /// think to check says the device is healthy.
+    ///
+    /// Two things happen here and they are independent on purpose. `isSilent` is
+    /// set whether or not there is anywhere to go, because telling the user is
+    /// worth doing even when the app cannot fix it, and on a closed laptop with
+    /// nothing plugged in there is genuinely nowhere to go. The switch is
+    /// attempted only when `candidates` offers a device this recording has not
+    /// already watched fail, which is what stops it cycling.
+    ///
+    /// **A device is only ever abandoned before it has been heard from.**
+    /// `heardSinceOpen` is what makes that switch safe to run unattended. Once a
+    /// microphone has produced audible audio, a later silence is somebody
+    /// listening rather than a broken input, and moving them off a working mic
+    /// mid-sentence would be a far worse bug than the one this fixes. It also
+    /// disposes of the awkward case: macOS Voice Isolation gates hard, so a
+    /// gated mic during a pause can look exactly like a dead one, and after the
+    /// first word it is permanently distinguishable.
+    ///
+    /// The warning is not gated that way. A headset that goes back in its case
+    /// half way through is worth saying out loud even though nothing should be
+    /// switched for it.
+    private func checkForSilence() {
+        guard isRecording, unit != nil else { return }
+        lock.lock()
+        let frames = silentFrames
+        lock.unlock()
+
+        // Silence has to be cleared by hearing something, never by the counter
+        // being reset. `buildEngine` zeroes `silentFrames`, so a plain
+        // "quiet for less than the grace period" test reports every device
+        // switch as a recovery: the first tick after the switch sees a fresh
+        // counter and says the microphone is picking up again, when all that
+        // happened is that a different dead device is now being listened to.
+        // That shipped for about ten minutes and the log claimed a working
+        // microphone over a file of bit-exact zeros.
+        let quietFor = Double(frames) / SAMPLE_RATE
+        let silent = heardSinceOpen
+            ? quietFor >= silentGrace
+            : isSilent || quietFor >= silentGrace
+        if silent != isSilent {
+            isSilent = silent
+            onSilenceChange?(silent)
+            if !silent { log("microphone: \(deviceName ?? "the microphone") is picking up") }
+        }
+        guard silent, !heardSinceOpen, let current = currentUID else { return }
+
+        var tried = exhausted
+        tried.insert(current)
+        // Nothing better to move to, so stop asking. The report stands.
+        guard let next = Settings.chooseMicrophone(excluding: tried),
+              next.device.uid != current else { return }
+        exhausted = tried
+        restart(reason: "\(deviceName ?? "the microphone") is not picking anything up")
+    }
+
+    /// Move to the device Settings now names, without stopping the recording.
+    ///
+    /// Somebody choosing a microphone mid-meeting is the strongest possible
+    /// signal about what to record from, so this clears `exhausted` and bypasses
+    /// the debounce: both of those exist to stop the app thrashing on its own,
+    /// and neither should stand between a person and the device they just asked
+    /// for. Without the reset, a device this recording had already given up on
+    /// could not be chosen again even after being plugged back in.
+    func adoptChosenDevice() {
+        control.async { [weak self] in
+            guard let self, self.isRecording else { return }
+            self.exhausted = []
+            self.lastRestartAttempt = .distantPast
+            self.restart(reason: "microphone changed by hand")
+        }
+    }
+
     /// Rebuild the engine onto whatever the microphone is now, keeping the same
     /// file open.
     private func restart(reason: String) {
@@ -482,7 +741,9 @@ final class MicRecorder {
             // stderr rather than `trace`, for the reason the dictionary counts
             // are: this is the user's own voice, and the seconds it costs are
             // not recoverable from anything else on disk.
-            log("microphone: \(reason); restarted capture (\(restarts) so far)")
+            log("microphone: \(reason); now recording from "
+                + "\(deviceName ?? "the default input") (\(restarts) restart"
+                + (restarts == 1 ? "" : "s") + " so far)")
         } catch {
             log("microphone: \(reason); could not restart "
                 + "(\(error.localizedDescription)), still trying")

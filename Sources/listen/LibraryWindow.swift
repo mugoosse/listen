@@ -61,6 +61,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let peopleItem = NSToolbarItem.Identifier("openPeople")
     private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
+    private static let recordItem = NSToolbarItem.Identifier("recordToggle")
 
     /// What the library looked like when this window last read it. See
     /// `appBecameActive`.
@@ -72,6 +73,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
     fileprivate var actionsMenu: NSMenu?
+
+    /// The toolbar item holding `recordFAB`, kept so its size can be re-stated as
+    /// the label grows. Rebuilt whenever `rebuildToolbar` runs.
+    private var recordToolbarItem: NSToolbarItem?
     /// The File menu's model list: see `modelMenu`. Kept for the same reason
     /// and stored here for the same one.
     fileprivate var fileModelMenu: NSMenu?
@@ -257,36 +262,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         detailHost.identifier = NSUserInterfaceItemIdentifier("detail")
         controller.addSplitViewItem(main)
 
-        // In the host and not in `DetailView`, so it floats over whichever pane
-        // is on the content side rather than being torn down and rebuilt with
-        // one of them. `PaneHost` inserts its children underneath for this: a
-        // pane swapped in afterwards would otherwise be added above the button
-        // and cover it.
-        //
-        // `RecordButton.margin` from both edges, which is the pane's own content
-        // column and **not** the toolbar's margin above it. Those two are in
-        // different layers: the ellipsis sits 3 points from the window edge
-        // because AppKit puts it there, that number is the window's chrome
-        // rather than this app's, and it moves between macOS releases. Measured,
-        // it cannot even be matched: a spacer item is clamped to a full slot, so
-        // the only two reachable values are 3 and 45.
-        //
-        // What a control floating over the content should line up with is the
-        // content. Measured on the running window, every element in the detail
-        // pane ends 24 points from the edge: the title, the speaker chips, the
-        // player card, the mode bar and the note. So does this, and the shared
-        // edge is visible, because the player card is drawn to it.
-        detailHost.loadViewIfNeeded()
-        detailHost.view.addSubview(recordFAB)
-        NSLayoutConstraint.activate([
-            recordFAB.trailingAnchor.constraint(equalTo: detailHost.view.trailingAnchor,
-                                                constant: -RecordButton.margin),
-            recordFAB.bottomAnchor.constraint(equalTo: detailHost.view.bottomAnchor,
-                                              constant: -RecordButton.margin),
-        ])
-        // The Ask pane is the one mode with a control of its own down here, so
-        // the button goes away while it is up unless it is the Stop control.
-        // See `updateRecordFAB`.
+        // The button is a toolbar item now, built in
+        // `toolbar(_:itemForItemIdentifier:)`, so nothing anchors it to the
+        // content pane any more. What that removed is worth recording: it floated
+        // over the bottom right corner, every scrolling pane had to reserve room
+        // under it, and it covered the corner the Ask pane and the recording
+        // screen both use. On the recording screen it sat on top of the strip
+        // that shows whether your own voice is arriving.
         detail.onShowingChanged = { [weak self] in self?.updateRecordFAB() }
 
         let w = NSWindow(contentViewController: controller)
@@ -713,46 +695,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// interesting states last under a minute and only happen after a real
     /// meeting, that is the difference between a picture somebody can check and
     /// one they have to catch.
+    /// The drawing itself is `NSView.writeShot`, which the recording panel needs
+    /// too and which carries the reasoning.
     @discardableResult
     func writeShot(to path: String) -> Bool {
         guard let view = window?.contentView else { return false }
-        // Laid out first: a window that was never ordered front has never been
-        // through a layout pass, and the bitmap would be of the frames the views
-        // were created with rather than the ones they are drawn at.
-        view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-            return false
-        }
-        view.cacheDisplay(in: view.bounds, to: rep)
-
-        // Composited onto the window's own background afterwards, because
-        // `cacheDisplay` draws the views and not the window: an
-        // `NSVisualEffectView`'s material is the window server's work, so the
-        // sidebar and the page behind the text come out transparent. Left as it
-        // is, a dark-mode window is white text on white, which is not a picture
-        // anybody can review. This is not what the window looks like to the
-        // pixel, and it is not meant to be: it is legible, and the colours and
-        // the layout are the app's own.
-        let size = view.bounds.size
-        let flattened = NSImage(size: size)
-        flattened.lockFocus()
-        view.effectiveAppearance.performAsCurrentDrawingAppearance {
-            NSColor.windowBackgroundColor.setFill()
-            NSRect(origin: .zero, size: size).fill()
-        }
-        rep.draw(in: NSRect(origin: .zero, size: size))
-        flattened.unlockFocus()
-
-        guard let flat = flattened.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: flat),
-              let data = bitmap.representation(using: .png, properties: [:]) else { return false }
-        do {
-            try data.write(to: URL(fileURLWithPath: path))
-            return true
-        } catch {
-            log("could not write \(path): \(error.localizedDescription)")
-            return false
-        }
+        return view.writeShot(to: path)
     }
 
     /// Show the transcription picture on a real recording, at a made-up
@@ -777,6 +725,31 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // After the selection: `select` re-shows the recording, which rebuilds
         // the empty area and would put the picture straight back away again.
         detail.previewTranscribing(fraction)
+    }
+
+    /// Show the recording screen on a real recording, driven by a synthetic
+    /// speech envelope. `LISTEN_PANEL=live`, and nothing else calls it.
+    ///
+    /// The two strips are the whole reason the screen exists, and "is this
+    /// readable" is a question about a moving thing: it cannot be answered from a
+    /// screenshot, from memory of the build before last, or by holding a meeting
+    /// every time somebody changes a constant. Speak learned this the same way
+    /// and its `--hud-demo` exists for it.
+    ///
+    /// `silent` drives the lower lane flat and puts the warning up, which is the
+    /// state this was all built for and the one a real machine will not reproduce
+    /// on demand unless somebody shuts a laptop lid.
+    func previewRecording(silent: Bool) {
+        show()
+        if let first = Recording.all().first { sidebar.select(first.id) }
+        detail.previewRecording(silent: silent)
+        // The toolbar's control belongs to this state too. It is a custom view
+        // in a toolbar item whose size has to be stated rather than derived, so
+        // it is the one place a label can be clipped, and a preview of the
+        // recording screen that left the button reading "New Recording" would
+        // be a picture of a state the app is never in.
+        recordFAB.state = .stop
+        if let item = recordToolbarItem { syncRecordItem(item) }
     }
 
     /// Select a recording from somewhere that is not the list, which today
@@ -818,8 +791,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
-         .flexibleSpace, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
-         Self.actionsItem, Self.personActionsItem]
+         .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
+         Self.actionsItem, Self.personActionsItem, Self.recordItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -827,11 +800,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// The sidebar toggle is only in the library, and the back button takes the
     /// slot it leaves.
     ///
-    /// There is **no record or stop item here at all any more**, in any mode.
-    /// Both are `recordFAB`, in the bottom right corner of the content pane,
-    /// which is what removed the last thing this list varied on: every mode's
-    /// items are now the same whether or not a meeting is running, and the
-    /// library's no longer depend on which row is selected either.
+    /// Record and Stop are one item, `recordItem`, and it is in the recordings
+    /// mode only. There is nothing to record from the People or Notes
+    /// collections, and Settings is not a place you start a meeting from.
+    ///
+    /// It does not vary with whether a meeting is running, which is the whole
+    /// point of it being one toggle: the control that starts a recording and the
+    /// control that stops it are in the same place, and a button that moves
+    /// between those two moments is a button somebody has to find twice.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         switch mode {
         case .library:
@@ -861,8 +837,20 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // the recording beside it. It replaces the row at the bottom of all
             // three lists, which is where a gear goes when the title bar has no
             // room for one, and this window's title bar has nothing else in it.
+            //
+            // Record sits immediately left of the actions menu, which is where
+            // the one thing you do *to* the library belongs next to the things
+            // you do to a recording in it.
+            //
+            // With a `.space` between them, and it is load-bearing rather than
+            // taste. macOS groups the trailing toolbar items into one glass
+            // container, so a button that draws its own capsule lands glass on
+            // glass: measured on the running window, "New Recording" and the
+            // ellipsis came out inside a single rounded shape reading as one
+            // control, with no edge between them to say where one ended.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace, Self.actionsItem]
+                    .sidebarTrackingSeparator, .flexibleSpace,
+                    Self.recordItem, .space, Self.actionsItem]
         case .settings:
             // The same shape as every other mode: what this pane is on the
             // left, one control on the right, both inside the sidebar's own
@@ -975,6 +963,23 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.maxSize = backButton.frame.size
             return item
 
+        case Self.recordItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Record"
+            item.toolTip = "Start or stop a recording (⌘N)"
+            // The capsule itself, not a plain toolbar button, so the words and
+            // the running clock come with it: while a meeting runs this reads
+            // "Stop 12:04", which is the only place in the window that says both
+            // what pressing it does and how long it has been doing it.
+            item.view = recordFAB
+            // A custom view in a toolbar is not sized by Auto Layout, so the
+            // item carries the size and `syncRecordItem` re-states it whenever
+            // the label changes. It changes a lot: once a second while
+            // recording, as the clock grows from "0:04" to "1:23:45".
+            syncRecordItem(item)
+            recordToolbarItem = item
+            return item
+
         case Self.actionsItem:
             let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = "Actions"
@@ -1032,7 +1037,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             }
 
             // Once a second, because the row shows seconds. It is the only
-            // thing left counting on this screen: the record control says
+            // thing left counting on this screen: the toolbar's button says
             // "Stop" and nothing else, so it has nothing to tick. The floating
             // panel ticks twice a second for its own clock; this one does not
             // need to.
@@ -1052,34 +1057,48 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         rebuildToolbar()
     }
 
-    /// Put the floating record control into the state the app is actually in.
+    /// Put the record control into the state the app is actually in.
     ///
     /// Called from both edges of capture, from every mode change, and once a
     /// second while recording, which is when the clock in it changes.
+    ///
+    /// It is never hidden any more, and the two rules that used to hide it are
+    /// both gone with the corner it used to float in. `mode != .library` is now
+    /// the toolbar's job, since `recordItem` is only in that mode's item list at
+    /// all; and `detail.isAsking` existed because the Ask pane has its own
+    /// control in the bottom right, which the toolbar does not collide with.
     private func updateRecordFAB() {
-        if Capture.shared.isRecording {
-            recordFAB.isHidden = false
-            recordFAB.state = .stop
-        } else {
-            // Hidden over the Ask pane, which has an input row of its own in
-            // that corner. Two controls in one corner is one of them covering
-            // the other, and the one that loses is the one somebody is typing
-            // into.
-            //
-            // Only in the idle branch, deliberately. While a recording is
-            // running this button is Stop, and a meeting you cannot stop
-            // because you happened to be reading an answer is a worse bug than
-            // any amount of overlap.
-            recordFAB.isHidden = mode != .library || detail.isAsking
-            recordFAB.state = .start
-        }
-        // Which leaves the Stop case, where the button is over the Ask pane's
-        // input row and has to be. Measured from the button rather than fixed:
-        // it is a capsule around a label that grows from "Stop · 0:04" to
-        // "Stop · 1:23:45", and this runs once a second while recording, which
-        // is exactly when that width changes.
-        detail.setAskClearance(recordFAB.isHidden
-            ? 0 : recordFAB.fittingSize.width + RecordButton.margin + 12)
+        recordFAB.state = Capture.shared.isRecording ? .stop : .start
+        // The item has to be re-measured, not just redrawn. A toolbar does not
+        // lay a custom view out from its constraints, so the capsule growing from
+        // "New Recording" to "Stop 1:23:45" is a size the item is told about or a
+        // label that gets clipped.
+        if let item = recordToolbarItem { syncRecordItem(item) }
+        // Nothing floats over the bottom right corner now, so no pane has to
+        // leave room in it.
+        detail.setAskClearance(0)
+    }
+
+    /// Re-state the toolbar item's size from the button's own fitting size.
+    ///
+    /// The button's own `intrinsicContentSize`, and not `fittingSize`, which is
+    /// (0, 0) until the view has been through a layout pass.
+    /// `itemForItemIdentifier` runs before that happens, and a custom-view
+    /// toolbar item left unsized is drawn as nothing at all: the toolbar came up
+    /// with an invisible record button and no error anywhere. That was patched
+    /// with `max(fitting.width, 132)`, which cost nothing while the shortest
+    /// label was "Stop 0:58" and then drew a 132 point capsule around the word
+    /// "Stop", packed against the left edge because `RecordButton.layout`
+    /// measures from the leading inset and never centres.
+    ///
+    /// `intrinsicContentSize` needs no layout pass and no floor: it is arithmetic
+    /// over the label's cell size, so it is right from the first call.
+    private func syncRecordItem(_ item: NSToolbarItem) {
+        recordFAB.layoutSubtreeIfNeeded()
+        let size = recordFAB.intrinsicContentSize
+        guard item.minSize != size else { return }
+        item.minSize = size
+        item.maxSize = size
     }
 
     /// Focus the search field, for Cmd-F.
@@ -1306,6 +1325,27 @@ extension LibraryWindow: NSMenuDelegate {
         guard let recording = selected else {
             menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
                 .isEnabled = false
+            return
+        }
+
+        // A recording that is still being made gets one item, and it is not one
+        // of these.
+        //
+        // Every other item in this menu is about a finished recording: Export
+        // writes a file that is still being appended to, Transcribe queues a job
+        // over audio that has not stopped arriving, Recorded in the Room answers
+        // a question the pipeline has not asked yet, and Delete is Discard with
+        // no warning and no Stop. Offering them mid-call is offering seven ways
+        // to damage the thing being captured, on the one screen where the only
+        // reversible mistake is deciding you did not want this recording at all.
+        //
+        // Stop is not here on purpose. It is the floating button, it is in the
+        // menu bar, and it is the one control that should not be two clicks deep.
+        if recording.isLive {
+            let discard = add(menu, "Discard Recording",
+                              #selector(App.discardRecordingFromUI), "trash")
+            discard.attributedTitle = NSAttributedString(
+                string: "Discard Recording", attributes: [.foregroundColor: NSColor.systemRed])
             return
         }
 

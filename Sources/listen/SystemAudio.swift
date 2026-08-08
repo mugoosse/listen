@@ -45,6 +45,18 @@ final class SystemAudioRecorder {
     /// "capturing" rather than "started" when it means it.
     private(set) var sawAudio = false
 
+    /// The newest loudness of the far side, 0...1, about thirty times a second.
+    ///
+    /// Called off the IO proc's realtime thread: `receive` already hands its
+    /// bytes to `queue` before converting, so this arrives on that queue and the
+    /// consumer hops to the main actor with `DispatchQueue.main.async`.
+    ///
+    /// No silence detector on this track, deliberately, and the asymmetry is the
+    /// point. Bit-exact zero from a process tap is the ordinary state of a Mac
+    /// with nothing playing, so the test that is certain for a microphone means
+    /// nothing here. A quiet far side is a quiet far side.
+    var onLevel: (@Sendable (Float) -> Void)?
+
     static let target = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: SAMPLE_RATE,
         channels: 1, interleaved: false)!
@@ -205,6 +217,22 @@ final class SystemAudioRecorder {
             trace("system audio has signal")
         }
         try? writer.append(samples)
+        report(samples)
+    }
+
+    /// The same 32 ms windowing as the microphone track, through the same
+    /// mapping, so the two lanes on screen are comparable. A far side that looks
+    /// twice as loud as you for the same signal would send people hunting for a
+    /// gain problem that is really a scale problem.
+    private func report(_ samples: [Float]) {
+        guard let onLevel else { return }
+        let window = Int(SAMPLE_RATE / 31)
+        var i = 0
+        while i < samples.count {
+            let end = min(i + window, samples.count)
+            onLevel(MicRecorder.loudness(samples[i..<end]))
+            i = end
+        }
     }
 
     // -----------------------------------------------------------------------

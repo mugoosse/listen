@@ -818,6 +818,16 @@ final class RecordingCell: NSView {
             if !facts.isEmpty { line.append(run(" · ", .secondaryLabelColor)) }
             line.append(run(state, live ? .systemRed : .secondaryLabelColor))
         }
+        // On the row, not only in the pane, and by the same argument the state
+        // word is coloured: a recording missing half of what was said is not a
+        // fact you should have to select it to find out. This is the surface
+        // somebody scrolls past a week later looking for the call they half
+        // remember, and a row that looks like every other row is how an hour
+        // stays lost.
+        if recording.micWasSilent {
+            if line.length > 0 { line.append(run(" · ", .secondaryLabelColor)) }
+            line.append(run("your mic caught nothing", .systemOrange))
+        }
         subtitle.attributedStringValue = line
     }
 }

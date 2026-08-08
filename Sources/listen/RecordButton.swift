@@ -1,8 +1,25 @@
 import AppKit
 
-/// The library's primary action, floating in the bottom right of the content
-/// pane.
+/// The library's primary action, in the toolbar's right-hand region,
+/// immediately left of the actions menu.
 ///
+/// It has been in three places, and the history is the argument for this one.
+/// The sidebar's first row could not survive the sidebar being collapsed, which
+/// left the window with no way at all to start a recording. Floating in the
+/// bottom right of the content pane fixed that, at the cost of sitting
+/// diagonally opposite the row it creates, needing every scrolling pane to
+/// reserve room under it, and covering the corner where the Ask pane and the
+/// recording screen both put their own controls. Measured on the recording
+/// screen: it landed on top of the strip that shows whether your voice is
+/// arriving, which is the one thing there that must never be obscured.
+///
+/// In the toolbar it is always visible, never collides with a pane, and needs no
+/// clearance from anything. It costs the alignment argument below: the toolbar's
+/// margin is AppKit's, not this app's, so the button no longer shares the content
+/// column's edge. Being next to the other control that acts on the library is
+/// worth more than lining up with the paragraph underneath it.
+///
+
 /// It was the first row of the sidebar, under the search field, and the
 /// argument for it there was that Record belongs at the top of the list it
 /// adds to. What that arrangement could not survive is the sidebar being
@@ -92,11 +109,16 @@ final class RecordButton: NSView {
 
     /// How much room anything scrolling underneath has to leave at its bottom.
     ///
-    /// The button, the margin it is inset by, and 12 more so the last line of a
-    /// transcript stops clear of it rather than touching it. Without this the
-    /// end of every recording, and the end of every note somebody types, sits
-    /// permanently under a capsule: scrollable to, and never readable.
-    static let clearance: CGFloat = M.height + margin + 12
+    /// It used to be this button's height plus its inset plus 12, because the
+    /// button floated over this corner: without the room, the end of every
+    /// transcript and every note sat permanently under a capsule, scrollable to
+    /// and never readable.
+    ///
+    /// The button is in the toolbar now, so what is left is the plain reading
+    /// margin, which is still wanted: the last line of a note should not touch
+    /// the bottom of the window. Kept as one constant rather than deleted so its
+    /// two call sites stay correct without knowing any of this.
+    static let clearance: CGFloat = 24
 
     private var hovering = false { didSet { restyle() } }
     private var pressed = false { didSet { restyle() } }

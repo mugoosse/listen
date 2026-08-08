@@ -125,6 +125,27 @@ struct Metadata: Codable {
     /// re-decided, so the answer survives Transcribe Again.
     var room_auto: Bool?
 
+    /// True when the microphone track was captured and turned out to hold no
+    /// audio at all.
+    ///
+    /// The recording exists, the file is the right length, and the user's own
+    /// voice is not in it. That happens for reasons outside the app: a laptop
+    /// recorded with its lid shut has no built-in microphone, because macOS
+    /// switches it off while leaving the device present, alive, unmuted and
+    /// delivering bit-exact zeros. Measured on the recording this field was
+    /// added for: 56,239,952 samples, not one of them nonzero, while the system
+    /// track was healthy throughout.
+    ///
+    /// It has to be written down at capture time because it cannot be recovered
+    /// afterwards in any way that is safe. A silent file and a meeting where the
+    /// user never spoke are byte-identical, and the transcript that comes out of
+    /// one reads like an ordinary conversation in which the other person did all
+    /// the talking. Set once, at `Capture.stop`, from `MicRecorder.sawAudio`.
+    ///
+    /// `true` or absent, never `false`: the recordings made before this existed
+    /// were never checked, and claiming otherwise would make the flag useless.
+    var mic_silent: Bool?
+
     /// Where the title came from, when nobody typed it.
     ///
     /// The same split as `auto_named` and `room_auto`, and here it is what makes

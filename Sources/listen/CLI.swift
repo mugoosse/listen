@@ -2353,6 +2353,22 @@ enum CLI {
             fail(error.localizedDescription)
         }
         for warning in await capture.warnings { log(warning) }
+
+        // Watch the levels the meters are drawn from, so that path can be checked
+        // with no window. "The audio arrived" and "the meter moved" are separate
+        // claims: they leave the same callback by different routes, and a broken
+        // sink draws a flat strip over a perfectly good recording, which is
+        // indistinguishable on screen from the dead microphone the strips exist
+        // to report. Peaks are printed at the end beside the file sizes.
+        await MainActor.run {
+            Capture.shared.addLevelSink(Capture.LevelPeaks.shared) { track, level in
+                switch track {
+                case .you:  Capture.LevelPeaks.shared.you = max(Capture.LevelPeaks.shared.you, level)
+                case .them: Capture.LevelPeaks.shared.them = max(Capture.LevelPeaks.shared.them, level)
+                }
+            }
+        }
+
         log("recording to \(recording.folder.path)")
         log(seconds.map { "stopping after \(Int($0))s" } ?? "press Ctrl-C to stop")
 
@@ -2410,6 +2426,12 @@ enum CLI {
         }
         report("mic", mic)
         report("system", sys)
+        // A peak of 0 on a track whose file has audio in it means the meter path
+        // is broken, not the microphone. That is the one failure the strips
+        // themselves cannot report, because a broken meter and a dead microphone
+        // draw the same flat line.
+        log(String(format: "levels: you %.3f, them %.3f (peak, 0...1)",
+                   Capture.LevelPeaks.shared.you, Capture.LevelPeaks.shared.them))
         // The folder, on stdout, so it composes: `listen transcribe $(listen record ...)`.
         print(recording.folder.path)
         exit(0)

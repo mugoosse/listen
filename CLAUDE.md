@@ -68,13 +68,21 @@ every session whether or not the session goes near the calendar. Nothing was
 deleted. Use `Read`, not `@`: an `@path` line is inlined at load time and would
 put the whole thing back.
 
-### `.agents/notes/capture.md` (16k)
+### `.agents/notes/capture.md` (27k)
 
-How audio gets onto disk. `Capture`, `SystemAudioRecorder`,
-`MicrophoneRecorder`, `WAVWriter`, `MeetingDetector`.
+How audio gets onto disk, and how it is shown while it happens. `Capture`,
+`SystemAudioRecorder`, `MicrophoneRecorder`, `WAVWriter`, `MeetingDetector`,
+`AudioDevices`, `Meters`, `RecordingView`.
 
+- A closed lid switches the built-in microphone off and reports it healthy
+- A silent device is found with a floor, not with a level, and never abandoned
+  after it has been heard from
+- The input list is full of things that are not microphones
+- The recording panel could not show any of this, because nothing on it moved
 - A process tap with an empty include list records perfect silence
 - AVAudioEngine cannot be pointed at a tap-backed aggregate device
+- AVAudioEngine picks the microphone before you can, and the first recording pays
+- `AVAudioPCMBuffer` rebuilds its buffer list, so do not size it by hand
 - Changing the microphone mid-meeting silently ended the mic track
 - The two tracks did not share a zero
 - The aggregate device is not ready when it is created

@@ -100,6 +100,24 @@ final class RecordingIndicator {
     private var pulse: Timer?
     private var bright = true
 
+    /// The two tracks, upper the far side and lower you, as on the recording
+    /// screen and in `TranscribingView`.
+    ///
+    /// This is the surface that matters when the library window is not in front,
+    /// which was the case in the hour that was lost: the panel was on screen, it
+    /// said "Recording", and the only thing moving on it was the clock. A clock
+    /// counting up looks the same whether or not anybody's voice is arriving.
+    private var themMeter: TrackMeter!
+    private var youMeter: TrackMeter!
+
+    /// One line under the strips, empty almost always. See `refreshAudio`.
+    private var warnLabel: NSTextField!
+
+    /// Whether the strips are subscribed and animating, so `show` is idempotent.
+    /// It is called again on every capture change and every menu rebuild, and
+    /// restarting the strips each time would wipe their history repeatedly.
+    private var metering = false
+
     /// The panel has been put away by hand for the rest of this recording.
     ///
     /// Sticky, and it has to be: `show` is called again on every capture
@@ -119,6 +137,17 @@ final class RecordingIndicator {
     /// run. The tick reads this instead of `Capture`, which in a preview launch
     /// is recording nothing and would put "0:00" back half a second later.
     var previewElapsed: TimeInterval?
+
+    /// A fixed answer to "is the microphone hearing anything" for
+    /// `LISTEN_PANEL=recording:silent`, nil in every real run. The state this
+    /// panel most needs checking in is the one no Mac reproduces on demand.
+    var previewSilent: Bool?
+
+    /// Drives both strips from a synthetic speech envelope in a preview launch,
+    /// since nothing is being captured there. `RecordingView.fakeLevel` is the
+    /// same envelope, for the same reason.
+    private var fake: Timer?
+    private var fakeClock: TimeInterval = 0
 
     /// The three answers to "are you in a meeting?".
     ///
@@ -145,6 +174,14 @@ final class RecordingIndicator {
         static let hide: CGFloat = 20
         static let minWidth: CGFloat = 236
         static let maxWidth: CGFloat = 460
+
+        /// One track's row, and the gap between the two.
+        static let meter: CGFloat = 15
+        static let meterGap: CGFloat = 3
+        /// The shortest strip worth drawing. Below about this the history stops
+        /// being readable and the thing degenerates into a level bar, which is
+        /// the style this replaced.
+        static let meterMin: CGFloat = 150
     }
 
     // MARK: - Showing
@@ -205,6 +242,22 @@ final class RecordingIndicator {
             startTimers()
         }
 
+        switch state {
+        case .recording, .detected:
+            startMetering()
+        case .transcribing:
+            // The microphone is closed and the transcriber is busy. The strips
+            // have to keep moving, because a frozen panel reads as a hung app,
+            // but nothing they do may be readable as "I can still hear you", so
+            // they stop scrolling and a highlight sweeps what they already
+            // captured. See `MeterView.working`.
+            Capture.shared.removeLevelSink(self)
+            metering = false
+            themMeter.meter.working()
+            youMeter.meter.working()
+        }
+        refreshAudio()
+
         showing = state
         layout(state)
         position(p)
@@ -213,8 +266,97 @@ final class RecordingIndicator {
         p.orderFrontRegardless()
     }
 
+    // MARK: - Metering
+
+    private func startMetering() {
+        guard !metering else { return }
+        metering = true
+        themMeter.meter.begin()
+        youMeter.meter.begin()
+        Capture.shared.addLevelSink(self) { [weak self] track, level in
+            guard let self else { return }
+            switch track {
+            case .you:  self.youMeter.meter.push(CGFloat(level))
+            case .them: self.themMeter.meter.push(CGFloat(level))
+            }
+        }
+    }
+
+    /// Unsubscribe and stop the frame clocks.
+    ///
+    /// Called from every way the panel leaves the screen, and that matters more
+    /// here than on the recording screen: a dismissed panel stays dismissed for
+    /// the rest of an hour-long meeting, and a 60 Hz redraw of a view nobody can
+    /// see is an hour of wakeups for nothing.
+    private func endMetering() {
+        metering = false
+        Capture.shared.removeLevelSink(self)
+        themMeter?.meter.end()
+        youMeter?.meter.end()
+    }
+
+    /// The strips' silence state and the line under them.
+    ///
+    /// Deliberately shorter sentences than the recording screen's. This panel is
+    /// 236 to 460 points wide and floats over somebody's meeting, so it gets the
+    /// fact and the window gets the explanation.
+    private func refreshAudio() {
+        guard let youMeter, let warnLabel else { return }
+        let capture = Capture.shared
+        let silent = previewSilent ?? capture.micIsSilent
+        youMeter.isSilent = silent
+
+        let text = previewSilent == true
+            ? "Your microphone is not picking anything up"
+            : capture.micNotice(short: true)
+
+        let wasHidden = warnLabel.isHidden
+        warnLabel.stringValue = text ?? ""
+        warnLabel.isHidden = text == nil
+        warnLabel.textColor = silent ? .systemOrange : .secondaryLabelColor
+        // The line changes the panel's height, so its appearing has to re-lay
+        // out and re-place the panel. Without this it draws off the bottom edge
+        // of a panel sized before the microphone went quiet, which is precisely
+        // the moment it has to be readable.
+        guard wasHidden != warnLabel.isHidden, let showing, let p = panel else { return }
+        layout(showing)
+        position(p)
+    }
+
+    /// Drive the strips from a synthetic envelope, for a preview launch where
+    /// nothing is being captured. `LISTEN_PANEL=recording[:silent]`.
+    ///
+    /// The panel's states are otherwise only reachable by holding a real
+    /// meeting, which is the argument this file already makes for
+    /// `previewElapsed`, and it is sharper for a strip than for a clock: a state
+    /// that cannot be put on screen on demand is a state nobody checks, and the
+    /// one worth checking most is your own track flat while the far side moves.
+    func previewLevels(silent: Bool) {
+        previewSilent = silent
+        fakeClock = 2000
+        fake?.invalidate()
+        fake = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fakeClock += 1.0 / 30.0
+                self.themMeter.meter.push(CGFloat(FakeSpeech.level(self.fakeClock)))
+                self.youMeter.meter.push(silent ? 0
+                    : CGFloat(FakeSpeech.level(self.fakeClock + 2.6)))
+            }
+        }
+        refreshAudio()
+    }
+
+    /// Draw the panel into a PNG. See `NSView.writeShot`.
+    @discardableResult
+    func writeShot(to path: String) -> Bool {
+        guard let view = panel?.contentView else { return false }
+        return view.writeShot(to: path)
+    }
+
     func hide() {
         stopTimers()
+        endMetering()
         panel?.orderOut(nil)
         // A dismissal belongs to one recording. The next one starts visible,
         // because "I did not want to see it during that call" is not "I never
@@ -315,6 +457,17 @@ final class RecordingIndicator {
         hideButton = symbolButton("minus.circle", in: bg)
         hideButton.toolTip = "Hide this panel. The recording keeps running."
 
+        themMeter = TrackMeter(name: "Them", tint: .systemTeal)
+        youMeter = TrackMeter(name: "You", tint: .systemRed)
+        for m in [themMeter, youMeter] { bg.addSubview(m!) }
+
+        warnLabel = NSTextField(labelWithString: "")
+        warnLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        warnLabel.textColor = .systemOrange
+        warnLabel.lineBreakMode = .byTruncatingTail
+        warnLabel.isHidden = true
+        bg.addSubview(warnLabel)
+
         p.contentView = bg
         return p
     }
@@ -400,7 +553,10 @@ final class RecordingIndicator {
         // screen edge it is pinned to.
         var width = max(M.minWidth,
                         leftInset + textWidth + M.pad,
-                        M.pad + buttonsWidth + M.pad)
+                        M.pad + buttonsWidth + M.pad,
+                        // Enough for a strip that still reads as history rather
+                        // than as a level bar. See `M.meterMin`.
+                        M.pad + TrackMeter.labelWidth + 8 + M.meterMin + M.pad)
         if !state.asksAQuestion {
             width = max(width, leftInset + textWidth + M.gap
                                + timeLabel.frame.width + trailing + M.pad)
@@ -410,9 +566,17 @@ final class RecordingIndicator {
         let titleH = titleLabel.frame.height
         let subtitleH = detected ? subtitleLabel.frame.height + 2 : 0
         let textBlock = titleH + subtitleH
+
+        // The two strips and the line under them, which is present in every
+        // state: capture is running in all three, and in `.transcribing` they
+        // are showing what was captured being read.
+        warnLabel.sizeToFit()
+        let warnBlock = warnLabel.isHidden ? 0 : warnLabel.frame.height + 3
+        let meterBlock = 8 + M.meter * 2 + M.meterGap + warnBlock
+
         let height = state.asksAQuestion
-            ? M.pad + textBlock + 14 + buttonHeight + 13
-            : max(52, M.pad + textBlock + M.pad)
+            ? M.pad + textBlock + meterBlock + 12 + buttonHeight + 13
+            : max(52, M.pad + textBlock + meterBlock + M.pad)
 
         let size = NSSize(width: width, height: height)
         if p.frame.size != size {
@@ -464,6 +628,29 @@ final class RecordingIndicator {
                                  width: timeLabel.frame.width,
                                  height: timeLabel.frame.height)
 
+        // The strips, under the text block and above whatever else the state
+        // carries. Full width rather than tucked into a trailing column: they
+        // have a row each, so Speak's problem of a spanning meter fighting the
+        // status text for one column does not arise here.
+        //
+        // `textBlock` is measured from the top, so its underside is the one
+        // number both the one-line and the question layouts agree on.
+        let meterX = M.pad
+        let meterW = width - meterX - M.pad
+        var my = height - M.pad - textBlock - 8 - M.meter
+        themMeter.frame = NSRect(x: meterX, y: my, width: meterW, height: M.meter)
+        my -= M.meterGap + M.meter
+        youMeter.frame = NSRect(x: meterX, y: my, width: meterW, height: M.meter)
+        if !warnLabel.isHidden {
+            my -= 3 + warnLabel.frame.height
+            warnLabel.frame = NSRect(x: meterX, y: my, width: meterW,
+                                     height: warnLabel.frame.height)
+        }
+        // The panel lays itself out by hand, so the two track views have to be
+        // told their own contents moved.
+        themMeter.needsLayout = true
+        youMeter.needsLayout = true
+
         // Buttons right to left, so the affirmative answer lands in the same
         // place whichever question is being asked.
         var x = width - M.pad
@@ -487,6 +674,7 @@ final class RecordingIndicator {
     @objc private func dismiss() {
         isDismissed = true
         stopTimers()
+        endMetering()
         panel?.orderOut(nil)
         onDismiss?()
     }
@@ -542,6 +730,7 @@ final class RecordingIndicator {
             Task { @MainActor in
                 guard let self else { return }
                 self.setElapsed(self.previewElapsed ?? Capture.shared.elapsed)
+                self.refreshAudio()
             }
         }
         // A slow pulse rather than a blink: noticeable in peripheral vision
@@ -561,6 +750,7 @@ final class RecordingIndicator {
     private func stopTimers() {
         tick?.invalidate(); tick = nil
         pulse?.invalidate(); pulse = nil
+        fake?.invalidate(); fake = nil
         dot?.alphaValue = 1
     }
 }

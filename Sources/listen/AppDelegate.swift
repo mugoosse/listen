@@ -150,11 +150,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func previewPanelIfAsked() -> Bool {
         guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
         switch want {
-        case "detected":
+        case let want where want.hasPrefix("detected"):
             // A real, installed bundle identifier, so the icon and the name are
             // the ones a user would see rather than placeholders that hide a
             // sizing bug.
+            //
+            // `detected:silent` is the worst case for this layout: the tallest
+            // state, with the strips and the warning line under it, which is
+            // where the panel would run off the bottom of itself if the height
+            // arithmetic were wrong.
             indicator.show(.detected("com.google.Chrome"))
+            indicator.previewLevels(silent: want.hasSuffix("silent"))
         case let want where want.hasPrefix("transcribing"):
             // `transcribing`, or `transcribing:0.6` for a position in the job.
             // One number across the whole thing, split across the two lanes the
@@ -163,6 +169,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let fraction = Double(want.dropFirst("transcribing".count)
                                       .drop { $0 == ":" }) ?? 0.35
             LibraryWindow.shared.previewTranscribing(fraction)
+        case let want where want.hasPrefix("live"):
+            // `live`, or `live:silent` for the state the screen was built for:
+            // the far side arriving normally and your own microphone flat, which
+            // is what a laptop recorded with its lid shut actually looks like and
+            // what no machine will reproduce on demand.
+            LibraryWindow.shared.previewRecording(silent: want.hasSuffix("silent"))
         case "ask":
             LibraryWindow.shared.previewAsk()
         case let want where want.hasPrefix("settings"):
@@ -183,10 +195,24 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // looked at reading "0:00" is a layout nobody has checked. The
             // version that shipped was a character too narrow from ten minutes
             // in, and lost a digit for the rest of the meeting.
-            indicator.previewElapsed = Double(want.dropFirst("recording".count)
-                                                  .drop { $0 == ":" })
+            // `recording:1994:silent` sets both, because the widest state and
+            // the tallest state have to be checkable at once: the clock decides
+            // the panel's width and the warning line decides its height, and a
+            // preview that can only show one of them at a time leaves the
+            // combination nobody has looked at.
+            let arg = want.dropFirst("recording".count).drop { $0 == ":" }
+            indicator.previewElapsed = Double(arg.filter { $0.isNumber || $0 == "." })
+            indicator.previewLevels(silent: arg.hasSuffix("silent"))
         }
         return true
+    }
+
+    /// True when `LISTEN_PANEL` named a state of the floating panel rather than
+    /// of the library window, so `shootIfAsked` knows which one to photograph.
+    private var previewingPanel: Bool {
+        guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
+        return !want.hasPrefix("transcribing") && !want.hasPrefix("live")
+            && !want.hasPrefix("settings") && want != "ask"
     }
 
     /// `LISTEN_SHOT=<prefix>` writes a numbered series of window PNGs, then
@@ -220,8 +246,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 taken += 1
                 let path = String(format: "%@-%02d.png", prefix, taken)
-                log(LibraryWindow.shared.writeShot(to: path) ? "shot \(path)"
-                                                            : "shot failed: \(path)")
+                // The panel is its own window, so photographing the library
+                // would produce a picture of whatever the library happened to be
+                // showing and none of the state being previewed.
+                let wrote = self.previewingPanel
+                    ? self.indicator.writeShot(to: path)
+                    : LibraryWindow.shared.writeShot(to: path)
+                log(wrote ? "shot \(path)" : "shot failed: \(path)")
                 guard taken >= count else { return }
                 timer.invalidate()
                 NSApp.terminate(nil)
@@ -485,6 +516,45 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// require going to the menu bar while reading a transcript.
     @objc func startRecordingFromUI() { startRecording() }
     @objc func stopRecordingFromUI() { stopRecording() }
+
+    /// Stop the running recording and throw it away. The only item the overflow
+    /// menu offers while capture is running.
+    ///
+    /// It confirms, which "No" on the detection panel deliberately does not, and
+    /// the difference is who asked. "No" answers a question Listen put up while
+    /// the call was in front of you; this is reached by opening a menu and
+    /// choosing the red item, so there is no obvious answer to lean on and a
+    /// mis-click costs a meeting nobody can hold again.
+    @objc func discardRecordingFromUI() {
+        guard Capture.shared.isRecording else { return }
+        let alert = NSAlert()
+        alert.messageText = "Discard this recording?"
+        // Said rather than left to be discovered, the same way Delete says it:
+        // notes live in the library and not in the recording folder, so nothing
+        // here removes them, and what somebody typed during a call is the one
+        // part of it that could not have been recorded again anyway.
+        let hasNotes = Capture.shared.current
+            .flatMap(Notes.yours(for:))?.body.isEmpty == false
+        alert.informativeText = "Recording stops and the audio is deleted. "
+            + "This cannot be undone."
+            + (hasNotes ? "\n\nYour own notes are kept, under Notes in the sidebar." : "")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Discard")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        startedByDetection = false
+        awaitingAnswer = nil
+        if let recording = Capture.shared.stop() {
+            do { try Capture.shared.discard(recording) } catch {
+                log("could not discard the recording: \(error.localizedDescription)")
+            }
+        }
+        MeetingDetector.shared.captureEnded()
+        indicator.hide()
+        rebuildMenu()
+        LibraryWindow.shared.reload()
+    }
 
     @objc private func startRecording() {
         // Pressing Start is not an answer to a question nobody asked.

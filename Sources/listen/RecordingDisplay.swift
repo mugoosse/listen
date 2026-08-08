@@ -167,3 +167,19 @@ extension Recording {
         return turns
     }
 }
+
+extension Note {
+    /// When the note came into being, parsed exactly the way `Recording.date`
+    /// is, because the sidebar now sorts the two into one list and a second
+    /// formatter with its own idea of a bad string would sort them differently.
+    ///
+    /// **`created`, never `updated`.** The list is chronological by when a thing
+    /// happened, and a recording has nothing that can move it: fixing a typo in
+    /// a note would otherwise send a meeting from March back to the top of the
+    /// library, which is the one thing a date-ordered list must not do.
+    var date: Date? {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        return parser.date(from: created)
+    }
+}

@@ -303,6 +303,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         sidebar.onSelect = { [weak self] recording in
             guard let self else { return }
+            // Back from a note, if that is where we were. `PaneHost.show` is
+            // idempotent, so the ordinary case of clicking one recording after
+            // another costs a comparison and nothing else.
+            self.detailHost.show(self.detail)
             self.detail.show(recording)
             // No rebuild. Which items belong used to depend on whether the
             // recording in progress was the one selected, because the stop
@@ -310,6 +314,30 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // Stopping is `recordFAB`'s now, so a mode's items are fixed and a
             // click in the list is a validation pass rather than five items
             // removed and re-inserted.
+            self.window?.toolbar?.validateVisibleItems()
+        }
+        // A note picked out of the one list. The transcript pane is put away
+        // rather than left underneath: `saveYours` flushes a keystroke that has
+        // not reached disk, and `stopPlayback` is here for the reason settings
+        // has it, which is that a transport nobody can see is one nobody can
+        // pause.
+        sidebar.onSelectNote = { [weak self] note in
+            guard let self else { return }
+            self.detail.saveYours()
+            self.detail.stopPlayback()
+            self.notePane.show(note)
+            self.detailHost.show(self.notePane)
+            self.window?.toolbar?.validateVisibleItems()
+        }
+        // A person picked out of the results shows the card, in the pane the
+        // People collection used to own. This is what makes removing that
+        // collection possible rather than a loss.
+        sidebar.onSelectPerson = { [weak self] person in
+            guard let self else { return }
+            self.detail.saveYours()
+            self.detail.stopPlayback()
+            self.personPane.show(person)
+            self.detailHost.show(self.personPane)
             self.window?.toolbar?.validateVisibleItems()
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
@@ -325,10 +353,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         detail.onChanged = { [weak self] in self?.sidebar.reload() }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
         peopleNav.onSelect = { [weak self] person in self?.personPane.show(person) }
-        // One handler, three lists. Each carries its own copy of the same
-        // control because the sidebar swaps its whole view controller, and they
-        // all report the same thing.
-        sidebar.onCollection = { [weak self] in self?.showCollection($0) }
+        // Two lists now, not three. The recordings sidebar has no picker any
+        // more: it is the one list, so there is no collection for it to report
+        // moving away from. People and Notes keep theirs while they are still
+        // reachable as modes, which is what gets them back to the library.
         peopleNav.onCollection = { [weak self] in self?.showCollection($0) }
         notesNav.onCollection = { [weak self] in self?.showCollection($0) }
         notesNav.onSelect = { [weak self] note in self?.notePane.show(note) }

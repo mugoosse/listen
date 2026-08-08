@@ -12,11 +12,25 @@ final class SidebarViewController: NSViewController {
     private var table: NSTableView!
     private var searchField: NSSearchField!
 
-    /// Headers and recordings in one list, because that is what the table
-    /// draws. `isGroupRow` picks them apart.
+    /// Headers, recordings and notes in one list, because that is what the
+    /// table draws. `isGroupRow` picks the headings apart.
+    ///
+    /// **A note is a row here only when it has no single page to live on.** A
+    /// note about exactly one recording belongs to that recording and is shown
+    /// with it; listing it here too would put every meeting in the library
+    /// twice, once as itself and once as the note somebody wrote on it. What is
+    /// left is a synthesis of several meetings, which has no one home, and a
+    /// note about none, which is a page in its own right. See `pageless`.
+    /// **A person is a row only while something is typed.** People have no date,
+    /// so they cannot be sorted into the days the rest of the list is grouped
+    /// by, and listing the whole roster above an unfiltered library would be the
+    /// People tab again under another name. A search is the one moment somebody
+    /// has a name in mind, which is exactly when the card is worth showing.
     private enum Row {
         case header(String)
         case recording(Recording)
+        case note(Note)
+        case person(Person)
     }
 
     private var rows: [Row] = []
@@ -109,10 +123,17 @@ final class SidebarViewController: NSViewController {
 
     var onSelect: ((Recording?) -> Void)?
     var onRenamed: (() -> Void)?
-    var onCollection: ((LibraryCollection) -> Void)?
-    private var picker: CollectionPicker!
+    /// A note picked out of the same list. Separate from `onSelect` rather than
+    /// a single callback over a sum type, because the window answers them in
+    /// different panes and every other caller of `onSelect` means a recording.
+    var onSelectNote: ((Note) -> Void)?
+    /// A person picked out of the search results, which is the only route to
+    /// the card now that the roster is not a collection you can navigate to.
+    var onSelectPerson: ((Person) -> Void)?
 
     private(set) var selectedRecording: Recording?
+    private(set) var selectedNote: Note?
+    private(set) var selectedPerson: Person?
     private var hover: TableHover!
 
     /// True while `reload` is rebuilding the list, so its own re-selection is
@@ -133,14 +154,12 @@ final class SidebarViewController: NSViewController {
     override func loadView() {
         let container = NSView()
 
-        picker = CollectionPicker(showing: .recordings)
-        picker.onSelect = { [weak self] in self?.onCollection?($0) }
-
         searchField = NSSearchField()
-        // Scoped, and it says so. The search reads this list and nothing else,
-        // so a field that just said "Search" beside a segment control would be
-        // claiming a reach it does not have.
-        searchField.placeholderString = LibraryCollection.recordings.searchPlaceholder
+        // Unscoped, and it says so. There is one list now, so the field reaches
+        // everything in it: the segmented control that used to sit above this
+        // and name a collection is gone, and with it the reason the placeholder
+        // had to promise less than "Search".
+        searchField.placeholderString = "Search"
         searchField.target = self
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -197,7 +216,6 @@ final class SidebarViewController: NSViewController {
                       #selector(showUnnamed))
         todoRow.isHidden = true
 
-        container.addSubview(picker)
         container.addSubview(searchField)
         container.addSubview(filterBar)
         container.addSubview(todoRow)
@@ -211,7 +229,11 @@ final class SidebarViewController: NSViewController {
         todoTop = todoRow.topAnchor.constraint(equalTo: filterBar.bottomAnchor,
                                                constant: 0)
         todoHeight = todoRow.heightAnchor.constraint(equalToConstant: 0)
-        NSLayoutConstraint.activate(picker.constraints(in: container, above: searchField) + [
+        NSLayoutConstraint.activate([
+            // Where the collection picker used to start: clear of the traffic
+            // lights, which sit over the content because the window uses a
+            // transparent full-size title bar.
+            searchField.topAnchor.constraint(equalTo: container.topAnchor, constant: 42),
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor,
                                                  constant: 10),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor,
@@ -295,28 +317,79 @@ final class SidebarViewController: NSViewController {
             }
         }
 
-        // The recording being made now is never filtered out. A search left in
-        // the field from ten minutes ago is not a reason to hide the meeting
-        // being recorded now, and neither is a lens it cannot match: a
-        // recording still being made has no transcript to have speakers in, and
-        // its tags are the ones somebody is about to add.
-        let matching = (live.map { [$0] } ?? []) + filter.apply(to: library)
+        let matching = filter.apply(to: library)
+
+        // Notes stand alongside recordings, sorted into the same days, because
+        // a note is a page that happens to have no audio. Only the ones with no
+        // single page to live on: see `Row`.
+        //
+        // Hidden entirely while a lens is on. Every lens asks something only a
+        // recording can answer, so a note surviving a filter for "the calls
+        // Ryan was in" would be a row the filter did not consider rather than a
+        // row it kept.
+        let noteRows = lenses.isEmpty && !filter.needsSpeakers
+            ? Notes.all().filter { Self.pageless($0) && Self.matches($0, query: filter.query) }
+            : []
+
+        var items: [(date: Date?, row: Row)] =
+            matching.map { ($0.date, Row.recording($0)) }
+            + noteRows.map { ($0.date, Row.note($0)) }
+        // A missing or unparseable date sinks to the bottom, which is where
+        // `heading(for:)` already files it under "Earlier".
+        items.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+
+        // The recording being made now is never filtered out, and never sorted
+        // either. A search left in the field from ten minutes ago is not a
+        // reason to hide the meeting being recorded now, and neither is a lens
+        // it cannot match: a recording still being made has no transcript to
+        // have speakers in, and its tags are the ones somebody is about to add.
+        // Pinned to the top rather than trusted to sort there, because a note
+        // written in the last minute would otherwise sit above it.
+        if let live { items.insert((live.date, .recording(live)), at: 0) }
 
         refreshTodo(in: library)
 
         rows = []
+
+        // People first, under their own heading, and never mixed into the days.
+        //
+        // A person has no date, so there is no honest place for them in a
+        // chronological list; sorting them in by relevance instead would put a
+        // card between two meetings and make the whole list's order a guess.
+        // One section above the library says what they are and leaves the rest
+        // of the list meaning exactly what it meant before anybody typed.
+        let people = matchingPeople(filter.query, needsSpeakers: filter.needsSpeakers,
+                                    in: library)
+        if !people.isEmpty {
+            rows.append(.header(people.count == 1 ? "Person" : "People"))
+            rows.append(contentsOf: people.map { Row.person($0) })
+        }
+
         var lastHeading: String?
-        for recording in matching {
-            let heading = Self.heading(for: recording)
+        for item in items {
+            let heading = Self.heading(for: item.date)
             if heading != lastHeading {
                 rows.append(.header(heading))
                 lastHeading = heading
             }
-            rows.append(.recording(recording))
+            rows.append(item.row)
         }
 
         reloading = true
         table.reloadData()
+
+        // A selected note is kept the same way and for the same reason, and
+        // first because the two are mutually exclusive: whichever one is set is
+        // the one the pane is showing.
+        if let keepSlug = selectedNote?.slug, let row = rows.firstIndex(where: {
+            if case .note(let n) = $0 { return n.slug == keepSlug }
+            return false
+        }) {
+            table.selectRowIndexes([row], byExtendingSelection: false)
+            if case .note(let fresh) = rows[row] { selectedNote = fresh }
+            reloading = false
+            return
+        }
 
         // Keep the selection on the same recording rather than the same row
         // index. Deleting or renaming reorders the list, and jumping to a
@@ -338,8 +411,63 @@ final class SidebarViewController: NSViewController {
         }
     }
 
-    private static func heading(for recording: Recording) -> String {
-        guard let date = recording.date else { return "Earlier" }
+    /// Who the query names, as cards for the top of the results.
+    ///
+    /// Two sources, because the roster and the contact book answer different
+    /// halves of "who is this". `People.roster` knows everybody with a voice in
+    /// the library; `ContactBook` knows the ones the user has named but who have
+    /// not been recorded yet, and a card that only appeared once somebody had
+    /// been in a meeting would be missing exactly when it is most useful. This
+    /// is the pairing `listen people <name>` already makes.
+    ///
+    /// **`contains`, not `SpeakerName.matches`.** That rule is case-insensitive
+    /// equality, which is right for a filter naming somebody exactly and wrong
+    /// for a field somebody is still typing into: "marc" would find nobody and
+    /// read as "no such person" rather than as "keep going".
+    ///
+    /// Empty while nothing is typed, and empty while a lens is on: a lens is
+    /// already a claim about which recordings are interesting, and a person card
+    /// is not one of them.
+    private func matchingPeople(_ query: String, needsSpeakers: Bool,
+                                in library: [Recording]) -> [Person] {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty, lenses.isEmpty, !needsSpeakers else { return [] }
+
+        var found = People.roster(in: library).filter {
+            $0.display.localizedCaseInsensitiveContains(wanted)
+        }
+        // A contact with no recordings, appended rather than merged: anybody the
+        // roster already knows is there with their real counts, and `Person.summary`
+        // says "no recordings yet" for the rest.
+        let known = Set(found.map { $0.display.lowercased() })
+        for contact in ContactBook.matching(wanted)
+        where !known.contains(contact.name.lowercased()) {
+            found.append(Person(label: contact.name, recordings: [], seconds: 0))
+        }
+        return found
+    }
+
+    /// Does this note have no single recording to be shown on?
+    ///
+    /// Exactly one source means it belongs to that page. Zero means it is a
+    /// page itself, and two or more means it is a synthesis with no one home,
+    /// which is the case the library-level note store exists for.
+    private static func pageless(_ note: Note) -> Bool { note.recordings.count != 1 }
+
+    /// Free text against a note, which is title and body and nothing else.
+    ///
+    /// `RecordingFilter` cannot be reused here: its cheap-first ordering is
+    /// built around reading `turns.json` per recording, and a note has neither
+    /// speakers, tags nor a duration for any of its predicates to test.
+    private static func matches(_ note: Note, query: String) -> Bool {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return true }
+        return note.title.localizedCaseInsensitiveContains(wanted)
+            || note.body.localizedCaseInsensitiveContains(wanted)
+    }
+
+    private static func heading(for date: Date?) -> String {
+        guard let date else { return "Earlier" }
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
@@ -573,10 +701,13 @@ final class SidebarViewController: NSViewController {
     /// Measured that way round: the sidebar came back to Recordings with the
     /// segment still highlighting Notes, which reads as the control having
     /// stopped working.
-    func setCollection(_ collection: LibraryCollection) {
-        loadViewIfNeeded()
-        picker.selectedSegment = collection.rawValue
-    }
+    /// Nothing to put back in agreement: this list has no picker any more.
+    ///
+    /// Kept as a no-op rather than deleted so `enter(_:)` can go on telling all
+    /// three lists about a mode change without knowing which of them still draw
+    /// a control. People and Notes are still modes while the merge is being
+    /// tried out, and one of them is where the caller is heading.
+    func setCollection(_ collection: LibraryCollection) {}
 
     func focusSearch() {
         view.window?.makeFirstResponder(searchField)
@@ -661,6 +792,24 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = RecordingCell()
             cell.configure(recording)
             return cell
+
+        case .note(let note):
+            // `NoteCell`, the same class the Notes collection drew, rather than
+            // a second cell shaped to match it. Same argument as the lens pill
+            // being a `SpeakerPill`: a note in this list is the same object it
+            // always was, so it should be drawn by the same code and not by a
+            // copy of its numbers that can go out of step.
+            let cell = NoteCell()
+            cell.configure(note)
+            return cell
+
+        case .person(let person):
+            // `PersonCell`, the roster's own, for `NoteCell`'s reason: the card
+            // in the results is the same card, not a copy of it, so the disc of
+            // initials keeps the colour that person has everywhere else.
+            let cell = PersonCell()
+            cell.configure(person)
+            return cell
         }
     }
 
@@ -669,8 +818,39 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         // is the list being rebuilt, not somebody choosing a recording. See
         // `reloading`.
         guard !reloading else { return }
-        selectedRecording = recording(at: table.selectedRow)
-        onSelect?(selectedRecording)
+        guard rows.indices.contains(table.selectedRow) else {
+            selectedRecording = nil
+            selectedNote = nil
+            selectedPerson = nil
+            onSelect?(nil)
+            return
+        }
+        switch rows[table.selectedRow] {
+        case .recording(let recording):
+            selectedNote = nil
+            selectedPerson = nil
+            selectedRecording = recording
+            onSelect?(recording)
+        case .person(let person):
+            selectedRecording = nil
+            selectedNote = nil
+            selectedPerson = person
+            onSelectPerson?(person)
+        case .note(let note):
+            // The recording goes first. Everything that validates a menu item
+            // or a toolbar button asks `selectedRecording`, and a note selected
+            // while that still held the last meeting would leave Export and
+            // Transcribe Again enabled over something they cannot act on.
+            selectedRecording = nil
+            selectedPerson = nil
+            selectedNote = note
+            onSelectNote?(note)
+        case .header:
+            selectedRecording = nil
+            selectedNote = nil
+            selectedPerson = nil
+            onSelect?(nil)
+        }
     }
 }
 

@@ -8,6 +8,66 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.10.0 (2026-08-08)
+
+### Ask a meeting a question, through an agent you already have
+
+Listen ships no model and holds no key. A new Ask pane drives whichever of
+Claude Code or Codex is already installed and signed in on this Mac, handing it
+`listen mcp` as the only way to reach the library. So a question about a
+recording costs nothing beyond the subscription already paid for, and never
+leaves the machine by a route the agent does not already take.
+
+Ask sits beside Transcript and Notes as a third mode: starter questions, the
+work shown as one line that is replaced rather than appended to as it runs,
+and Save as note to promote an answer into the library. `listen ask` is the
+same engine from a terminal, and is how it was measured. When neither CLI is
+installed or signed in, the pane now says which, instead of showing four dead
+starter chips.
+
+### Name a recording after the people in it
+
+The calendar can only name a meeting that was scheduled, and most calls are
+not: four recordings in this library sat at "Untitled" with the nearest
+calendar event 51 and 32 minutes away, nothing for it to find. A recording is
+now also named after whoever spoke, the moment the last unnamed speaker is
+given a name. It follows further renames and stops the moment somebody types a
+title of their own; a title typed while a recording is running now survives
+stopping it, where it used to be discarded on reload.
+
+Recordings whose speakers were already named before this update need `listen
+title backfill` to pick it up; it is a dry run unless you pass `--apply`. An
+unnamed recording reads "New recording" rather than "Untitled" on screen,
+though the string stored on disk is unchanged.
+
+### The microphone Listen records from is the one you chose
+
+An hour of a call was captured with the laptop lid shut: macOS had switched
+the built-in microphone off, and Listen followed the system default onto it
+anyway, filing 56,239,952 silent samples as a healthy one-speaker meeting with
+nothing on screen to say so. Recording now drives the chosen microphone
+directly instead of asking `AVAudioEngine` for the system default, moves off a
+device that has never been heard from mid-meeting, and a dedicated recording
+screen shows one lane per track instead of three empty tabs, so a track that
+never started is visible while it still matters. A finished recording that
+captured no voice says that on its row.
+
+### Worth knowing
+
+- **The installed `listen` command can transcribe again.** Running it from
+  `~/.local/bin`, which is what the Developers pane itself tells you to do,
+  died with "Failed to load the default metallib" on every call that needed
+  the model. It now re-execs the real binary inside the app bundle first.
+- **Installing an update no longer kills the iPhone sync agent.** An
+  unanchored process match took down `listen-sync serve` on every install,
+  because the sync agent carries the app's path as an argument, not as its own
+  identity. That could strand a phone's sync mid-upload until the app was
+  force quit.
+- The sentence edit field opens at the height of the whole sentence instead of
+  showing its last line with the rest scrolled out of sight.
+- The notes placeholder no longer lingers over an empty pane after a live
+  recording, whose mode it belongs to, is stopped.
+
 ## 0.9.0 (2026-08-08)
 
 ### Setup could not download a model, and did not say so

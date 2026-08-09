@@ -291,6 +291,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // has no equivalent moment unless it is given one here.
         askBar.show(nil)
         askBar.reload()
+        // `LISTEN_CHAT=<id>` opens a conversation at launch, in the family of
+        // `LISTEN_PANEL` and `LISTEN_SHOT`. Scaffolding: opening one is a click
+        // on a link, and a click is the one input this window cannot be driven
+        // by, since every control here is laid out by frame and invisible to
+        // accessibility. Without it a bug in the restore path can only be
+        // reported, never reproduced.
+        if let id = ProcessInfo.processInfo.environment["LISTEN_CHAT"],
+           let chat = Chat.load(id: id) {
+            composerHost.open(chat)
+        }
 
         // The button is a toolbar item now, built in
         // `toolbar(_:itemForItemIdentifier:)`, so nothing anchors it to the

@@ -114,7 +114,17 @@ final class DetailView: NSView {
     /// With Transcript as a tab the pane's title said which document you were
     /// looking at. On one page nothing does, so a meeting with an empty note
     /// would open on a wall of dialogue with no heading anywhere.
-    private let transcriptHeading = NSTextField(labelWithString: "Transcript")
+    private let recordingHeading = NSTextField(labelWithString: "Recording")
+    /// The transcript's own heading has a pair now.
+    ///
+    /// The note half of the page was the only unlabelled thing on it: a block
+    /// of text under the player with nothing saying what it was, which reads as
+    /// part of the recording's own metadata rather than as the one document you
+    /// write. Same size, same weight, same colour as "Transcript", because they
+    /// are the two halves of one page.
+    private let notesHeading = NSTextField(labelWithString: "Notes")
+    private var notesHeadingTop: NSLayoutConstraint!
+    private var notesHeadingHeight: NSLayoutConstraint!
     /// The greeting over an empty pane, with the mascot beside it.
     ///
     /// The empty state used to be one grey sentence of instruction. This screen
@@ -211,8 +221,8 @@ final class DetailView: NSView {
     /// which is why it is a scroll view rather than a label.
     private static let notesFloorHeight: CGFloat = 72
     private static let notesCeilingHeight: CGFloat = 168
-    private var transcriptHeadingTop: NSLayoutConstraint!
-    private var transcriptHeadingHeight: NSLayoutConstraint!
+    private var recordingHeadingTop: NSLayoutConstraint!
+    private var recordingHeadingHeight: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
     private var playerHeight: NSLayoutConstraint!
     private var noteInfoTop: NSLayoutConstraint!
@@ -343,7 +353,11 @@ final class DetailView: NSView {
 
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 18
+        // 12 rather than 18. Each turn already carries a speaker name in colour
+        // above it, so the gap was doing a job the label does: at 18 a two-line
+        // exchange read as two separate documents rather than as one
+        // conversation.
+        stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 40, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -399,13 +413,15 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             modeBar.addSubview(v)
         }
-        transcriptHeading.font = .systemFont(ofSize: 12, weight: .semibold)
-        transcriptHeading.textColor = .secondaryLabelColor
+        for heading in [recordingHeading, notesHeading] {
+            heading.font = .systemFont(ofSize: 12, weight: .semibold)
+            heading.textColor = .secondaryLabelColor
+        }
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, transcriptHeading, greeting, recentChats, empty,
-                  emptyIcon, transcribing, live] {
+                  chatLinks, notesHeading, recordingHeading, greeting,
+                  recentChats, empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -425,8 +441,13 @@ final class DetailView: NSView {
         // occupies its frame.
         modeTop = modeBar.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 14)
         modeHeight = modeBar.heightAnchor.constraint(equalToConstant: 24)
-        playerTop = playerCard.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
-                                                    constant: 10)
+        // **Under the section heading, not above the notes.** The player is
+        // part of the recording, and the page now says so: notes first, because
+        // that is the half you write, then "Recording" with its transport and
+        // the dialogue under it. It used to sit directly under the chips, which
+        // made the note below it read as a caption on the audio.
+        playerTop = playerCard.topAnchor.constraint(equalTo: recordingHeading.bottomAnchor,
+                                                    constant: 8)
         playerHeight = playerCard.heightAnchor.constraint(equalToConstant: 58)
         // An empty note has nothing to say about itself: no date, because it has
         // never been saved. A label with an empty string still occupies a line,
@@ -437,8 +458,11 @@ final class DetailView: NSView {
         soloHeight = soloBar.heightAnchor.constraint(equalToConstant: 0)
         // The note starts the page, under the solo bar, and the transcript
         // follows it rather than sharing its box.
-        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: soloBar.bottomAnchor,
-                                                    constant: 12)
+        notesHeadingTop = notesHeading.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
+                                                            constant: 12)
+        notesHeadingHeight = notesHeading.heightAnchor.constraint(equalToConstant: 16)
+        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: notesHeading.bottomAnchor,
+                                                    constant: 6)
         noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
         // **The notes get a height, and the transcript gets the rest.**
         //
@@ -463,9 +487,9 @@ final class DetailView: NSView {
         chatLinksTop = chatLinks.topAnchor.constraint(equalTo: notesScroll.bottomAnchor,
                                                       constant: 0)
         chatLinksHeight = chatLinks.heightAnchor.constraint(equalToConstant: 0)
-        transcriptHeadingTop = transcriptHeading.topAnchor.constraint(
+        recordingHeadingTop = recordingHeading.topAnchor.constraint(
             equalTo: chatLinks.bottomAnchor, constant: 14)
-        transcriptHeadingHeight = transcriptHeading.heightAnchor.constraint(
+        recordingHeadingHeight = recordingHeading.heightAnchor.constraint(
             equalToConstant: 16)
         noteInfoHeight.priority = .defaultHigh
 
@@ -568,14 +592,13 @@ final class DetailView: NSView {
             chatLinks.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             chatLinks.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
 
-            transcriptHeadingTop,
-            transcriptHeadingHeight,
-            transcriptHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            transcriptHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
+            recordingHeadingTop,
+            recordingHeadingHeight,
+            recordingHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            recordingHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                         constant: -24),
 
-            scroll.topAnchor.constraint(equalTo: transcriptHeading.bottomAnchor,
-                                        constant: 6),
+            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -587,10 +610,15 @@ final class DetailView: NSView {
             //
             // Level with the transcript it stands in for, so the note above
             // stays put when a running recording finishes.
-            live.topAnchor.constraint(equalTo: transcriptHeading.bottomAnchor, constant: 6),
+            live.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
             live.leadingAnchor.constraint(equalTo: leadingAnchor),
             live.trailingAnchor.constraint(equalTo: trailingAnchor),
             live.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            notesHeadingTop,
+            notesHeadingHeight,
+            notesHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            notesHeading.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
 
             noteInfoTop,
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -1418,15 +1446,20 @@ final class DetailView: NSView {
         // them was never a choice anybody wanted to make.
         notesScroll.isHidden = !open
         notesHeight.constant = open ? notesHeight.constant : 0
+        // Collapsed as well as hidden, spacing included, which this file
+        // records three times over.
+        notesHeading.isHidden = !open
+        notesHeadingHeight.constant = open ? 16 : 0
+        notesHeadingTop.constant = open ? 12 : 0
         // No heading over a meeting with nothing under it either. The sentence
         // `updateEmpty` writes there already says why the transcript is absent,
         // and a label naming a document that is not present is furniture
         // pretending to be content.
-        transcriptHeading.isHidden = !open || turns.isEmpty
+        recordingHeading.isHidden = !open || turns.isEmpty
         // Collapsed as well as hidden, spacing included: a hidden view keeps its
         // frame, which is the trap this file already records three times.
-        transcriptHeadingHeight.constant = transcriptHeading.isHidden ? 0 : 16
-        transcriptHeadingTop.constant = transcriptHeading.isHidden ? 0 : 14
+        recordingHeadingHeight.constant = recordingHeading.isHidden ? 0 : 16
+        recordingHeadingTop.constant = recordingHeading.isHidden ? 0 : 14
         askView.isHidden = page
         // A solo is a lens on the transcript, so it goes with the transcript.
         // Leaving the bar up over Ask would be a sentence about paragraphs that
@@ -1903,13 +1936,16 @@ final class DetailView: NSView {
         // added to the page has to be added here too, and the heading was not:
         // it drew the word "Transcript" halfway down an otherwise empty pane,
         // above "Select something from the list."
-        transcriptHeading.isHidden = hidden
+        recordingHeading.isHidden = hidden
+        notesHeading.isHidden = hidden
         chatLinks.isHidden = hidden
         if hidden {
             // Collapsed as well as hidden, spacing included, or the empty
             // sentence sits pushed down the pane by furniture nobody can see.
-            transcriptHeadingHeight.constant = 0
-            transcriptHeadingTop.constant = 0
+            recordingHeadingHeight.constant = 0
+            recordingHeadingTop.constant = 0
+            notesHeadingHeight.constant = 0
+            notesHeadingTop.constant = 0
             chatLinksHeight.isActive = true
             chatLinksTop.constant = 0
             notesHeight.constant = 0

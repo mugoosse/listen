@@ -125,6 +125,23 @@ final class DetailView: NSView {
     private let chatLinks = LinkLine()
     private var chatLinksTop: NSLayoutConstraint!
     private var chatLinksHeight: NSLayoutConstraint!
+
+    /// True while the conversation drawer is open over this pane.
+    ///
+    /// Only the centred sentence cares. A page with a meeting on it is happy to
+    /// be partly covered, but "Select something from the list, or ask about
+    /// your library below" over a conversation that has already started is the
+    /// pane arguing with the drawer on top of it.
+    private var drawerCovering = false
+
+    /// Told by the window, because only the window knows how tall the drawer is.
+    func setDrawerCovering(_ on: Bool) {
+        guard drawerCovering != on else { return }
+        drawerCovering = on
+        // Cheap and idempotent, and it re-derives both labels from the state
+        // they are actually computed from rather than guessing which applies.
+        if recording == nil { show(nil) } else { updateEmpty() }
+    }
     private let askView = AskView()
     /// Analog's artifact switcher, which is the part of their notes design worth
     /// copying: a recording has any number of notes and they are all the same
@@ -1465,7 +1482,7 @@ final class DetailView: NSView {
         if showPicture { message = "" }
 
         empty.stringValue = message
-        empty.isHidden = message.isEmpty
+        empty.isHidden = message.isEmpty || drawerCovering
         transcribing.isHidden = !showPicture
         // The transcript goes away while the picture is up, or a re-run draws
         // the picture on top of the paragraphs it is in the middle of replacing.
@@ -1550,12 +1567,12 @@ final class DetailView: NSView {
 
         guard let recording else {
             setChromeHidden(true)
-            empty.isHidden = false
+            empty.isHidden = drawerCovering
             let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
             // The character welcomes a new library. In a library that already
             // has recordings, it would only turn a simple selection prompt into
             // decoration and make the detail pane feel less calm.
-            emptyIcon.isHidden = !libraryIsEmpty
+            emptyIcon.isHidden = !libraryIsEmpty || drawerCovering
             // Selecting is no longer the only thing you can do here. The
             // composer under this sentence asks about the whole library, so an
             // instruction to go and pick something first is now untrue as well
@@ -3114,6 +3131,11 @@ final class DetailViewController: NSViewController {
     func showTranscript() {
         loadViewIfNeeded()
         detail.showTranscript()
+    }
+
+    func setDrawerCovering(_ on: Bool) {
+        loadViewIfNeeded()
+        detail.setDrawerCovering(on)
     }
 
     /// Flush a keystroke that has not reached disk yet. Safe at any time.

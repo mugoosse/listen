@@ -266,8 +266,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // ever be a mode of a meeting, which is why the empty screen had
         // nothing to ask with. So the split's main item is a container holding
         // whatever `detailHost` is showing, with the composer pinned under it.
-        let main = NSSplitViewItem(viewController: DetailWithComposer(
-            content: detailHost, composer: askBar))
+        let composerHost = DetailWithComposer(content: detailHost, composer: askBar)
+        // The page's centred sentence steps aside for the drawer. Only that
+        // label: a meeting page is happy to be partly covered, and an empty one
+        // arguing with the conversation on top of it is not.
+        composerHost.onCoveringChanged = { [weak self] covering in
+            self?.detail.setDrawerCovering(covering)
+        }
+        let main = NSSplitViewItem(viewController: composerHost)
         main.minimumThickness = 420
         main.holdingPriority = NSLayoutConstraint.Priority(250)
         detailHost.identifier = NSUserInterfaceItemIdentifier("detail")
@@ -1236,43 +1242,137 @@ final class DetailWithComposer: NSViewController {
 
     required init?(coder: NSCoder) { fatalError("no nib") }
 
+    /// The drawer's own background, so a conversation is not read through the
+    /// transcript underneath it.
+    private let drawer = NSVisualEffectView()
+    private let collapseButton = NSButton()
+    private var header: NSView!
+    private var headerHeight: NSLayoutConstraint!
+
+    /// What `AskView` last asked for, before collapsing is taken into account.
+    private var wantedHeight: CGFloat = 68
+    private var collapsed = false
+
+    /// The window hides the page's empty sentence while this is up.
+    var onCoveringChanged: ((Bool) -> Void)?
+
+    /// Held so `applyHeight` never has to ask for `view`. See the note there.
+    private weak var container: NSView?
+
     override func loadView() {
         let container = NSView()
+        self.container = container
         addChild(content)
         content.view.translatesAutoresizingMaskIntoConstraints = false
         composer.translatesAutoresizingMaskIntoConstraints = false
+        drawer.translatesAutoresizingMaskIntoConstraints = false
+
+        // **It covers rather than pushes.** The page keeps its own layout and
+        // its scroll position, so dismissing the drawer puts somebody back
+        // exactly where they were. Sharing the vertical space instead would
+        // squeeze a meeting page that already has two independently scrolling
+        // zones into three, and shrink the transcript precisely when a question
+        // is being asked about it.
+        drawer.material = .underWindowBackground
+        drawer.blendingMode = .withinWindow
+        drawer.state = .active
+        drawer.wantsLayer = true
+        drawer.layer?.cornerRadius = 16
+        drawer.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+
+        header = NSView()
+        header.translatesAutoresizingMaskIntoConstraints = false
+        collapseButton.isBordered = false
+        collapseButton.bezelStyle = .inline
+        collapseButton.imagePosition = .imageOnly
+        collapseButton.image = NSImage(systemSymbolName: "chevron.down",
+                                       accessibilityDescription: "Put the conversation away")
+        collapseButton.toolTip = "Put the conversation away"
+        collapseButton.target = self
+        collapseButton.action = #selector(toggleCollapsed)
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(collapseButton)
+
         container.addSubview(content.view)
-        container.addSubview(composer)
+        container.addSubview(drawer)
+        drawer.addSubview(header)
+        drawer.addSubview(composer)
+
+        headerHeight = header.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             content.view.topAnchor.constraint(equalTo: container.topAnchor),
             content.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             content.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            content.view.bottomAnchor.constraint(equalTo: composer.topAnchor),
+            content.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            composer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
-            composer.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -24),
-            composer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
-            composerHeight,
+            drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            drawerHeight,
+
+            header.topAnchor.constraint(equalTo: drawer.topAnchor),
+            header.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
+            headerHeight,
+            collapseButton.trailingAnchor.constraint(equalTo: header.trailingAnchor,
+                                                     constant: -24),
+            collapseButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+
+            composer.topAnchor.constraint(equalTo: header.bottomAnchor),
+            composer.leadingAnchor.constraint(equalTo: drawer.leadingAnchor, constant: 24),
+            composer.trailingAnchor.constraint(equalTo: drawer.trailingAnchor, constant: -24),
+            composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor, constant: -12),
         ])
-        // The bar is as tall as its contents say, because the setup card is
-        // several lines and a button and a bar sized for the well alone clips
-        // it to nothing: the one state with something important to say would be
-        // the one state nobody can read.
+
         composer.onHeightChanged = { [weak self] height in
             guard let self else { return }
-            // Clamped here rather than in `AskView`, which cannot know what the
-            // window can spare. A conversation asks for more than a bar and
-            // must still leave the page it is covering partly visible.
-            let available = self.view.bounds.height - 140
-            self.composerHeight.constant = available > 0 ? min(height, available) : height
+            self.wantedHeight = height
+            // A question asked after the drawer was put away brings it back.
+            // Collapsing means "not now", not "never again", and the alternative
+            // is an answer streaming into a bar nobody can see.
+            if height > Self.barCeiling { self.collapsed = false }
+            self.applyHeight()
         }
         view = container
     }
 
-    /// Starts at the well plus its status line. `AskView` corrects it as soon
-    /// as it knows whether there is a setup card or a row of starters to show.
-    private lazy var composerHeight =
-        composer.heightAnchor.constraint(equalToConstant: 68)
+    /// Anything taller than this is a conversation rather than a bar, which is
+    /// what the collapse control and the page-covering flag both key off.
+    private static let barCeiling: CGFloat = 200
+
+    @objc private func toggleCollapsed() {
+        collapsed.toggle()
+        applyHeight()
+    }
+
+    private func applyHeight() {
+        // **`container`, never `view`.** `AskView` can report a height while it
+        // is being added to the hierarchy, which is inside `loadView`, and
+        // `self.view` there re-enters `loadView` and recurses until the app
+        // hangs with no window and nothing on stderr. Measured exactly once,
+        // which was one time too many.
+        guard let container else { return }
+        let expanded = wantedHeight > Self.barCeiling && !collapsed
+        // Clamped here rather than in `AskView`, which cannot know what the
+        // window can spare. A conversation asks for more than a bar and must
+        // still leave the page it covers partly visible.
+        let available = container.bounds.height - 140
+        let wanted = collapsed ? Self.collapsedHeight : wantedHeight
+        drawerHeight.constant = available > 0 ? min(wanted, available) : wanted
+        headerHeight.constant = expanded ? 28 : 0
+        header.isHidden = !expanded
+        // The drawer is never hidden, because the composer lives inside it and
+        // would go with it. Its material behind the bare bar is welcome anyway:
+        // it stops the page's text reading through the one control that is on
+        // screen at all times.
+        onCoveringChanged?(expanded)
+    }
+
+    /// The well and its status line, which is the drawer with nothing in it.
+    private static let collapsedHeight: CGFloat = 68
+
+    private lazy var drawerHeight =
+        drawer.heightAnchor.constraint(equalToConstant: Self.collapsedHeight)
 }
 
 /// Holds one view controller at a time, so a split view item can change what it

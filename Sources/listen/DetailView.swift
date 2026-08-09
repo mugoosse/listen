@@ -158,6 +158,22 @@ final class DetailView: NSView {
     /// pane arguing with the drawer on top of it.
     private var drawerCovering = false
 
+    /// How much of the bottom of this pane the drawer is covering.
+    ///
+    /// The drawer overlays rather than pushes, which is what keeps the page's
+    /// layout and scroll position intact. The cost is that the last lines of a
+    /// transcript sit underneath it: not clipped, but unreachable, because the
+    /// scroll had nothing telling it there is furniture over its floor. A
+    /// content inset is the difference between covering a view and stealing
+    /// part of it.
+    func setBottomInset(_ points: CGFloat) {
+        guard abs(scroll.contentInsets.bottom - points) > 0.5 else { return }
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: points, right: 0)
+        // So the scroller itself is not drawn under the drawer either.
+        scroll.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: points, right: 0)
+    }
+
     /// Told by the window, because only the window knows how tall the drawer is.
     func setDrawerCovering(_ on: Bool) {
         guard drawerCovering != on else { return }
@@ -3331,6 +3347,11 @@ final class DetailViewController: NSViewController {
     var onOpenChat: ((Chat) -> Void)? {
         get { detail.onOpenChat }
         set { loadViewIfNeeded(); detail.onOpenChat = newValue }
+    }
+
+    func setBottomInset(_ points: CGFloat) {
+        loadViewIfNeeded()
+        detail.setBottomInset(points)
     }
 
     /// Flush a keystroke that has not reached disk yet. Safe at any time.

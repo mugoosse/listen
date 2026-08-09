@@ -276,6 +276,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         composerHost.onCoveringChanged = { [weak self] covering in
             self?.detail.setDrawerCovering(covering)
         }
+        composerHost.onDrawerHeight = { [weak self] points in
+            self?.detail.setBottomInset(points)
+        }
         let main = NSSplitViewItem(viewController: composerHost)
         main.minimumThickness = 420
         main.holdingPriority = NSLayoutConstraint.Priority(250)
@@ -1297,6 +1300,9 @@ final class DetailWithComposer: NSViewController {
 
     /// The window hides the page's empty sentence while this is up.
     var onCoveringChanged: ((Bool) -> Void)?
+    /// How much of the page the drawer is standing over, so the content
+    /// underneath can be scrolled clear of it.
+    var onDrawerHeight: ((CGFloat) -> Void)?
 
     /// Held so `applyHeight` never has to ask for `view`. See the note there.
     private weak var container: NSView?
@@ -1690,6 +1696,9 @@ final class DetailWithComposer: NSViewController {
             settleComposer()
         }
         onCoveringChanged?(expanded)
+        // The drawer's own bottom margin counts: what the page loses is
+        // everything from the container's floor to the drawer's top edge.
+        onDrawerHeight?(drawerHeight.constant + 14)
     }
 
     /// Always present, so the history and the way back are never taken away.

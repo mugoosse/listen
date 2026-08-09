@@ -1588,15 +1588,24 @@ final class DetailWithComposer: NSViewController {
         // A bar easing itself taller because agent detection finished is motion
         // nobody asked for, and the first frame of the window is not a gesture.
         if animated, drawerHeight.constant != target {
-            NSAnimationContext.runAnimationGroup { context in
+            // **The constant is set plainly and the layout pass is what
+            // animates.** Driving it through `animator()` *and* calling
+            // `layoutSubtreeIfNeeded` in the same block drives the same value
+            // twice, and the subviews end up laid out for a height the drawer
+            // no longer has: the composer well came out clipped, and stayed
+            // clipped, because nothing laid it out again afterwards.
+            NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.22
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 context.allowsImplicitAnimation = true
-                drawerHeight.animator().constant = target
+                drawerHeight.constant = target
                 container.layoutSubtreeIfNeeded()
-            }
+            }, completionHandler: { [weak self] in
+                self?.settleComposer()
+            })
         } else {
             drawerHeight.constant = target
+            settleComposer()
         }
         onCoveringChanged?(expanded)
     }
@@ -1604,6 +1613,17 @@ final class DetailWithComposer: NSViewController {
     /// Always present, so the history and the way back are never taken away.
     /// Tall enough to hold the collapse disc with air around it.
     private static let headerHeightPoints: CGFloat = 44
+    /// Lay the composer out again once the height has finished moving.
+    ///
+    /// `ComposerWell` positions its field, model control and send button by
+    /// frame rather than by constraint, so a bounds change that arrives through
+    /// an animation leaves it holding the geometry it had before. Autolayout
+    /// has nothing to re-solve and the well does not know to ask.
+    private func settleComposer() {
+        composer.needsLayout = true
+        composer.layoutSubtreeIfNeeded()
+    }
+
     /// Enough for an answer and its question with the page still behind it.
     private static let standardHeight: CGFloat = 560
     private static let collapseDiameter: CGFloat = 30

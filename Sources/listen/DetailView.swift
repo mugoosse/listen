@@ -115,6 +115,12 @@ final class DetailView: NSView {
     /// looking at. On one page nothing does, so a meeting with an empty note
     /// would open on a wall of dialogue with no heading anywhere.
     private let transcriptHeading = NSTextField(labelWithString: "Transcript")
+    /// The greeting over an empty pane, with the mascot beside it.
+    ///
+    /// The empty state used to be one grey sentence of instruction. This screen
+    /// is where somebody arrives and where they can now work from, so it opens
+    /// with their name rather than with a direction.
+    private let greeting = NSTextField(labelWithString: "")
     /// The conversations that have asked about this meeting.
     ///
     /// The back half of `Chat.recordings`, and the reason a conversation names
@@ -388,7 +394,8 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, transcriptHeading, empty, emptyIcon, transcribing, live] {
+                  chatLinks, transcriptHeading, greeting, empty, emptyIcon,
+                  transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -606,9 +613,14 @@ final class DetailView: NSView {
             stack.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -20),
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
+            greeting.centerXAnchor.constraint(equalTo: centerXAnchor),
+            greeting.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
             empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
             emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
-            emptyIcon.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
+            // Above the greeting, which is what it now introduces. Anchored to
+            // `empty` it sat on top of the words: that constraint predates
+            // there being anything between the mascot and the sentence.
+            emptyIcon.bottomAnchor.constraint(equalTo: greeting.topAnchor, constant: -16),
 
             // Wider than the 320 the sentence is capped at, because it is a
             // picture of the recording rather than a paragraph: the wider it is
@@ -706,6 +718,11 @@ final class DetailView: NSView {
             .foregroundColor: Brand.accent,
             .cursor: NSCursor.pointingHand,
         ]
+
+        greeting.font = .systemFont(ofSize: 26, weight: .semibold)
+        greeting.textColor = .labelColor
+        greeting.alignment = .center
+        greeting.isHidden = true
 
         notesPlaceholder.font = .systemFont(ofSize: 13)
         notesPlaceholder.textColor = .tertiaryLabelColor
@@ -1142,6 +1159,19 @@ final class DetailView: NSView {
     /// kind of thing from the page's point of view, which is somebody else's
     /// reading of this meeting, and the difference between them is what happens
     /// when you press one.
+    /// "What's cooking, Maxime?", or without the name when there is none.
+    ///
+    /// The name is the one in Settings, which is also what the microphone track
+    /// is displayed as. Nobody is asked for it twice, and a library where it was
+    /// never set gets the question without a name rather than a placeholder
+    /// standing in for one.
+    private static func greetingText() -> String {
+        guard let name = Settings.userName, !name.isEmpty else {
+            return "What's cooking?"
+        }
+        return "What's cooking, \(name)?"
+    }
+
     private func showRelated() {
         let others = notes.filter { !Notes.isYours($0) }
         let chats = recording.map { Chat.about($0.id) } ?? []
@@ -1405,6 +1435,7 @@ final class DetailView: NSView {
         transcribing.isHidden = false
         empty.isHidden = true
         emptyIcon.isHidden = true
+        greeting.isHidden = true
         // As `updateEmpty` does. Without it the preview draws over whatever
         // transcript the chosen recording already has, which is not a state the
         // app can be in and would have somebody chasing a bug that is only in
@@ -1607,11 +1638,15 @@ final class DetailView: NSView {
         guard let recording else {
             setChromeHidden(true)
             empty.isHidden = drawerCovering
+            greeting.stringValue = Self.greetingText()
+            greeting.isHidden = drawerCovering
             let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
             // The character welcomes a new library. In a library that already
             // has recordings, it would only turn a simple selection prompt into
             // decoration and make the detail pane feel less calm.
-            emptyIcon.isHidden = !libraryIsEmpty || drawerCovering
+            // The mascot now belongs to the greeting rather than to an empty
+            // library, so it is here whenever the pane is.
+            emptyIcon.isHidden = drawerCovering
             // Selecting is no longer the only thing you can do here. The
             // composer under this sentence asks about the whole library, so an
             // instruction to go and pick something first is now untrue as well

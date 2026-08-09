@@ -1252,14 +1252,22 @@ final class DetailWithComposer: NSViewController {
             composer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
             composer.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -24),
             composer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
-            // Enough for the well, its status line and one row of starters.
-            // Measured against `ComposerWell.height` plus the chips rather than
-            // guessed, and the conversation above them collapses to nothing,
-            // which is what makes this a bar rather than a pane.
-            composer.heightAnchor.constraint(equalToConstant: 132),
+            composerHeight,
         ])
+        // The bar is as tall as its contents say, because the setup card is
+        // several lines and a button and a bar sized for the well alone clips
+        // it to nothing: the one state with something important to say would be
+        // the one state nobody can read.
+        composer.onHeightChanged = { [weak self] height in
+            self?.composerHeight.constant = height
+        }
         view = container
     }
+
+    /// Starts at the well plus its status line. `AskView` corrects it as soon
+    /// as it knows whether there is a setup card or a row of starters to show.
+    private lazy var composerHeight =
+        composer.heightAnchor.constraint(equalToConstant: 68)
 }
 
 /// Holds one view controller at a time, so a split view item can change what it

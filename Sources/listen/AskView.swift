@@ -355,11 +355,20 @@ final class AskView: NSView {
         redraw()
     }
 
-    /// Re-read from disk. The CLI can write to this file too.
+    /// Re-read from disk, and redraw either way. The CLI can write to this file
+    /// too.
+    ///
+    /// **The redraw is unconditional, and that is the point.** Re-reading is
+    /// only possible once a conversation has an id, but a conversation with no
+    /// id yet is exactly the state the window-level bar is built in, and
+    /// `redraw` is what runs detection and decides whether to show the model
+    /// control or the setup card. Returning early left the bar with neither:
+    /// no way to choose a model, and no notice saying why asking would not
+    /// work. The composer is on screen from launch now, so it has no later
+    /// moment to be configured in.
     func reload() {
         guard run == nil else { return }
-        guard let id = chat.id, let fresh = Chat.load(id: id) else { return }
-        chat = fresh
+        if let id = chat.id, let fresh = Chat.load(id: id) { chat = fresh }
         redraw()
     }
 
@@ -392,6 +401,11 @@ final class AskView: NSView {
         // whatever detection had found, so with no CLI installed the pane
         // offered four buttons that silently did nothing: `ask` returns at the
         // first guard, and the pane looks exactly as it did before the press.
+        // `recording != nil` stays here, unlike in `updateStatus`. These four
+        // are about *this* meeting ("Summarise", "Action items"), so over the
+        // library they would be four questions about nothing. The setup card
+        // and the model control are about the app and belong on every screen;
+        // the starters are about a document and belong on one.
         guard chat.turns.isEmpty, recording != nil,
               AgentCLI.cachedChosen() != nil else {
             starterRow.isHidden = true
@@ -406,12 +420,13 @@ final class AskView: NSView {
     }
 
     private func updateStatus() {
-        guard recording != nil else {
-            say("")
-            notice.isHidden = true
-            drawStarters()
-            return
-        }
+        // **No `recording != nil` guard.** There used to be one, returning
+        // before any of this: with no meeting open there was no pane, so there
+        // was nothing to report about. The composer belongs to the window now
+        // and asking about the library is a real question, so bailing out here
+        // is what left the bar with no model control and, worse, no setup card
+        // on the one screen somebody opens first. Missing configuration has to
+        // announce itself wherever a question can be typed.
 
         // From the cache, never by running detection. `AgentCLI.chosen()`
         // spawns up to four processes, this runs on every recording selection,
@@ -434,10 +449,12 @@ final class AskView: NSView {
             say("")
             notice.show(found)
             setAskable(false)
+            reportHeight()
             return
         }
         notice.isHidden = true
         setAskable(true)
+        reportHeight()
         // Nothing at all when everything is working.
         //
         // It said "Answers come from your recordings only", which is true and
@@ -449,6 +466,27 @@ final class AskView: NSView {
         // The label stays for the things that *are* about right now: looking
         // for an agent, not finding one, and confirming a note was written.
         say("")
+    }
+
+    /// How tall this needs to be as a bar, told to whoever is constraining it.
+    ///
+    /// The setup card is the reason this exists. It is several lines and a
+    /// button, and in a bar sized for the well alone it is clipped to nothing:
+    /// the one state that has something important to say would be the one state
+    /// you cannot read. So the owner is told a number rather than guessing one.
+    var onHeightChanged: ((CGFloat) -> Void)?
+
+    private func reportHeight() {
+        // The well, the gap under it, the status line, and the bottom inset.
+        var height = ComposerWell.height + 6 + 14 + 12
+        // Whichever invitation is up, and never both: `updateStatus` shows the
+        // card or the starters, so measuring the visible one is the whole rule.
+        if !notice.isHidden {
+            height += notice.fittingSize.height + 8
+        } else if !starterRow.isHidden {
+            height += starterRow.fittingSize.height + 8
+        }
+        onHeightChanged?(height)
     }
 
     /// Everything that has to agree about whether a question can be asked.

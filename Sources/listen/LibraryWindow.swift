@@ -1252,7 +1252,7 @@ final class DetailWithComposer: NSViewController {
     /// transcript underneath it.
     private let drawer = NSView()
     private let collapseButton = NSButton()
-    private let titleLabel = NSTextField(labelWithString: "")
+    private let titleButton = NSButton()
 
     /// The same glass the composer well is made of, so the drawer under it is
     /// one material rather than two that nearly match.
@@ -1326,10 +1326,20 @@ final class DetailWithComposer: NSViewController {
         header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        titleLabel.font = .systemFont(ofSize: 11)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        // **A button, not a label.** The clock leaves the header when the
+        // drawer is open, which took switching, starting and deleting with it:
+        // expanded, there was no route to any of them. The title is the natural
+        // place, because it already names the thing they act on.
+        //
+        // The chevron is a character in the attributed title rather than the
+        // button's `image`, which is the alignment fix `SpeakerPill` records: an
+        // `.imageTrailing` glyph sits on the title's baseline and lands a couple
+        // of points below the centre of the letters beside it.
+        titleButton.isBordered = false
+        titleButton.bezelStyle = .inline
+        titleButton.target = self
+        titleButton.action = #selector(showTitleMenu)
+        titleButton.translatesAutoresizingMaskIntoConstraints = false
 
         // Its own glass disc, and big enough to be a target rather than a hint.
         // A bare chevron at 11 points is the control somebody hunts for after
@@ -1369,7 +1379,7 @@ final class DetailWithComposer: NSViewController {
         fullGlass.translatesAutoresizingMaskIntoConstraints = false
         fullGlass.addSubview(fullButton)
 
-        header.addSubview(titleLabel)
+        header.addSubview(titleButton)
         header.addSubview(fullGlass)
         header.addSubview(collapseGlass)
 
@@ -1395,10 +1405,10 @@ final class DetailWithComposer: NSViewController {
             header.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
             headerHeight,
-            titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor,
-                                                constant: 24),
-            titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo:
+            titleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor,
+                                                 constant: 20),
+            titleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            titleButton.trailingAnchor.constraint(lessThanOrEqualTo:
                 fullGlass.leadingAnchor, constant: -8),
 
             fullGlass.trailingAnchor.constraint(equalTo: collapseGlass.leadingAnchor,
@@ -1423,6 +1433,12 @@ final class DetailWithComposer: NSViewController {
         ])
 
         composer.onHistory = { [weak self] anchor in self?.showHistory(from: anchor) }
+        composer.onWantsOpen = { [weak self] in
+            guard let self else { return }
+            self.putAway = false
+            self.extent = .standard
+            self.applyHeight(animated: true)
+        }
         composer.onExpand = { [weak self] in
             guard let self else { return }
             self.putAway = false
@@ -1477,6 +1493,10 @@ final class DetailWithComposer: NSViewController {
     /// redesign already took: the library's list holds artifacts somebody kept,
     /// and a conversation is working-out until it becomes a note. This is where
     /// it lives instead, next to the field it was typed into.
+    @objc private func showTitleMenu() {
+        showHistory(from: titleButton)
+    }
+
     private func showHistory(from anchor: NSView) {
         let menu = NSMenu()
         let fresh = NSMenuItem(title: "New conversation",
@@ -1551,15 +1571,14 @@ final class DetailWithComposer: NSViewController {
     @objc private func openConversation(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let chat = Chat.load(id: id) else { return }
-        // **Opened before it is filled.** `setExpanded` is what un-hides the
-        // conversation view, and it runs from `applyHeight`, so loading first
-        // rendered the turns into a view that was still hidden and left a
-        // drawer with a title and nothing under it.
+        // **Filled, then opened, and the opening is asked for rather than
+        // inferred.** Sizing first meant `applyHeight` read the *previous*
+        // conversation, found it empty, forced the bar and hid the view that
+        // the turns were about to be drawn into: a full-height drawer with a
+        // header and nothing under it. `onWantsOpen` fires after the turns are
+        // in, which is the only moment at which un-hiding shows anything.
         putAway = false
-        extent = .standard
-        applyHeight(animated: true)
         composer.open(chat)
-        applyHeight()
     }
 
     private func applyHeight(animated: Bool = false) {
@@ -1616,8 +1635,12 @@ final class DetailWithComposer: NSViewController {
                 : "arrow.up.left.and.arrow.down.right",
             accessibilityDescription: extent == .full ? "Smaller" : "Fill the page")
         fullButton.toolTip = extent == .full ? "Smaller" : "Fill the page"
-        titleLabel.stringValue = composer.hasConversation
-            ? composer.conversationTitle : ""
+        let name = composer.hasConversation ? composer.conversationTitle : ""
+        titleButton.attributedTitle = NSAttributedString(
+            string: name.isEmpty ? "" : name + "  ⌄",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor])
+        titleButton.isHidden = name.isEmpty
 
         // Animated on a press, immediate when the height was merely recomputed.
         // A bar easing itself taller because agent detection finished is motion

@@ -435,6 +435,7 @@ final class AskView: NSView {
         // Picked out of the history on purpose, so this one does deserve room.
         wantsRoom = true
         redraw()
+        onWantsOpen?()
     }
 
     /// Start a new conversation, keeping whatever is on screen as its subject.
@@ -624,6 +625,13 @@ final class AskView: NSView {
     /// the one state that has something important to say would be the one state
     /// you cannot read. So the owner is told a number rather than guessing one.
     var onHeightChanged: ((CGFloat) -> Void)?
+
+    /// Fired when a conversation has been loaded and wants to be on screen.
+    ///
+    /// Separate from the height report, which the drawer has to interpret. This
+    /// one is unambiguous, and it arrives *after* the turns are in, so the view
+    /// being un-hidden already has something in it.
+    var onWantsOpen: (() -> Void)?
 
     private func reportHeight() {
         // A conversation needs the room a bar does not have. The owner clamps

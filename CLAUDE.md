@@ -313,6 +313,8 @@ Asking questions about the library through an agent CLI the user already has.
 - History is every conversation, which reverses an earlier decision
 - A reference is an id the model wrote, and a number the reader clicks
 - Save as note did nothing on the screen most questions are asked from
+- Clicking away gives up the caret, and the whole bar counts as inside
+- New chat is a button on the card, and the chevron became a cross
 
 ### `.agents/notes/release.md` (5k)
 

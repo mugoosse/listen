@@ -1439,11 +1439,19 @@ final class DetailWithComposer: NSViewController {
         // became expanded-only that stopped being true: collapse always means
         // put this away. The assignment went with the rewrite and left a glass
         // disc with nothing drawn in it.
-        collapseButton.image = NSImage(systemSymbolName: "chevron.down",
-                                       accessibilityDescription: "Put the conversation away")
-        collapseButton.toolTip = "Put the conversation away"
+        //
+        // **A cross rather than a chevron.** The chevron was drawn from the
+        // control's mechanics: the drawer slides down to the bar, so down is
+        // where it goes. Nobody reads it that way. A chevron pointing down in a
+        // pane full of scrolling text is "go to the end", and this one sat in
+        // the corner where every other card in every other app puts its
+        // dismissal. What the button does is close the conversation and leave
+        // the composer, which is what a cross means.
+        collapseButton.image = NSImage(systemSymbolName: "xmark",
+                                       accessibilityDescription: "Close the conversation")
+        collapseButton.toolTip = "Close the conversation"
         collapseButton.target = self
-        collapseButton.action = #selector(toggleCollapsed)
+        collapseButton.action = #selector(closeConversation)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
         collapseGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
         collapseGlass.translatesAutoresizingMaskIntoConstraints = false
@@ -1464,7 +1472,32 @@ final class DetailWithComposer: NSViewController {
         fullGlass.translatesAutoresizingMaskIntoConstraints = false
         fullGlass.addSubview(fullButton)
 
+        // **Starting another one is a button, not only a menu row.** It was
+        // reachable in two places, both of them lists of past conversations:
+        // the History pull-down and the same menu under the drawer's title.
+        // That is the wrong shape for it. Going back to something you asked
+        // yesterday is browsing and belongs in a menu; asking a fresh question
+        // is the most common thing anybody does with a conversation that is
+        // already on screen, and it was costing a menu and a read of every row
+        // in it. The menu keeps its row, because the pull-down in the title bar
+        // is the only route in when no card is up.
+        newButton.isBordered = false
+        newButton.bezelStyle = .inline
+        newButton.imagePosition = .imageOnly
+        newButton.contentTintColor = .labelColor
+        newButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
+        newButton.image = NSImage(systemSymbolName: "square.and.pencil",
+                                  accessibilityDescription: "New conversation")
+        newButton.toolTip = "New conversation"
+        newButton.target = self
+        newButton.action = #selector(newConversation)
+        newButton.translatesAutoresizingMaskIntoConstraints = false
+        newGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
+        newGlass.translatesAutoresizingMaskIntoConstraints = false
+        newGlass.addSubview(newButton)
+
         header.addSubview(titleButton)
+        header.addSubview(newGlass)
         header.addSubview(fullGlass)
         header.addSubview(collapseGlass)
 
@@ -1494,7 +1527,18 @@ final class DetailWithComposer: NSViewController {
                                                  constant: 20),
             titleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             titleButton.trailingAnchor.constraint(lessThanOrEqualTo:
-                fullGlass.leadingAnchor, constant: -8),
+                newGlass.leadingAnchor, constant: -8),
+
+            // Left to right: start another, resize, close. The two that change
+            // how much room the conversation has stay together, and the one
+            // that ends it is on the outside, where a dismissal belongs.
+            newGlass.trailingAnchor.constraint(equalTo: fullGlass.leadingAnchor,
+                                               constant: -8),
+            newGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            newGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            newGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            newButton.centerXAnchor.constraint(equalTo: newGlass.centerXAnchor),
+            newButton.centerYAnchor.constraint(equalTo: newGlass.centerYAnchor),
 
             fullGlass.trailingAnchor.constraint(equalTo: collapseGlass.leadingAnchor,
                                                 constant: -8),
@@ -1579,9 +1623,26 @@ final class DetailWithComposer: NSViewController {
     /// which is the one gesture that means "show me".
     private var putAway = false
 
-    @objc private func toggleCollapsed() {
-        extent = extent == .bar ? .standard : .bar
-        putAway = extent == .bar
+    /// One-way, because the control is only on screen while the card is open.
+    /// It used to toggle, from the days when the header was permanent; a cross
+    /// that reopens what it just closed would be a lie about which of the two
+    /// it is.
+    ///
+    /// **And it lets the conversation go, rather than only hiding it.**
+    /// Collapsing kept it current: the bar came back, and the next question
+    /// silently continued a conversation with nothing on screen to say which
+    /// one, or that there was one at all. Closing something means it is not
+    /// there any more. Nothing is lost by it, because History holds every
+    /// conversation and this one is one click into that menu, which is the
+    /// same bargain `startNew` already makes.
+    ///
+    /// The caret goes too. A field still blinking under a card that has just
+    /// been put away is the same claim the cross was drawn to withdraw.
+    @objc private func closeConversation() {
+        composer.startNew()
+        composer.endComposing()
+        putAway = false
+        extent = .bar
         applyHeight(animated: true)
     }
 
@@ -1892,6 +1953,8 @@ final class DetailWithComposer: NSViewController {
     private var collapseGlass: NSView!
     private let fullButton = NSButton()
     private var fullGlass: NSView!
+    private let newButton = NSButton()
+    private var newGlass: NSView!
     private var backdrop: NSView!
 
     private lazy var drawerHeight =

@@ -96,6 +96,9 @@ final class AskView: NSView {
     /// Is the field being typed into? What the starter chips and the drawer's
     /// panel both key off. See `setComposing`.
     private var composing = false
+    /// Armed only while `composing`, and the whole of "click away to stop
+    /// asking". See `watchClicks`.
+    private var clickAway: Any?
     /// Set when a conversation was opened on purpose, and cleared only by
     /// another deliberate act: starting one, opening another, or deleting this.
     ///
@@ -528,6 +531,17 @@ final class AskView: NSView {
 
     func focusField() { window?.makeFirstResponder(field) }
 
+    /// Give up the caret, wherever the click landed.
+    ///
+    /// `NSView` does not accept first responder, so a click on the page behind
+    /// the bar goes nowhere and the field keeps the caret: the chips stayed up
+    /// and the drawer stayed backed over a meeting somebody had gone back to
+    /// reading. Only another control took it away. See `watchClicks` for why
+    /// this is driven by an event monitor rather than by `mouseDown`.
+    func endComposing() {
+        guard field.currentEditor() != nil else { return }
+        window?.makeFirstResponder(nil)
+    }
 
     private func redraw() {
         trace("askview redraw: \(chat.turns.count) turns, id \(chat.id ?? "none"), "
@@ -564,8 +578,40 @@ final class AskView: NSView {
     private func setComposing(_ on: Bool) {
         guard composing != on else { return }
         composing = on
+        watchClicks(on)
         drawStarters()
         reportHeight()
+    }
+
+    /// Watch for the click that means somebody has stopped asking.
+    ///
+    /// **A monitor rather than `mouseDown`, and the labels are why.** The
+    /// pattern this app already uses for the title field is a `mouseDown` on
+    /// the pane, which catches every click no subview claimed because
+    /// `NSView.mouseDown` forwards up the responder chain. `NSControl` does not
+    /// forward, and every piece of text on these pages is an `NSTextField`, so
+    /// clicking the empty state's own sentence, a transcript line or a speaker
+    /// name would have left the caret exactly where the complaint started. A
+    /// local monitor sees the click whoever ends up claiming it.
+    ///
+    /// **The whole bar is "inside", not just the well.** The test is this
+    /// view's bounds, so the chips, the conversation and the model menu all
+    /// keep the caret. Anything narrower breaks the chips: the monitor runs
+    /// before the click is dispatched, so ending editing on a chip press empties
+    /// the row under the mouse and the press then lands on nothing. That trap is
+    /// the reason `ComposerField.textDidEndEditing` was left alone.
+    private func watchClicks(_ on: Bool) {
+        if let clickAway { NSEvent.removeMonitor(clickAway) }
+        clickAway = nil
+        guard on else { return }
+        clickAway = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, let window, window === event.window else { return event }
+                if !bounds.contains(convert(event.locationInWindow, from: nil)) {
+                    endComposing()
+                }
+                return event
+            }
     }
 
     private func drawStarters() {
@@ -1191,16 +1237,16 @@ final class ComposerField: NSTextField {
         return took
     }
 
-    /// **Not the same thing as clicking away.** `NSView` does not accept first
-    /// responder, so a click on a plain view leaves the caret where it is and
-    /// this never fires, which is right: somebody who clicked the page's
-    /// background has not stopped asking. Only another control takes the field
-    /// away, and that is exactly when the chips should go.
+    /// **This is not what makes clicking away work.** `NSView` does not accept
+    /// first responder, so a click on a plain view leaves the caret where it is
+    /// and this never fires; only another control takes the field away.
+    /// `AskView.watchClicks` is what turns a click on the page into a lost
+    /// caret, and it does it by asking for this the ordinary way.
     ///
-    /// Pressing a chip does not end editing either, for the same reason: an
-    /// `NSButton` does not take first responder on a click. If it did, the row
-    /// would be emptied under the mouse between the press and the release and
-    /// the chip's action would never run.
+    /// Pressing a chip still does not end editing, and must not: an `NSButton`
+    /// does not take first responder on a click, and if the row were emptied
+    /// under the mouse between the press and the release the chip's action would
+    /// never run. That is why the monitor treats the whole bar as inside.
     override func textDidEndEditing(_ notification: Notification) {
         super.textDidEndEditing(notification)
         onFocusChanged?(false)

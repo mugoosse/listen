@@ -622,11 +622,12 @@ field left the chips down and the drawer unbacked. `ComposerField` overrides
 `becomeFirstResponder` and `textDidEndEditing` instead, which fire on the caret
 itself.
 
-Two things that would have broken it and do not, both for the same reason.
-Clicking a plain view does not end editing, because `NSView` does not accept
-first responder, which is right: somebody who clicked the page background has
-not stopped asking. And pressing a chip does not end editing either, so the row
-is not emptied under the mouse between the press and the release.
+One thing that would have broken it and does not: pressing a chip does not end
+editing, because an `NSButton` does not take first responder on a click, so the
+row is not emptied under the mouse between the press and the release. Clicking a
+plain view does not end editing either, for the related reason that `NSView`
+does not accept first responder, and that half was read as correct for a while.
+It is not; see below.
 
 ## The composer is always a fresh conversation, and History is how you go back
 
@@ -796,3 +797,72 @@ when a conversation is read back, so a citation in a preamble is numbered on
 restore and stripped while it streams. Nothing cites in a preamble today, and
 the alternative is re-rendering every block on `finish` for the case where it
 does.
+
+## Clicking away gives up the caret, and the whole bar counts as inside
+
+Clicking into the composer and then clicking the page left the caret in the
+field: the chips stayed up, the drawer stayed backed, and the page somebody had
+gone back to reading was still covered. `NSView` does not accept first
+responder, so a click on anything that is not a control goes nowhere and the
+field keeps what it has. Only another control took it away, which is why
+clicking the sidebar always worked and clicking the meeting never did.
+
+The pattern this app already had for the same problem is `DetailView.mouseDown`,
+which catches every click no subview claimed because `NSView.mouseDown` forwards
+up the responder chain. **It is not enough here.** `NSControl` does not forward,
+and every piece of text on these pages is an `NSTextField`: the empty state's
+own sentence, a transcript line, a speaker name. The complaint that started this
+was a click on exactly such a label.
+
+So `AskView.watchClicks` arms a local `.leftMouseDown`/`.rightMouseDown` monitor
+while the field has the caret, which sees the click whoever ends up claiming it,
+and `endComposing` asks for the resignation the ordinary way. The monitor is
+armed and torn down inside `setComposing`, so it exists exactly while the flag
+the chips key off is true.
+
+**The test is the whole bar's bounds, not the well's.** A monitor runs before
+the click is dispatched, so ending editing on a chip press empties the row under
+the mouse and the press then lands on nothing, which is the trap recorded above.
+Treating everything inside `AskView` as inside covers the chips, the
+conversation, the model menu and the well's own padding in one number.
+Measured against the built app through accessibility: clicking the field focuses
+it, clicking the bar's background leaves it focused, and clicking the transcript
+moves focus to the window.
+
+## New chat is a button on the card, and the chevron became a cross
+
+Two things about the drawer's header, both from the same reading of it.
+
+Starting another conversation was reachable only through a list of old ones: the
+History pull-down, and the same menu under the drawer's title. That is the wrong
+shape. Going back to yesterday's question is browsing and belongs in a menu;
+asking a fresh one is the commonest thing anybody does with a card that is
+already open, and it was costing a menu and a read of every row in it. It is now
+a disc in the header beside the other two, calling the same `newConversation`
+the menu row calls. The menu keeps its row, because the pull-down is the only
+route in when no card is up.
+
+The collapse control was a `chevron.down`, which was drawn from the mechanics:
+the drawer slides down to the bar, so down is where it goes. Nobody reads it
+that way. A downward chevron in a pane full of scrolling text is "go to the
+end", and this one sat in the corner where every card in every other app puts
+its dismissal. It is an `xmark` now, and one-way rather than a toggle: the
+header only exists while the card is open, so a cross that reopens what it just
+closed would be a lie about which of the two it is.
+
+**And a cross has to actually close it.** Collapsing kept the conversation
+current: the bar came back and the next question silently continued it, with
+nothing on screen naming which conversation that was or that there was one.
+`closeConversation` therefore calls `startNew` and gives up the caret, so what
+is left is a fresh composer over an untouched page. Nothing is lost, because
+History holds every conversation and this one is one click into that menu.
+The cost is that closing mid-answer stops the run, since `startNew` does; the
+alternative is an agent streaming into a card nobody can see.
+
+That leaves the two header buttons differing by one thing: both start a clean
+conversation, and only `newConversation` puts the caret in the field. Which is
+the difference between "ask something else now" and "I am done here".
+
+Left to right the header is: title, new conversation, resize, close. The two
+that change how much room the conversation has stay together, and the one that
+ends it is on the outside.

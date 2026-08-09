@@ -93,6 +93,19 @@ final class AskView: NSView {
     /// The drawer's last reported state, so the caret can be re-evaluated when
     /// the conversation changes without the height changing.
     private var expandedNow = false
+    /// Set when a conversation was opened on purpose, and cleared only by
+    /// another deliberate act: starting one, opening another, or deleting this.
+    ///
+    /// **A context change then moves the context without moving the
+    /// conversation.** Opening one from the landing screen selects nothing, so
+    /// anything that arrives afterwards, including the sidebar picking a
+    /// recording at launch, was overwriting a conversation the user had just
+    /// asked for. Traced: two turns loaded, then `0 turns, id none`.
+    ///
+    /// Asking from somewhere else then continues the same conversation about
+    /// both, which `persist` already handles by adding to `recordings` rather
+    /// than replacing it.
+    private var pinned = false
     private var run: AgentRun?
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
@@ -369,6 +382,14 @@ final class AskView: NSView {
     }
 
     func show(_ recording: Recording?) {
+        // Pinned: take the new context, keep the conversation.
+        if pinned {
+            self.recording = recording
+            person = nil
+            field.placeholderString = Self.prompt(for: recording)
+            updateStatus()
+            return
+        }
         field.placeholderString = Self.prompt(for: recording)
         // `loaded` is what gets the first call through. Both ids are nil at
         // launch, so guarding on the id alone meant the library context never
@@ -403,6 +424,13 @@ final class AskView: NSView {
     /// would make "is this like what she said last year" unanswerable.
     func show(person name: String) {
         guard name != person else { return }
+        if pinned {
+            recording = nil
+            person = name
+            field.placeholderString = Self.prompt(for: nil, person: name)
+            updateStatus()
+            return
+        }
         stop()
         loaded = true
         recording = nil
@@ -427,8 +455,10 @@ final class AskView: NSView {
         person = chat.person
         field.placeholderString = Self.prompt(for: recording, person: person)
         loaded = true
-        // Picked out of the history on purpose, so this one does deserve room.
+        // Picked out of the history on purpose, so this one does deserve room,
+        // and deserves to survive whatever selection arrives next.
         wantsRoom = true
+        pinned = true
         redraw()
         onWantsOpen?()
     }
@@ -437,6 +467,7 @@ final class AskView: NSView {
     func startNew() {
         stop()
         chat = Chat()
+        pinned = false
         redraw()
     }
 
@@ -580,6 +611,15 @@ final class AskView: NSView {
         // trackpad, which is a conversation nobody asked to see behind a bar
         // that says it is put away.
         scroll.isHidden = !on
+        // **Un-hiding is not enough.** The turns are added while this is hidden,
+        // because the drawer only asks to expand once the conversation is
+        // loaded, and a scroll view whose document was built out of sight comes
+        // back with nothing laid out in it. Same staleness as `ComposerWell`,
+        // same cure: ask for the pass explicitly.
+        guard on else { return }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        scrollToEnd()
     }
 
     /// The height this needs as a bar: the well, its status line, and the
@@ -880,6 +920,7 @@ final class AskView: NSView {
     /// empty composer with a history you have to go back into.
     func discard() {
         stop()
+        pinned = false
         if let id = chat.id { Chat.forget(id: id) }
         let here = recording?.id
         let who = person

@@ -37,6 +37,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// `splitView.autosaveName` exists to keep.
     private let sidebarHost = PaneHost()
     private let detailHost = PaneHost()
+    /// The one composer, under everything the detail area shows.
+    private let askBar = AskView()
 
     private let settingsNav = SettingsNavViewController()
     /// People is a third mode for the same reason settings is a second one: it
@@ -256,11 +258,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         controller.addSplitViewItem(side)
         sidebarItem = side
 
-        let main = NSSplitViewItem(viewController: detailHost)
+        // The composer belongs to the **window**, not to the detail pane.
+        //
+        // That is the whole point of it: with nothing selected there is no
+        // detail pane to hang it on, and asking about the library is exactly
+        // the case that has no recording. Inside `DetailView` it could only
+        // ever be a mode of a meeting, which is why the empty screen had
+        // nothing to ask with. So the split's main item is a container holding
+        // whatever `detailHost` is showing, with the composer pinned under it.
+        let main = NSSplitViewItem(viewController: DetailWithComposer(
+            content: detailHost, composer: askBar))
         main.minimumThickness = 420
         main.holdingPriority = NSLayoutConstraint.Priority(250)
         detailHost.identifier = NSUserInterfaceItemIdentifier("detail")
         controller.addSplitViewItem(main)
+
+        // A note written from the composer is a note in the library, so the
+        // list has to hear about it wherever it was written from.
+        askBar.onNoteWritten = { [weak self] in self?.sidebar.reload() }
 
         // The button is a toolbar item now, built in
         // `toolbar(_:itemForItemIdentifier:)`, so nothing anchors it to the
@@ -308,6 +323,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // another costs a comparison and nothing else.
             self.detailHost.show(self.detail)
             self.detail.show(recording)
+            // The composer follows the selection: a question typed while a
+            // meeting is open is about that meeting, and one typed with nothing
+            // open is about the library. `AskView.show` is a no-op when the id
+            // has not moved, so this costs a comparison per click.
+            self.askBar.show(recording)
             // No rebuild. Which items belong used to depend on whether the
             // recording in progress was the one selected, because the stop
             // control stood in for People and Actions on that one screen.
@@ -1185,6 +1205,56 @@ extension LibraryWindow: NSMenuItemValidation {
 }
 
 // MARK: - The two halves of the window
+
+/// Whatever the detail area is showing, with the composer pinned beneath it.
+///
+/// A container rather than a subview of `DetailView`, because the composer has
+/// to survive the pane changing underneath it: the library's empty state, a
+/// note, a person's card and a meeting are four different view controllers and
+/// the question bar is the same bar on all of them.
+///
+/// The height is the composer's alone. `AskView` lays out bottom-up (status,
+/// composer, invitation, transcript of the conversation), so constraining it
+/// here squeezes the conversation to nothing and leaves exactly the well and
+/// its starters, which is what a bar should be.
+@MainActor
+final class DetailWithComposer: NSViewController {
+    private let content: NSViewController
+    private let composer: AskView
+
+    init(content: NSViewController, composer: AskView) {
+        self.content = content
+        self.composer = composer
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    override func loadView() {
+        let container = NSView()
+        addChild(content)
+        content.view.translatesAutoresizingMaskIntoConstraints = false
+        composer.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content.view)
+        container.addSubview(composer)
+        NSLayoutConstraint.activate([
+            content.view.topAnchor.constraint(equalTo: container.topAnchor),
+            content.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.view.bottomAnchor.constraint(equalTo: composer.topAnchor),
+
+            composer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
+            composer.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -24),
+            composer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            // Enough for the well, its status line and one row of starters.
+            // Measured against `ComposerWell.height` plus the chips rather than
+            // guessed, and the conversation above them collapses to nothing,
+            // which is what makes this a bar rather than a pane.
+            composer.heightAnchor.constraint(equalToConstant: 132),
+        ])
+        view = container
+    }
+}
 
 /// Holds one view controller at a time, so a split view item can change what it
 /// shows.

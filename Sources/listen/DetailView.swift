@@ -102,6 +102,10 @@ final class DetailView: NSView {
     /// one surface that is not a document at all. `.selectAny` rather than
     /// `.selectOne`, so pressing it again is the way back, which a control with
     /// nothing else to select cannot otherwise offer.
+    /// Never shown any more, and kept only until `Showing.ask` is deleted with
+    /// it. The composer moved to the window, so a control here that swapped the
+    /// pane for a conversation would be a second way to ask, sitting above a
+    /// bar that is already asking.
     private let modePicker = NSSegmentedControl(
         labels: ["Ask"], trackingMode: .selectAny,
         target: nil, action: nil)
@@ -631,6 +635,7 @@ final class DetailView: NSView {
         modePicker.selectedSegmentBezelColor = Brand.tint
         modePicker.target = self
         modePicker.action = #selector(switchShowing)
+        modePicker.isHidden = true
 
         // An answer saved from Ask is a note like any other, and the switcher
         // in Notes has to know about it without being switched away from and

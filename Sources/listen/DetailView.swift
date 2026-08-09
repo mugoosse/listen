@@ -229,13 +229,18 @@ final class DetailView: NSView {
 
     /// The note takes what it needs between these two.
     ///
-    /// The floor is three lines: an empty note is one line high, and a writing
+    /// The floor is two lines: an empty note is one line high, and a writing
     /// surface you cannot see is one nobody writes in, which is the same
     /// argument as the click-anywhere handler in `mouseDown`. The ceiling is
     /// six, measured against the longest of the 11 notes in the development
     /// library, which runs to five. Past it the note scrolls inside itself,
     /// which is why it is a scroll view rather than a label.
-    private static let notesFloorHeight: CGFloat = 72
+    ///
+    /// Three lines was the first floor and is one too many. Almost every
+    /// meeting has no note, so on almost every page it was two blank lines
+    /// between the placeholder and "Recording", which read as the page having
+    /// come apart rather than as room to write.
+    private static let notesFloorHeight: CGFloat = 44
     private static let notesCeilingHeight: CGFloat = 168
     private var recordingHeadingTop: NSLayoutConstraint!
     private var recordingHeadingHeight: NSLayoutConstraint!
@@ -369,12 +374,17 @@ final class DetailView: NSView {
 
         stack.orientation = .vertical
         stack.alignment = .leading
-        // 12 rather than 18. Each turn already carries a speaker name in colour
+        // 10 rather than 18. Each turn already carries a speaker name in colour
         // above it, so the gap was doing a job the label does: at 18 a two-line
         // exchange read as two separate documents rather than as one
-        // conversation.
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 40, right: 16)
+        // conversation. It went 18, 12, 10, and the padding inside each turn
+        // came down with it: what separates two turns is the sum of three
+        // numbers, so trimming only this one never moved much.
+        stack.spacing = 10
+        // 6 at the top rather than 16. The player card is directly above and is
+        // already separated from the first turn by the scroll view's own gap, so
+        // this was a third margin stacked on two others.
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 40, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // The clip view has to be flipped, and it has to be replaced before the
@@ -455,8 +465,20 @@ final class DetailView: NSView {
         //
         // Collapsible for the reason the chips row is: a hidden view still
         // occupies its frame.
-        modeTop = modeBar.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 14)
-        modeHeight = modeBar.heightAnchor.constraint(equalToConstant: 24)
+        // **Collapsed from the start, because it holds nothing any more.** Both
+        // of its controls are permanently hidden: the mode picker went when the
+        // page started naming its two halves with headings, and the note
+        // switcher went with it. What was left was 38 points of guaranteed
+        // nothing between the speaker chips and "Notes" on every meeting page,
+        // which was the largest gap on the page and the hardest to account for,
+        // because there is no view there to look at.
+        //
+        // Kept rather than deleted, with `setModeBarCollapsed` still able to
+        // open it, because a second document mode is a live possibility and the
+        // bar is where it would go.
+        modeTop = modeBar.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 0)
+        modeHeight = modeBar.heightAnchor.constraint(equalToConstant: 0)
+        modeBar.isHidden = true
         // **Under the section heading, not above the notes.** The player is
         // part of the recording, and the page now says so: notes first, because
         // that is the half you write, then "Recording" with its transport and
@@ -474,11 +496,14 @@ final class DetailView: NSView {
         soloHeight = soloBar.heightAnchor.constraint(equalToConstant: 0)
         // The note starts the page, under the solo bar, and the transcript
         // follows it rather than sharing its box.
+        // 16 from the chips, which is the gap every section heading on this page
+        // now gets: "Notes" and "Recording" are the same kind of thing and were
+        // 50 and 14 points below what came before them.
         notesHeadingTop = notesHeading.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
-                                                            constant: 12)
+                                                            constant: 16)
         notesHeadingHeight = notesHeading.heightAnchor.constraint(equalToConstant: 16)
         noteInfoTop = noteInfo.topAnchor.constraint(equalTo: notesHeading.bottomAnchor,
-                                                    constant: 6)
+                                                    constant: 4)
         noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
         // **The notes get a height, and the transcript gets the rest.**
         //
@@ -504,7 +529,7 @@ final class DetailView: NSView {
                                                       constant: 0)
         chatLinksHeight = chatLinks.heightAnchor.constraint(equalToConstant: 0)
         recordingHeadingTop = recordingHeading.topAnchor.constraint(
-            equalTo: chatLinks.bottomAnchor, constant: 14)
+            equalTo: chatLinks.bottomAnchor, constant: 16)
         recordingHeadingHeight = recordingHeading.heightAnchor.constraint(
             equalToConstant: 16)
         noteInfoHeight.priority = .defaultHigh
@@ -614,7 +639,7 @@ final class DetailView: NSView {
             recordingHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                         constant: -24),
 
-            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -640,7 +665,7 @@ final class DetailView: NSView {
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             noteInfo.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
 
-            notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor, constant: 6),
+            notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor, constant: 4),
             notesScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             notesHeight,
@@ -3010,7 +3035,7 @@ final class TurnView: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            speakerButton.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            speakerButton.topAnchor.constraint(equalTo: topAnchor, constant: 3),
             // 8 and not 6: the pill's own padding used to hold the name clear of
             // this edge, and without it the name has to line up with the
             // paragraph under it or the turn reads as two indents.
@@ -3018,10 +3043,13 @@ final class TurnView: NSView {
             timeLabel.centerYAnchor.constraint(equalTo: speakerButton.centerYAnchor),
             timeLabel.leadingAnchor.constraint(equalTo: speakerButton.trailingAnchor,
                                                constant: 8),
-            body.topAnchor.constraint(equalTo: speakerButton.bottomAnchor, constant: 3),
+            body.topAnchor.constraint(equalTo: speakerButton.bottomAnchor, constant: 1),
             body.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             body.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            body.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            // 4 rather than 8. This is half of the gap to the next speaker's
+            // name and the stack's spacing is the other half, so it was being
+            // paid twice.
+            body.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
         ])
         fill(with: [bodyLabel])
 

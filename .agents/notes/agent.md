@@ -557,3 +557,73 @@ A wrong result has three possible causes and there is a flag for each:
 `--print-command` quotes the empty string explicitly. `allSatisfy` is vacuously
 true for it, so `--tools ""` first printed as bare `--tools` and the pasted
 command meant the opposite of what Listen runs.
+
+## An empty row and the conversation shared one number, and the row took it
+
+Opening a saved conversation drew an empty drawer. The chat loaded, the turns
+were built, and nothing was on screen. Four hypotheses were spent before the
+frames were printed, and the frames say it in one line. Drawer at 548 points,
+`LISTEN_CHAT=2026-08-09-101558-BE0C` on the scratch library:
+
+```
+self       (0, 0, 1129, 548)
+scroll     (0, 548, 1129, 0)     <- zero high
+turns      (0, 0, 1129, 331)     <- every turn built and correctly sized
+invitation (0, 72, 1129, 468)    <- an empty row, 468 points tall
+```
+
+`AskView` is a vertical chain pinned top and bottom: scroll, invitation,
+composer, status. Between them the scroll view and the invitation row share
+whatever the drawer's height leaves over, and **nothing said which of the two
+takes it**.
+
+The free variable is further down than it looks. The row holds `starterLine`,
+which holds the starter chips, a spacer and the drawer's chevron.
+`NSStackView` detaches hidden arranged views, and in the state that matters the
+chips are gone (there are turns) and the chevron is gone (it is expanded), so
+all that is left arranged is the spacer: a bare `NSView` with **no intrinsic
+content size**. Nothing constrained its height, so nothing constrained
+`starterLine`, so nothing constrained the row, and `NSScrollView` has no
+intrinsic content size either. The solver split 468 points between the two
+however it liked.
+
+Content hugging cannot fix this, and it was tried and measured: hugging pulls a
+view down *to its intrinsic size*, and there is no intrinsic size here to pull
+towards. Raising it on both stacks changed nothing. The cure is one constraint
+on the leaf, `spacer.heightAnchor == 0`, which determines the chain.
+
+It is history-dependent, which is why asking a new question always worked and
+only reopening failed. Asking lays the pane out with the chips visible, so the
+scroll view already holds a real height when they disappear and the incremental
+solver leaves it there. Restoring goes the other way: the turns are added while
+the drawer is still a bar, which pins the scroll view at 0, and every point of
+the growth to 548 then goes to the empty row.
+
+The general rule, which is worth more than the fix: **two views with no
+intrinsic content size cannot be neighbours in a chain that has slack.** One of
+them has to be told a number.
+
+## The chips wait for the caret, and the drawer's panel comes with them
+
+The starter chips are the only thing in the composer with no material of their
+own. The drawer draws no glass until it has something to hold, so over a meeting
+nobody had asked about yet, four unbacked chips lay directly on the transcript
+with its text running through them.
+
+Both halves are fixed by one rule: the chips appear when the field takes the
+caret, and the panel appears with them. Idle, the drawer over a meeting is one
+glass capsule and the page is otherwise untouched.
+
+**`controlTextDidBeginEditing` is not the caret, and it looks like it.** It is
+posted when the text first *changes*, so keying off it put the chips up one
+keystroke after the caret arrived, which is exactly one keystroke too late for
+something whose whole job is to suggest what to type. Measured: focusing the
+field left the chips down and the drawer unbacked. `ComposerField` overrides
+`becomeFirstResponder` and `textDidEndEditing` instead, which fire on the caret
+itself.
+
+Two things that would have broken it and do not, both for the same reason.
+Clicking a plain view does not end editing, because `NSView` does not accept
+first responder, which is right: somebody who clicked the page background has
+not stopped asking. And pressing a chip does not end editing either, so the row
+is not emptied under the mouse between the press and the release.

@@ -1652,8 +1652,21 @@ final class DetailWithComposer: NSViewController {
         // **No panel around a bare composer.** With nothing to hold, the glass
         // was a frame drawn around a control that already has its own, which
         // reads as a container missing its contents. It comes back the moment
-        // there is a conversation for it to contain.
+        // there is anything to contain.
+        //
+        // **And clicking into the field is having something to contain.** Keyed
+        // on the conversation alone, this was right on the landing page, where
+        // the composer really is bare, and wrong on every meeting that has not
+        // been asked about yet: the starter chips are the one thing here with no
+        // material of their own, so they were drawn straight onto the transcript
+        // with its text running through them. The well survives that because it
+        // is glass; a chip is not.
+        //
+        // So the chips wait for the field and the panel arrives with them. Over
+        // a meeting nobody is asking about, the drawer is one glass capsule and
+        // the page is otherwise untouched.
         backdrop.isHidden = !expanded && !composer.hasConversation
+            && !composer.isActive
         // The clock and the chevron belong to the bar. Expanded, this header
         // carries the title and the size controls, and a second clock under it
         // would be the same action offered twice, six points apart.

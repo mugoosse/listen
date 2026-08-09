@@ -1061,3 +1061,32 @@ Three changes, and each one closes a different half:
 The general shape: a pane that re-reads from disk on a timer or a notification
 has to know the difference between "show me this recording" and "show me this
 recording again", and only the first one may overwrite a field.
+
+## The meeting page's largest gap was a row holding nothing
+
+Between the speaker chips and the "Notes" heading sat 50 points of nothing, and
+there was no view there to look at: `modeBar` is 24 points tall with 14 above
+it, and both of the controls in it are permanently hidden. The mode picker went
+when the page started naming its two halves with headings, and the note switcher
+went with it. The bar is collapsed from the start now, and kept rather than
+deleted because a second document mode is where it would go.
+
+The rest of the page was measured against it in the same pass, because a gap
+only reads as wrong next to a gap that is right:
+
+| between | was | is |
+|---|---|---|
+| chips and "Notes" | 50 | 16 |
+| "Notes" and the note | 12 | 8 |
+| an empty note and "Recording" | 72 floor + 14 | 44 floor + 16 |
+| the player card and the first turn | 28 | 14 |
+| a paragraph and the next speaker | 26 | 18 |
+
+The last one is the one worth remembering: what separates two turns is the sum
+of **three** numbers, the turn's own bottom padding, the stack's spacing and the
+next turn's top padding. Trimming only the stack's spacing, which is the number
+with a name, never moved much and made the turns look pinched instead. 4, 10 and
+3.
+
+Both section headings now sit 16 points below whatever is above them, because
+"Notes" and "Recording" are the same kind of thing and were 50 and 14.

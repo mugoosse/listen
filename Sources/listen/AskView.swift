@@ -46,7 +46,7 @@ final class AskView: NSView {
     /// alternatives rather than neighbours: one invites a question and the other
     /// says why there is nobody to ask.
     private let invitation = NSStackView()
-    private let field = NSTextField()
+    private let field = ComposerField()
     private let sendButton = SendButton()
     private let modelButton = NSButton()
     private lazy var composer = ComposerWell(field: field, model: modelButton,
@@ -93,6 +93,9 @@ final class AskView: NSView {
     /// The drawer's last reported state, so the caret can be re-evaluated when
     /// the conversation changes without the height changing.
     private var expandedNow = false
+    /// Is the field being typed into? What the starter chips and the drawer's
+    /// panel both key off. See `setComposing`.
+    private var composing = false
     /// Set when a conversation was opened on purpose, and cleared only by
     /// another deliberate act: starting one, opening another, or deleting this.
     ///
@@ -177,9 +180,40 @@ final class AskView: NSView {
         starterLine.addArrangedSubview(spacer)
         starterLine.addArrangedSubview(expandButton)
         // The spacer is what pushes the controls to the trailing edge, and it
-        // is the only thing in the row allowed to grow.
+        // is the only thing in the row allowed to grow. Sideways, and only
+        // sideways: see the height below.
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         starterRow.setContentHuggingPriority(.required, for: .horizontal)
+        // **And it is zero points tall, which is what stopped a whole
+        // conversation being drawn.**
+        //
+        // A bare `NSView` has no intrinsic content size, so nothing said how
+        // tall this one is. That does not matter while something else in the
+        // row is visible, and both of its neighbours are hidden in exactly the
+        // state that matters: the chips go when there are turns, and the setup
+        // card is only up when there is no agent. `NSStackView` detaches hidden
+        // arranged views, so the row was left holding one view of no known
+        // height, and its own height became a free variable. So did the row
+        // above it, and so, therefore, did the conversation's scroll view,
+        // which has no intrinsic content size either.
+        //
+        // Autolayout then split the drawer's spare height between the two of
+        // them however it liked. Measured on the scratch library with
+        // `LISTEN_CHAT`, drawer 548 points: scroll view 0 high over a document
+        // 331 high, and this empty row 468. Every turn built, sized and laid
+        // out, inside a view with no height. Content hugging cannot fix it,
+        // because hugging pulls a view down to its intrinsic size and there is
+        // no intrinsic size here to pull towards. Measured too: raising the
+        // hugging priority on both rows changed nothing.
+        //
+        // It is history-dependent, which is why asking a new question always
+        // looked fine and only reopening a saved one failed. Asking lays the
+        // pane out with the chips visible, so the scroll view already holds a
+        // real height when they disappear and the incremental solver leaves it
+        // alone. Restoring goes the other way: the turns are added while the
+        // drawer is still a bar, which pins the scroll view at 0, and every
+        // point of the growth to 548 then goes to the empty row.
+        spacer.heightAnchor.constraint(equalToConstant: 0).isActive = true
 
         invitation.orientation = .vertical
         invitation.alignment = .leading
@@ -248,6 +282,7 @@ final class AskView: NSView {
         field.target = self
         field.action = #selector(send)
         field.delegate = self
+        field.onFocusChanged = { [weak self] on in self?.setComposing(on) }
         field.translatesAutoresizingMaskIntoConstraints = false
 
         // Which agent and which model, in the composer rather than only in
@@ -515,6 +550,21 @@ final class AskView: NSView {
         scrollToEnd()
     }
 
+    /// The field gained or lost the caret.
+    ///
+    /// The height is re-reported even though it does not change: the drawer's
+    /// panel is decided in `applyHeight`, and this is the only thing that tells
+    /// it to look again. The bar's height is deliberately the same either way,
+    /// because the chips share their line with the drawer's own controls, so
+    /// clicking into the field brings a panel and four chips rather than a
+    /// panel, four chips and a jump.
+    private func setComposing(_ on: Bool) {
+        guard composing != on else { return }
+        composing = on
+        drawStarters()
+        reportHeight()
+    }
+
     private func drawStarters() {
         for view in starterRow.arrangedSubviews { view.removeFromSuperview() }
         // Only on an empty conversation. Four chips under a page of answers is
@@ -529,7 +579,14 @@ final class AskView: NSView {
         // library they would be four questions about nothing. The setup card
         // and the model control are about the app and belong on every screen;
         // the starters are about a document and belong on one.
-        guard chat.turns.isEmpty, recording != nil,
+        //
+        // **And only once somebody is actually asking.** Standing over a
+        // meeting page they were four unbacked chips lying on the transcript,
+        // with its text running straight through them, because the drawer draws
+        // no panel until it has something to hold. Waiting for the field solves
+        // both halves at once: nothing covers the page until you mean to ask,
+        // and by the time the chips are up the panel is up behind them.
+        guard composing, chat.turns.isEmpty, recording != nil,
               AgentCLI.cachedChosen() != nil else {
             starterRow.isHidden = true
             return
@@ -620,6 +677,9 @@ final class AskView: NSView {
         needsLayout = true
         layoutSubtreeIfNeeded()
         scrollToEnd()
+        trace("askview expanded: scroll \(scroll.frame.height) high over a document of "
+              + "\(scroll.documentView?.frame.height ?? 0), invitation "
+              + "\(invitation.frame.height)")
     }
 
     /// The height this needs as a bar: the well, its status line, and the
@@ -640,6 +700,16 @@ final class AskView: NSView {
 
     /// Is there a conversation to go back to, as opposed to an empty composer?
     var hasConversation: Bool { !chat.turns.isEmpty }
+
+    /// Is the composer in use, as opposed to sitting there waiting to be?
+    ///
+    /// The drawer asks, because it is what decides whether to draw a panel
+    /// behind all this. See the note on `backdrop` in `applyHeight`.
+    ///
+    /// The setup card counts as in use whether or not anybody has clicked into
+    /// the field: it is several lines of text explaining why asking will not
+    /// work, and it has to be readable over whatever is behind it.
+    var isActive: Bool { composing || !notice.isHidden }
 
     /// Which conversation is open, so the history can tick it.
     var currentID: String? { chat.id }
@@ -1052,6 +1122,43 @@ extension AskView: NSTextFieldDelegate {
     /// last one deleted.
     func controlTextDidChange(_ notification: Notification) {
         updateSendButton()
+    }
+}
+
+/// The composer's field, which says when it has the caret.
+///
+/// **`controlTextDidBeginEditing` is not that signal, and it looks like it.**
+/// It is posted when the text first *changes*, so keying the starter chips off
+/// it put them up one keystroke after the caret arrived, which is exactly one
+/// keystroke too late for something whose whole job is to suggest what to type.
+/// Measured: focusing the field left the chips down and the drawer unbacked.
+///
+/// `becomeFirstResponder` is called on the field itself before it hands over to
+/// the field editor, and `textDidEndEditing` when the field editor gives up,
+/// whether or not anything was typed. Between them they are the caret.
+final class ComposerField: NSTextField {
+    /// True when the caret arrives, false when it leaves.
+    var onFocusChanged: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let took = super.becomeFirstResponder()
+        if took { onFocusChanged?(true) }
+        return took
+    }
+
+    /// **Not the same thing as clicking away.** `NSView` does not accept first
+    /// responder, so a click on a plain view leaves the caret where it is and
+    /// this never fires, which is right: somebody who clicked the page's
+    /// background has not stopped asking. Only another control takes the field
+    /// away, and that is exactly when the chips should go.
+    ///
+    /// Pressing a chip does not end editing either, for the same reason: an
+    /// `NSButton` does not take first responder on a click. If it did, the row
+    /// would be emptied under the mouse between the press and the release and
+    /// the chip's action would never run.
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        onFocusChanged?(false)
     }
 }
 

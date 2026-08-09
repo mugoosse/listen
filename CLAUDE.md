@@ -233,6 +233,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Continue on the model step means the model loaded, not that a file is the right size
 - The notes prompt is not inside the notes pane, and stayed up over an empty one
 - Stopping a recording is a reload, and it wiped the name being typed
+- The meeting page's largest gap was a row holding nothing
 
 ### `.agents/notes/appkit.md` (20k)
 
@@ -303,6 +304,8 @@ Asking questions about the library through an agent CLI the user already has.
 - The conversation is a sidecar, and a note is not
 - Markdown is rendered at the end, not while streaming
 - `listen ask` is the test mechanism, and it is the same engine as the window
+- An empty row and the conversation shared one number, and the row took it
+- The chips wait for the caret, and the drawer's panel comes with them
 
 ### `.agents/notes/release.md` (5k)
 

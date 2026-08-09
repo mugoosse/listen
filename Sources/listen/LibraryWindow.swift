@@ -276,6 +276,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // A note written from the composer is a note in the library, so the
         // list has to hear about it wherever it was written from.
         askBar.onNoteWritten = { [weak self] in self?.sidebar.reload() }
+        // The bar starts on the library, and `reload` is what fills in the model
+        // control. Without it the composer sat there un-updated: the pane's copy
+        // was refreshed by entering Ask mode, and a bar that is always on screen
+        // has no equivalent moment unless it is given one here.
+        askBar.show(nil)
+        askBar.reload()
 
         // The button is a toolbar item now, built in
         // `toolbar(_:itemForItemIdentifier:)`, so nothing anchors it to the

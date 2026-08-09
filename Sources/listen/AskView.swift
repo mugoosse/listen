@@ -185,7 +185,7 @@ final class AskView: NSView {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 15)
-        field.placeholderString = "Ask about this meeting…"
+        field.placeholderString = Self.prompt(for: nil)
         field.target = self
         field.action = #selector(send)
         field.delegate = self
@@ -196,6 +196,13 @@ final class AskView: NSView {
         // above the transcript: it is a property of the question being asked,
         // and somebody who wants a better answer to *this* question should not
         // have to leave the pane to ask for one.
+        // Empty and hidden until `updateModelButton` has something to say. An
+        // `NSButton` created with no title carries AppKit's own placeholder, so
+        // a composer that had not been updated yet advertised a control called
+        // "Button": measured on the window-level bar, which unlike the pane's
+        // copy is built before any agent detection has finished.
+        modelButton.title = ""
+        modelButton.isHidden = true
         modelButton.bezelStyle = .inline
         modelButton.isBordered = false
         modelButton.font = .systemFont(ofSize: 12)
@@ -306,7 +313,16 @@ final class AskView: NSView {
     /// changing recordings stops it. Letting it finish would file its turn into
     /// a conversation nobody is looking at, and its cost line would land under
     /// somebody else's meeting.
+    /// What the field offers to answer, which is not the same question on every
+    /// screen. "Ask about this meeting" over an empty library is a promise about
+    /// a meeting that is not open, and it was the placeholder on every screen
+    /// the moment the composer moved to the window.
+    static func prompt(for recording: Recording?) -> String {
+        recording == nil ? "Ask about your library…" : "Ask about this meeting…"
+    }
+
     func show(_ recording: Recording?) {
+        field.placeholderString = Self.prompt(for: recording)
         guard recording?.id != self.recording?.id else { return }
         stop()
         self.recording = recording
@@ -328,6 +344,7 @@ final class AskView: NSView {
         stop()
         self.chat = chat
         recording = chat.sources.first.flatMap { Recording.find($0) }
+        field.placeholderString = Self.prompt(for: recording)
         redraw()
     }
 

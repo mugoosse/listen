@@ -1556,11 +1556,13 @@ final class DetailView: NSView {
             // has recordings, it would only turn a simple selection prompt into
             // decoration and make the detail pane feel less calm.
             emptyIcon.isHidden = !libraryIsEmpty
-            // "a recording" was the whole truth while the list held nothing
-            // else. It now holds notes and, while somebody is searching, people.
+            // Selecting is no longer the only thing you can do here. The
+            // composer under this sentence asks about the whole library, so an
+            // instruction to go and pick something first is now untrue as well
+            // as unhelpful: this screen is a place you can work from.
             empty.stringValue = libraryIsEmpty
                 ? "No recordings yet. Start a new recording from the sidebar."
-                : "Select something from the list."
+                : "Select something from the list, or ask about your library below."
             return
         }
 

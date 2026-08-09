@@ -224,6 +224,8 @@ final class DetailView: NSView {
 
     /// Fires when this pane changes something the list also shows.
     var onChanged: (() -> Void)?
+    /// A conversation named on this page, handed to whoever owns the composer.
+    var onOpenChat: ((Chat) -> Void)?
 
     private var player: AVAudioPlayer?
     private var tick: Timer?
@@ -1155,9 +1157,11 @@ final class DetailView: NSView {
     /// tell you it has been asked about, and then show you what was said.
     private func openChat(_ chat: Chat) {
         saveYours()
-        showing = .ask
-        askView.open(chat)
-        applyShowing()
+        // **The window's composer, not this pane's.** `askView` here has been
+        // dormant since the composer moved to the window, so opening a
+        // conversation into it followed the link, loaded the turns and drew
+        // them in a view nobody can see: a link that does nothing.
+        onOpenChat?(chat)
     }
 
     /// Give the note the height of its own text, between the floor and ceiling.
@@ -1543,6 +1547,13 @@ final class DetailView: NSView {
     /// the same time as the sentence it replaces.
     private func updateEmpty() {
         guard let recording else { return }
+        // The greeting and the library's conversations belong to the screen with
+        // nothing open. They are siblings of the empty label rather than
+        // children of anything that hides it, which is the trap this file
+        // already records against `updatePlaceholder`, so arriving at a meeting
+        // left them drawn over its page.
+        greeting.isHidden = true
+        recentChats.isHidden = true
 
         // While capture is running, the whole pane below the header is the
         // recording screen and the mode picker collapses.
@@ -3279,6 +3290,11 @@ final class DetailViewController: NSViewController {
     func setDrawerCovering(_ on: Bool) {
         loadViewIfNeeded()
         detail.setDrawerCovering(on)
+    }
+
+    var onOpenChat: ((Chat) -> Void)? {
+        get { detail.onOpenChat }
+        set { loadViewIfNeeded(); detail.onOpenChat = newValue }
     }
 
     /// Flush a keystroke that has not reached disk yet. Safe at any time.

@@ -267,6 +267,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // nothing to ask with. So the split's main item is a container holding
         // whatever `detailHost` is showing, with the composer pinned under it.
         let composerHost = DetailWithComposer(content: detailHost, composer: askBar)
+        // Conversations named on a page open in the window's composer, which is
+        // the only one on screen.
+        detail.onOpenChat = { [weak composerHost] chat in composerHost?.open(chat) }
         // The page's centred sentence steps aside for the drawer. Only that
         // label: a meeting page is happy to be partly covered, and an empty one
         // arguing with the conversation on top of it is not.
@@ -1565,6 +1568,13 @@ final class DetailWithComposer: NSViewController {
         extent = .bar
         putAway = false
         applyHeight(animated: true)
+    }
+
+    /// Load a conversation and show it. The one entry point, so a link on a
+    /// page and a pick from the title menu cannot come apart.
+    func open(_ chat: Chat) {
+        putAway = false
+        composer.open(chat)
     }
 
     @objc private func openConversation(_ sender: NSMenuItem) {

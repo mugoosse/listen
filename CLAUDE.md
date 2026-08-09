@@ -195,6 +195,7 @@ The three things written about a recording rather than extracted from it.
 - Lenses stack, and `RecordingFilter` is why there is not a fourth predicate
 - The server is no longer read-only, and notes and tags are the whole exception
 - A note belongs to the library, not to a recording
+- A note may name no recording, and only the window may write one
 - A note file has to survive being written by hand
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
@@ -310,6 +311,8 @@ Asking questions about the library through an agent CLI the user already has.
 - The chips wait for the caret, and the drawer's panel comes with them
 - The composer is always a fresh conversation, and History is how you go back
 - History is every conversation, which reverses an earlier decision
+- A reference is an id the model wrote, and a number the reader clicks
+- Save as note did nothing on the screen most questions are asked from
 
 ### `.agents/notes/release.md` (5k)
 

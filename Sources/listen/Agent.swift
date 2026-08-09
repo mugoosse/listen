@@ -768,6 +768,20 @@ final class AgentRun {
         Answer in a few sentences unless asked for more. Name the recording and \
         the date behind any claim, and quote people rather than paraphrasing \
         where the exact words matter.
+
+        Cite what you are drawing on, with a marker straight after the sentence \
+        it supports: after its full stop, and with no space before it, the way a \
+        footnote is numbered:
+
+        - `[rec:<id>]` for a recording, the id `list_recordings` gave you
+        - `[note:<slug>]` for a note
+        - `[person:<name>]` for somebody in the library
+
+        Listen draws each one as a small number the reader can click to open \
+        that page, so spell the id exactly as a tool returned it: a marker \
+        naming something that is not there is dropped, and the claim is left \
+        with nothing behind it. Cite only what you actually read. Two markers \
+        may sit side by side when a sentence rests on two recordings.
         """
         if allowWrites {
             text += """

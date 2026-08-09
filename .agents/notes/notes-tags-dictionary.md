@@ -334,6 +334,28 @@ single startup path the CLI, the app and the pipeline actor all go through and a
 `static let` is initialised lazily and exactly once by the runtime. **35 notes
 moved** on the real library.
 
+### A note may name no recording, and only the window may write one
+
+`Notes.create` refused an empty `recordings` with "A note nothing points at is
+one nothing can find", which was true when it was written and is not any more:
+the sidebar lists a note with no single page to live on as a row of its own, and
+`Sidebar.pageless` spells out that **zero means it is a page itself**. A
+hand-written file in `notes/` with no frontmatter has always been such a note.
+
+So `create` takes `requiringSources`, defaulting to true, and exactly one caller
+turns it off: `AskView.saveAsNote`. The asymmetry is the point rather than a
+convenience. An agent writing over MCP is *stating* what its note is about, so a
+`write_note` with no `recordings` is a claim it forgot to make and is still
+refused. A person pressing `Save as note` on an answer about the whole library is
+making no such claim: there is no meeting to name, and refusing left the button
+doing nothing at all, silently, on the screen the app opens on. See
+`agent.md`.
+
+Nothing downstream needed changing, which is the evidence that this was the
+missing case rather than a new shape: `recordings: []` round-trips through
+`encode`/`decode` (`sequence` drops empties), the sidebar and the Notes list both
+already show it, and the note pane draws an empty source line.
+
 ### A note file has to survive being written by hand
 
 The frontmatter is emitted with every value double-quoted and escaped, always,

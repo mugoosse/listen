@@ -671,6 +671,28 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if let slug { detail.showNote(slug) } else { detail.showTranscript() }
     }
 
+    /// Open a note that is not being read beside a recording.
+    ///
+    /// The route a numbered reference in an answer takes, and the same one the
+    /// one list takes when somebody clicks a note in it. There is no recording
+    /// to select on the way: a note can be about four meetings or none, so the
+    /// note pane goes up in place of the detail pane rather than inside it.
+    func open(note slug: String) {
+        if window == nil { build() }
+        guard let note = Notes.find(slug) else { NSSound.beep(); return }
+        enter(.library)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        // Both for the reason `sidebar.onSelectNote` has them: a keystroke that
+        // has not reached disk, and a transport nobody can see is one nobody
+        // can pause.
+        detail.saveYours()
+        detail.stopPlayback()
+        notePane.show(note)
+        detailHost.show(notePane)
+        window?.toolbar?.validateVisibleItems()
+    }
+
     /// Follow the sidebar's segmented control.
     ///
     /// Settings is deliberately not one of these: the segments are which part

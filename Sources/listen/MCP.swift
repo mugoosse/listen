@@ -528,9 +528,16 @@ enum MCP {
             guard let title = args["title"] as? String else {
                 throw MCPError.badArguments("write_note needs a title")
             }
-            guard let body = args["body"] as? String else {
+            guard let written = args["body"] as? String else {
                 throw MCPError.badArguments("write_note needs a body")
             }
+            // Without the citation markers. `Agent.brief` asks for them and the
+            // Ask pane draws them as numbers, but a note is a markdown file
+            // somebody may open in another editor, and `[rec:2026-08-08-…]` in
+            // the middle of a sentence there is this app's private punctuation
+            // leaking into their document. What the note is about is a field on
+            // it, which is where provenance belongs.
+            let body = AnswerReferences.strip(written)
             let note = try Notes.create(title: title, body: body, source: .agent,
                                         prompt: args["prompt"] as? String,
                                         recordings: try ids(args["recordings"],
@@ -554,7 +561,10 @@ enum MCP {
                         + "Read the note first.")
             }
             let note = try Notes.replace(
-                existing.slug, body: body,
+                // Markers out, the same way `write_note` takes them out. `was`
+                // is compared against what `read_note` returned, which is the
+                // stored body, so stripping the new one cannot move the swap.
+                existing.slug, body: AnswerReferences.strip(body),
                 title: args["title"] as? String,
                 prompt: args["prompt"] as? String, source: .agent,
                 recordings: args["recordings"] == nil

@@ -34,7 +34,9 @@ final class AnswerTurn: NSView {
     private let footer = NSStackView()
     private let save = NSButton()
 
-    private let onSave: (String, String) -> Void
+    /// Told the answer and the question it came from, and answers whether a note
+    /// was written. See `saveTapped`.
+    private let onSave: (String, String) -> Bool
     let question: String
 
     /// Every block, in order, so the turn can be written to `chat.json` and
@@ -47,19 +49,24 @@ final class AnswerTurn: NSView {
     private(set) var toolLines: [String] = []
 
     /// The text view currently being streamed into, if the last block is text.
-    private var openText: NSTextField?
-    /// Every paragraph, so `layout` can tell each one how wide it is. See the
-    /// comment there: without it they reserve height for lines they do not draw.
-    private var paragraphs: [NSTextField] = []
+    private var openText: LinkLine?
     /// Tool phrases seen since the last text block, waiting to be summarised.
     private var pending: [String] = []
+    /// Everything this answer cited, in the order the numbers were handed out.
+    ///
+    /// One list for the whole turn rather than one per block, so a recording
+    /// named in the first paragraph and again in the last is reference 1 both
+    /// times. It is rebuilt from the markdown every time a block is rendered,
+    /// which is what makes a conversation read back from disk number itself the
+    /// same way it did while it was being written.
+    private var references: [Reference] = []
 
     private var started = Date()
     private var ticker: Timer?
     private var running = false
     private var collapsed = false
 
-    init(question: String, onSave: @escaping (String, String) -> Void) {
+    init(question: String, onSave: @escaping (String, String) -> Bool) {
         self.question = question
         self.onSave = onSave
         super.init(frame: .zero)
@@ -148,31 +155,19 @@ final class AnswerTurn: NSView {
         view.widthAnchor.constraint(equalTo: blocks.widthAnchor).isActive = true
     }
 
-    /// Tell every paragraph how wide it is, before anything measures its height.
+    /// **There is deliberately no `layout()` override any more.** There used to
+    /// be one, telling every paragraph its `preferredMaxLayoutWidth`, because an
+    /// `NSTextField` computes its height from that and not from the width it has
+    /// been given: a label left at the default reserved room for the three lines
+    /// it would need at some narrower width and then drew one, leaving the
+    /// difference as blank space underneath. It read as a spacing bug and was a
+    /// measuring one.
     ///
-    /// This is the trap `Pane.sizeDocument` records, and it is what made the
-    /// spacing between blocks look wrong: an `NSTextField` computes its height
-    /// from `preferredMaxLayoutWidth`, not from the width it has been given, so
-    /// a label left at the default reserved room for the three lines it would
-    /// need at some narrower width and then drew one, leaving the difference as
-    /// blank space underneath. It read as a spacing bug and was a measuring one.
-    ///
-    /// Only when it changed: setting it dirties layout, and setting it
-    /// unconditionally from `layout` schedules another pass forever.
-    override func layout() {
-        super.layout()
-        // From this view's own bounds, not from the stack's. A subview's frame
-        // during a layout pass is whatever it was before the pass, so reading
-        // it here pinned every paragraph to the width the pane had when the
-        // turn was created and left them wrapping at half the window.
-        // `self.bounds` is set by the parent before `layout()` runs, so it is
-        // the one width that is known to be current.
-        let width = bounds.width - Self.gutter
-        guard width > 0 else { return }
-        for label in paragraphs where abs(label.preferredMaxLayoutWidth - width) > 0.5 {
-            label.preferredMaxLayoutWidth = width
-        }
-    }
+    /// The blocks are `LinkLine`s now, whose container tracks the view's width,
+    /// and that width is stated by the constraint `addBlock` puts on every one
+    /// of them. So the measurement follows the constraint rather than a property
+    /// somebody has to remember to set, and re-adding a `layout()` pass here
+    /// would be setting it twice.
 
     /// How far short of the right edge an answer stops, so an answer and a
     /// question are visibly different shapes before you read either.
@@ -253,7 +248,7 @@ final class AnswerTurn: NSView {
 
         if let open = openText {
             body += chunk
-            open.stringValue = body
+            write(body, into: open)
             if var last = steps.last, last.kind == Chat.Step.text {
                 last.text = body
                 steps[steps.count - 1] = last
@@ -288,6 +283,7 @@ final class AnswerTurn: NSView {
         toolLines = []
         pending = []
         steps = []
+        references = []
         openText = nil
         for view in blocks.arrangedSubviews { view.removeFromSuperview() }
         show(activity: "Thinking")
@@ -297,8 +293,7 @@ final class AnswerTurn: NSView {
         stopClock()
         closePhase()
         hideActivity()
-        let label = paragraph(message)
-        label.textColor = .systemRed
+        let label = paragraph(message, colour: .systemRed)
         addBlock(label)
         openText = nil
     }
@@ -314,7 +309,7 @@ final class AnswerTurn: NSView {
         // Markdown only now. Re-parsing on every delta means re-laying out the
         // whole answer forty times a second, and half-written markdown renders
         // as its own syntax while it is half-written.
-        openText?.attributedStringValue = Self.rendered(body)
+        if let open = openText { open.set(rendered(body)) }
         openText = nil
         save.isHidden = body.isEmpty
         // Only worth collapsing when there is working-out to hide.
@@ -347,7 +342,7 @@ final class AnswerTurn: NSView {
                     addBlock(ActivityLine(step.text))
                 } else {
                     let label = paragraph(step.text)
-                    label.attributedStringValue = Self.rendered(step.text)
+                    label.set(rendered(step.text))
                     addBlock(label)
                 }
             }
@@ -362,16 +357,14 @@ final class AnswerTurn: NSView {
             body = turn.text
             if !turn.text.isEmpty {
                 let label = paragraph(turn.text)
-                label.attributedStringValue = Self.rendered(turn.text)
+                label.set(rendered(turn.text))
                 addBlock(label)
             }
             toolLines = turn.tools ?? []
         }
 
         if let failure = turn.failure, body.isEmpty {
-            let label = paragraph(failure)
-            label.textColor = .systemRed
-            addBlock(label)
+            addBlock(paragraph(failure, colour: .systemRed))
         }
         save.isHidden = body.isEmpty
         disclosure.isHidden = blocks.arrangedSubviews.count < 2
@@ -439,24 +432,86 @@ final class AnswerTurn: NSView {
         }
     }
 
-    @objc private func saveTapped() { onSave(body, question) }
+    /// Saved without the markers.
+    ///
+    /// A note is a markdown file somebody may open in another editor, and
+    /// `[rec:2026-08-08-150112-42A1]` in the middle of a sentence is this app's
+    /// private punctuation showing through. The note keeps the recording it is
+    /// about in its own `recordings` field, which is where provenance belongs.
+    ///
+    /// **The button reports its own outcome.** The confirmation used to be only
+    /// the small grey line under the composer, which is six inches away from the
+    /// thing that was pressed and is wiped by the next status change; a press
+    /// that wrote a file and a press that did nothing looked identical. The
+    /// control that was clicked is the one place the answer cannot be missed.
+    /// Disabled with it, so an answer cannot quietly become two notes.
+    @objc private func saveTapped() {
+        guard onSave(AnswerReferences.strip(body), question) else { return }
+        save.title = "Saved"
+        save.image = NSImage(systemSymbolName: "checkmark",
+                             accessibilityDescription: nil)
+        save.imagePosition = .imageLeading
+        save.isEnabled = false
+    }
 
     // MARK: - Words
 
-    private func paragraph(_ text: String) -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 13)
-        label.isSelectable = true
-        // Selectable **and** attribute-preserving. Clicking a selectable
-        // `NSTextField` hands it to the field editor, which without this
-        // re-renders the content in the control's own font and throws the
-        // attributed string away: the answer lost every bold, italic and list
-        // indent the moment somebody clicked it to copy a line, and got tighter
-        // at the same time because the paragraph styles went with them.
-        label.allowsEditingTextAttributes = true
-        label.preferredMaxLayoutWidth = max(0, bounds.width - Self.gutter)
-        paragraphs.append(label)
-        return label
+    /// One block of the answer.
+    ///
+    /// **A text view, not a label.** Every block used to be an `NSTextField`,
+    /// which cannot route a click on a link to anything but `NSWorkspace`, and
+    /// a citation that asks Launch Services to open `listen-recording:` is a
+    /// citation that does nothing. `LinkLine` is the same view the note pane
+    /// puts its sources in, for the same reason, and it brings its own height.
+    /// It also retires the trap the old label carried: a selectable
+    /// `NSTextField` hands itself to the field editor on the first click and
+    /// re-renders its content in the control's font, so the answer lost every
+    /// bold and every list indent the moment somebody clicked it to copy a line.
+    private func paragraph(_ text: String, colour: NSColor = .labelColor) -> LinkLine {
+        let view = LinkLine()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.delegate = self
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.minSize = .zero
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                              height: CGFloat.greatestFiniteMagnitude)
+        view.setContentHuggingPriority(.required, for: .vertical)
+        view.setContentCompressionResistancePriority(.required, for: .vertical)
+        // Stated rather than left at the default, which underlines every link
+        // and paints it system blue whatever the attributed string asked for.
+        // See `DetailView.buildNotesPane`, where leaving it out drew a blue
+        // band across the pane.
+        view.linkTextAttributes = [
+            .foregroundColor: Brand.accent,
+            .cursor: NSCursor.pointingHand,
+        ]
+        write(text, into: view, colour: colour)
+        return view
+    }
+
+    /// The text as it arrives, before markdown is parsed.
+    ///
+    /// Markers are taken out here as well as at the end. They are written
+    /// mid-sentence, so leaving them in while the answer streams shows the
+    /// reader `[rec:2026-08-08-150112-42A1]` for as long as it takes the next
+    /// paragraph to arrive, which is the one moment they are least able to
+    /// ignore it.
+    private func write(_ text: String, into view: LinkLine,
+                       colour: NSColor = .labelColor) {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 2
+        view.set(NSAttributedString(string: AnswerReferences.strip(text), attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: colour,
+            .paragraphStyle: style,
+        ]))
     }
 
     /// Markdown, trimmed for a label that is one block among several.
@@ -468,9 +523,17 @@ final class AnswerTurn: NSView {
     /// line plus its trailing spacing, and the blocks drifted apart. Measured
     /// against the plain-text version of the same answer, which was correct and
     /// is what made the cause obvious.
-    private static func rendered(_ markdown: String) -> NSAttributedString {
+    ///
+    /// The references are numbered on the way in and drawn on the way out,
+    /// either side of the markdown, because neither parser can be trusted with
+    /// a marker: the numbering has to see `[rec:…]` before Foundation decides
+    /// what a bracket means, and the number has to be inserted after
+    /// `MarkdownText` has finished moving text around.
+    private func rendered(_ markdown: String) -> NSAttributedString {
+        let numbered = AnswerReferences.number(markdown, into: &references)
         let out = NSMutableAttributedString(
-            attributedString: MarkdownText.attributed(markdown))
+            attributedString: MarkdownText.attributed(numbered))
+        AnswerReferences.decorate(out, with: references)
         while let last = out.string.last, last.isNewline {
             out.deleteCharacters(in: NSRange(location: out.length - 1, length: 1))
         }
@@ -528,6 +591,39 @@ final class AnswerTurn: NSView {
     static func phrase(_ name: String, _ detail: String) -> String {
         let doing = Self.doing(name, detail)
         return doing.prefix(1).lowercased() + doing.dropFirst()
+    }
+}
+
+extension AnswerTurn: NSTextViewDelegate {
+    /// A numbered reference was clicked.
+    ///
+    /// The card is anchored to the number itself rather than to the block, so a
+    /// reference half way down a long answer does not put its popover at the
+    /// top of the paragraph. The anchor view is the text view, which lives as
+    /// long as this turn does: anchoring to something shorter-lived than the
+    /// popover is the crash `.agents/notes/appkit.md` records.
+    func textView(_ textView: NSTextView, clickedOnLink link: Any,
+                  at charIndex: Int) -> Bool {
+        guard let reference = Reference(link: link) else { return false }
+        ReferencePopover.show(reference, from: textView,
+                              rect: Self.rect(of: charIndex, in: textView))
+        return true
+    }
+
+    /// Where one character is, in the text view's own coordinates.
+    private static func rect(of index: Int, in view: NSTextView) -> NSRect {
+        guard let manager = view.layoutManager, let container = view.textContainer else {
+            return view.bounds
+        }
+        let glyphs = manager.glyphRange(
+            forCharacterRange: NSRange(location: index, length: 1),
+            actualCharacterRange: nil)
+        var rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+        // The container is inset inside the view, and a rect that ignores that
+        // is a popover pointing a few points off the number it belongs to.
+        rect.origin.x += view.textContainerInset.width
+        rect.origin.y += view.textContainerInset.height
+        return rect
     }
 }
 

@@ -286,14 +286,24 @@ enum Notes {
     /// collision is an agent asked twice for "action items", and refusing it
     /// means it has to invent a name that is worse than the one it had. Nothing
     /// is lost either way, and this direction cannot destroy a note.
+    ///
+    /// `requiringSources` is the one thing a caller may relax, and only the
+    /// window does. An agent writing over MCP is *stating* what its note is
+    /// about, so a write with no `recordings` there is a claim it forgot to
+    /// make. A person pressing `Save as note` on an answer about the whole
+    /// library is making no such claim: there is no meeting to name, and
+    /// refusing the note left the button doing nothing at all. A note about
+    /// nothing is a page in its own right, which is what the sidebar's
+    /// `pageless` already says.
     @discardableResult
     static func create(title: String, body: String, source: Source,
-                       prompt: String? = nil, recordings: [String]) throws -> Note {
+                       prompt: String? = nil, recordings: [String],
+                       requiringSources: Bool = true) throws -> Note {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw Failure.emptyTitle }
         guard !body.isEmpty else { throw Failure.emptyBody }
-        let recordings = try checked(recordings)
+        let recordings = try checked(recordings, requiring: requiringSources)
 
         let now = Metadata.iso(Date())
         let note = Note(slug: unique(slug(for: title)), title: title,
@@ -367,13 +377,15 @@ enum Notes {
     }
 
     /// Every id must name a recording that exists **at the moment it is
-    /// claimed**, and there must be at least one.
+    /// claimed**, and unless the caller says otherwise there must be at least
+    /// one.
     ///
     /// Checked on the way in and never again. A note that outlives a recording
     /// keeps naming it, which is the point: a synthesis of four meetings must
     /// not lose a source because one was deleted. What this stops is a typo
     /// becoming a note nobody can find from any recording.
-    private static func checked(_ ids: [String]) throws -> [String] {
+    private static func checked(_ ids: [String],
+                               requiring atLeastOne: Bool = true) throws -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         let library = Recording.all()
@@ -383,7 +395,7 @@ enum Notes {
             }
             if seen.insert(id).inserted { out.append(id) }
         }
-        guard !out.isEmpty else { throw Failure.noRecordings }
+        guard !out.isEmpty || !atLeastOne else { throw Failure.noRecordings }
         return out
     }
 

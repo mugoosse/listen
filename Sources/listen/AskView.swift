@@ -860,7 +860,7 @@ final class AskView: NSView {
         // Save on an older answer filed it under a question asked afterwards,
         // which was measured and is exactly as confusing as it sounds.
         let answer = AnswerTurn(question: text) { [weak self] body, asked in
-            self?.saveAsNote(body, asked: asked)
+            self?.saveAsNote(body, asked: asked) ?? false
         }
         answering = answer
         addTurn(answer)
@@ -1036,18 +1036,50 @@ final class AskView: NSView {
     /// question rather than from the answer: the question is what somebody will
     /// be looking for in the note list, and an answer's first line is usually a
     /// sentence rather than a name.
-    private func saveAsNote(_ body: String, asked: String) {
-        guard let recording else { return }
+    ///
+    /// **No `guard let recording`, for the reason `persist` records.** There
+    /// used to be one, and it made the button silently dead on the one screen
+    /// most questions are asked from: a question asked with nothing selected is
+    /// about the library, so `recording` was nil, so the press wrote nothing and
+    /// said nothing. An answer that spans the library is the *most* worth
+    /// keeping, and it is the case the library-level note store was built for.
+    ///
+    /// Returns whether a note was written, so the button that was pressed can
+    /// say so itself. See `AnswerTurn.saveTapped`.
+    private func saveAsNote(_ body: String, asked: String) -> Bool {
         let asked = asked.isEmpty ? "Asked in Listen" : asked
         let title = String(asked.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            _ = try Notes.create(title: title, body: body, source: .agent,
-                                 prompt: asked, recordings: [recording.id])
+            let note = try Notes.create(title: title, body: body, source: .agent,
+                                        prompt: asked, recordings: sourcesForNote(),
+                                        requiringSources: false)
             onNoteWritten?()
-            say("Saved as a note. It is in the Notes tab.")
+            say(note.recordings.isEmpty
+                ? "Saved as a note about the library. It is in Notes in the sidebar."
+                : "Saved as a note. It is in the Notes tab.")
+            return true
         } catch {
             say(error.localizedDescription)
+            return false
         }
+    }
+
+    /// The meetings a note out of this conversation is about.
+    ///
+    /// `chat.sources` rather than the recording on screen, because `persist` has
+    /// already named the meeting every turn was asked on and the selection can
+    /// have moved since: a conversation reopened from History is pinned, so
+    /// clicking down the sidebar changes what is selected without changing what
+    /// the conversation was about. Filing last week's answer against whatever is
+    /// open now would be provenance that is confidently wrong.
+    ///
+    /// Filtered to what the library still has, because `Notes.create` refuses an
+    /// id it cannot resolve and a conversation can outlive one of its
+    /// recordings. An empty result is a note about the library, which is allowed.
+    private func sourcesForNote() -> [String] {
+        var ids = chat.sources
+        if let id = recording?.id, !ids.contains(id) { ids.append(id) }
+        return ids.filter { Recording.find($0) != nil }
     }
 
     // MARK: - Drawing a turn
@@ -1068,7 +1100,7 @@ final class AskView: NSView {
     private func view(for turn: Chat.Turn, asking: String) -> NSView {
         if turn.who == Chat.you { return QuestionTurn(turn.text) }
         let answer = AnswerTurn(question: asking) { [weak self] body, asked in
-            self?.saveAsNote(body, asked: asked)
+            self?.saveAsNote(body, asked: asked) ?? false
         }
         answer.restore(turn)
         return answer

@@ -24,6 +24,20 @@ enum NoteLink {
     }
 }
 
+/// And for somebody in the roster, which only an answer's references link to.
+///
+/// The name as it is shown, not the on-disk label: it is written by an agent
+/// that was handed display names, and `People.findByDisplayName` is the one
+/// lookup that accepts both.
+enum PersonLink {
+    static let scheme = "listen-person:"
+
+    static func id(_ link: Any) -> String? {
+        guard let url = link as? String, url.hasPrefix(scheme) else { return nil }
+        return String(url.dropFirst(scheme.count))
+    }
+}
+
 /// The same trick for a conversation, and separate rather than a parameter on
 /// the one above, because the two are read by different delegates and a link
 /// that resolves to the wrong kind of thing is the failure worth designing out.
@@ -544,6 +558,18 @@ extension NotePane: NSTextViewDelegate {
 /// an empty note.
 @MainActor
 final class LinkLine: NSTextView {
+    /// Replace the text, and say so.
+    ///
+    /// `textStorage` is written to directly rather than through `string`,
+    /// because the attributes are the point here, and a programmatic write does
+    /// not call `didChangeText`: without the invalidation the view keeps the
+    /// height it was last measured at, which for an answer being streamed into
+    /// is the height of its first sentence.
+    func set(_ text: NSAttributedString) {
+        textStorage?.setAttributedString(text)
+        invalidateIntrinsicContentSize()
+    }
+
     override var intrinsicContentSize: NSSize {
         guard let container = textContainer, let manager = layoutManager else {
             return super.intrinsicContentSize

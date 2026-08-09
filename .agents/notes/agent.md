@@ -688,3 +688,111 @@ absent when nothing is open, so the menu keeps its shape.
 
 It does not ask twice: a conversation is working-out rather than evidence, and
 anything worth keeping was already saved as a note.
+
+## Save as note did nothing on the screen most questions are asked from
+
+`saveAsNote` opened with `guard let recording else { return }`, so on a
+conversation about the library the press wrote no file and printed no message.
+Measured from the outside: pressing the button through accessibility left
+`notes/` empty and left the status line as it was, which is the same evidence a
+user has, and it is none.
+
+The guard was a leftover from when the Ask pane was a third mode on a recording
+page and could not be reached without one. The composer belongs to the window
+now, so nothing is selected on the screen the app opens on, and `persist` had
+already been through exactly this: **a question asked with nothing selected is
+about the library**, and refusing it there is refusing it in the common case.
+An answer that spans four meetings is also the case the library-level note store
+was built for, so the one answer most worth keeping was the one that could not be
+kept.
+
+Three parts to the fix, and the middle one is the interesting one:
+
+- The guard is gone, and `Notes.create` takes `requiringSources: false` from the
+  window only. See `notes-tags-dictionary.md`.
+- **The sources are `chat.sources`, not the recording on screen.** `persist` has
+  already named the meeting every turn was asked on, and a conversation opened
+  from History is pinned, so clicking down the sidebar moves the selection
+  without moving what the conversation was about. Filing last week's answer
+  against whatever happens to be open would be provenance that is confidently
+  wrong. Ids the library no longer has are dropped, because `Notes.create`
+  refuses one it cannot resolve and a conversation outlives its recordings.
+- **The button reports its own outcome.** The confirmation was only the small
+  grey line under the composer, which is a long way from the thing that was
+  pressed and is wiped by the next `updateStatus`. `saveTapped` now reads the
+  closure's `Bool` and turns the button into a disabled "Saved" with a
+  checkmark, which also stops one answer quietly becoming two notes.
+
+Driven with `LISTEN_CHAT=<id>` and `AXUIElementPerformAction`, which is why the
+first two claims above are measurements. The save button is a plain `NSButton`
+in a stack view, so unlike everything in the composer well it is visible to
+accessibility and can actually be pressed.
+
+## A reference is an id the model wrote, and a number the reader clicks
+
+Answers named recordings and left them dead: "Call with Céline Goossens
+(2026-08-08)" is a place with no way to get to it, in an app whose whole point
+is that the place exists. Granola's numbered citations are the shape, and the
+question is where the identity comes from.
+
+**Linkifying titles was tried on paper and abandoned.** Scanning the prose for
+titles in the library needs nothing from the model, and it cannot work here:
+most of this library is called "New recording", so the match is ambiguous
+exactly where it matters, and a citation that opens the wrong meeting is worse
+than none. The id is the identity, and only the model has it in hand.
+
+So the agent writes markers and `AnswerReferences` reads them. `Agent.brief`
+states the language, `[rec:<id>]`, `[note:<slug>]` and `[person:<name>]`, and
+those two files are the whole contract. Measured against Claude Code on a
+scratch library: it cites unprompted after the first sentence of each claim,
+including two markers side by side, so the brief is worded for that rather than
+against it. It puts them before the full stop unless told otherwise, which is
+why the brief says "after its full stop".
+
+Four decisions inside it are the ones worth keeping:
+
+- **The marker is not a markdown link.** `[title](listen-recording:id)` parses
+  for free and puts the model in charge of the words as well as the id, so the
+  answer says the title twice and there is no way to draw the citation as a
+  number without throwing its wording away.
+- **Numbering happens before markdown and drawing happens after.** An offset
+  taken in the source names a different character in the output, because
+  `MarkdownText` joins wrapped lines and re-lays out tables. The number is
+  parked in the text as `U+E000 n U+E001` and found again by searching the
+  rendered string, which is the one thing both parsers leave alone.
+- **A marker naming something the library does not have is dropped**, not drawn
+  grey and not drawn at all. `ReferenceLookup` resolves each one while
+  numbering, reading the library at most once per answer, so an invented id
+  costs the reader nothing. Verified with a fabricated id in a fabricated
+  `chat.json`: four markers, five references, the fifth silently gone.
+- **A superscript, not a filled pill.** The pill has to be an `NSTextAttachment`,
+  and an attachment cell takes the click before the `.link` under it is
+  consulted. A raised number is one string with one attribute on it, which is
+  what makes the whole mechanism the text view's own link routing.
+
+The blocks of an answer are `LinkLine`s now rather than `NSTextField`s, because
+a text field can only hand a link to `NSWorkspace` and `listen-recording:` is
+nobody's URL scheme. That also retired the trap the field carried: a selectable
+`NSTextField` re-renders its content in the control's font the moment somebody
+clicks it, so the answer used to lose every bold and every list indent to a
+click meant to copy a line. `layout()` went with it: a `LinkLine`'s container
+tracks the width the constraint already states.
+
+The number opens a card, and the card is what navigates. A citation is read
+while reading the sentence it sits on, so a click that replaces the page under
+you is one most people will not risk twice: the card says what it points at, and
+"Open recording" is a second, deliberate click. Anchored to the text view, which
+outlives the popover, and `.maxY` because an `NSTextView` is flipped and that is
+the edge that is downward on screen.
+
+Markers are stripped at both write boundaries: `saveTapped` before a note is
+written from the pane, and `write_note` and `edit_note` in the MCP server, since
+an agent told to cite in answers cites in the notes it writes too. A note is a
+markdown file somebody may open in another editor, and what a note is about is
+already a field on it.
+
+One inconsistency, known and left: a preamble block is only markdown-rendered
+when a conversation is read back, so a citation in a preamble is numbered on
+restore and stripped while it streams. Nothing cites in a preamble today, and
+the alternative is re-rendering every block on `finish` for the case where it
+does.

@@ -1552,13 +1552,19 @@ final class DetailWithComposer: NSViewController {
         case .bar:
             body = bar
         case .standard:
-            // Clamped here rather than in `AskView`, which cannot know what the
-            // window can spare.
-            body = min(wantedHeight, max(bar, container.bounds.height - 140))
+            // **A size of its own, not whatever `AskView` last reported.** That
+            // report is the bar's height when a conversation was loaded rather
+            // than asked, so expanding resolved to a bar with a header on top:
+            // the awkward middle state, where a sliver of answer showed between
+            // two rows of chrome. `wantedHeight` says *whether* to open itself,
+            // never how far.
+            body = min(Self.standardHeight, max(bar, container.bounds.height - 140))
         case .full:
-            // Full still leaves the page's heading visible, so a conversation
-            // covering everything says what it is covering.
-            body = max(bar, container.bounds.height - 84)
+            // Clear of the toolbar, which floats over the content because the
+            // window is full-size-content: at 84 the drawer's own controls sat
+            // level with New Recording and the ellipsis, two sets of buttons in
+            // one strip.
+            body = max(bar, container.bounds.height - 130)
         }
         let target = body + (expanded ? Self.headerHeightPoints : 0)
 
@@ -1598,6 +1604,8 @@ final class DetailWithComposer: NSViewController {
     /// Always present, so the history and the way back are never taken away.
     /// Tall enough to hold the collapse disc with air around it.
     private static let headerHeightPoints: CGFloat = 44
+    /// Enough for an answer and its question with the page still behind it.
+    private static let standardHeight: CGFloat = 560
     private static let collapseDiameter: CGFloat = 30
     private var collapseGlass: NSView!
     private let fullButton = NSButton()

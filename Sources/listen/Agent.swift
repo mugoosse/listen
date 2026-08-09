@@ -1247,9 +1247,27 @@ struct Chat: Codable {
     /// Falls back to the first thing the user said, because every conversation
     /// on disk before `title` existed has one and none of them have a title.
     var displayTitle: String {
-        if let title, !title.isEmpty { return title }
-        let asked = turns.first { $0.who == Chat.you }?.text ?? ""
-        return asked.isEmpty ? "Conversation" : String(asked.prefix(60))
+        let asked = title?.isEmpty == false
+            ? title!
+            : (turns.first { $0.who == Chat.you }?.text ?? "")
+        return asked.isEmpty ? "Conversation" : Chat.shorten(asked)
+    }
+
+    /// Cut at a word, and say that it was cut.
+    ///
+    /// A hard `prefix(60)` ends mid-word: measured on the first real
+    /// conversation, "…then the key po", which reads as a title somebody typed
+    /// badly rather than as one that continues. Falls back to the hard cut for a
+    /// 60-character first word, which is a URL rather than a sentence.
+    static func shorten(_ text: String, to limit: Int = 60) -> String {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard flat.count > limit else { return flat }
+        let cut = String(flat.prefix(limit))
+        guard let space = cut.lastIndex(of: " "), space > cut.startIndex else {
+            return cut + "…"
+        }
+        return cut[cut.startIndex..<space] + "…"
     }
 }
 
@@ -1320,7 +1338,12 @@ extension Chat {
         if created == nil { created = now }
         if title == nil || title?.isEmpty == true {
             let asked = turns.first { $0.who == Chat.you }?.text ?? ""
-            if !asked.isEmpty { title = String(asked.prefix(60)) }
+            // Shortened here rather than where it is drawn. A hard cut stored on
+            // disk is indistinguishable from a title that is genuinely 60
+            // characters long, so nothing downstream can tell it was truncated
+            // and put the ellipsis back: measured, the first migrated
+            // conversation read "…then the key po" in the back link.
+            if !asked.isEmpty { title = Chat.shorten(asked) }
         }
         if touch || updated == nil { updated = now }
 

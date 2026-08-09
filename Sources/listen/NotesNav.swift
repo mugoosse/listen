@@ -14,6 +14,18 @@ enum RecordingLink {
     }
 }
 
+/// The same trick for a conversation, and separate rather than a parameter on
+/// the one above, because the two are read by different delegates and a link
+/// that resolves to the wrong kind of thing is the failure worth designing out.
+enum ChatLink {
+    static let scheme = "listen-chat:"
+
+    static func id(_ link: Any) -> String? {
+        guard let url = link as? String, url.hasPrefix(scheme) else { return nil }
+        return String(url.dropFirst(scheme.count))
+    }
+}
+
 /// Which part of the library the window is showing.
 ///
 /// Three peers, and settings is deliberately not a fourth. These are *what you

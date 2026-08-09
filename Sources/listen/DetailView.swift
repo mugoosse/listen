@@ -111,6 +111,16 @@ final class DetailView: NSView {
     /// looking at. On one page nothing does, so a meeting with an empty note
     /// would open on a wall of dialogue with no heading anywhere.
     private let transcriptHeading = NSTextField(labelWithString: "Transcript")
+    /// The conversations that have asked about this meeting.
+    ///
+    /// The back half of `Chat.recordings`, and the reason a conversation names
+    /// its sources at all: without this a question asked about a meeting is
+    /// reachable only from the composer's history, so a month later the meeting
+    /// cannot tell you it has already been asked about. Between the note and the
+    /// transcript because it is about the page rather than about either half.
+    private let chatLinks = LinkLine()
+    private var chatLinksTop: NSLayoutConstraint!
+    private var chatLinksHeight: NSLayoutConstraint!
     private let askView = AskView()
     /// Analog's artifact switcher, which is the part of their notes design worth
     /// copying: a recording has any number of notes and they are all the same
@@ -357,7 +367,7 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  transcriptHeading, empty, emptyIcon, transcribing, live] {
+                  chatLinks, transcriptHeading, empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -408,8 +418,15 @@ final class DetailView: NSView {
         // free to pick the ceiling: measured, a one-line note reserved the full
         // 168 points and left a hand's width of nothing above the transcript.
         notesHeight = notesScroll.heightAnchor.constraint(equalToConstant: Self.notesFloorHeight)
+        // Collapsing to nothing when no conversation has named this recording,
+        // spacing included, for the reason the chips row and the solo bar both
+        // record: a hidden view keeps its frame, so leaving it would open a gap
+        // above the transcript of every meeting nobody has asked about.
+        chatLinksTop = chatLinks.topAnchor.constraint(equalTo: notesScroll.bottomAnchor,
+                                                      constant: 0)
+        chatLinksHeight = chatLinks.heightAnchor.constraint(equalToConstant: 0)
         transcriptHeadingTop = transcriptHeading.topAnchor.constraint(
-            equalTo: notesScroll.bottomAnchor, constant: 14)
+            equalTo: chatLinks.bottomAnchor, constant: 14)
         transcriptHeadingHeight = transcriptHeading.heightAnchor.constraint(
             equalToConstant: 16)
         noteInfoHeight.priority = .defaultHigh
@@ -508,6 +525,11 @@ final class DetailView: NSView {
             // scroller with the note above it, following the playhead would drag
             // the note off the top of the window while somebody has a caret in
             // it, so the two halves of the page have to scroll independently.
+            chatLinksTop,
+            chatLinksHeight,
+            chatLinks.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            chatLinks.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
             transcriptHeadingTop,
             transcriptHeadingHeight,
             transcriptHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -643,6 +665,26 @@ final class DetailView: NSView {
             .foregroundColor: Brand.accent,
             .cursor: NSCursor.pointingHand,
         ]
+        // Every line of this is `noteInfo`'s, and none of it is optional. An
+        // `NSTextView` left at its defaults draws an opaque background and
+        // colours a link system blue whatever the attributed string asks for,
+        // which is a filled band across the pane in the wrong colour: measured
+        // by leaving it out first.
+        chatLinks.isEditable = false
+        chatLinks.isSelectable = true
+        chatLinks.drawsBackground = false
+        chatLinks.delegate = self
+        chatLinks.textContainerInset = .zero
+        chatLinks.textContainer?.lineFragmentPadding = 0
+        chatLinks.textContainer?.widthTracksTextView = true
+        chatLinks.isVerticallyResizable = true
+        chatLinks.isHorizontallyResizable = false
+        chatLinks.setContentHuggingPriority(.required, for: .vertical)
+        chatLinks.linkTextAttributes = [
+            .foregroundColor: Brand.accent,
+            .cursor: NSCursor.pointingHand,
+        ]
+
         notesPlaceholder.font = .systemFont(ofSize: 13)
         notesPlaceholder.textColor = .tertiaryLabelColor
         notesPlaceholder.maximumNumberOfLines = 0
@@ -862,6 +904,12 @@ final class DetailView: NSView {
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any,
                   at charIndex: Int) -> Bool {
+        // A conversation first, because both schemes arrive here and only one
+        // of them is a recording id.
+        if let id = ChatLink.id(link), let chat = Chat.load(id: id) {
+            openChat(chat)
+            return true
+        }
         guard let id = RecordingLink.id(link) else { return false }
         // No note named, so it lands on the transcript. See `showTranscript`:
         // the note being read is about that meeting too, so staying on the
@@ -1025,6 +1073,16 @@ final class DetailView: NSView {
         notesText.scroll(NSPoint(x: 0, y: 0))
     }
 
+    /// Open a conversation from a back link, in the pane that already draws
+    /// conversations. This is what makes the link worth having: a meeting can
+    /// tell you it has been asked about, and then show you what was said.
+    private func openChat(_ chat: Chat) {
+        saveYours()
+        showing = .ask
+        askView.open(chat)
+        applyShowing()
+    }
+
     /// Give the note the height of its own text, between the floor and ceiling.
     ///
     /// Asked of the layout manager rather than measured off the frame: an
@@ -1041,6 +1099,39 @@ final class DetailView: NSView {
         let wanted = text + Self.notesTopInset + Self.notesTextInset * 2
         notesHeight.constant = min(max(wanted, Self.notesFloorHeight),
                                    Self.notesCeilingHeight)
+    }
+
+    /// "Asked about in" plus the conversations, or nothing at all.
+    ///
+    /// Titled by the question that opened each one, which is what
+    /// `Chat.displayTitle` falls back to: an answer's first line is usually a
+    /// sentence rather than a name, and the question is the half somebody is
+    /// looking for. Same argument `saveAsNote` already makes.
+    private func showChatLinks() {
+        let chats = recording.map { Chat.about($0.id) } ?? []
+        let show = showing == .page && !chats.isEmpty
+        chatLinks.isHidden = !show
+        chatLinksHeight.isActive = !show
+        chatLinksTop.constant = show ? 10 : 0
+        guard show else { return }
+
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let line = NSMutableAttributedString(string: "Asked about in ", attributes: plain)
+        for (index, chat) in chats.enumerated() {
+            guard let id = chat.id else { continue }
+            if index > 0 {
+                line.append(NSAttributedString(string: ", ", attributes: plain))
+            }
+            var attributes = plain
+            attributes[.link] = ChatLink.scheme + id
+            attributes[.foregroundColor] = Brand.accent
+            line.append(NSAttributedString(string: chat.displayTitle, attributes: attributes))
+        }
+        chatLinks.textStorage?.setAttributedString(line)
+        chatLinks.invalidateIntrinsicContentSize()
     }
 
     private func showProvenance() {
@@ -1167,6 +1258,7 @@ final class DetailView: NSView {
         // anyway: switching to Ask already stops playback.
         if !page { setSolo(nil) }
         showProvenance()
+        showChatLinks()
         updatePlaceholder()
         // One note is still worth a switcher: it is also where the note's title
         // is written, and the pane would otherwise show a document with no name

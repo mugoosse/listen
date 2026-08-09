@@ -468,6 +468,16 @@ final class AskView: NSView {
         say("")
     }
 
+    /// Is there a conversation to go back to, as opposed to an empty composer?
+    var hasConversation: Bool { !chat.turns.isEmpty }
+
+    /// Which conversation is open, so the history can tick it.
+    var currentID: String? { chat.id }
+
+    /// What the drawer's header calls what is open, which is the question that
+    /// started it. See `Chat.displayTitle`.
+    var conversationTitle: String { chat.displayTitle }
+
     /// How tall this needs to be as a bar, told to whoever is constraining it.
     ///
     /// The setup card is the reason this exists. It is several lines and a

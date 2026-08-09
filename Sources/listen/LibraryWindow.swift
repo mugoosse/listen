@@ -1246,6 +1246,8 @@ final class DetailWithComposer: NSViewController {
     /// transcript underneath it.
     private let drawer = NSVisualEffectView()
     private let collapseButton = NSButton()
+    private let historyButton = NSButton()
+    private let titleLabel = NSTextField(labelWithString: "")
     private var header: NSView!
     private var headerHeight: NSLayoutConstraint!
 
@@ -1280,17 +1282,40 @@ final class DetailWithComposer: NSViewController {
         drawer.layer?.cornerRadius = 16
         drawer.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
 
+        // **The header is permanent, not a feature of being expanded.** It was
+        // only there while the drawer was open, which meant collapsing removed
+        // the one control that could open it again: the conversation was still
+        // on disk, still resumable, and unreachable. A strip that is always
+        // there is also the only honest home for the history, which otherwise
+        // has nowhere to live at all.
         header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
+
+        historyButton.isBordered = false
+        historyButton.bezelStyle = .inline
+        historyButton.imagePosition = .imageOnly
+        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                                      accessibilityDescription: "Earlier conversations")
+        historyButton.toolTip = "Earlier conversations"
+        historyButton.contentTintColor = .secondaryLabelColor
+        historyButton.target = self
+        historyButton.action = #selector(showHistory)
+        historyButton.translatesAutoresizingMaskIntoConstraints = false
+
+        titleLabel.font = .systemFont(ofSize: 11)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
         collapseButton.isBordered = false
         collapseButton.bezelStyle = .inline
         collapseButton.imagePosition = .imageOnly
-        collapseButton.image = NSImage(systemSymbolName: "chevron.down",
-                                       accessibilityDescription: "Put the conversation away")
-        collapseButton.toolTip = "Put the conversation away"
+        collapseButton.contentTintColor = .secondaryLabelColor
         collapseButton.target = self
         collapseButton.action = #selector(toggleCollapsed)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(historyButton)
+        header.addSubview(titleLabel)
         header.addSubview(collapseButton)
 
         container.addSubview(content.view)
@@ -1314,6 +1339,14 @@ final class DetailWithComposer: NSViewController {
             header.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
             headerHeight,
+            historyButton.leadingAnchor.constraint(equalTo: header.leadingAnchor,
+                                                   constant: 24),
+            historyButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: historyButton.trailingAnchor,
+                                                constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo:
+                collapseButton.leadingAnchor, constant: -8),
             collapseButton.trailingAnchor.constraint(equalTo: header.trailingAnchor,
                                                      constant: -24),
             collapseButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -1345,6 +1378,57 @@ final class DetailWithComposer: NSViewController {
         applyHeight()
     }
 
+    /// Every conversation, newest first, and a way to start another.
+    ///
+    /// A menu rather than a list in the sidebar, which is the decision this
+    /// redesign already took: the library's list holds artifacts somebody kept,
+    /// and a conversation is working-out until it becomes a note. This is where
+    /// it lives instead, next to the field it was typed into.
+    @objc private func showHistory() {
+        let menu = NSMenu()
+        let fresh = NSMenuItem(title: "New conversation",
+                               action: #selector(newConversation), keyEquivalent: "")
+        fresh.target = self
+        menu.addItem(fresh)
+
+        let chats = Chat.all()
+        if !chats.isEmpty {
+            menu.addItem(.separator())
+            // Ten, because this is a menu and not a browser. Anything older is
+            // found through the meeting it was about, which is what the back
+            // links on a page are for.
+            for chat in chats.prefix(10) {
+                let item = NSMenuItem(title: chat.displayTitle,
+                                      action: #selector(openConversation(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = chat.id
+                // A tick on the one already open, so the menu says where you are
+                // as well as where you can go.
+                item.state = chat.id == composer.currentID ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: historyButton.bounds.maxY + 4),
+                   in: historyButton)
+    }
+
+    @objc private func newConversation() {
+        composer.startNew()
+        collapsed = false
+        applyHeight()
+        composer.focusField()
+    }
+
+    @objc private func openConversation(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let chat = Chat.load(id: id) else { return }
+        composer.open(chat)
+        collapsed = false
+        applyHeight()
+    }
+
     private func applyHeight() {
         // **`container`, never `view`.** `AskView` can report a height while it
         // is being added to the hierarchy, which is inside `loadView`, and
@@ -1358,9 +1442,23 @@ final class DetailWithComposer: NSViewController {
         // still leave the page it covers partly visible.
         let available = container.bounds.height - 140
         let wanted = collapsed ? Self.collapsedHeight : wantedHeight
-        drawerHeight.constant = available > 0 ? min(wanted, available) : wanted
-        headerHeight.constant = expanded ? 28 : 0
-        header.isHidden = !expanded
+        drawerHeight.constant = (available > 0 ? min(wanted, available) : wanted)
+            + Self.headerHeightPoints
+        headerHeight.constant = Self.headerHeightPoints
+
+        // The chevron points the way it will move the drawer, and is only there
+        // when there is a conversation to move: on an empty composer it would
+        // offer to open nothing.
+        collapseButton.isHidden = !composer.hasConversation
+        collapseButton.image = NSImage(
+            systemSymbolName: expanded ? "chevron.down" : "chevron.up",
+            accessibilityDescription: expanded ? "Put the conversation away"
+                                               : "Show the conversation")
+        collapseButton.toolTip = expanded ? "Put the conversation away"
+                                          : "Show the conversation"
+        // The title is what says a collapsed bar still has something behind it.
+        titleLabel.stringValue = composer.hasConversation
+            ? composer.conversationTitle : ""
         // The drawer is never hidden, because the composer lives inside it and
         // would go with it. Its material behind the bare bar is welcome anyway:
         // it stops the page's text reading through the one control that is on
@@ -1370,6 +1468,8 @@ final class DetailWithComposer: NSViewController {
 
     /// The well and its status line, which is the drawer with nothing in it.
     private static let collapsedHeight: CGFloat = 68
+    /// Always present, so the history and the way back are never taken away.
+    private static let headerHeightPoints: CGFloat = 28
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: Self.collapsedHeight)

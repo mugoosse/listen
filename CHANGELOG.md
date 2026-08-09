@@ -8,6 +8,78 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.11.0 (2026-08-09)
+
+### One list, and a meeting is one page
+
+The sidebar's three-way picker is gone. The recordings list is the library:
+notes sit among the meetings in the same days, and typing a name brings back
+that person's card above the results as well as the transcripts they appear in.
+A note is a row only when it has no single page to live on, which means a
+synthesis of several meetings or a note about none; a note about exactly one
+recording lives on that recording, because listing it here too would put every
+meeting in the library twice.
+
+Transcript and Notes have stopped being two tabs you choose between. They are
+one page now, what you wrote above and what was said below. The transcript
+keeps its own scroller, which is load-bearing: playback scrolls it to the
+sentence being spoken, and a shared scroller would drag the note off the top of
+the window every time somebody pressed play with a caret in it. The note takes
+the height of its own text between three lines and six, measured against the
+longest of the 11 notes in this library.
+
+### Ask is always on screen, and a conversation is a document
+
+The question bar belongs to the window rather than to a meeting, so a question
+asked with nothing selected is a question about the library. That case had no
+way to be asked before, and it is the one a library-wide answer exists for.
+
+Conversations moved out of the recording folder into `chats/`, naming the
+meetings they are about as a list. A question spanning four meetings had four
+bad homes and a question about none had nowhere to go. Existing conversations
+are moved on first launch, keeping their turns, their session and the time of
+the last thing said in them rather than the time the move ran.
+
+The answer arrives in a drawer over the page instead of replacing it, in three
+sizes, and putting it away does not lose it. The composer always starts empty,
+at launch and on every meeting: it used to load the newest conversation for
+whatever you had arrived at, so opening the app put you inside an old
+conversation nobody had asked for. History, in the title bar, is how you go
+back, and it lists every conversation rather than the current page's. Delete is
+one item at the foot of that menu acting on the conversation that is open,
+because conversations are titled by their first question and a list of four
+rows with two identical pairs is a delete you cannot aim.
+
+### An answer cites what it read
+
+Answers named recordings and left them dead. Each claim now carries a small
+numbered reference; clicking it shows what is behind it, the recording with its
+date, length and speakers, or a note, or a person, and the card is what opens
+the page. Two clicks rather than one, deliberately: a citation is read in the
+middle of a sentence, and a number that swaps the page under you is one nobody
+presses twice.
+
+The identity is the agent's, not a text match. It writes the recording's id
+after the claim, so a library where most recordings are called "New recording"
+cannot send you to the wrong meeting. A reference naming something the library
+does not have is dropped rather than drawn, and the markers never reach a note
+or a file on disk.
+
+Measured against Claude Code, which cites unprompted once its brief asks for
+it. Codex writes the same answers through the same brief but its compliance
+has not been measured, so an answer from it may carry no numbers at all.
+
+### Worth knowing
+
+- **Save as note works on a conversation with nothing selected**, which is
+  where most questions are asked. It used to write no file and say nothing. It
+  now files the note against the meetings the conversation was about rather
+  than whatever is on screen, and the button itself says "Saved".
+- The empty pane opens with your name rather than an instruction, and a meeting
+  page says what has already been asked about it.
+- Missing agent configuration is announced in the composer, where the question
+  is typed, instead of only in settings.
+
 ## 0.10.0 (2026-08-08)
 
 ### Ask a meeting a question, through an agent you already have

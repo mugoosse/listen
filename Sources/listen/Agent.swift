@@ -1237,6 +1237,10 @@ struct Chat: Codable {
     /// recording's page, several for a question spanning them, none for a
     /// question about the library.
     var recordings: [String]?
+    /// The person this conversation is about, when it was asked from their
+    /// card. A name rather than an id, because a person *is* a name in this
+    /// app and there is nothing else to key on.
+    var person: String?
 
     static let you = "you", agent = "agent"
 

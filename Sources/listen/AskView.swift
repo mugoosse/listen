@@ -81,12 +81,19 @@ final class AskView: NSView {
     }
 
     private var recording: Recording?
+    /// Set instead of `recording` when a person's card is open. The two are
+    /// alternatives: a question is about a meeting, about somebody, or about
+    /// the library, and never about two of those at once.
+    private var person: String?
     private var chat = Chat()
     /// Has a context ever been shown? See `show`.
     private var loaded = false
     /// Set by asking, cleared by merely arriving somewhere. Only a question
     /// deserves to take the page.
     private var wantsRoom = false
+    /// The drawer's last reported state, so the caret can be re-evaluated when
+    /// the conversation changes without the height changing.
+    private var expandedNow = false
     private var run: AgentRun?
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
@@ -362,8 +369,9 @@ final class AskView: NSView {
     /// screen. "Ask about this meeting" over an empty library is a promise about
     /// a meeting that is not open, and it was the placeholder on every screen
     /// the moment the composer moved to the window.
-    static func prompt(for recording: Recording?) -> String {
-        recording == nil ? "Ask about your library…" : "Ask about this meeting…"
+    static func prompt(for recording: Recording?, person: String? = nil) -> String {
+        if let person { return "Ask about \(person)…" }
+        return recording == nil ? "Ask about your library…" : "Ask about this meeting…"
     }
 
     func show(_ recording: Recording?) {
@@ -384,11 +392,29 @@ final class AskView: NSView {
         // A meeting takes the newest about it; the library takes the newest
         // about nothing, since a question about one meeting is not the
         // conversation you were having about everything.
+        person = nil
         chat = recording.map { Chat.about($0.id).first ?? Chat() }
-            ?? Chat.all().first { $0.sources.isEmpty } ?? Chat()
+            ?? Chat.all().first { $0.sources.isEmpty && $0.person == nil } ?? Chat()
         // Loaded, not opened. Arriving at a meeting should not throw a drawer
         // over the page you came to read; the title and the chevron say it is
         // there, which is what they are for.
+        wantsRoom = false
+        redraw()
+    }
+
+    /// A person's card is a context like any other.
+    ///
+    /// Their recordings are named in the question rather than filtered to,
+    /// which is the rule `start` already follows for a meeting: a hard filter
+    /// would make "is this like what she said last year" unanswerable.
+    func show(person name: String) {
+        guard name != person else { return }
+        stop()
+        loaded = true
+        recording = nil
+        person = name
+        field.placeholderString = Self.prompt(for: nil, person: name)
+        chat = Chat.all().first { $0.person == name } ?? Chat()
         wantsRoom = false
         redraw()
     }
@@ -403,7 +429,8 @@ final class AskView: NSView {
         stop()
         self.chat = chat
         recording = chat.sources.first.flatMap { Recording.find($0) }
-        field.placeholderString = Self.prompt(for: recording)
+        person = chat.person
+        field.placeholderString = Self.prompt(for: recording, person: person)
         loaded = true
         // Picked out of the history on purpose, so this one does deserve room.
         wantsRoom = true
@@ -451,6 +478,11 @@ final class AskView: NSView {
         // The chips are drawn by `updateStatus`, which is the only thing that
         // knows whether there is anything to ask.
         updateStatus()
+        // And the caret is re-evaluated here rather than only when the drawer
+        // resizes. Starting a new conversation changes what there is to expand
+        // without changing any height, so the caret was left offering to open a
+        // conversation that no longer existed.
+        setExpanded(expandedNow)
         scrollToEnd()
     }
 
@@ -544,6 +576,7 @@ final class AskView: NSView {
     /// header carries the title and the size controls, and a second clock under
     /// it would be the same action offered twice, six points apart.
     func setExpanded(_ on: Bool) {
+        expandedNow = on
         historyButton.isHidden = on
         expandButton.isHidden = on || !hasConversation
         // **The conversation is taken out of the view, not merely squeezed.**
@@ -575,6 +608,10 @@ final class AskView: NSView {
 
     /// Which conversation is open, so the history can tick it.
     var currentID: String? { chat.id }
+
+    /// The recording this composer is about, or nil for the library. What the
+    /// history scopes itself to.
+    var contextID: String? { person.map { "person:" + $0 } ?? recording?.id }
 
     /// What the drawer's header calls what is open, which is the question that
     /// started it. See `Chat.displayTitle`.
@@ -716,9 +753,16 @@ final class AskView: NSView {
         // at the rest of the library, which is the point: "is this the same
         // thing we said last week" is a reasonable follow-up and a hard filter
         // would make it unanswerable.
-        let scoped = resuming == nil && recording != nil
-            ? "About the recording `\(recording!.id)` (\(recording!.metadata.title)): \(text)"
-            : text
+        var scoped = text
+        if resuming == nil, let recording {
+            scoped = "About the recording `\(recording.id)` (\(recording.metadata.title)): \(text)"
+        } else if resuming == nil, let person {
+            // Named, not filtered, for the reason above. The instruction points
+            // at the person's own material first, which is the retrieval ladder
+            // the brief already describes, rather than fencing the library off.
+            scoped = "About the person \(person). Start from the recordings they "
+                + "speak in and the notes about those, then widen if you need to: \(text)"
+        }
         let question = AgentRun.Question(
             text: scoped, backend: backend, path: path, resume: resuming,
             // Writes are on because "write this up as a note" is a thing to ask
@@ -819,6 +863,7 @@ final class AskView: NSView {
         if let id = recording?.id, !chat.sources.contains(id) {
             chat.recordings = chat.sources + [id]
         }
+        if chat.person == nil { chat.person = person }
         chat.save()
     }
 
@@ -826,6 +871,23 @@ final class AskView: NSView {
         run?.cancel()
         run = nil
         answering = nil
+    }
+
+    /// Throw the open conversation away and load whatever is left in this
+    /// context, so deleting lands you on the previous one rather than on an
+    /// empty composer with a history you have to go back into.
+    func discard() {
+        stop()
+        if let id = chat.id { Chat.forget(id: id) }
+        let here = recording?.id
+        let who = person
+        chat = Chat.all().first { candidate in
+            if let who { return candidate.person == who }
+            if let here { return candidate.sources.contains(here) }
+            return candidate.sources.isEmpty && candidate.person == nil
+        } ?? Chat()
+        wantsRoom = false
+        redraw()
     }
 
     /// Throw the conversation away. Everything it was about keeps everything

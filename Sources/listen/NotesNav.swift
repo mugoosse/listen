@@ -14,6 +14,16 @@ enum RecordingLink {
     }
 }
 
+/// And for a note, for the same reason as `ChatLink`.
+enum NoteLink {
+    static let scheme = "listen-note:"
+
+    static func id(_ link: Any) -> String? {
+        guard let url = link as? String, url.hasPrefix(scheme) else { return nil }
+        return String(url.dropFirst(scheme.count))
+    }
+}
+
 /// The same trick for a conversation, and separate rather than a parameter on
 /// the one above, because the two are read by different delegates and a link
 /// that resolves to the wrong kind of thing is the failure worth designing out.

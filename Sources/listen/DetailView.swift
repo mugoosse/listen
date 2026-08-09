@@ -932,6 +932,13 @@ final class DetailView: NSView {
             openChat(chat)
             return true
         }
+        if let slug = NoteLink.id(link) {
+            saveYours()
+            showingNote = slug
+            renderNote()
+            showRelated()
+            return true
+        }
         guard let id = RecordingLink.id(link) else { return false }
         // No note named, so it lands on the transcript. See `showTranscript`:
         // the note being read is about that meeting too, so staying on the
@@ -1123,15 +1130,23 @@ final class DetailView: NSView {
                                    Self.notesCeilingHeight)
     }
 
-    /// "Asked about in" plus the conversations, or nothing at all.
+    /// Everything else written about this recording, on one line.
     ///
-    /// Titled by the question that opened each one, which is what
-    /// `Chat.displayTitle` falls back to: an answer's first line is usually a
-    /// sentence rather than a name, and the question is the half somebody is
-    /// looking for. Same argument `saveAsNote` already makes.
-    private func showChatLinks() {
+    /// **The note area is yours and the switcher is gone.** A pop-up that
+    /// silently swapped your own note for an agent's made the one editable
+    /// document on the page indistinguishable from the read-only ones beside
+    /// it, and it hid conversations entirely because they are not notes.
+    ///
+    /// So: agent notes and conversations together, named and reachable, in a
+    /// line that collapses to nothing when there are neither. They are the same
+    /// kind of thing from the page's point of view, which is somebody else's
+    /// reading of this meeting, and the difference between them is what happens
+    /// when you press one.
+    private func showRelated() {
+        let others = notes.filter { !Notes.isYours($0) }
         let chats = recording.map { Chat.about($0.id) } ?? []
-        let show = showing == .page && !chats.isEmpty
+        let away = showingNote != nil && !showingYours
+        let show = showing == .page && (!others.isEmpty || !chats.isEmpty || away)
         chatLinks.isHidden = !show
         chatLinksHeight.isActive = !show
         chatLinksTop.constant = show ? 10 : 0
@@ -1141,16 +1156,36 @@ final class DetailView: NSView {
             .font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]
-        let line = NSMutableAttributedString(string: "Asked about in ", attributes: plain)
-        for (index, chat) in chats.enumerated() {
-            guard let id = chat.id else { continue }
-            if index > 0 {
-                line.append(NSAttributedString(string: ", ", attributes: plain))
-            }
+        let line = NSMutableAttributedString()
+        func add(_ text: String, link: String?) {
             var attributes = plain
-            attributes[.link] = ChatLink.scheme + id
-            attributes[.foregroundColor] = Brand.accent
-            line.append(NSAttributedString(string: chat.displayTitle, attributes: attributes))
+            if let link {
+                attributes[.link] = link
+                attributes[.foregroundColor] = Brand.accent
+            }
+            line.append(NSAttributedString(string: text, attributes: attributes))
+        }
+
+        // The way back, and only when somebody has gone somewhere. Reading an
+        // agent's note over the top of your own with no route back was the
+        // switcher's other failure.
+        if away {
+            add("Your notes",
+                link: NoteLink.scheme + (recording.map { Notes.yoursSlug(for: $0.id) } ?? ""))
+            add("   ", link: nil)
+        }
+        add("Also about this: ", link: nil)
+        var first = true
+        for note in others {
+            if !first { add(", ", link: nil) }
+            first = false
+            add(note.title, link: NoteLink.scheme + note.slug)
+        }
+        for chat in chats {
+            guard let id = chat.id else { continue }
+            if !first { add(", ", link: nil) }
+            first = false
+            add(chat.displayTitle, link: ChatLink.scheme + id)
         }
         chatLinks.textStorage?.setAttributedString(line)
         chatLinks.invalidateIntrinsicContentSize()
@@ -1298,12 +1333,16 @@ final class DetailView: NSView {
         // anyway: switching to Ask already stops playback.
         if !page { setSolo(nil) }
         showProvenance()
-        showChatLinks()
+        showRelated()
         updatePlaceholder()
         // One note is still worth a switcher: it is also where the note's title
         // is written, and the pane would otherwise show a document with no name
         // on it.
-        notePicker.isHidden = !page || notes.isEmpty
+        // Never. The line under the note carries the others now, and a control
+        // that swapped the page's one editable document for a read-only one was
+        // the thing that made "Your notes" feel like a filter rather than a
+        // document.
+        notePicker.isHidden = true
         updateEmpty()
         // Last, and from the one place the mode is ever applied, so the window
         // cannot be told about a mode this pane has not finished entering.

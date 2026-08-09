@@ -370,6 +370,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.detail.stopPlayback()
             self.personPane.show(person)
             self.detailHost.show(self.personPane)
+            self.askBar.show(person: person.display)
             self.window?.toolbar?.validateVisibleItems()
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
@@ -1483,7 +1484,15 @@ final class DetailWithComposer: NSViewController {
         fresh.target = self
         menu.addItem(fresh)
 
-        let chats = Chat.all()
+        // **Only this page's conversations.** The history belongs to the
+        // context you are in: on a meeting it is the questions asked about that
+        // meeting, and on the library it is the ones asked about the library.
+        // A flat list of everything made the menu a second, worse library list,
+        // and offered to swap the page's subject out from under it.
+        let here = composer.contextID
+        let chats = Chat.all().filter {
+            here == nil ? $0.sources.isEmpty : $0.sources.contains(here!)
+        }
         if !chats.isEmpty {
             menu.addItem(.separator())
             // Ten, because this is a menu and not a browser. Anything older is
@@ -1505,6 +1514,20 @@ final class DetailWithComposer: NSViewController {
         // a button this class still owned but had stopped putting on screen,
         // so the menu opened relative to a view with no window: built, popped,
         // and invisible.
+        // Deleting the open one, at the bottom and away from the list, so a
+        // press aimed at "resume that" cannot land on "destroy that". A
+        // conversation is working-out rather than evidence, which is why this
+        // is allowed at all and why it does not ask twice: what it throws away
+        // is a question you can ask again, and anything worth keeping was
+        // already saved as a note.
+        if composer.hasConversation, composer.currentID != nil {
+            menu.addItem(.separator())
+            let delete = NSMenuItem(title: "Delete this conversation",
+                                    action: #selector(deleteConversation),
+                                    keyEquivalent: "")
+            delete.target = self
+            menu.addItem(delete)
+        }
         menu.popUp(positioning: nil,
                    at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
                    in: anchor)
@@ -1518,13 +1541,25 @@ final class DetailWithComposer: NSViewController {
         composer.focusField()
     }
 
+    @objc private func deleteConversation() {
+        composer.discard()
+        extent = .bar
+        putAway = false
+        applyHeight(animated: true)
+    }
+
     @objc private func openConversation(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let chat = Chat.load(id: id) else { return }
-        composer.open(chat)
+        // **Opened before it is filled.** `setExpanded` is what un-hides the
+        // conversation view, and it runs from `applyHeight`, so loading first
+        // rendered the turns into a view that was still hidden and left a
+        // drawer with a title and nothing under it.
         putAway = false
         extent = .standard
         applyHeight(animated: true)
+        composer.open(chat)
+        applyHeight()
     }
 
     private func applyHeight(animated: Bool = false) {

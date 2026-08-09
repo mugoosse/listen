@@ -510,10 +510,12 @@ final class AskView: NSView {
 
     /// Pressed on the clock and on the chevron in the starters line. The drawer
     /// owns what they mean, because only it knows how tall it is.
-    var onHistory: (() -> Void)?
+    /// Carries the button, because the menu has to pop up from the control
+    /// that was pressed and that control lives here, not in the drawer.
+    var onHistory: ((NSView) -> Void)?
     var onExpand: (() -> Void)?
 
-    @objc private func historyPressed() { onHistory?() }
+    @objc private func historyPressed() { onHistory?(historyButton) }
     @objc private func expandPressed() { onExpand?() }
 
     /// Both controls belong to the collapsed bar. Expanded, the drawer's own

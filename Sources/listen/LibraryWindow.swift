@@ -1246,7 +1246,6 @@ final class DetailWithComposer: NSViewController {
     /// transcript underneath it.
     private let drawer = NSView()
     private let collapseButton = NSButton()
-    private let historyButton = NSButton()
     private let titleLabel = NSTextField(labelWithString: "")
 
     /// The same glass the composer well is made of, so the drawer under it is
@@ -1334,6 +1333,14 @@ final class DetailWithComposer: NSViewController {
         collapseButton.imagePosition = .imageOnly
         collapseButton.contentTintColor = .labelColor
         collapseButton.symbolConfiguration = .init(pointSize: 13, weight: .semibold)
+        // Set once, here, rather than in `applyHeight`. It used to be assigned
+        // there because the glyph flipped with the state, and when the header
+        // became expanded-only that stopped being true: collapse always means
+        // put this away. The assignment went with the rewrite and left a glass
+        // disc with nothing drawn in it.
+        collapseButton.image = NSImage(systemSymbolName: "chevron.down",
+                                       accessibilityDescription: "Put the conversation away")
+        collapseButton.toolTip = "Put the conversation away"
         collapseButton.target = self
         collapseButton.action = #selector(toggleCollapsed)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1409,7 +1416,7 @@ final class DetailWithComposer: NSViewController {
             composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor, constant: -12),
         ])
 
-        composer.onHistory = { [weak self] in self?.showHistory() }
+        composer.onHistory = { [weak self] anchor in self?.showHistory(from: anchor) }
         composer.onExpand = { [weak self] in
             guard let self else { return }
             self.putAway = false
@@ -1464,7 +1471,7 @@ final class DetailWithComposer: NSViewController {
     /// redesign already took: the library's list holds artifacts somebody kept,
     /// and a conversation is working-out until it becomes a note. This is where
     /// it lives instead, next to the field it was typed into.
-    @objc private func showHistory() {
+    private func showHistory(from anchor: NSView) {
         let menu = NSMenu()
         let fresh = NSMenuItem(title: "New conversation",
                                action: #selector(newConversation), keyEquivalent: "")
@@ -1489,9 +1496,13 @@ final class DetailWithComposer: NSViewController {
                 menu.addItem(item)
             }
         }
+        // Anchored to the control that was pressed. It used to be anchored to
+        // a button this class still owned but had stopped putting on screen,
+        // so the menu opened relative to a view with no window: built, popped,
+        // and invisible.
         menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: historyButton.bounds.maxY + 4),
-                   in: historyButton)
+                   at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
+                   in: anchor)
     }
 
     @objc private func newConversation() {

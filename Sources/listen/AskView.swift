@@ -477,6 +477,13 @@ final class AskView: NSView {
     var onHeightChanged: ((CGFloat) -> Void)?
 
     private func reportHeight() {
+        // A conversation needs the room a bar does not have. The owner clamps
+        // this to what the window can spare, so asking for more than exists is
+        // safe and asking for a share of an unknown height is not.
+        guard chat.turns.isEmpty, run == nil else {
+            onHeightChanged?(560)
+            return
+        }
         // The well, the gap under it, the status line, and the bottom inset.
         var height = ComposerWell.height + 6 + 14 + 12
         // Whichever invitation is up, and never both: `updateStatus` shows the
@@ -560,7 +567,16 @@ final class AskView: NSView {
     }
 
     private func ask(_ text: String) {
-        guard run == nil, let recording else { return }
+        // **No `let recording`.** `send` clears the field before calling this,
+        // so a guard that fails here swallows the question without a word: the
+        // text vanishes and nothing happens, which is what asking about the
+        // library did from the moment the composer left the meeting pane.
+        //
+        // Nothing downstream needed the recording. `start` already scopes the
+        // question to one only when there is one, and deliberately as a
+        // sentence rather than a hard filter, so the library case was written
+        // and reachable everywhere except through this line.
+        guard run == nil else { return }
         guard let chosen = AgentCLI.cachedChosen(), let path = chosen.path else {
             updateStatus()
             return
@@ -682,6 +698,11 @@ final class AskView: NSView {
         chat.turns.append(turn)
         addTurn(view(for: turn, asking: turn.text))
         persist()
+        // The first turn is what turns the bar into a conversation, so the
+        // height has to be re-asked here rather than only when the status
+        // changes: an answer streaming into a view with no room to draw it is
+        // indistinguishable from a question that was never sent.
+        reportHeight()
     }
 
     /// Write the conversation, naming what it is about.

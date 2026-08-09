@@ -1259,7 +1259,12 @@ final class DetailWithComposer: NSViewController {
         // it to nothing: the one state with something important to say would be
         // the one state nobody can read.
         composer.onHeightChanged = { [weak self] height in
-            self?.composerHeight.constant = height
+            guard let self else { return }
+            // Clamped here rather than in `AskView`, which cannot know what the
+            // window can spare. A conversation asks for more than a bar and
+            // must still leave the page it is covering partly visible.
+            let available = self.view.bounds.height - 140
+            self.composerHeight.constant = available > 0 ? min(height, available) : height
         }
         view = container
     }

@@ -40,7 +40,6 @@ final class AskView: NSView {
     private let starterRow = NSStackView()
     /// The starters and the drawer's collapsed-state controls, on one line.
     private let starterLine = NSStackView()
-    private let historyButton = NSButton()
     private let expandButton = NSButton()
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
@@ -141,7 +140,7 @@ final class AskView: NSView {
         // The starters and the two drawer controls share one line, right
         // against left. A clock on a line of its own above the chips is a whole
         // row spent on one glyph, which is what it looked like.
-        for button in [historyButton, expandButton] {
+        for button in [expandButton] {
             button.isBordered = false
             button.bezelStyle = .inline
             button.imagePosition = .imageOnly
@@ -149,10 +148,6 @@ final class AskView: NSView {
             button.target = self
             button.translatesAutoresizingMaskIntoConstraints = false
         }
-        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
-                                      accessibilityDescription: "Earlier conversations")
-        historyButton.toolTip = "Earlier conversations"
-        historyButton.action = #selector(historyPressed)
         expandButton.image = NSImage(systemSymbolName: "chevron.up",
                                      accessibilityDescription: "Show the conversation")
         expandButton.toolTip = "Show the conversation"
@@ -168,7 +163,6 @@ final class AskView: NSView {
         starterLine.addArrangedSubview(starterRow)
         starterLine.addArrangedSubview(spacer)
         starterLine.addArrangedSubview(expandButton)
-        starterLine.addArrangedSubview(historyButton)
         // The spacer is what pushes the controls to the trailing edge, and it
         // is the only thing in the row allowed to grow.
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
@@ -567,10 +561,8 @@ final class AskView: NSView {
     /// owns what they mean, because only it knows how tall it is.
     /// Carries the button, because the menu has to pop up from the control
     /// that was pressed and that control lives here, not in the drawer.
-    var onHistory: ((NSView) -> Void)?
     var onExpand: (() -> Void)?
 
-    @objc private func historyPressed() { onHistory?(historyButton) }
     @objc private func expandPressed() { onExpand?() }
 
     /// Both controls belong to the collapsed bar. Expanded, the drawer's own
@@ -578,7 +570,6 @@ final class AskView: NSView {
     /// it would be the same action offered twice, six points apart.
     func setExpanded(_ on: Bool) {
         expandedNow = on
-        historyButton.isHidden = on
         expandButton.isHidden = on || !hasConversation
         // **The conversation is taken out of the view, not merely squeezed.**
         // Collapsed, the scroll view still had the whole answer in it at a few

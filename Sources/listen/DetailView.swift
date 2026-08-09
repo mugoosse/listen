@@ -121,6 +121,14 @@ final class DetailView: NSView {
     /// is where somebody arrives and where they can now work from, so it opens
     /// with their name rather than with a direction.
     private let greeting = NSTextField(labelWithString: "")
+    /// The conversations about the library, listed on the screen you land on.
+    ///
+    /// This is what replaced the history control. A clock beside the composer
+    /// was a fourth place to look for something the app can simply show: the
+    /// library screen lists its own, a recording page names its own on the
+    /// "Also about this" line, and the open conversation's title carries the
+    /// rest.
+    private let recentChats = LinkLine()
     /// The conversations that have asked about this meeting.
     ///
     /// The back half of `Chat.recordings`, and the reason a conversation names
@@ -394,8 +402,8 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, transcriptHeading, greeting, empty, emptyIcon,
-                  transcribing, live] {
+                  chatLinks, transcriptHeading, greeting, recentChats, empty,
+                  emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -615,6 +623,9 @@ final class DetailView: NSView {
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             greeting.centerXAnchor.constraint(equalTo: centerXAnchor),
             greeting.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
+            recentChats.topAnchor.constraint(equalTo: empty.bottomAnchor, constant: 22),
+            recentChats.centerXAnchor.constraint(equalTo: centerXAnchor),
+            recentChats.widthAnchor.constraint(equalToConstant: 420),
             empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
             emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
             // Above the greeting, which is what it now introduces. Anchored to
@@ -718,6 +729,26 @@ final class DetailView: NSView {
             .foregroundColor: Brand.accent,
             .cursor: NSCursor.pointingHand,
         ]
+
+        // Every setting `noteInfo` carries, for the reason recorded there: an
+        // `NSTextView` left at its defaults draws an opaque background and
+        // paints a link system blue whatever the string asks for.
+        recentChats.isEditable = false
+        recentChats.isSelectable = true
+        recentChats.drawsBackground = false
+        recentChats.delegate = self
+        recentChats.textContainerInset = .zero
+        recentChats.textContainer?.lineFragmentPadding = 0
+        recentChats.textContainer?.widthTracksTextView = true
+        recentChats.isVerticallyResizable = true
+        recentChats.isHorizontallyResizable = false
+        recentChats.setContentHuggingPriority(.required, for: .vertical)
+        recentChats.alignment = .center
+        recentChats.linkTextAttributes = [
+            .foregroundColor: Brand.accent,
+            .cursor: NSCursor.pointingHand,
+        ]
+        recentChats.isHidden = true
 
         greeting.font = .systemFont(ofSize: 26, weight: .semibold)
         greeting.textColor = .labelColor
@@ -1165,6 +1196,42 @@ final class DetailView: NSView {
     /// is displayed as. Nobody is asked for it twice, and a library where it was
     /// never set gets the question without a name rather than a placeholder
     /// standing in for one.
+    /// The library's own conversations, newest first, as links.
+    ///
+    /// Five, because this is a landing screen and not an archive: older ones are
+    /// reached through the meeting they were about, which is what the back links
+    /// on a page are for.
+    private func showRecentChats() {
+        let chats = Chat.all()
+            .filter { $0.sources.isEmpty && $0.person == nil }
+            .prefix(5)
+        guard !chats.isEmpty, !drawerCovering else {
+            recentChats.isHidden = true
+            return
+        }
+        recentChats.isHidden = false
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        style.paragraphSpacing = 4
+        let line = NSMutableAttributedString()
+        for (index, chat) in chats.enumerated() {
+            guard let id = chat.id else { continue }
+            if index > 0 {
+                line.append(NSAttributedString(string: "\n", attributes: [
+                    .font: NSFont.systemFont(ofSize: 12), .paragraphStyle: style,
+                ]))
+            }
+            line.append(NSAttributedString(string: chat.displayTitle, attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: Brand.accent,
+                .paragraphStyle: style,
+                .link: ChatLink.scheme + id,
+            ]))
+        }
+        recentChats.textStorage?.setAttributedString(line)
+        recentChats.invalidateIntrinsicContentSize()
+    }
+
     private static func greetingText() -> String {
         guard let name = Settings.userName, !name.isEmpty else {
             return "What's cooking?"
@@ -1436,6 +1503,7 @@ final class DetailView: NSView {
         empty.isHidden = true
         emptyIcon.isHidden = true
         greeting.isHidden = true
+        recentChats.isHidden = true
         // As `updateEmpty` does. Without it the preview draws over whatever
         // transcript the chosen recording already has, which is not a state the
         // app can be in and would have somebody chasing a bug that is only in
@@ -1640,6 +1708,7 @@ final class DetailView: NSView {
             empty.isHidden = drawerCovering
             greeting.stringValue = Self.greetingText()
             greeting.isHidden = drawerCovering
+            showRecentChats()
             let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
             // The character welcomes a new library. In a library that already
             // has recordings, it would only turn a simple selection prompt into

@@ -1307,7 +1307,7 @@ final class DetailWithComposer: NSViewController {
         // the bottom of it. Its glass is what makes the page underneath legible
         // as *underneath*: blurred, still there, still the thing being asked
         // about.
-        let backdrop = Self.glassPanel(radius: 20)
+        backdrop = Self.glassPanel(radius: 20)
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         drawer.addSubview(backdrop)
         NSLayoutConstraint.activate([
@@ -1432,7 +1432,6 @@ final class DetailWithComposer: NSViewController {
             composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor, constant: -12),
         ])
 
-        composer.onHistory = { [weak self] anchor in self?.showHistory(from: anchor) }
         composer.onWantsOpen = { [weak self] in
             guard let self else { return }
             self.putAway = false
@@ -1624,6 +1623,11 @@ final class DetailWithComposer: NSViewController {
 
         headerHeight.constant = expanded ? Self.headerHeightPoints : 0
         header.isHidden = !expanded
+        // **No panel around a bare composer.** With nothing to hold, the glass
+        // was a frame drawn around a control that already has its own, which
+        // reads as a container missing its contents. It comes back the moment
+        // there is a conversation for it to contain.
+        backdrop.isHidden = !expanded && !composer.hasConversation
         // The clock and the chevron belong to the bar. Expanded, this header
         // carries the title and the size controls, and a second clock under it
         // would be the same action offered twice, six points apart.
@@ -1688,6 +1692,7 @@ final class DetailWithComposer: NSViewController {
     private var collapseGlass: NSView!
     private let fullButton = NSButton()
     private var fullGlass: NSView!
+    private var backdrop: NSView!
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: 84)

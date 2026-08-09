@@ -434,20 +434,21 @@ final class AskView: NSView {
         loaded = true
         stop()
         self.recording = recording
-        // The most recent conversation in this context, which is what the
-        // history is for stepping back beyond. There can be several now,
-        // because a conversation is a library document naming its sources
-        // rather than one sidecar per folder.
-        //
-        // A meeting takes the newest about it; the library takes the newest
-        // about nothing, since a question about one meeting is not the
-        // conversation you were having about everything.
         person = nil
-        chat = recording.map { Chat.about($0.id).first ?? Chat() }
-            ?? Chat.all().first { $0.sources.isEmpty && $0.person == nil } ?? Chat()
-        // Loaded, not opened. Arriving at a meeting should not throw a drawer
-        // over the page you came to read; the title and the chevron say it is
-        // there, which is what they are for.
+        // **Always a fresh conversation, and resuming is History's job.**
+        //
+        // This used to load the newest conversation in whatever context you had
+        // arrived at: the newest about this meeting, or the newest about
+        // nothing. It meant opening the app put you back into an old
+        // conversation you had not asked for, and clicking a meeting somebody
+        // had asked about once silently swapped an empty composer for a page of
+        // last week's answers. The starter chips went with it, because there
+        // were turns, so the pane you were given depended on history you could
+        // not see.
+        //
+        // Nothing is lost by dropping it. Every conversation is in History, and
+        // a meeting's own are named on the page under "Also about this".
+        chat = Chat()
         wantsRoom = false
         redraw()
     }
@@ -471,7 +472,9 @@ final class AskView: NSView {
         recording = nil
         person = name
         field.placeholderString = Self.prompt(for: nil, person: name)
-        chat = Chat.all().first { $0.person == name } ?? Chat()
+        // Fresh, for the reason `show(_:)` records. Their conversations are in
+        // History like everybody else's.
+        chat = Chat()
         wantsRoom = false
         redraw()
     }
@@ -618,6 +621,17 @@ final class AskView: NSView {
             say("Looking for Claude Code or Codex…")
             notice.isHidden = true
             setAskable(false)
+            // **Reported here too, and this branch is the one that runs first.**
+            //
+            // Without it the drawer kept the height it was built with, which is
+            // below what the well needs, and `ComposerWell` lays its field,
+            // model control and send button out by frame: the first thing on
+            // screen at launch was a squashed capsule with the send button as a
+            // flattened oval and the model name clipped to "Claude Co". It
+            // corrected itself a second later, when detection finished and the
+            // branches below reported a height for the first time, which made
+            // it look like a loading state rather than a layout fault.
+            reportHeight()
             // Once, and the callback puts the real state up.
             AgentCLI.warmUp { [weak self] in self?.updateStatus() }
             return
@@ -985,20 +999,29 @@ final class AskView: NSView {
         answering = nil
     }
 
-    /// Throw the open conversation away and load whatever is left in this
-    /// context, so deleting lands you on the previous one rather than on an
-    /// empty composer with a history you have to go back into.
+    /// Throw the open conversation away and start a fresh one.
+    ///
+    /// It used to load whatever was left in this context, on the argument that
+    /// deleting should land you on the previous conversation rather than on an
+    /// empty composer. That is the same argument `show(_:)` used to make and it
+    /// is wrong for the same reason: the composer is never a conversation
+    /// nobody asked for, and one you have just deleted is the last moment to
+    /// start guessing.
     func discard() {
+        forget(chat.id)
+    }
+
+    /// Delete a conversation by id, whether or not it is the one on screen.
+    ///
+    /// Deleting the open one leaves a fresh composer; deleting any other leaves
+    /// the screen exactly as it was, which is what History's own delete needs.
+    func forget(_ id: String?) {
+        guard let id else { return }
+        Chat.forget(id: id)
+        guard id == chat.id else { return }
         stop()
         pinned = false
-        if let id = chat.id { Chat.forget(id: id) }
-        let here = recording?.id
-        let who = person
-        chat = Chat.all().first { candidate in
-            if let who { return candidate.person == who }
-            if let here { return candidate.sources.contains(here) }
-            return candidate.sources.isEmpty && candidate.person == nil
-        } ?? Chat()
+        chat = Chat()
         wantsRoom = false
         redraw()
     }

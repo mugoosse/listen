@@ -627,3 +627,52 @@ Clicking a plain view does not end editing, because `NSView` does not accept
 first responder, which is right: somebody who clicked the page background has
 not stopped asking. And pressing a chip does not end editing either, so the row
 is not emptied under the mouse between the press and the release.
+
+## The composer is always a fresh conversation, and History is how you go back
+
+`show` used to load the newest conversation in whatever context you had arrived
+at: the newest about this meeting, or the newest about nothing. Two bad
+consequences, both of which read as bugs rather than as a feature:
+
+- Opening the app put you inside an old conversation nobody had asked for, with
+  a panel drawn round it.
+- Clicking a meeting somebody had asked about once silently swapped an empty
+  composer for last week's answers, and took the starter chips with it, because
+  the chips only appear when there are no turns. Which pane you got depended on
+  history you could not see.
+
+Nothing is lost by dropping it. Every conversation is in History, and a
+meeting's own are named on its page under "Also about this". `discard` was
+changed for the same reason: it used to load the next conversation in the
+context, which is the same guess made at the worst possible moment.
+
+## History is every conversation, which reverses an earlier decision
+
+The list used to be filtered to the page you were standing on, on the argument
+that a flat list of everything was a second, worse library list that offered to
+swap the page's subject out from under you.
+
+That was right while the only way in was the title at the top of the drawer,
+which is a label on the thing you are already looking at. It is wrong for a
+control called History in the window's title bar: a history that hides most of
+itself depending on which page you are on is a history you cannot trust.
+
+So: every conversation, twenty of them, grouped Today / Yesterday / Earlier,
+because "when did I ask that" is the only thing anybody remembers about a
+question they want back. It sits immediately after `.sidebarTrackingSeparator`,
+which is the only way to reach the top left of the *content* rather than the
+sidebar.
+
+Two menu traps, both measured through accessibility rather than by looking:
+
+- `NSMenuToolbarItem` eats item 0, so `fillHistory` takes a `forPullDown` flag
+  and prepends a bare item. Without it "New conversation" is the title and never
+  drawn. Same trap as `recordingActionsMenu`.
+- `NSMenu` re-enables everything as it opens unless `autoenablesItems` is off,
+  so the day headings came back live: three rows that look pressable and do
+  nothing, because they carry no action.
+
+Delete is a submenu rather than an ellipsis on every row. The rows stay one
+click to open, and a press aimed at "resume that" cannot land on "destroy that".
+It does not ask twice: a conversation is working-out rather than evidence, and
+anything worth keeping was already saved as a note.

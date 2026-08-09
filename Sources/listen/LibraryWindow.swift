@@ -64,6 +64,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
+    private static let historyItem = NSToolbarItem.Identifier("chatHistory")
+
+    /// The drawer, so the History toolbar item can borrow its menu.
+    private weak var composerHost: DetailWithComposer?
 
     /// What the library looked like when this window last read it. See
     /// `appBecameActive`.
@@ -267,6 +271,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // nothing to ask with. So the split's main item is a container holding
         // whatever `detailHost` is showing, with the composer pinned under it.
         let composerHost = DetailWithComposer(content: detailHost, composer: askBar)
+        // Held, because the History toolbar item is built here and again on
+        // every mode change, and the menu it shows belongs to the drawer.
+        self.composerHost = composerHost
         // Conversations named on a page open in the window's composer, which is
         // the only one on screen.
         detail.onOpenChat = { [weak composerHost] chat in composerHost?.open(chat) }
@@ -874,7 +881,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
-         Self.actionsItem, Self.personActionsItem, Self.recordItem]
+         Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -930,8 +937,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // glass: measured on the running window, "New Recording" and the
             // ellipsis came out inside a single rounded shape reading as one
             // control, with no edge between them to say where one ended.
+            // History is the first thing after the tracking separator, which is
+            // the top left of the *content*, immediately right of the divider.
+            // That is where it belongs and not beside Record: the conversations
+            // are the other half of this window and this is their way back, so
+            // it sits at the start of the pane they open into rather than among
+            // the verbs on the right.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace,
+                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
                     Self.recordItem, .space, Self.actionsItem]
         case .settings:
             // The same shape as every other mode: what this pane is on the
@@ -958,7 +971,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // longer lock the sidebar open, because the segmented control in it
             // is the navigation and collapsing is a choice like any other.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace, Self.personActionsItem]
+                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
+                    Self.personActionsItem]
         case .notes:
             // Nothing on the right. A note has no verbs yet: it is deleted
             // where it is written, and there is nothing to export that is not
@@ -968,7 +982,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // as you move between segments reads as three different screens
             // rather than three views of one library.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace]
+                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace]
         }
     }
 
@@ -1025,6 +1039,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // belong depends on who is selected and whether they have a card.
             item.menu = personPane.actionsMenu
             item.showsIndicator = false
+            return item
+
+        case Self.historyItem:
+            let item = NSMenuToolbarItem(itemIdentifier: id)
+            item.label = "History"
+            item.title = "History"
+            item.toolTip = "Every conversation, and a way to start another"
+            item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                                 accessibilityDescription: "History")
+            // The host owns the menu and fills it as it opens: which
+            // conversations exist, and which of them is on screen, are both
+            // answers that go stale the moment anything is asked or deleted.
+            item.menu = composerHost?.historyMenu ?? NSMenu()
             return item
 
         case Self.peopleItem:
@@ -1475,6 +1502,25 @@ final class DetailWithComposer: NSViewController {
             self.applyHeight(animated: self.composer.hasConversation)
         }
         view = container
+        // **Laid out once, here, before anything is on screen.**
+        //
+        // Everything below is decided in `applyHeight`: the drawer's height,
+        // whether the header exists, whether the panel is drawn, and whether
+        // the composer well has been given a pass since its bounds last moved.
+        // Until now the first call came from `AskView`'s first height report,
+        // which arrives when agent detection finishes, about a second after the
+        // window appears. For that second the drawer wore the height it was
+        // built with and a header nobody had told to collapse: `titleButton`
+        // and the two size discs were drawn around a zero-height header, so the
+        // first thing on screen at launch was the word "Button", which is
+        // AppKit's placeholder title for an `NSButton` that has none, next to
+        // two empty glass circles, over a squashed composer.
+        //
+        // Safe here and nowhere earlier. `applyHeight` reads `container`, which
+        // is set at the top of this method, and never `self.view`, which would
+        // re-enter `loadView` and hang the app with no window. See the note
+        // there.
+        applyHeight()
     }
 
     /// Anything taller than this is a conversation rather than a bar, which is
@@ -1515,60 +1561,143 @@ final class DetailWithComposer: NSViewController {
         showHistory(from: titleButton)
     }
 
+    /// The History toolbar item's menu.
+    ///
+    /// Kept rather than built per item, for the reason `recordingActionsMenu`
+    /// is: the toolbar rebuilds its items on every mode change, and the
+    /// identity of this menu is what `menuNeedsUpdate` uses to tell the
+    /// pull-down apart from the one popped up under the drawer's title, which
+    /// must not lose its first item.
+    lazy var historyMenu: NSMenu = {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }()
+
     private func showHistory(from anchor: NSView) {
         let menu = NSMenu()
+        fillHistory(menu, forPullDown: false)
+        // Anchored to the control that was pressed. It used to be anchored to
+        // a button this class still owned but had stopped putting on screen,
+        // so the menu opened relative to a view with no window: built, popped,
+        // and invisible.
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
+                   in: anchor)
+    }
+
+    /// Every conversation, newest first, under the day it was last touched.
+    ///
+    /// **Every conversation, not this page's.** It used to filter to the
+    /// context you were standing in, on the argument that a flat list of
+    /// everything was a second, worse library list. That was true while the
+    /// only way in was a title at the top of the drawer, which is a label on
+    /// the thing you are already looking at. It is not true of a control called
+    /// History in the window's title bar: a history that hides most of itself
+    /// depending on which page you are on is a history you cannot trust, and
+    /// the page's own conversations are still named on it under "Also about
+    /// this".
+    ///
+    /// Twenty, because this is a menu and not a browser, and grouped by day
+    /// because "when did I ask that" is the only thing anybody remembers about
+    /// a question they want back.
+    ///
+    /// `forPullDown` prepends a placeholder, for the reason
+    /// `recordingActionsMenu` does: an `NSMenuToolbarItem` takes item 0 as its
+    /// own title and never draws it, so without one "New conversation" would be
+    /// eaten. The popped-up version shows every item it is handed.
+    func fillHistory(_ menu: NSMenu, forPullDown: Bool) {
+        menu.removeAllItems()
+        // Otherwise `NSMenu` re-enables everything as it opens, from the
+        // responder chain, and the day headings come back as live rows: they do
+        // nothing when pressed, because they carry no action, so the menu grew
+        // three items that look pressable and are not. Measured through
+        // accessibility, which reported `enabled=true` on "Today" after it had
+        // been built disabled.
+        menu.autoenablesItems = false
+        if forPullDown { menu.addItem(NSMenuItem()) }
         let fresh = NSMenuItem(title: "New conversation",
                                action: #selector(newConversation), keyEquivalent: "")
         fresh.target = self
         menu.addItem(fresh)
 
-        // **Only this page's conversations.** The history belongs to the
-        // context you are in: on a meeting it is the questions asked about that
-        // meeting, and on the library it is the ones asked about the library.
-        // A flat list of everything made the menu a second, worse library list,
-        // and offered to swap the page's subject out from under it.
-        let here = composer.contextID
-        let chats = Chat.all().filter {
-            here == nil ? $0.sources.isEmpty : $0.sources.contains(here!)
-        }
-        if !chats.isEmpty {
-            menu.addItem(.separator())
-            // Ten, because this is a menu and not a browser. Anything older is
-            // found through the meeting it was about, which is what the back
-            // links on a page are for.
-            for chat in chats.prefix(10) {
-                let item = NSMenuItem(title: chat.displayTitle,
-                                      action: #selector(openConversation(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                item.representedObject = chat.id
-                // A tick on the one already open, so the menu says where you are
-                // as well as where you can go.
-                item.state = chat.id == composer.currentID ? .on : .off
-                menu.addItem(item)
+        let chats = Array(Chat.all().prefix(20))
+        var lastGroup: String?
+        for chat in chats {
+            let group = Self.historyGroup(chat)
+            if group != lastGroup {
+                menu.addItem(.separator())
+                let heading = NSMenuItem(title: group, action: nil, keyEquivalent: "")
+                heading.isEnabled = false
+                menu.addItem(heading)
+                lastGroup = group
             }
+            let item = NSMenuItem(title: chat.displayTitle,
+                                  action: #selector(openConversation(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = chat.id
+            // A tick on the one already open, so the menu says where you are
+            // as well as where you can go.
+            item.state = chat.id == composer.currentID ? .on : .off
+            menu.addItem(item)
         }
-        // Anchored to the control that was pressed. It used to be anchored to
-        // a button this class still owned but had stopped putting on screen,
-        // so the menu opened relative to a view with no window: built, popped,
-        // and invisible.
-        // Deleting the open one, at the bottom and away from the list, so a
-        // press aimed at "resume that" cannot land on "destroy that". A
-        // conversation is working-out rather than evidence, which is why this
-        // is allowed at all and why it does not ask twice: what it throws away
-        // is a question you can ask again, and anything worth keeping was
-        // already saved as a note.
-        if composer.hasConversation, composer.currentID != nil {
-            menu.addItem(.separator())
-            let delete = NSMenuItem(title: "Delete this conversation",
-                                    action: #selector(deleteConversation),
-                                    keyEquivalent: "")
-            delete.target = self
-            menu.addItem(delete)
+
+        // **Delete is one level deeper, and deliberately.** A press aimed at
+        // "resume that" must not be able to land on "destroy that", which is
+        // why this is a submenu rather than an ellipsis on every row: the rows
+        // stay one click to open, and the rare destructive act costs a move.
+        //
+        // It does not ask twice. A conversation is working-out rather than
+        // evidence: what it throws away is a question you can ask again, and
+        // anything worth keeping was already saved as a note.
+        guard !chats.isEmpty else { return }
+        menu.addItem(.separator())
+        let delete = NSMenuItem(title: "Delete", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        for chat in chats {
+            let item = NSMenuItem(title: chat.displayTitle,
+                                  action: #selector(deleteNamedConversation(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = chat.id
+            submenu.addItem(item)
         }
-        menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
-                   in: anchor)
+        delete.submenu = submenu
+        menu.addItem(delete)
+    }
+
+    /// Which day heading a conversation sits under.
+    ///
+    /// The same three the sidebar uses, and for the same reason: a date is a
+    /// worse answer than "Yesterday" for anything inside the week somebody
+    /// actually remembers.
+    private static func historyGroup(_ chat: Chat) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let stamp = chat.updated, let date = parser.date(from: stamp) else {
+            return "Earlier"
+        }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return "Earlier"
+    }
+
+    @objc private func deleteNamedConversation(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        // Asked before, not after: `forget` replaces the open conversation with
+        // a fresh one, so afterwards there is nothing left to compare against.
+        let wasOpen = id == composer.currentID
+        composer.forget(id)
+        // Only when the open one went. Deleting somebody else's row leaves the
+        // screen alone, which is the whole point of being able to do it from a
+        // list rather than only from the conversation you are in.
+        guard wasOpen else { return }
+        extent = .bar
+        putAway = false
+        applyHeight(animated: true)
     }
 
     @objc private func newConversation() {
@@ -1577,13 +1706,6 @@ final class DetailWithComposer: NSViewController {
         extent = .bar
         applyHeight(animated: true)
         composer.focusField()
-    }
-
-    @objc private func deleteConversation() {
-        composer.discard()
-        extent = .bar
-        putAway = false
-        applyHeight(animated: true)
     }
 
     /// Load a conversation and show it. The one entry point, so a link on a
@@ -1738,6 +1860,15 @@ final class DetailWithComposer: NSViewController {
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: 84)
+}
+
+extension DetailWithComposer: NSMenuDelegate {
+    /// Only the toolbar's pull-down reaches here. The menu popped up under the
+    /// drawer's title is built and thrown away by `showHistory`, so it needs no
+    /// placeholder and would show one if it were given it.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        fillHistory(menu, forPullDown: true)
+    }
 }
 
 /// Holds one view controller at a time, so a split view item can change what it

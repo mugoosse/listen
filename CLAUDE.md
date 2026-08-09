@@ -234,6 +234,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The notes prompt is not inside the notes pane, and stayed up over an empty one
 - Stopping a recording is a reload, and it wiped the name being typed
 - The meeting page's largest gap was a row holding nothing
+- The drawer was never laid out until agent detection finished
 
 ### `.agents/notes/appkit.md` (20k)
 
@@ -306,6 +307,8 @@ Asking questions about the library through an agent CLI the user already has.
 - `listen ask` is the test mechanism, and it is the same engine as the window
 - An empty row and the conversation shared one number, and the row took it
 - The chips wait for the caret, and the drawer's panel comes with them
+- The composer is always a fresh conversation, and History is how you go back
+- History is every conversation, which reverses an earlier decision
 
 ### `.agents/notes/release.md` (5k)
 

@@ -1090,3 +1090,29 @@ with a name, never moved much and made the turns look pinched instead. 4, 10 and
 
 Both section headings now sit 16 points below whatever is above them, because
 "Notes" and "Recording" are the same kind of thing and were 50 and 14.
+
+## The drawer was never laid out until agent detection finished
+
+For about a second after launch the window showed the word "Button" next to two
+empty glass circles, over a squashed composer well.
+
+Everything about the drawer is decided in `applyHeight`: its height, whether the
+header exists, whether the panel is drawn, and whether `ComposerWell` has been
+given a layout pass since its bounds last moved. Nothing called it until
+`AskView` reported a height for the first time, and that report came from
+`updateStatus`, which returns early while agent detection is still running. So
+the first frame wore the height the drawer was *built* with, 84 points, and a
+header nobody had told to collapse: `titleButton` and the two size discs were
+drawn around a zero-height header, and "Button" is AppKit's placeholder title
+for an `NSButton` that has none.
+
+Two changes, and both are needed. `updateStatus` reports a height in its
+"looking for an agent" branch as well, so the bar is the right size before
+anything is known. And `loadView` ends with one `applyHeight()`, which is safe
+there and nowhere earlier: it reads `container`, set at the top of that method,
+and never `self.view`, which would re-enter `loadView` and hang the app with no
+window.
+
+The general shape is worth keeping: **a view whose geometry is decided by a
+method has to have that method called once at build time.** Waiting for the
+first real event means shipping whatever the initialisers happened to leave.

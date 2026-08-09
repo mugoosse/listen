@@ -1276,7 +1276,6 @@ final class DetailWithComposer: NSViewController {
 
     /// What `AskView` last asked for, before collapsing is taken into account.
     private var wantedHeight: CGFloat = 68
-    private var collapsed = false
 
     /// The window hides the page's empty sentence while this is up.
     var onCoveringChanged: ((Bool) -> Void)?
@@ -1322,17 +1321,6 @@ final class DetailWithComposer: NSViewController {
         header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        historyButton.isBordered = false
-        historyButton.bezelStyle = .inline
-        historyButton.imagePosition = .imageOnly
-        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
-                                      accessibilityDescription: "Earlier conversations")
-        historyButton.toolTip = "Earlier conversations"
-        historyButton.contentTintColor = .secondaryLabelColor
-        historyButton.target = self
-        historyButton.action = #selector(showHistory)
-        historyButton.translatesAutoresizingMaskIntoConstraints = false
-
         titleLabel.font = .systemFont(ofSize: 11)
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -1353,8 +1341,23 @@ final class DetailWithComposer: NSViewController {
         collapseGlass.translatesAutoresizingMaskIntoConstraints = false
         collapseGlass.addSubview(collapseButton)
 
-        header.addSubview(historyButton)
+        // Beside the collapse control, and the same size, because they are the
+        // two directions of one thing: how much of the page the conversation
+        // is allowed to have.
+        fullButton.isBordered = false
+        fullButton.bezelStyle = .inline
+        fullButton.imagePosition = .imageOnly
+        fullButton.contentTintColor = .labelColor
+        fullButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
+        fullButton.target = self
+        fullButton.action = #selector(toggleFull)
+        fullButton.translatesAutoresizingMaskIntoConstraints = false
+        fullGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
+        fullGlass.translatesAutoresizingMaskIntoConstraints = false
+        fullGlass.addSubview(fullButton)
+
         header.addSubview(titleLabel)
+        header.addSubview(fullGlass)
         header.addSubview(collapseGlass)
 
         container.addSubview(content.view)
@@ -1379,14 +1382,19 @@ final class DetailWithComposer: NSViewController {
             header.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
             headerHeight,
-            historyButton.leadingAnchor.constraint(equalTo: header.leadingAnchor,
-                                                   constant: 24),
-            historyButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: historyButton.trailingAnchor,
-                                                constant: 8),
+            titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor,
+                                                constant: 24),
             titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo:
-                collapseButton.leadingAnchor, constant: -8),
+                fullGlass.leadingAnchor, constant: -8),
+
+            fullGlass.trailingAnchor.constraint(equalTo: collapseGlass.leadingAnchor,
+                                                constant: -8),
+            fullGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            fullGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            fullGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            fullButton.centerXAnchor.constraint(equalTo: fullGlass.centerXAnchor),
+            fullButton.centerYAnchor.constraint(equalTo: fullGlass.centerYAnchor),
             collapseGlass.trailingAnchor.constraint(equalTo: header.trailingAnchor,
                                                     constant: -20),
             collapseGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -1401,14 +1409,23 @@ final class DetailWithComposer: NSViewController {
             composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor, constant: -12),
         ])
 
+        composer.onHistory = { [weak self] in self?.showHistory() }
+        composer.onExpand = { [weak self] in
+            guard let self else { return }
+            self.putAway = false
+            self.extent = .standard
+            self.applyHeight(animated: true)
+        }
         composer.onHeightChanged = { [weak self] height in
             guard let self else { return }
             self.wantedHeight = height
             // A question asked after the drawer was put away brings it back.
             // Collapsing means "not now", not "never again", and the alternative
             // is an answer streaming into a bar nobody can see.
-            if height > Self.barCeiling { self.collapsed = false }
-            self.applyHeight()
+            // A question asked after the drawer was put away brings it back:
+            // collapsing means "not now", not "never again".
+            if height > Self.barCeiling { self.putAway = false }
+            self.applyHeight(animated: self.composer.hasConversation)
         }
         view = container
     }
@@ -1417,9 +1434,28 @@ final class DetailWithComposer: NSViewController {
     /// what the collapse control and the page-covering flag both key off.
     private static let barCeiling: CGFloat = 200
 
+    /// How much of the page the conversation is allowed to have.
+    ///
+    /// Three rather than two, because "as much as it needs" and "all of it" are
+    /// different answers: a follow-up wants the page still visible behind it,
+    /// and reading a long answer wants the room.
+    enum Extent { case bar, standard, full }
+    private var extent: Extent = .bar
+
+    /// Set when somebody collapses on purpose, so the next reported height does
+    /// not immediately reopen what they just put away. Cleared by asking again,
+    /// which is the one gesture that means "show me".
+    private var putAway = false
+
     @objc private func toggleCollapsed() {
-        collapsed.toggle()
-        applyHeight()
+        extent = extent == .bar ? .standard : .bar
+        putAway = extent == .bar
+        applyHeight(animated: true)
+    }
+
+    @objc private func toggleFull() {
+        extent = extent == .full ? .standard : .full
+        applyHeight(animated: true)
     }
 
     /// Every conversation, newest first, and a way to start another.
@@ -1460,8 +1496,9 @@ final class DetailWithComposer: NSViewController {
 
     @objc private func newConversation() {
         composer.startNew()
-        collapsed = false
-        applyHeight()
+        putAway = false
+        extent = .bar
+        applyHeight(animated: true)
         composer.focusField()
     }
 
@@ -1469,57 +1506,89 @@ final class DetailWithComposer: NSViewController {
         guard let id = sender.representedObject as? String,
               let chat = Chat.load(id: id) else { return }
         composer.open(chat)
-        collapsed = false
-        applyHeight()
+        putAway = false
+        extent = .standard
+        applyHeight(animated: true)
     }
 
-    private func applyHeight() {
+    private func applyHeight(animated: Bool = false) {
         // **`container`, never `view`.** `AskView` can report a height while it
         // is being added to the hierarchy, which is inside `loadView`, and
         // `self.view` there re-enters `loadView` and recurses until the app
         // hangs with no window and nothing on stderr. Measured exactly once,
         // which was one time too many.
         guard let container else { return }
-        let expanded = wantedHeight > Self.barCeiling && !collapsed
-        // Clamped here rather than in `AskView`, which cannot know what the
-        // window can spare. A conversation asks for more than a bar and must
-        // still leave the page it covers partly visible.
-        let available = container.bounds.height - 140
-        let wanted = collapsed ? Self.collapsedHeight : wantedHeight
-        drawerHeight.constant = (available > 0 ? min(wanted, available) : wanted)
-            + Self.headerHeightPoints
-        headerHeight.constant = Self.headerHeightPoints
+        // A conversation that has just started opens itself. One that is still
+        // an empty composer is a bar however this was last left, so a new
+        // question does not inherit the size of the last answer.
+        if !composer.hasConversation { extent = .bar }
+        else if extent == .bar, wantedHeight > Self.barCeiling, !putAway {
+            extent = .standard
+        }
+        let expanded = extent != .bar
 
-        // The chevron points the way it will move the drawer, and is only there
-        // when there is a conversation to move: on an empty composer it would
-        // offer to open nothing.
-        collapseGlass.isHidden = !composer.hasConversation
-        collapseButton.image = NSImage(
-            systemSymbolName: expanded ? "chevron.down" : "chevron.up",
-            accessibilityDescription: expanded ? "Put the conversation away"
-                                               : "Show the conversation")
-        collapseButton.toolTip = expanded ? "Put the conversation away"
-                                          : "Show the conversation"
-        // The title is what says a collapsed bar still has something behind it.
+        // **The bar's height is asked for, never assumed.** Hardcoding it below
+        // what `AskView` needs squeezed the well until autolayout gave way
+        // somewhere else, and the send button came back a flattened oval.
+        let bar = composer.barHeight
+        let body: CGFloat
+        switch extent {
+        case .bar:
+            body = bar
+        case .standard:
+            // Clamped here rather than in `AskView`, which cannot know what the
+            // window can spare.
+            body = min(wantedHeight, max(bar, container.bounds.height - 140))
+        case .full:
+            // Full still leaves the page's heading visible, so a conversation
+            // covering everything says what it is covering.
+            body = max(bar, container.bounds.height - 84)
+        }
+        let target = body + (expanded ? Self.headerHeightPoints : 0)
+
+        headerHeight.constant = expanded ? Self.headerHeightPoints : 0
+        header.isHidden = !expanded
+        // The clock and the chevron belong to the bar. Expanded, this header
+        // carries the title and the size controls, and a second clock under it
+        // would be the same action offered twice, six points apart.
+        composer.setExpanded(expanded)
+
+        fullButton.image = NSImage(
+            systemSymbolName: extent == .full
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right",
+            accessibilityDescription: extent == .full ? "Smaller" : "Fill the page")
+        fullButton.toolTip = extent == .full ? "Smaller" : "Fill the page"
         titleLabel.stringValue = composer.hasConversation
             ? composer.conversationTitle : ""
-        // The drawer is never hidden, because the composer lives inside it and
-        // would go with it. Its material behind the bare bar is welcome anyway:
-        // it stops the page's text reading through the one control that is on
-        // screen at all times.
+
+        // Animated on a press, immediate when the height was merely recomputed.
+        // A bar easing itself taller because agent detection finished is motion
+        // nobody asked for, and the first frame of the window is not a gesture.
+        if animated, drawerHeight.constant != target {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.allowsImplicitAnimation = true
+                drawerHeight.animator().constant = target
+                container.layoutSubtreeIfNeeded()
+            }
+        } else {
+            drawerHeight.constant = target
+        }
         onCoveringChanged?(expanded)
     }
 
-    /// The well and its status line, which is the drawer with nothing in it.
-    private static let collapsedHeight: CGFloat = 68
     /// Always present, so the history and the way back are never taken away.
     /// Tall enough to hold the collapse disc with air around it.
     private static let headerHeightPoints: CGFloat = 44
     private static let collapseDiameter: CGFloat = 30
     private var collapseGlass: NSView!
+    private let fullButton = NSButton()
+    private var fullGlass: NSView!
 
     private lazy var drawerHeight =
-        drawer.heightAnchor.constraint(equalToConstant: Self.collapsedHeight)
+        drawer.heightAnchor.constraint(equalToConstant: 84)
 }
 
 /// Holds one view controller at a time, so a split view item can change what it

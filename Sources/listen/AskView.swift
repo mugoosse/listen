@@ -38,6 +38,10 @@ final class AskView: NSView {
     private let scroll = NSScrollView()
     private let turns = NSStackView()
     private let starterRow = NSStackView()
+    /// The starters and the drawer's collapsed-state controls, on one line.
+    private let starterLine = NSStackView()
+    private let historyButton = NSButton()
+    private let expandButton = NSButton()
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
     /// alternatives rather than neighbours: one invites a question and the other
@@ -122,11 +126,47 @@ final class AskView: NSView {
         notice.isHidden = true
         notice.onCheckAgain = { [weak self] in self?.recheck() }
 
+        // The starters and the two drawer controls share one line, right
+        // against left. A clock on a line of its own above the chips is a whole
+        // row spent on one glyph, which is what it looked like.
+        for button in [historyButton, expandButton] {
+            button.isBordered = false
+            button.bezelStyle = .inline
+            button.imagePosition = .imageOnly
+            button.contentTintColor = .secondaryLabelColor
+            button.target = self
+            button.translatesAutoresizingMaskIntoConstraints = false
+        }
+        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                                      accessibilityDescription: "Earlier conversations")
+        historyButton.toolTip = "Earlier conversations"
+        historyButton.action = #selector(historyPressed)
+        expandButton.image = NSImage(systemSymbolName: "chevron.up",
+                                     accessibilityDescription: "Show the conversation")
+        expandButton.toolTip = "Show the conversation"
+        expandButton.action = #selector(expandPressed)
+        expandButton.isHidden = true
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        starterLine.orientation = .horizontal
+        starterLine.alignment = .centerY
+        starterLine.spacing = 6
+        starterLine.translatesAutoresizingMaskIntoConstraints = false
+        starterLine.addArrangedSubview(starterRow)
+        starterLine.addArrangedSubview(spacer)
+        starterLine.addArrangedSubview(expandButton)
+        starterLine.addArrangedSubview(historyButton)
+        // The spacer is what pushes the controls to the trailing edge, and it
+        // is the only thing in the row allowed to grow.
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        starterRow.setContentHuggingPriority(.required, for: .horizontal)
+
         invitation.orientation = .vertical
         invitation.alignment = .leading
         invitation.spacing = 8
         invitation.translatesAutoresizingMaskIntoConstraints = false
-        invitation.addArrangedSubview(starterRow)
+        invitation.addArrangedSubview(starterLine)
         invitation.addArrangedSubview(notice)
 
         buildComposer()
@@ -468,6 +508,38 @@ final class AskView: NSView {
         say("")
     }
 
+    /// Pressed on the clock and on the chevron in the starters line. The drawer
+    /// owns what they mean, because only it knows how tall it is.
+    var onHistory: (() -> Void)?
+    var onExpand: (() -> Void)?
+
+    @objc private func historyPressed() { onHistory?() }
+    @objc private func expandPressed() { onExpand?() }
+
+    /// Both controls belong to the collapsed bar. Expanded, the drawer's own
+    /// header carries the title and the size controls, and a second clock under
+    /// it would be the same action offered twice, six points apart.
+    func setExpanded(_ on: Bool) {
+        historyButton.isHidden = on
+        expandButton.isHidden = on || !hasConversation
+    }
+
+    /// The height this needs as a bar: the well, its status line, and the
+    /// starters line, which is always there because the controls live in it.
+    ///
+    /// Asked for rather than assumed. The drawer hardcoded 68, which is below
+    /// this, so collapsing squeezed the well until autolayout gave up somewhere
+    /// and the send button came back a flattened oval.
+    var barHeight: CGFloat {
+        var height = ComposerWell.height + 6 + 14 + 12
+        if !notice.isHidden {
+            height += notice.fittingSize.height + 8
+        } else {
+            height += max(starterLine.fittingSize.height, 20) + 8
+        }
+        return height
+    }
+
     /// Is there a conversation to go back to, as opposed to an empty composer?
     var hasConversation: Bool { !chat.turns.isEmpty }
 
@@ -490,20 +562,7 @@ final class AskView: NSView {
         // A conversation needs the room a bar does not have. The owner clamps
         // this to what the window can spare, so asking for more than exists is
         // safe and asking for a share of an unknown height is not.
-        guard chat.turns.isEmpty, run == nil else {
-            onHeightChanged?(560)
-            return
-        }
-        // The well, the gap under it, the status line, and the bottom inset.
-        var height = ComposerWell.height + 6 + 14 + 12
-        // Whichever invitation is up, and never both: `updateStatus` shows the
-        // card or the starters, so measuring the visible one is the whole rule.
-        if !notice.isHidden {
-            height += notice.fittingSize.height + 8
-        } else if !starterRow.isHidden {
-            height += starterRow.fittingSize.height + 8
-        }
-        onHeightChanged?(height)
+        onHeightChanged?(chat.turns.isEmpty && run == nil ? barHeight : 560)
     }
 
     /// Everything that has to agree about whether a question can be asked.

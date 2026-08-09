@@ -1244,13 +1244,31 @@ final class DetailView: NSView {
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
                   hidden: showing == .ask || recording?.isLive == true)
+        // **Every piece of the page is gated on there being a page.** The
+        // heading, the note and the transcript are furniture belonging to a
+        // meeting, and with nothing selected the pane's whole content is one
+        // centred sentence saying so. Without the `recording != nil` half, an
+        // empty pane drew "Transcript" in the middle of it, over a note-shaped
+        // hole holding the previous meeting's height. This is the same reason
+        // `updatePlaceholder` tests `recording == nil`: these views are siblings
+        // of the empty label rather than children of anything it hides.
         let page = showing == .page
-        scroll.isHidden = !page
+        let open = page && recording != nil
+        scroll.isHidden = !open
         // Both halves of the page, together. This is the change: a note and the
         // dialogue it was taken during are one document, and choosing between
         // them was never a choice anybody wanted to make.
-        notesScroll.isHidden = !page
-        transcriptHeading.isHidden = !page
+        notesScroll.isHidden = !open
+        notesHeight.constant = open ? notesHeight.constant : 0
+        // No heading over a meeting with nothing under it either. The sentence
+        // `updateEmpty` writes there already says why the transcript is absent,
+        // and a label naming a document that is not present is furniture
+        // pretending to be content.
+        transcriptHeading.isHidden = !open || turns.isEmpty
+        // Collapsed as well as hidden, spacing included: a hidden view keeps its
+        // frame, which is the trap this file already records three times.
+        transcriptHeadingHeight.constant = transcriptHeading.isHidden ? 0 : 16
+        transcriptHeadingTop.constant = transcriptHeading.isHidden ? 0 : 14
         askView.isHidden = page
         // A solo is a lens on the transcript, so it goes with the transcript.
         // Leaving the bar up over Ask would be a sentence about paragraphs that
@@ -1702,6 +1720,22 @@ final class DetailView: NSView {
         scroll.isHidden = hidden
         notesScroll.isHidden = hidden
         askView.isHidden = hidden
+        // **This list is the one that runs when nothing is selected**, because
+        // `show(nil)` returns from here without reaching `applyShowing`. Anything
+        // added to the page has to be added here too, and the heading was not:
+        // it drew the word "Transcript" halfway down an otherwise empty pane,
+        // above "Select something from the list."
+        transcriptHeading.isHidden = hidden
+        chatLinks.isHidden = hidden
+        if hidden {
+            // Collapsed as well as hidden, spacing included, or the empty
+            // sentence sits pushed down the pane by furniture nobody can see.
+            transcriptHeadingHeight.constant = 0
+            transcriptHeadingTop.constant = 0
+            chatLinksHeight.isActive = true
+            chatLinksTop.constant = 0
+            notesHeight.constant = 0
+        }
         if hidden {
             // Deselecting while a meeting is being recorded is ordinary: the
             // recording carries on, so the note has to be written down and the

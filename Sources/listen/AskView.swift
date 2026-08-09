@@ -1008,19 +1008,9 @@ final class AskView: NSView {
     /// nobody asked for, and one you have just deleted is the last moment to
     /// start guessing.
     func discard() {
-        forget(chat.id)
-    }
-
-    /// Delete a conversation by id, whether or not it is the one on screen.
-    ///
-    /// Deleting the open one leaves a fresh composer; deleting any other leaves
-    /// the screen exactly as it was, which is what History's own delete needs.
-    func forget(_ id: String?) {
-        guard let id else { return }
-        Chat.forget(id: id)
-        guard id == chat.id else { return }
         stop()
         pinned = false
+        if let id = chat.id { Chat.forget(id: id) }
         chat = Chat()
         wantsRoom = false
         redraw()

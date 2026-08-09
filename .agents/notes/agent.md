@@ -672,7 +672,19 @@ Two menu traps, both measured through accessibility rather than by looking:
   so the day headings came back live: three rows that look pressable and do
   nothing, because they carry no action.
 
-Delete is a submenu rather than an ellipsis on every row. The rows stay one
-click to open, and a press aimed at "resume that" cannot land on "destroy that".
+Delete is one item at the foot and it acts on the **open** conversation, so the
+rows above it only ever open. It was briefly a submenu naming every
+conversation, and that failed on its own data: a conversation is titled by the
+first question asked in it, the same question gets asked of different meetings,
+and the list came out as four rows of which two pairs were identical. A delete
+you cannot aim is worse than no delete, and it doubled the length of a menu
+whose job is to get you back into a conversation with a second copy of the same
+list doing the opposite.
+
+Deleting a different one is still reachable and costs one more move: open it,
+then delete it. That is the right price for the destructive half of a control
+whose other half is one click, and it is why the item is disabled rather than
+absent when nothing is open, so the menu keeps its shape.
+
 It does not ask twice: a conversation is working-out rather than evidence, and
 anything worth keeping was already saved as a note.

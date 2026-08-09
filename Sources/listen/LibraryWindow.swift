@@ -1660,28 +1660,31 @@ final class DetailWithComposer: NSViewController {
             menu.addItem(item)
         }
 
-        // **Delete is one level deeper, and deliberately.** A press aimed at
-        // "resume that" must not be able to land on "destroy that", which is
-        // why this is a submenu rather than an ellipsis on every row: the rows
-        // stay one click to open, and the rare destructive act costs a move.
+        // **The open one, and only the open one.**
+        //
+        // This was a submenu naming every conversation, so that any of them
+        // could be deleted from here. Two things were wrong with it. A
+        // conversation is titled by the first question asked in it, and the
+        // same question gets asked of different meetings, so the list came out
+        // as four rows of which two pairs were identical: a delete you cannot
+        // aim is worse than no delete. And it doubled the length of a menu whose
+        // job is to get you back into a conversation, with a second copy of the
+        // same list that does the opposite.
+        //
+        // Deleting another one is still reachable, and costs one more move than
+        // it did: open it, then delete it. That is the right price for the
+        // destructive half of a control whose other half is one click.
         //
         // It does not ask twice. A conversation is working-out rather than
         // evidence: what it throws away is a question you can ask again, and
         // anything worth keeping was already saved as a note.
-        guard !chats.isEmpty else { return }
         menu.addItem(.separator())
-        let delete = NSMenuItem(title: "Delete", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        for chat in chats {
-            let item = NSMenuItem(title: chat.displayTitle,
-                                  action: #selector(deleteNamedConversation(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = chat.id
-            submenu.addItem(item)
-        }
-        delete.submenu = submenu
+        let delete = NSMenuItem(title: "Delete this conversation",
+                                action: #selector(deleteConversation), keyEquivalent: "")
+        delete.target = self
+        // Disabled rather than absent, so the menu keeps its shape and says why
+        // there is nothing to do instead of quietly being one item shorter.
+        delete.isEnabled = composer.hasConversation && composer.currentID != nil
         menu.addItem(delete)
     }
 
@@ -1702,16 +1705,8 @@ final class DetailWithComposer: NSViewController {
         return "Earlier"
     }
 
-    @objc private func deleteNamedConversation(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        // Asked before, not after: `forget` replaces the open conversation with
-        // a fresh one, so afterwards there is nothing left to compare against.
-        let wasOpen = id == composer.currentID
-        composer.forget(id)
-        // Only when the open one went. Deleting somebody else's row leaves the
-        // screen alone, which is the whole point of being able to do it from a
-        // list rather than only from the conversation you are in.
-        guard wasOpen else { return }
+    @objc private func deleteConversation() {
+        composer.discard()
         extent = .bar
         putAway = false
         applyHeight(animated: true)

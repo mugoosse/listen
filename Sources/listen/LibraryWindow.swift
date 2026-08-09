@@ -1386,6 +1386,23 @@ final class DetailWithComposer: NSViewController {
         titleButton.target = self
         titleButton.action = #selector(showTitleMenu)
         titleButton.translatesAutoresizingMaskIntoConstraints = false
+        // **A symbol, not a typed glyph.** The caret used to be "⌄" appended to
+        // the title string, U+2304 DOWN ARROWHEAD, and it sat visibly below the
+        // words next to it: that character is centred on its own em box rather
+        // than on the x-height of the run it lands in, and it comes from
+        // whatever fallback font happens to carry it, so it matched neither the
+        // baseline nor the weight. An SF Symbol is laid out against the title's
+        // own line, which is the whole reason `AnswerTurn`'s disclosure is an
+        // image too.
+        titleButton.image = NSImage(systemSymbolName: "chevron.down",
+                                    accessibilityDescription: "")
+        titleButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
+        titleButton.contentTintColor = .secondaryLabelColor
+        titleButton.imagePosition = .imageTrailing
+        // Beside the words rather than pushed to the far edge of the button,
+        // which is what an untouched trailing image does when the button is
+        // wider than its text.
+        titleButton.imageHugsTitle = true
 
         // Its own glass disc, and big enough to be a target rather than a hint.
         // A bare chevron at 11 points is the control somebody hunts for after
@@ -1802,7 +1819,9 @@ final class DetailWithComposer: NSViewController {
         fullButton.toolTip = extent == .full ? "Smaller" : "Fill the page"
         let name = composer.hasConversation ? composer.conversationTitle : ""
         titleButton.attributedTitle = NSAttributedString(
-            string: name.isEmpty ? "" : name + "  ⌄",
+            // One trailing space, because `imageHugsTitle` puts the chevron
+            // against the last letter with nothing between them.
+            string: name.isEmpty ? "" : name + " ",
             attributes: [.font: NSFont.systemFont(ofSize: 11),
                          .foregroundColor: NSColor.secondaryLabelColor])
         titleButton.isHidden = name.isEmpty

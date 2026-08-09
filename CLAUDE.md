@@ -254,6 +254,7 @@ this app, so read them before building any new window, menu or popover.
 - Cmd-Q is intercepted ahead of the menu, not rebound in it
 - The sidebar width fought the split view
 - `intrinsicContentSize` is four points narrower than the text
+- A typed chevron is not aligned with the text beside it
 
 ### `.agents/notes/cli-mcp.md` (6k)
 

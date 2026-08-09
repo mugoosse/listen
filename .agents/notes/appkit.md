@@ -371,3 +371,27 @@ documented as the drawing width. The rule is that a hand-placed label is sized
 from `cellSize`, and the only reason to touch `intrinsicContentSize` is when
 Auto Layout is placing the label for you, where AppKit adds the same padding
 back itself.
+
+## A typed chevron is not aligned with the text beside it
+
+The drawer's conversation title carried its caret as a character, `"⌄"` appended
+to the string, U+2304 DOWN ARROWHEAD. It sits visibly below the words next to
+it, for two reasons at once: the glyph is centred on its own em box rather than
+on the x-height of the run it lands in, and no system font ships it, so it
+arrives from whatever fallback carries it and matches neither the baseline nor
+the weight.
+
+An SF Symbol on the button is laid out against the title's own line and inherits
+the weight, which is why every other chevron in this app is an image:
+
+```swift
+button.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "")
+button.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
+button.imagePosition = .imageTrailing
+button.imageHugsTitle = true          // or it is pushed to the button's far edge
+```
+
+`imageHugsTitle` puts it against the last letter with nothing between them, so
+the title keeps one trailing space. `AnswerTurn`'s disclosure records the other
+half of this: two glyphs rather than one rotated, because a rotation under Auto
+Layout is only aligned in one of its two states.

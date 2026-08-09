@@ -151,6 +151,10 @@ final class SidebarViewController: NSViewController {
     /// then it is true.
     private var reloading = false
 
+    /// Set while a click is moving the selection, so `rowClicked` can tell a
+    /// click that opened something from a click on what was already open.
+    private var selectionMoved = false
+
     override func loadView() {
         let container = NSView()
 
@@ -174,6 +178,7 @@ final class SidebarViewController: NSViewController {
         table.delegate = self
         table.dataSource = self
         table.target = self
+        table.action = #selector(rowClicked)
         table.doubleAction = #selector(doubleClicked)
         table.menu = rowMenu()
 
@@ -709,6 +714,21 @@ final class SidebarViewController: NSViewController {
     /// tried out, and one of them is where the caller is heading.
     func setCollection(_ collection: LibraryCollection) {}
 
+    /// Is anything open, whatever kind it is?
+    var hasSelection: Bool {
+        selectedRecording != nil || selectedNote != nil || selectedPerson != nil
+    }
+
+    /// Put the open page away and give the pane back to the composer.
+    ///
+    /// `deselectAll` posts the selection notification, which is what carries
+    /// the nil onwards, so this does not report it a second time.
+    func deselect() {
+        loadViewIfNeeded()
+        guard hasSelection else { return }
+        table.deselectAll(nil)
+    }
+
     func focusSearch() {
         view.window?.makeFirstResponder(searchField)
     }
@@ -718,6 +738,23 @@ final class SidebarViewController: NSViewController {
     @objc private func searchChanged() {
         query = searchField.stringValue
         reload()
+    }
+
+    /// A click on the row that is already open closes it.
+    ///
+    /// The table's `action` fires on every click, including one that changed
+    /// nothing, which is the only way to hear about a click on an already
+    /// selected row: `tableViewSelectionDidChange` by definition does not fire
+    /// when the selection did not change.
+    ///
+    /// `selectionMoved` is what tells the two apart. Clicking a *different* row
+    /// changes the selection first and then arrives here, and closing the page
+    /// somebody has just opened is the opposite of what they asked for.
+    @objc private func rowClicked() {
+        defer { selectionMoved = false }
+        guard !selectionMoved, table.clickedRow >= 0,
+              table.clickedRow == table.selectedRow else { return }
+        deselect()
     }
 
     @objc private func doubleClicked() {
@@ -818,6 +855,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         // is the list being rebuilt, not somebody choosing a recording. See
         // `reloading`.
         guard !reloading else { return }
+        selectionMoved = true
         guard rows.indices.contains(table.selectedRow) else {
             selectedRecording = nil
             selectedNote = nil

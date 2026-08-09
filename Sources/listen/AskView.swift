@@ -82,6 +82,11 @@ final class AskView: NSView {
 
     private var recording: Recording?
     private var chat = Chat()
+    /// Has a context ever been shown? See `show`.
+    private var loaded = false
+    /// Set by asking, cleared by merely arriving somewhere. Only a question
+    /// deserves to take the page.
+    private var wantsRoom = false
     private var run: AgentRun?
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
@@ -363,14 +368,28 @@ final class AskView: NSView {
 
     func show(_ recording: Recording?) {
         field.placeholderString = Self.prompt(for: recording)
-        guard recording?.id != self.recording?.id else { return }
+        // `loaded` is what gets the first call through. Both ids are nil at
+        // launch, so guarding on the id alone meant the library context never
+        // loaded its conversation at all: the bar came up empty next to a
+        // history full of them.
+        guard recording?.id != self.recording?.id || !loaded else { return }
+        loaded = true
         stop()
         self.recording = recording
-        // The newest conversation about this meeting, or a fresh one. There can
-        // now be several, because a conversation is a library document naming
-        // its sources rather than one sidecar per folder, and `about` returns
-        // them most recently touched first.
-        chat = recording.flatMap { Chat.about($0.id).first } ?? Chat()
+        // The most recent conversation in this context, which is what the
+        // history is for stepping back beyond. There can be several now,
+        // because a conversation is a library document naming its sources
+        // rather than one sidecar per folder.
+        //
+        // A meeting takes the newest about it; the library takes the newest
+        // about nothing, since a question about one meeting is not the
+        // conversation you were having about everything.
+        chat = recording.map { Chat.about($0.id).first ?? Chat() }
+            ?? Chat.all().first { $0.sources.isEmpty } ?? Chat()
+        // Loaded, not opened. Arriving at a meeting should not throw a drawer
+        // over the page you came to read; the title and the chevron say it is
+        // there, which is what they are for.
+        wantsRoom = false
         redraw()
     }
 
@@ -385,6 +404,9 @@ final class AskView: NSView {
         self.chat = chat
         recording = chat.sources.first.flatMap { Recording.find($0) }
         field.placeholderString = Self.prompt(for: recording)
+        loaded = true
+        // Picked out of the history on purpose, so this one does deserve room.
+        wantsRoom = true
         redraw()
     }
 
@@ -524,6 +546,12 @@ final class AskView: NSView {
     func setExpanded(_ on: Bool) {
         historyButton.isHidden = on
         expandButton.isHidden = on || !hasConversation
+        // **The conversation is taken out of the view, not merely squeezed.**
+        // Collapsed, the scroll view still had the whole answer in it at a few
+        // points high: legible through the glass and scrollable with a
+        // trackpad, which is a conversation nobody asked to see behind a bar
+        // that says it is put away.
+        scroll.isHidden = !on
     }
 
     /// The height this needs as a bar: the well, its status line, and the
@@ -564,7 +592,7 @@ final class AskView: NSView {
         // A conversation needs the room a bar does not have. The owner clamps
         // this to what the window can spare, so asking for more than exists is
         // safe and asking for a share of an unknown height is not.
-        onHeightChanged?(chat.turns.isEmpty && run == nil ? barHeight : 560)
+        onHeightChanged?(wantsRoom || run != nil ? 560 : barHeight)
     }
 
     /// Everything that has to agree about whether a question can be asked.
@@ -773,6 +801,7 @@ final class AskView: NSView {
         // height has to be re-asked here rather than only when the status
         // changes: an answer streaming into a view with no room to draw it is
         // indistinguishable from a question that was never sent.
+        wantsRoom = true
         reportHeight()
     }
 

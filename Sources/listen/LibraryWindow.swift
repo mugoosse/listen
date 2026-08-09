@@ -659,6 +659,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
     }
 
+    /// Put the open page away, back to the library and the composer.
+    @objc func closeSelected() {
+        sidebar.deselect()
+    }
+
     /// Open the roster, on `label` if somebody was asked for.
     ///
     /// The entry point from a chip's menu and from the toolbar. Selecting the
@@ -1766,6 +1771,17 @@ extension LibraryWindow: NSMenuDelegate {
         // Only the toolbar's. The sidebar's right-click menu shares this
         // delegate and shows every item it is handed, blank one included.
         if menu === actionsMenu { menu.addItem(NSMenuItem()) }
+        // The way out of a page. Everything else in this menu acts *on* the
+        // recording; this one puts it away and gives the pane back to the
+        // composer, which is now a place you can work from rather than a
+        // holding screen.
+        if sidebar.hasSelection {
+            let close = NSMenuItem(title: "Close", action: #selector(closeSelected),
+                                   keyEquivalent: "")
+            close.target = self
+            menu.addItem(close)
+            menu.addItem(.separator())
+        }
         guard let recording = selected else {
             menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
                 .isEnabled = false

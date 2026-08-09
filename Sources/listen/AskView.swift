@@ -420,6 +420,7 @@ final class AskView: NSView {
     /// narrow it to one. A conversation about none leaves the recording nil,
     /// which is the library-wide case.
     func open(_ chat: Chat) {
+        trace("askview open: \(chat.id ?? "none") with \(chat.turns.count) turns")
         stop()
         self.chat = chat
         recording = chat.sources.first.flatMap { Recording.find($0) }
@@ -460,6 +461,8 @@ final class AskView: NSView {
 
 
     private func redraw() {
+        trace("askview redraw: \(chat.turns.count) turns, id \(chat.id ?? "none"), "
+              + "scrollHidden \(scroll.isHidden), expandedNow \(expandedNow)")
         for view in turns.arrangedSubviews { view.removeFromSuperview() }
         answering = nil
         // The question each answer belongs to, tracked while walking the list so

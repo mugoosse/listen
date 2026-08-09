@@ -1244,10 +1244,33 @@ final class DetailWithComposer: NSViewController {
 
     /// The drawer's own background, so a conversation is not read through the
     /// transcript underneath it.
-    private let drawer = NSVisualEffectView()
+    private let drawer = NSView()
     private let collapseButton = NSButton()
     private let historyButton = NSButton()
     private let titleLabel = NSTextField(labelWithString: "")
+
+    /// The same glass the composer well is made of, so the drawer under it is
+    /// one material rather than two that nearly match.
+    ///
+    /// `NSGlassEffectView` where there is one, and `.hudWindow` where there is
+    /// not: `.underWindowBackground`, which this used first, is opaque enough
+    /// that the page behind it stops existing, and the point of a drawer is
+    /// that you can see what it is covering.
+    private static func glassPanel(radius: CGFloat) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = radius
+            return glass
+        }
+        let vibrant = NSVisualEffectView()
+        vibrant.material = .hudWindow
+        vibrant.blendingMode = .withinWindow
+        vibrant.state = .active
+        vibrant.wantsLayer = true
+        vibrant.layer?.cornerRadius = radius
+        vibrant.layer?.masksToBounds = true
+        return vibrant
+    }
     private var header: NSView!
     private var headerHeight: NSLayoutConstraint!
 
@@ -1275,12 +1298,20 @@ final class DetailWithComposer: NSViewController {
         // squeeze a meeting page that already has two independently scrolling
         // zones into three, and shrink the transcript precisely when a question
         // is being asked about it.
-        drawer.material = .underWindowBackground
-        drawer.blendingMode = .withinWindow
-        drawer.state = .active
-        drawer.wantsLayer = true
-        drawer.layer?.cornerRadius = 16
-        drawer.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        // Inset from the window's edges and rounded on every corner, so it
+        // reads as a panel resting over the page rather than a band welded to
+        // the bottom of it. Its glass is what makes the page underneath legible
+        // as *underneath*: blurred, still there, still the thing being asked
+        // about.
+        let backdrop = Self.glassPanel(radius: 20)
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        drawer.addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.topAnchor.constraint(equalTo: drawer.topAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: drawer.bottomAnchor),
+        ])
 
         // **The header is permanent, not a feature of being expanded.** It was
         // only there while the drawer was open, which meant collapsing removed
@@ -1307,16 +1338,24 @@ final class DetailWithComposer: NSViewController {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        // Its own glass disc, and big enough to be a target rather than a hint.
+        // A bare chevron at 11 points is the control somebody hunts for after
+        // the drawer has already swallowed the page.
         collapseButton.isBordered = false
         collapseButton.bezelStyle = .inline
         collapseButton.imagePosition = .imageOnly
-        collapseButton.contentTintColor = .secondaryLabelColor
+        collapseButton.contentTintColor = .labelColor
+        collapseButton.symbolConfiguration = .init(pointSize: 13, weight: .semibold)
         collapseButton.target = self
         collapseButton.action = #selector(toggleCollapsed)
         collapseButton.translatesAutoresizingMaskIntoConstraints = false
+        collapseGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
+        collapseGlass.translatesAutoresizingMaskIntoConstraints = false
+        collapseGlass.addSubview(collapseButton)
+
         header.addSubview(historyButton)
         header.addSubview(titleLabel)
-        header.addSubview(collapseButton)
+        header.addSubview(collapseGlass)
 
         container.addSubview(content.view)
         container.addSubview(drawer)
@@ -1330,9 +1369,10 @@ final class DetailWithComposer: NSViewController {
             content.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             content.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                             constant: -16),
+            drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
             drawerHeight,
 
             header.topAnchor.constraint(equalTo: drawer.topAnchor),
@@ -1347,9 +1387,13 @@ final class DetailWithComposer: NSViewController {
             titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo:
                 collapseButton.leadingAnchor, constant: -8),
-            collapseButton.trailingAnchor.constraint(equalTo: header.trailingAnchor,
-                                                     constant: -24),
-            collapseButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            collapseGlass.trailingAnchor.constraint(equalTo: header.trailingAnchor,
+                                                    constant: -20),
+            collapseGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            collapseGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            collapseGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            collapseButton.centerXAnchor.constraint(equalTo: collapseGlass.centerXAnchor),
+            collapseButton.centerYAnchor.constraint(equalTo: collapseGlass.centerYAnchor),
 
             composer.topAnchor.constraint(equalTo: header.bottomAnchor),
             composer.leadingAnchor.constraint(equalTo: drawer.leadingAnchor, constant: 24),
@@ -1449,7 +1493,7 @@ final class DetailWithComposer: NSViewController {
         // The chevron points the way it will move the drawer, and is only there
         // when there is a conversation to move: on an empty composer it would
         // offer to open nothing.
-        collapseButton.isHidden = !composer.hasConversation
+        collapseGlass.isHidden = !composer.hasConversation
         collapseButton.image = NSImage(
             systemSymbolName: expanded ? "chevron.down" : "chevron.up",
             accessibilityDescription: expanded ? "Put the conversation away"
@@ -1469,7 +1513,10 @@ final class DetailWithComposer: NSViewController {
     /// The well and its status line, which is the drawer with nothing in it.
     private static let collapsedHeight: CGFloat = 68
     /// Always present, so the history and the way back are never taken away.
-    private static let headerHeightPoints: CGFloat = 28
+    /// Tall enough to hold the collapse disc with air around it.
+    private static let headerHeightPoints: CGFloat = 44
+    private static let collapseDiameter: CGFloat = 30
+    private var collapseGlass: NSView!
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: Self.collapsedHeight)

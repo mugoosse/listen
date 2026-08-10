@@ -315,6 +315,7 @@ Asking questions about the library through an agent CLI the user already has.
 - Save as note did nothing on the screen most questions are asked from
 - Clicking away gives up the caret, and the whole bar counts as inside
 - New chat is a button on the card, and the chevron became a cross
+- The height report is what reopened the card the cross had just closed
 - Expanded is a page, and a page has no frame around it
 - The page scrolls, not a panel inside it
 - A width nobody else may have an opinion about

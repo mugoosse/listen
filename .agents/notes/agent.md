@@ -867,6 +867,57 @@ Left to right the header is: title, new conversation, resize, close. The two
 that change how much room the conversation has stay together, and the one that
 ends it is on the outside.
 
+## The height report is what reopened the card the cross had just closed
+
+Pressing the cross emptied the conversation and left the card up: the three
+header discs still there, the panel still the height of an answer, and nothing
+drawn in it. Reproduced against the shipped 0.12.0 binary, so it is a fault in
+the build rather than in a reading of the diff.
+
+`AskView.reportHeight` answers 560 whenever `wantsRoom` is set, whatever the
+view is actually holding: the number says *whether* there is a conversation, not
+how tall one is. `wantsRoom` is set by asking and by opening something from
+History, and cleared by `show`, `show(person:)` and `discard`. `startNew` never
+cleared it. So the empty conversation the cross leaves behind went on claiming a
+card's worth of room, and the drawer believes the last number it was given:
+
+```swift
+else if extent == .bar, wantedHeight > Self.barCeiling, !putAway {
+    extent = .standard
+}
+```
+
+That branch is what lets a bar open itself when an answer arrives. Here it fired
+on the press that had just collapsed the drawer, and reopened it around nothing.
+The fix is one line in `startNew`, which now matches the other three fresh
+conversation paths.
+
+**The New chat disc had the same fault and hid it.** `newConversation` ends with
+`focusField`, and gaining the caret reports a height, which goes round
+`applyHeight` once more: by then `extent` is `.standard` with no conversation,
+which is the branch that forces the bar. One accidental extra report cancelled
+it. Closing focuses nothing, so closing is where it showed. Measured on 0.12.0:
+the cross leaves the header on screen and New chat does not.
+
+**And the report arrives in the middle of the gesture.** `composer.startNew()`
+reports its new height before `closeConversation` has finished saying what the
+drawer should be, and that report used to lay the drawer out from a state the
+press had not written yet: the card jumped shut unanimated, and the animated
+pass meant to close it then found the height already at its target and had
+nothing left to move. `settling` is the answer: the number is recorded, the
+layout is skipped, and the three gestures that empty the composer, close, new
+and delete, each collapse exactly once and ease while doing it.
+
+Checked with an AX driver rather than by eye, and the assertion is the header.
+`applyHeight` hides the header when the drawer is a bar, and a hidden `NSView`
+leaves the accessibility tree, so "is there still a button called Close the
+conversation" is the whole test. The library is a scratch directory holding one
+`chats/<id>.json` and no recordings at all, which is enough: a conversation
+loads from that file and needs nothing else on disk. One trap in writing it: the
+History pull-down's own **New conversation** row is an `AXMenuItem` and stays in
+the tree while the menu is open, so the check has to be for `AXButton` or it
+fails on a menu it opened itself.
+
 ## Expanded is a page, and a page has no frame around it
 
 `extent == .full` used to be the card grown until it nearly touched the window's

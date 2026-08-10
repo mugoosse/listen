@@ -599,10 +599,22 @@ final class AskView: NSView {
     }
 
     /// Start a new conversation, keeping whatever is on screen as its subject.
+    ///
+    /// **`wantsRoom` goes with the turns.** It is set by asking and by opening
+    /// something from History, and it is the whole of the height report: while
+    /// it is true `reportHeight` says 560 whatever is in the view. Leaving it
+    /// set here meant the empty conversation this leaves behind still claimed a
+    /// card's worth of room, and the drawer believed it: `applyHeight` reads
+    /// the last reported height to decide whether a bar should open itself, so
+    /// pressing the cross cleared the answers and then immediately reopened the
+    /// card around nothing. Both header discs land here, so both did it. The
+    /// other three fresh-conversation paths, `show`, `show(person:)` and
+    /// `discard`, already cleared it; this was the one that did not.
     func startNew() {
         stop()
         chat = Chat()
         pinned = false
+        wantsRoom = false
         redraw()
     }
 

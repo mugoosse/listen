@@ -1695,6 +1695,14 @@ final class DetailWithComposer: NSViewController {
             // A question asked after the drawer was put away brings it back:
             // collapsing means "not now", not "never again".
             if height > Self.barCeiling { self.putAway = false }
+            // **Recorded and not acted on while a press is tearing the
+            // conversation down.** Emptying the composer reports a height, and
+            // that report arrives in the middle of the gesture, before the
+            // press has finished saying what the drawer should be: it applied
+            // itself, snapped the card shut unanimated, and the animated pass
+            // that followed found the height already there and had nothing to
+            // move. See `settling`.
+            guard !self.settling else { return }
             self.applyHeight(animated: self.composer.hasConversation)
         }
         view = container
@@ -1736,6 +1744,24 @@ final class DetailWithComposer: NSViewController {
     /// which is the one gesture that means "show me".
     private var putAway = false
 
+    /// Set while a press is emptying the composer, so the height it reports on
+    /// the way is recorded rather than applied.
+    ///
+    /// Closing, starting another and deleting all clear the conversation and
+    /// then say what the drawer should be. The clearing reports a height by
+    /// itself, halfway through, and that report used to lay the drawer out
+    /// from a state the press had not finished writing: the card jumped shut
+    /// and the animated pass that was meant to close it arrived at a height
+    /// that was already there.
+    private var settling = false
+
+    /// Empty the composer without the drawer reacting to it, then decide.
+    private func settle(_ work: () -> Void) {
+        settling = true
+        work()
+        settling = false
+    }
+
     /// One-way, because the control is only on screen while the card is open.
     /// It used to toggle, from the days when the header was permanent; a cross
     /// that reopens what it just closed would be a lie about which of the two
@@ -1752,8 +1778,10 @@ final class DetailWithComposer: NSViewController {
     /// The caret goes too. A field still blinking under a card that has just
     /// been put away is the same claim the cross was drawn to withdraw.
     @objc private func closeConversation() {
-        composer.startNew()
-        composer.endComposing()
+        settle {
+            composer.startNew()
+            composer.endComposing()
+        }
         putAway = false
         extent = .bar
         applyHeight(animated: true)
@@ -1902,7 +1930,7 @@ final class DetailWithComposer: NSViewController {
     }
 
     @objc private func deleteConversation() {
-        composer.discard()
+        settle { composer.discard() }
         extent = .bar
         putAway = false
         applyHeight(animated: true)
@@ -1917,7 +1945,7 @@ final class DetailWithComposer: NSViewController {
     /// somebody pressed while reading a conversation full width, and dropping
     /// them back onto the meeting would be answering a different question.
     @objc func newConversation() {
-        composer.startNew()
+        settle { composer.startNew() }
         putAway = false
         if extent != .full { extent = .bar }
         applyHeight(animated: true)

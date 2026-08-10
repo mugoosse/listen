@@ -240,35 +240,129 @@ final class AskView: NSView {
         let wide = notice.widthAnchor.constraint(equalToConstant: SetupNotice.maxWidth)
         wide.priority = .defaultHigh
 
-        NSLayoutConstraint.activate([
-            document.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            turns.topAnchor.constraint(equalTo: document.topAnchor),
+        // **The four things that are a column on a page.** Everything on this
+        // pane is pinned to both of its sides in a card, which is right there
+        // because a card is already a column: it is inset from the window and
+        // sits over the meeting. A page is as wide as the window, and the same
+        // constraints made a 168 character line of it. See `setPage`.
+        //
+        // The scroll view is deliberately not one of them. It stays pinned to
+        // both edges, so the thing that scrolls is the page rather than a panel
+        // inside it, and the scroller lands on the window's edge where a page's
+        // scroller belongs.
+        edgeWidth = [
             turns.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             turns.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            invitation.leadingAnchor.constraint(equalTo: leadingAnchor),
+            invitation.trailingAnchor.constraint(equalTo: trailingAnchor),
+            composer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            composerTrailing,
+            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+        ]
+        // Centred on the scroll view rather than on the document, so the column
+        // lines up with the composer under it. They are not the same number
+        // when the scrollers are the always-visible kind: the document is then
+        // narrower than the scroll view by the scroller's width, and a column
+        // centred in it sits half a scroller to the left of the well.
+        columnWidth = [column(turns, in: document, centredOn: scroll),
+                       column(invitation, in: self), column(composer, in: self),
+                       column(status, in: self)].flatMap { $0 }
+
+        NSLayoutConstraint.activate(edgeWidth + [
+            // **The clip view's width, not the scroll view's.** They differ by
+            // the scroller on a Mac set to show them always, which is a mouse
+            // plugged in for most people, and the document was then wider than
+            // the visible area: no horizontal scroller appeared, because the
+            // constraint said there was nothing to scroll, and the right-hand
+            // edge of every question bubble was simply cut off.
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            turns.topAnchor.constraint(equalTo: document.topAnchor),
             turns.bottomAnchor.constraint(equalTo: document.bottomAnchor),
 
-            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scrollTop,
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: invitation.topAnchor, constant: -8),
 
-            invitation.leadingAnchor.constraint(equalTo: leadingAnchor),
-            invitation.trailingAnchor.constraint(equalTo: trailingAnchor),
             invitation.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
             notice.widthAnchor.constraint(lessThanOrEqualTo: invitation.widthAnchor),
             wide,
 
-            composer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            composerTrailing,
             composer.heightAnchor.constraint(equalToConstant: ComposerWell.height),
             composer.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
 
-            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
             statusHeight,
         ])
     }
+
+    /// One view, centred in a column of `Self.pageColumn` points.
+    ///
+    /// **The width is stated at 300, and the margins are what cannot be
+    /// broken.** 300 is above everything inside this pane with an opinion about
+    /// width, the highest of which is a stack view's own content hugging at
+    /// 250, and below `windowSizeStayPut`, which is 500 and is where AppKit
+    /// holds the window against its content. Both edges of that range were
+    /// measured on the built app while this was being written: at 500 the
+    /// column reached the window and shrank it from 1512 points to 1136, and
+    /// then refused to be dragged wider; at 240 it lost to the hugging and came
+    /// out 560 wide whatever the window did, 560 being `SetupNotice.maxWidth`
+    /// and the hidden setup card the only thing left with an opinion.
+    ///
+    /// A width that can be broken is also what makes a narrow window work: the
+    /// two margins are required, so a pane narrower than the column falls back
+    /// to its edges instead of refusing to be that narrow.
+    private func column(_ view: NSView, in parent: NSView,
+                        centredOn centre: NSView? = nil) -> [NSLayoutConstraint] {
+        let width = view.widthAnchor.constraint(equalToConstant: Self.pageColumn)
+        width.priority = NSLayoutConstraint.Priority(300)
+        return [
+            view.centerXAnchor.constraint(equalTo: (centre ?? parent).centerXAnchor),
+            view.leadingAnchor.constraint(greaterThanOrEqualTo: parent.leadingAnchor,
+                                          constant: Self.pageMargin),
+            view.trailingAnchor.constraint(lessThanOrEqualTo: parent.trailingAnchor,
+                                           constant: -Self.pageMargin),
+            width,
+        ]
+    }
+
+    /// A card, or a page.
+    ///
+    /// The pane is the same in both: the difference is that a page is as wide
+    /// as the window, so the conversation becomes a column in the middle of it
+    /// and the space above it makes room for the toolbar the page's controls
+    /// now live in. The window owns which of the two this is.
+    func setPage(_ on: Bool) {
+        guard on != isPage else { return }
+        isPage = on
+        // Off before on: the two sets both state a width, and a moment with
+        // both active is a conflict the solver logs.
+        NSLayoutConstraint.deactivate(on ? edgeWidth : columnWidth)
+        NSLayoutConstraint.activate(on ? columnWidth : edgeWidth)
+        // **The conversation stops at the toolbar rather than scrolling under
+        // it.** A content inset was the other way, and is what `DetailView`
+        // does with its notes pane, but the page's own controls sit in that
+        // strip now: text sliding under a glass group with History and New chat
+        // in it is legible through the glass and reads as two things in one
+        // place.
+        scrollTop.constant = on ? Self.pageTopPad : 0
+        needsLayout = true
+    }
+
+    /// See `column`. 620 is 105 characters of the 13 point body, which measures
+    /// 5.9 points a character, and is deliberately the same number
+    /// `Pane.maxContentWidth` caps a settings pane at.
+    private static let pageColumn: CGFloat = 620
+    /// The least a column may have between it and the window's edge.
+    private static let pageMargin: CGFloat = 24
+    /// Clear of the toolbar, which floats over the content because the window
+    /// is full-size-content.
+    private static let pageTopPad: CGFloat = 52
+    private var isPage = false
+    private var edgeWidth: [NSLayoutConstraint] = []
+    private var columnWidth: [NSLayoutConstraint] = []
+    private lazy var scrollTop = scroll.topAnchor.constraint(equalTo: topAnchor)
 
     /// The input row: one glass capsule holding the field, the model chooser
     /// and the send button.

@@ -315,6 +315,11 @@ Asking questions about the library through an agent CLI the user already has.
 - Save as note did nothing on the screen most questions are asked from
 - Clicking away gives up the caret, and the whole bar counts as inside
 - New chat is a button on the card, and the chevron became a cross
+- Expanded is a page, and a page has no frame around it
+- The page scrolls, not a panel inside it
+- A width nobody else may have an opinion about
+- The document was as wide as the scroll view, and the scroller took the difference
+- The page's controls are the window's toolbar
 
 ### `.agents/notes/release.md` (5k)
 

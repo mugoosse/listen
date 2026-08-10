@@ -29,6 +29,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// section list and the content side swaps the transcript for a pane.
     private enum Mode { case library, settings, people, notes }
     private var mode: Mode = .library
+    /// Is the conversation a page rather than a card? Not a fifth `Mode`,
+    /// because it is not one: the mode underneath is still there, still
+    /// selected, and comes back untouched when the page is put away. It only
+    /// changes what the toolbar's content half holds.
+    private var chatting = false
 
     /// The two split items' view controllers, which never change. Swapping a
     /// child inside them is the only way to change what a split view item shows:
@@ -65,6 +70,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
     private static let historyItem = NSToolbarItem.Identifier("chatHistory")
+    private static let newChatItem = NSToolbarItem.Identifier("newChat")
+    private static let leaveChatItem = NSToolbarItem.Identifier("leaveChat")
 
     /// The drawer, so the History toolbar item can borrow its menu.
     private weak var composerHost: DetailWithComposer?
@@ -285,6 +292,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         composerHost.onDrawerHeight = { [weak self] points in
             self?.detail.setBottomInset(points)
+        }
+        // The chat page's chrome is the toolbar, so entering and leaving it is
+        // a swap of items exactly like a mode change.
+        composerHost.onPageChanged = { [weak self] page in
+            guard let self else { return }
+            self.chatting = page
+            self.rebuildToolbar()
         }
         let main = NSSplitViewItem(viewController: composerHost)
         main.minimumThickness = 420
@@ -903,7 +917,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
-         Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem]
+         Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem,
+         Self.newChatItem, Self.leaveChatItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -920,6 +935,29 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// control that stops it are in the same place, and a button that moves
     /// between those two moments is a button somebody has to find twice.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        let items = modeItemIdentifiers()
+        // **The chat page keeps the sidebar's half and replaces the content's.**
+        // The left of the title bar belongs to the list, which is still there
+        // and still works; everything after the tracking separator belongs to
+        // the pane, and on a page the pane is the conversation. So the verbs on
+        // a recording go, because the recording is not on screen, and what
+        // takes their place is the two things a conversation has: a way back
+        // out of it, and a way to start another.
+        guard chatting, let cut = items.firstIndex(of: .sidebarTrackingSeparator) else {
+            return items
+        }
+        var page = Array(items[...cut])
+        page += [Self.leaveChatItem, Self.historyItem, .flexibleSpace]
+        // **Except Stop, which outranks the page.** The one control that must
+        // never be hidden is the one that ends a meeting being recorded now:
+        // the rule the Ask pane already had, kept here because a page covers
+        // more than that pane ever did.
+        if Capture.shared.isRecording { page += [Self.recordItem, .space] }
+        page.append(Self.newChatItem)
+        return page
+    }
+
+    private func modeItemIdentifiers() -> [NSToolbarItem.Identifier] {
         switch mode {
         case .library:
             // `sidebarTrackingSeparator` is what puts the toggle over the
@@ -1074,6 +1112,36 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // conversations exist, and which of them is on screen, are both
             // answers that go stale the moment anything is asked or deleted.
             item.menu = composerHost?.historyMenu ?? NSMenu()
+            return item
+
+        case Self.newChatItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "New chat"
+            // `title` as well as `image`, which is what puts the words in the
+            // item rather than under it: the toolbar is `.iconOnly`, and this
+            // is how History gets its label too. It takes New Recording's slot
+            // while the page is up, because a chat page is not a place you
+            // start a meeting from and the words are what make the swap
+            // readable rather than a pencil where a record button used to be.
+            item.title = "New chat"
+            item.toolTip = "Start another conversation"
+            item.image = NSImage(systemSymbolName: "square.and.pencil",
+                                 accessibilityDescription: "New chat")
+            item.target = composerHost
+            item.action = #selector(DetailWithComposer.newConversation)
+            return item
+
+        case Self.leaveChatItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Done"
+            item.toolTip = "Put the conversation back over the page"
+            // The same glyph the card's resize disc wears while expanded, so
+            // the two directions of one control look like each other whichever
+            // strip they are in.
+            item.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left",
+                                 accessibilityDescription: "Smaller")
+            item.target = composerHost
+            item.action = #selector(DetailWithComposer.leavePage)
             return item
 
         case Self.peopleItem:
@@ -1349,6 +1417,9 @@ final class DetailWithComposer: NSViewController {
 
     /// The window hides the page's empty sentence while this is up.
     var onCoveringChanged: ((Bool) -> Void)?
+    /// The chat page has taken the window, or given it back. The toolbar is the
+    /// page's own chrome, so the window swaps its items on this.
+    var onPageChanged: ((Bool) -> Void)?
     /// How much of the page the drawer is standing over, so the content
     /// underneath can be scrolled clear of it.
     var onDrawerHeight: ((CGFloat) -> Void)?
@@ -1375,6 +1446,25 @@ final class DetailWithComposer: NSViewController {
         // the bottom of it. Its glass is what makes the page underneath legible
         // as *underneath*: blurred, still there, still the thing being asked
         // about.
+        //
+        // **Except at full, where there is nothing underneath any more.** See
+        // `pageBackground`, which is what the glass gives way to.
+        pageBackground.boxType = .custom
+        pageBackground.fillColor = .windowBackgroundColor
+        pageBackground.borderWidth = 0
+        pageBackground.cornerRadius = 0
+        pageBackground.titlePosition = .noTitle
+        pageBackground.contentViewMargins = .zero
+        pageBackground.isHidden = true
+        pageBackground.translatesAutoresizingMaskIntoConstraints = false
+        drawer.addSubview(pageBackground)
+        NSLayoutConstraint.activate([
+            pageBackground.topAnchor.constraint(equalTo: drawer.topAnchor),
+            pageBackground.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
+            pageBackground.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
+            pageBackground.bottomAnchor.constraint(equalTo: drawer.bottomAnchor),
+        ])
+
         backdrop = Self.glassPanel(radius: 20)
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         drawer.addSubview(backdrop)
@@ -1507,16 +1597,36 @@ final class DetailWithComposer: NSViewController {
         drawer.addSubview(composer)
 
         headerHeight = header.heightAnchor.constraint(equalToConstant: 0)
+        // Everything about where the drawer's edges are is held rather than
+        // stated inline, because at full they all move at once: see
+        // `applyHeight`. The top is the odd one out, activated only there, and
+        // it is what replaces the height while the conversation is a page.
+        drawerLeading = drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor,
+                                                        constant: Self.cardSideInset)
+        drawerTrailing = drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                                          constant: -Self.cardSideInset)
+        drawerBottom = drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor,
+                                                      constant: -Self.cardBottomInset)
+        drawerTop = drawer.topAnchor.constraint(equalTo: container.topAnchor)
+        composerBottom = composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor,
+                                                          constant: -12)
+        // The pane spans the drawer, inset in a card and flush on a page. What
+        // the conversation does with that width is `AskView.setPage`'s: on a
+        // page it becomes a column, and the scrolling stays full width so the
+        // page is what scrolls.
+        composerLeading = composer.leadingAnchor.constraint(equalTo: drawer.leadingAnchor,
+                                                            constant: Self.composerInset)
+        composerTrailing = composer.trailingAnchor.constraint(equalTo: drawer.trailingAnchor,
+                                                              constant: -Self.composerInset)
         NSLayoutConstraint.activate([
             content.view.topAnchor.constraint(equalTo: container.topAnchor),
             content.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             content.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             content.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                             constant: -16),
-            drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
+            drawerLeading,
+            drawerTrailing,
+            drawerBottom,
             drawerHeight,
 
             header.topAnchor.constraint(equalTo: drawer.topAnchor),
@@ -1556,15 +1666,18 @@ final class DetailWithComposer: NSViewController {
             collapseButton.centerYAnchor.constraint(equalTo: collapseGlass.centerYAnchor),
 
             composer.topAnchor.constraint(equalTo: header.bottomAnchor),
-            composer.leadingAnchor.constraint(equalTo: drawer.leadingAnchor, constant: 24),
-            composer.trailingAnchor.constraint(equalTo: drawer.trailingAnchor, constant: -24),
-            composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor, constant: -12),
+            composerLeading,
+            composerTrailing,
+            composerBottom,
         ])
 
+        // Opening a conversation from a page leaves you on the page. Everywhere
+        // else it is a card: that is what asking a question on a meeting means,
+        // and the page is somewhere you have to have gone on purpose.
         composer.onWantsOpen = { [weak self] in
             guard let self else { return }
             self.putAway = false
-            self.extent = .standard
+            if self.extent != .full { self.extent = .standard }
             self.applyHeight(animated: true)
         }
         composer.onExpand = { [weak self] in
@@ -1795,12 +1908,28 @@ final class DetailWithComposer: NSViewController {
         applyHeight(animated: true)
     }
 
-    @objc private func newConversation() {
+    /// Start another one. The card's own disc, the History menu's row, and the
+    /// page's New chat are all this.
+    ///
+    /// **It stays where it was asked from.** From a card or a bar it collapses,
+    /// because the composer with nothing in it is a bar and a meeting is behind
+    /// it. From the page it stays a page: New chat there is the toolbar button
+    /// somebody pressed while reading a conversation full width, and dropping
+    /// them back onto the meeting would be answering a different question.
+    @objc func newConversation() {
         composer.startNew()
         putAway = false
-        extent = .bar
+        if extent != .full { extent = .bar }
         applyHeight(animated: true)
         composer.focusField()
+    }
+
+    /// Leave the page, keeping the conversation. The toolbar's way back, and
+    /// the same move the card's resize disc makes in the other direction.
+    @objc func leavePage() {
+        guard extent == .full else { return }
+        extent = .standard
+        applyHeight(animated: true)
     }
 
     /// Load a conversation and show it. The one entry point, so a link on a
@@ -1833,11 +1962,30 @@ final class DetailWithComposer: NSViewController {
         // A conversation that has just started opens itself. One that is still
         // an empty composer is a bar however this was last left, so a new
         // question does not inherit the size of the last answer.
-        if !composer.hasConversation { extent = .bar }
+        // **An empty card is a bar, and an empty page is still a page.** The
+        // rule is that a conversation nobody has started does not inherit the
+        // size of the last answer. New chat on a page is the exception, and the
+        // only one: somebody who is in the chat page and asks for a fresh
+        // conversation has said where they want to be.
+        if !composer.hasConversation, extent == .standard { extent = .bar }
         else if extent == .bar, wantedHeight > Self.barCeiling, !putAway {
             extent = .standard
         }
         let expanded = extent != .bar
+        // **Full is a page, not a bigger card.** It used to be the same inset,
+        // rounded, glass panel grown until it nearly touched the window's
+        // edges, which is the worst of both: a frame drawn a few points inside
+        // a frame, and a blurred transcript behind text nobody is reading it
+        // against any more. Somebody who asks for all the room has stopped
+        // looking at the page underneath. So the edges go, the glass gives way
+        // to the window's own background, the conversation becomes a column
+        // that scrolls with the page rather than inside a panel, and the header
+        // strip goes with the card it belonged to: a page's controls are the
+        // window's toolbar, which is the one strip of chrome it has.
+        //
+        // The card is untouched: `standard` is still a panel resting over a
+        // meeting, because that is the state where the page still matters.
+        let page = extent == .full
 
         // **The bar's height is asked for, never assumed.** Hardcoding it below
         // what `AskView` needs squeezed the well until autolayout gave way
@@ -1856,16 +2004,21 @@ final class DetailWithComposer: NSViewController {
             // never how far.
             body = min(Self.standardHeight, max(bar, container.bounds.height - 140))
         case .full:
-            // Clear of the toolbar, which floats over the content because the
-            // window is full-size-content: at 84 the drawer's own controls sat
-            // level with New Recording and the ellipsis, two sets of buttons in
-            // one strip.
-            body = max(bar, container.bounds.height - 130)
+            // The whole container. The height is not what holds it there,
+            // though: the top edge is pinned below, so a window resize refits
+            // the page without anybody having to notice it happened. This
+            // number is only what gets reported and what the collapse animates
+            // from.
+            body = container.bounds.height
         }
-        let target = body + (expanded ? Self.headerHeightPoints : 0)
+        // The header belongs to the card. On a page its three controls are in
+        // the toolbar, where a page's controls belong, and a strip of chrome
+        // under a strip of chrome would be the same buttons twice.
+        let strip = expanded && !page ? Self.headerHeightPoints : 0
+        let target = body + strip
 
-        headerHeight.constant = expanded ? Self.headerHeightPoints : 0
-        header.isHidden = !expanded
+        headerHeight.constant = strip
+        header.isHidden = !expanded || page
         // **No panel around a bare composer.** With nothing to hold, the glass
         // was a frame drawn around a control that already has its own, which
         // reads as a container missing its contents. It comes back the moment
@@ -1882,8 +2035,41 @@ final class DetailWithComposer: NSViewController {
         // So the chips wait for the field and the panel arrives with them. Over
         // a meeting nobody is asking about, the drawer is one glass capsule and
         // the page is otherwise untouched.
-        backdrop.isHidden = !expanded && !composer.hasConversation
-            && !composer.isActive
+        //
+        // **And no glass at all on a page.** A material exists to say what is
+        // behind it; on a page nothing is, so the glass would be a blur of a
+        // transcript the reader has just asked to be rid of.
+        backdrop.isHidden = page || (!expanded && !composer.hasConversation
+            && !composer.isActive)
+        pageBackground.isHidden = !page
+        // Hidden rather than merely covered. An opaque background is enough for
+        // the eye, and not for accessibility: a transcript still in the tree
+        // under a full-screen conversation is a page VoiceOver can read and
+        // nobody can see.
+        content.view.isHidden = page
+
+        // The edges, all of which move together. Zero on every side is what
+        // makes this a page rather than a taller card, and the pane goes flush
+        // with them: the room the toolbar needs at the top, and the column the
+        // conversation is read in, are both `AskView`'s to leave.
+        drawerLeading.constant = page ? 0 : Self.cardSideInset
+        drawerTrailing.constant = page ? 0 : -Self.cardSideInset
+        drawerBottom.constant = page ? 0 : -Self.cardBottomInset
+        composerLeading.constant = page ? 0 : Self.composerInset
+        composerTrailing.constant = page ? 0 : -Self.composerInset
+        // The card's own bottom inset goes with the edges, so the composer
+        // keeps the distance from the window's floor it had before.
+        composerBottom.constant = page ? -Self.pageBottomPad : -12
+        composer.setPage(page)
+        // Deactivate before activating, so the two never both hold the drawer's
+        // vertical extent and log a conflict on the way through.
+        if page {
+            drawerHeight.isActive = false
+            drawerTop.isActive = true
+        } else {
+            drawerTop.isActive = false
+            drawerHeight.isActive = true
+        }
         // The clock and the chevron belong to the bar. Expanded, this header
         // carries the title and the size controls, and a second clock under it
         // would be the same action offered twice, six points apart.
@@ -1907,7 +2093,14 @@ final class DetailWithComposer: NSViewController {
         // Animated on a press, immediate when the height was merely recomputed.
         // A bar easing itself taller because agent detection finished is motion
         // nobody asked for, and the first frame of the window is not a gesture.
-        if animated, drawerHeight.constant != target {
+        //
+        // The height is not the only thing that can have moved any more:
+        // becoming a page changes four edges and can leave the number alone, so
+        // the state is part of the test or the one transition that most needs
+        // easing would be the one that jumps.
+        let becamePage = page != pageNow
+        pageNow = page
+        if animated, drawerHeight.constant != target || becamePage {
             // **The constant is set plainly and the layout pass is what
             // animates.** Driving it through `animator()` *and* calling
             // `layoutSubtreeIfNeeded` in the same block drives the same value
@@ -1928,9 +2121,16 @@ final class DetailWithComposer: NSViewController {
             settleComposer()
         }
         onCoveringChanged?(expanded)
+        if becamePage { onPageChanged?(page) }
         // The drawer's own bottom margin counts: what the page loses is
         // everything from the container's floor to the drawer's top edge.
-        onDrawerHeight?(drawerHeight.constant + 14)
+        //
+        // Nothing to reserve on a page. The inset exists so the last lines of a
+        // transcript can be scrolled clear of the drawer, and a transcript that
+        // is not on screen at all has nothing to clear: reserving its whole
+        // height instead would leave it scrolled somewhere else on the way
+        // back.
+        onDrawerHeight?(page ? 0 : drawerHeight.constant + Self.cardBottomInset)
     }
 
     /// Always present, so the history and the way back are never taken away.
@@ -1950,12 +2150,42 @@ final class DetailWithComposer: NSViewController {
     /// Enough for an answer and its question with the page still behind it.
     private static let standardHeight: CGFloat = 560
     private static let collapseDiameter: CGFloat = 30
+
+    /// What makes the card a card: inset from the window's edges on three
+    /// sides. All three go to zero on a page.
+    private static let cardSideInset: CGFloat = 16
+    private static let cardBottomInset: CGFloat = 14
+    /// The card's two bottom margins added up, so the composer sits the same
+    /// distance off the floor whichever of the two it is in.
+    private static let pageBottomPad: CGFloat = 26
+    /// The pane's margin inside a card. A page has none of its own: see
+    /// `AskView.setPage`.
+    private static let composerInset: CGFloat = 24
+
     private var collapseGlass: NSView!
     private let fullButton = NSButton()
     private var fullGlass: NSView!
     private let newButton = NSButton()
     private var newGlass: NSView!
     private var backdrop: NSView!
+    /// The page's own opaque background, and the whole of why a page is not a
+    /// window-sized card. An `NSBox` rather than a layer-backed view because a
+    /// box redraws its `fillColor` when the appearance changes and a
+    /// `CGColor` on a layer does not: see `DetailView.styleCard`.
+    private let pageBackground = NSBox()
+
+    private var drawerLeading: NSLayoutConstraint!
+    private var drawerTrailing: NSLayoutConstraint!
+    private var drawerBottom: NSLayoutConstraint!
+    /// Active only on a page, where it replaces the height: pinned top and
+    /// bottom, the drawer refits itself when the window resizes.
+    private var drawerTop: NSLayoutConstraint!
+    private var composerBottom: NSLayoutConstraint!
+    private var composerLeading: NSLayoutConstraint!
+    private var composerTrailing: NSLayoutConstraint!
+    /// What the geometry was last laid out as, so becoming a page is animated
+    /// even when the height happens not to change.
+    private var pageNow = false
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: 84)

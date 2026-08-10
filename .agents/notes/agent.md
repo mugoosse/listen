@@ -866,3 +866,140 @@ the difference between "ask something else now" and "I am done here".
 Left to right the header is: title, new conversation, resize, close. The two
 that change how much room the conversation has stay together, and the one that
 ends it is on the outside.
+
+## Expanded is a page, and a page has no frame around it
+
+`extent == .full` used to be the card grown until it nearly touched the window's
+edges: the same 16 point inset, the same 20 point corners, the same glass, and a
+blurred transcript behind an answer nobody was reading against it any more. That
+is the worst of both. A frame drawn a few points inside a frame reads as a
+mistake, and somebody who has asked for all the room has stopped looking at the
+page underneath.
+
+So full is a different thing rather than a bigger one, and Granola's expanded
+chat is the shape:
+
+- The drawer's four insets go to zero and the top is **pinned** rather than
+  sized. `drawerTop` replaces `drawerHeight` while the page is up, so a window
+  resize refits it with no code involved. The height constant is still kept
+  current, because it is what the collapse animates from.
+- `pageBackground`, an `NSBox` with `fillColor` rather than a layer-backed view,
+  takes over from the glass. A box redraws itself when the appearance changes
+  and a `CGColor` on a layer does not, which is the trap `DetailView.styleCard`
+  records. The glass is hidden outright: a material exists to say what is behind
+  it, and on a page nothing is.
+- `content.view.isHidden = page`. An opaque background is enough for the eye and
+  not for accessibility: a transcript still in the tree under a full-screen
+  conversation is a page VoiceOver reads and nobody can see.
+- Nothing is reserved underneath. `setBottomInset` exists so the last lines of a
+  transcript clear the drawer; a transcript that is not on screen has nothing to
+  clear, and reserving its whole height would leave it scrolled somewhere else
+  on the way back.
+
+The card is untouched. `standard` is still an inset glass panel resting over the
+meeting it is about, because that is the state where the page behind still
+matters.
+
+## The page scrolls, not a panel inside it
+
+The first version kept `AskView` a column and let it carry the scroll view with
+it, so the conversation scrolled inside a 620 point strip with its own scroller
+down the middle of an otherwise empty page. It reads as a panel with the frame
+taken off rather than as a page.
+
+What fixes it is which view is the column. `AskView` spans the page and its
+scroll view is pinned to both edges; `setPage` moves the column inside, onto the
+four things that are read: the turns stack in the document, the invitation row,
+the composer well and the status line. The scroller then lands on the window's
+edge, where a page's scroller belongs, and the thing that scrolls is the page.
+
+Two numbers go with it. `scrollTop` is 52 on a page, which clears the toolbar
+floating over the content: a content inset was the other way, and is what
+`DetailView` does with its notes pane, but the page's own controls sit in that
+strip now and text sliding under a glass group with History and New chat in it
+is legible through the glass. And `pageColumn` is 620, which is 105 characters
+of the 13 point body at the 5.9 points a character it measures: the same text
+full width on a 1512 point window ran to 168.
+
+## A width nobody else may have an opinion about
+
+The column is one constraint, `width == 620` at **priority 300**, with required
+margins either side of it. Every other way of writing it was tried against the
+built app first and all three are wrong:
+
+- **`widthCapped`'s trick**, a 500-priority equality to the parent against a
+  required maximum, reached the window. Entering the page shrank it from 1512
+  points to 1136, which is the column plus the margins plus the sidebar, moved
+  the difference into the sidebar, and then refused to be dragged wider again.
+  500 is `windowSizeStayPut`, which is exactly the priority at which AppKit
+  stops holding a window's size against its content. `widthCapped` gets away
+  with it in a settings pane because that is inside a scroll view, where nothing
+  it says can reach the window.
+- **The same equality at 240**, below the split view's holding priorities of 250
+  and 260, lost to the invitation stack's own content hugging, which is 250. The
+  column came out 560 wide whatever the window did: 560 is
+  `SetupNotice.maxWidth`, and the hidden setup card was the only thing left with
+  an opinion.
+- **Required margins with the arithmetic done in code** blocked the resize they
+  were computed from. A 228 point margin either side of a 620 column is a
+  required 1077 points of pane, so the window would not go below 1380, and the
+  recomputation that would have freed it needed a layout pass it could not have.
+
+300 is above everything inside this pane with an opinion about width and below
+the window's. Stating it as a breakable width with unbreakable margins is also
+what makes a narrow window work: the column gives way to the pane's edges
+instead of the pane refusing to be that narrow.
+
+All three readings are from `AXUIElementCopyAttributeValue` on the running app,
+against a scratch `LISTEN_LIBRARY` with `LISTEN_CHAT` opening a real
+conversation. The first one was nearly mis-read as a second copy of Listen
+running: check the pid, per `target-mac-apps-by-pid-not-system-events`.
+
+## The document was as wide as the scroll view, and the scroller took the difference
+
+`document.width == scroll.width` cut the right-hand edge off every question
+bubble on a Mac set to show scrollers always, which is any Mac with a mouse
+plugged in. The document was wider than the visible area by the scroller's
+width, and no horizontal scroller appeared to say so, because the constraint
+said there was nothing to scroll. It is `scroll.contentView.width` now.
+
+The same difference is why the column is centred on the **scroll view** and not
+on the document: centred in the document it sat half a scroller to the left of
+the composer under it, which is a misalignment you can see and cannot name.
+
+## The page's controls are the window's toolbar
+
+A page has one strip of chrome and it is the title bar, so the drawer's header
+is hidden while the page is up and its three discs are gone. Putting a header
+under the toolbar would be two rows of buttons doing the same jobs six points
+apart, and it would take the top of the conversation with it.
+
+`chatting` is not a fifth `Mode`: the mode underneath is still selected and
+comes back untouched. It only changes what the toolbar's content half holds,
+which is everything after `.sidebarTrackingSeparator`. The sidebar's half is
+left exactly as the mode had it, because the list is still there and still
+works.
+
+What the content half becomes:
+
+- **`leaveChatItem`**, wearing the same `arrow.down.right.and.arrow.up.left` the
+  card's resize disc wears while expanded, so the two directions of one control
+  look like each other whichever strip they are in. It puts the conversation
+  back over the page rather than closing it, which is what the card's cross is
+  for.
+- **History**, the same item and the same menu as everywhere else.
+- **`newChatItem`** in New Recording's slot, with `title` set as well as
+  `image`: the toolbar is `.iconOnly`, and setting `title` is what puts the
+  words in the item rather than under it, which is how History gets its label
+  too. A chat page is not a place you start a meeting from, and the words are
+  what make the swap readable rather than a pencil where a record button was.
+- **Stop, if a meeting is running.** The rule the Ask pane already had, kept
+  because a page covers more than that pane ever did.
+
+Two knock-on rules in `applyHeight`, both about staying where you are:
+`newConversation` leaves the extent alone on a page, so New chat is an empty
+page rather than a jump back to the meeting; and the "an empty conversation is a
+bar" rule is narrowed to cards, which is what makes an empty page possible at
+all. Opening one from History does the same: `onWantsOpen` only forces a card
+when it is not already a page.
+

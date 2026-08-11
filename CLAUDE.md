@@ -240,6 +240,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The meeting page's largest gap was a row holding nothing
 - The drawer was never laid out until agent detection finished
 - A meeting being transcribed is a loading state, and three things were still on it
+- The note box reserved room for a button that left, and lost the last line of every note
 - The ellipsis said "No recording selected" over a note, because the menu was the recording's
 
 ### `.agents/notes/appkit.md` (29k)

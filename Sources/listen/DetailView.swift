@@ -889,21 +889,33 @@ final class DetailView: NSView {
 
         notesScroll.documentView = notesText
         notesScroll.hasVerticalScroller = true
+        // The scroller is only wanted when the note is past its ceiling, which
+        // is the only time this box has anything to scroll. Without this a Mac
+        // set to show scroll bars always draws an empty legacy track down the
+        // right of a two-line box, taking 17 points of the writing surface to
+        // say nothing. Measured: the same note is 1149 points wide with the
+        // scroller and 1166 without it.
+        notesScroll.autohidesScrollers = true
         notesScroll.drawsBackground = false
         notesScroll.isHidden = true
-        // Room at the bottom for the floating Record button, which is in the
-        // window's content host and therefore over this. It matters more here
-        // than in the transcript: this one is typed into, so what ends up under
-        // the button is the caret rather than a line somebody could scroll past.
+        // **No insets, and every edge has to say so.** Setting `contentInsets`
+        // at all turns `automaticallyAdjustsContentInsets` off, so each edge is
+        // whatever is stated here, and the honest value on all four is zero: an
+        // inset is a scroll offset rather than a position, and the air above the
+        // note is a constraint. See `notesTopInset`.
         //
-        // **And nothing at the top.** Setting `contentInsets` at all turns
-        // `automaticallyAdjustsContentInsets` off, so the top has to be stated
-        // whatever it is, and the honest value is zero: an inset is a scroll
-        // offset rather than a position, and the air above the note is now a
-        // constraint. See `notesTopInset`.
+        // **The bottom was `RecordButton.clearance` and that was the bug.** It
+        // was copied from the transcript while the Record button floated over
+        // this pane's corner, and it never applied here: this box is 30 to 154
+        // points tall between the chips and the player, and the transcript below
+        // it is what actually reaches the window's floor. What 24 points of
+        // inset bought instead was 24 points of scrollable nothing under every
+        // note, so a one-line note could be scrolled until its own line left the
+        // box, and a scroller whose track is the box minus the inset: 6 points
+        // of track on an empty note, holding a 2-point knob that appeared
+        // against the right edge as a sliver nothing on the page explained.
         notesScroll.automaticallyAdjustsContentInsets = false
-        notesScroll.contentInsets = NSEdgeInsets(top: 0, left: 0,
-                                                 bottom: RecordButton.clearance, right: 0)
+        notesScroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         // An agent writes notes while this window is open and nothing on disk
         // announces it. Coming back to the app is the moment somebody expects

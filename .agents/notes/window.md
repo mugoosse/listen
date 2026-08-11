@@ -1226,6 +1226,52 @@ never in. `previewingTranscription` makes `isLoadingTranscript` true for the
 length of the preview, which is what `previewRecording` does by hand with
 `showsComposer`.
 
+## The note box reserved room for a button that left, and lost the last line of every note
+
+The user's own note is an `NSScrollView` around an `NSTextView`, sized to its own
+text between a 30 point floor and a 154 point ceiling (`sizeNotes`). It also
+carried `contentInsets.bottom = RecordButton.clearance`, copied from the
+transcript while the Record button floated over the bottom right of this pane.
+
+**A content inset is not padding; it is scrollable range plus a smaller clip
+view.** The scroll view keeps its frame, the clip view is the frame minus the
+insets, and the scroller's track is what is left. So 24 points of bottom inset on
+a box whose height is exactly its text meant the box could never show all of it.
+
+Measured through accessibility on build 159, against a scratch library, in
+`AXScrollArea` sizes (the clip, not the frame):
+
+| Note | Box | Visible | Scroll bar |
+|---|---|---|---|
+| Empty | 30 | **6** | 19 x 8 |
+| Three lines | 58 | **34** | 19 x 36 |
+
+The last 24 points of every note were underneath nothing at all: scrollable to,
+never on screen. On an empty note the writing surface was a 6 point strip, and
+the 2 point knob left in an 8 point track is what showed up in the corner of a
+screenshot as an unexplained sliver against the right edge. That sliver is what
+this was reported as.
+
+The button has been in the toolbar since "Move the record control to the corner
+it acts in" was undone, and `RecordButton.clearance` says so, but this box was
+wrong even while it floated: the note is 30 to 154 points tall between the
+speaker chips and the player, and the thing that actually reaches the window's
+floor is the transcript below it, which reserves its room with a spacer view at
+the end of its stack rather than with an inset (`renderTurns`).
+
+So the insets are zero on all four edges, with
+`automaticallyAdjustsContentInsets` still off, because that is the trap directly
+above it: setting any inset turns the automatic ones off, and AppKit's automatic
+top inset here was 14, which is the air the placeholder and the caret are
+positioned by. Stating zero keeps it stated.
+
+`autohidesScrollers` went on at the same time. Nothing scrolls until a note
+passes the ceiling, and the scroller was taking 17 points of width from the text
+container to say so: the same three lines measure 1149 points wide before and
+1166 after, so the note now lines up with the heading above it and the transcript
+below it. After: empty note 30 visible of 30, three lines 58 of 58, no scroll bar
+in the tree at all.
+
 ## The ellipsis said "No recording selected" over a note, because the menu was the recording's
 
 `LibraryWindow.menuNeedsUpdate` was written when the sidebar listed recordings

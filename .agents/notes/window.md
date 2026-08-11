@@ -1186,3 +1186,42 @@ window.
 The general shape is worth keeping: **a view whose geometry is decided by a
 method has to have that method called once at build time.** Waiting for the
 first real event means shipping whatever the initialisers happened to leave.
+
+## A meeting being transcribed is a loading state, and three things were still on it
+
+The page for a recording the queue is running showed the transcription picture in
+the middle of it, and around that: the Notes heading with its "What you are
+thinking" invitation, the player card with a transport for audio whose transcript
+does not exist yet, the "Recording" heading, and the composer offering to answer
+questions about a meeting nothing can be read from. Measured by looking at an
+hour-long call at 82%: four empty regions around the one live thing.
+
+`DetailViewController.isLoadingTranscript` names the test once, and it is the one
+`updateEmpty` was already making to decide whether to draw the picture at all
+(`showPicture`), so nothing can now disagree about whether this is a loading
+state. `applyShowing` hides the notes half, the player and the transcript heading
+from it; `updatePlaceholder` hides the invitation, and it has to be there rather
+than in `applyShowing` because it runs last and would otherwise put it back.
+`LibraryWindow.updateComposer` takes the composer away, which is the same
+sentence it already applies one step earlier, to the meeting being recorded.
+
+**The heading needed the loading test rather than `turns.isEmpty`.** Transcribe
+Again replaces a transcript that already exists, so the page has turns and the
+word "Recording" stood alone over a picture, naming a document that had just been
+taken off the screen.
+
+**The note box's height is re-measured on the way back, not remembered.**
+`applyShowing` kept `notesHeight.constant` as it was whenever the page was open,
+which was right while the only way to lose the note was to select nothing:
+selecting a recording again re-renders the note, and rendering re-measures. A job
+finishing does neither, because it is the same recording with the same note, so
+`reloadNotes` finds the signature unchanged and skips the render. A height zeroed
+on the way in would have stayed zero with the note hidden inside it. It calls
+`sizeNotes()` instead, which is the same measurement rendering makes.
+
+`LISTEN_PANEL=transcribing:0.6` had to learn about it too. The preview draws the
+picture on a recording the queue is not running, so every test above was false
+and it drew the *old* page around the picture: a preview of a state the app is
+never in. `previewingTranscription` makes `isLoadingTranscript` true for the
+length of the preview, which is what `previewRecording` does by hand with
+`showsComposer`.

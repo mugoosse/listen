@@ -2420,3 +2420,211 @@ deciding how much to read.
 A person is the case still deliberately left out. A pane narrowed to one name
 has a question in it already, and four chips would each have to guess which.
 
+## A conversation full width is a mode, and the sidebar under it was live
+
+Reading a conversation full width used to be a third size of the composer
+drawer, `extent == .full`. The drawer covered the content pane and `applyHeight`
+hid what was under it, and the sidebar beside it went on being the recording
+list.
+
+So a click in that list did happen: `sidebar.onSelect` ran, `detail.show` ran,
+and the recording it drew was in a view with `isHidden = true`. Nothing on
+screen moved, and the row highlighted itself under a page that was still the
+conversation. Reported as "some routing issue", which is exactly what it looked
+like from outside. The same swallowing hit every numbered reference in an
+answer, because `ReferencePopover` opens a recording through
+`LibraryWindow.open(recording:)`, which ends in that same selection.
+
+It was not fixable by making the click leave the page, because the click has two
+honest readings. `AskView.show` returns early for a pinned conversation, so the
+selection moved the context and kept the conversation; unpinned it threw the
+conversation away and *still* left the page up, now empty. One gesture, two
+outcomes, neither of them on screen.
+
+The page is `Mode.chat` now, beside `.settings`, `.people` and `.notes`. The
+sidebar holds `ChatNav`, the masthead says "Chats", and the collapse control's
+slot holds Back, which is settings' shape exactly and for settings' reason: the
+list is the only navigation the screen has, so it is locked open and a control
+that would always be disabled is not drawn. There is no recording list under the
+page to swallow anything, because the list under the page is the conversations.
+
+What the drawer keeps is its other two sizes. A card resting over the meeting it
+is about is still the right shape for asking about that meeting, and `standard`
+is untouched.
+
+Measured on the built app over a scratch `LISTEN_LIBRARY` holding real `chats/`
+and sidecar-only recordings, driven through `AXUIElementCreateApplication(pid)`:
+pressing Chats swaps the toolbar from `Listen, Settings, Sidebar, Chats, Record,
+Actions` to `Chats, Back, New chat, Actions`, and the sidebar table reads `Today
+/ who are the top 2 people i spoke to last month / 10:26 · 7 questions ·
+Kinsight catchup wiht Edgar / …`. Back restores both.
+
+## The list is the sidebar, and History is what this page was asked
+
+`fillHistory` listed every conversation in the library from whatever screen you
+were on, and the note above it in this file argues for exactly that: a history
+that hides most of itself depending on the page is a history you cannot trust.
+That argument was about a menu that was the only route into any conversation.
+
+It is not the only route any more, so the same control is free to answer the
+narrower question the page it sits on actually raises. The toolbar's History is
+now the conversations about the meeting selected (`Chat.about`), or about the
+person whose card is open (`chat.person`), with "All conversations…" as the last
+row, which enters the mode. The card's own title menu shows the same rows, since
+they are the same question asked from two controls six points apart, and one
+screen with two histories that disagree is worse than either.
+
+It is uncapped where the flat list took twenty: a source has as many
+conversations as somebody asked about it, which is single figures, and the
+oldest may be the one being looked for.
+
+Both menu traps still apply and are still paid for the same way: the pull-down
+copy prepends a bare item because `NSMenuToolbarItem` eats item 0, and
+`autoenablesItems` is off or `NSMenu` brings the day headings back as live rows.
+
+A note gets no such menu. `Chat` records the recordings and the person a
+question was about and has no field for a note, so a note page could only be
+scoped by the meetings underneath it, which is a different claim wearing the same
+words. The Notes collection therefore has no route into chat mode at all, which
+is the cost of that and is taken deliberately.
+
+## Where Back goes is where the conversation came from
+
+Chat mode is reachable from the home page, from a meeting whose card was grown
+by its resize disc, and from a person's card, so "back to the library" would be
+wrong exactly when somebody was reading a conversation about the meeting they
+were on. `enter(.chat)` records the mode it left in `chatReturn` and Back returns
+to it.
+
+`overACard` survives, with one job instead of two. It used to decide whether
+there was a way out **at all**: the way back was a toolbar item that collapsed
+the page onto its card, and a conversation opened from History had never been a
+card, so it had no item, and no route to the library short of starting another
+conversation or deleting this one. That hole is what the routing report ran
+into. A mode has a Back button however it was entered, so `overACard` is left
+deciding only where the drawer lands: over the meeting as a card, or as a bar.
+
+Two rules on the way down, both about not losing work:
+
+- **A running answer is never cancelled by leaving.** `composer.isRunning` puts
+  the drawer down as a card rather than a bar, because a bar is what a fresh
+  conversation is and getting there means `startNew`, which cancels the run. A
+  forty-second answer thrown away by a click is the one loss on this path that
+  reopening the conversation cannot undo.
+- **Otherwise the conversation is let go, exactly as the cross lets it go.** Left
+  loaded in a bar it would silently continue under a placeholder offering to
+  answer about the meeting now on screen. Nothing is lost: it is the first row of
+  the list one press of Chats away.
+
+`leavePage(keepingCard:)` takes the flag rather than working it out, because the
+window knows *why* it is leaving: Back is a return, and a reference clicked in an
+answer is somebody asking for a different page, which must not arrive under a
+card about the conversation they just left.
+
+`LISTEN_CHAT=<id>` moved with all this. It used to open inside `build()`, which
+is called *by* `show()`, and `show()` enters the library on the next line: the
+conversation came up as a page and was put straight back down. It is recorded in
+`launchChat` and opened at the end of `show()` instead, and `shootIfAsked` no
+longer reveals a recording when it is set, since that is a navigation straight
+back out of the thing being photographed.
+
+## The meeting being recorded has no History either, and the toolbar had to be told twice
+
+The same rule the composer already follows on that screen, and the same reason:
+nothing is transcribed until Stop, so there is nothing to have asked about the
+meeting being recorded and nothing that could be asked. The menu could only ever
+open onto "Nothing asked about this meeting yet", next to the one control in the
+window that must never be hunted for.
+
+`isShowingLiveMeeting` names the test once and both callers use it:
+`updateComposer` to take the drawer away, and `modeItemIdentifiers` to leave both
+of the conversation controls out.
+
+Leaving them out is half the fix. `syncToolbarWithHome` rebuilds only when what
+is open changed which items belong, and it compared one bit, `isHome`. Clicking
+from the meeting being recorded to yesterday's call changes neither the mode nor
+that bit, so History would have stayed missing for the rest of the session. The
+comparison is a `ContentShape` of the two bits that matter now, home and live.
+The capture edges themselves were already safe: that handler ends in an
+unconditional `rebuildToolbar()`, after the live recording has been selected.
+
+Not verified by recording. Doing that means a second Listen opening the
+microphone and the process tap on a Mac that is often already in a meeting, and
+the rule is the one `updateComposer` has been making correctly on that screen all
+along.
+
+## The search field belongs where the list it swaps with keeps its own
+
+`ChatNav` has no `CollectionPicker` above its search field, because the
+conversations are not a fourth collection of the library. What went with the
+picker was the 76 points it was paying for, and the field went to the top of the
+pane: the window has a transparent full-size title bar, so it came up behind the
+traffic lights, the word "Chats" and the Back button, all four drawn over each
+other.
+
+Stating 76 by hand fixed the overlap and was still wrong. That is what People and
+Notes spend, because they have a picker (42 to clear the title bar, its own 24,
+and 10 under it), and the list this one *swaps with* is the recordings list,
+which has no picker either and states 42. Matching the wrong pair put the field a
+control's height lower than the list it replaces, which reads as a jump the
+moment you press Back.
+
+So: 42, and the two lists' first rows are on one line. Measured through
+accessibility on the built app, with the window at y=33: both search fields at
+(17, 82), 272 by 26.
+## An empty page needs the greeting the home page has
+
+Chat mode with nothing open was a composer at the foot of a window-high
+emptiness, which reads as a page that failed to load. The library's home page
+answers exactly this moment with the mascot, "What's cooking, <name>?" and a line
+saying what to do, and a second answer to it in another visual language would say
+the two screens are different kinds of place.
+
+`AskView.welcome` is that block: the same 64 point mascot, the same 26 point
+semibold greeting and 13 point secondary line, the same 16 and 14 between them,
+all taken from `DetailView` rather than invented. Not the same code, because that
+one is the empty state of the pane a page hides.
+
+It is a subview of the pane centred on the scroll view, not a row in the stack of
+turns: in the stack it would sit at the top of a page whose whole point is that
+there are no turns. Shown only when `isPage && !hasConversation`, so a card and a
+bar never draw it and the first question takes it away. `redraw` is the hook,
+which is also what brings it back on New chat.
+
+The wording differs by one clause. The home page says "Select something from the
+list, or ask about your library below" about the recordings; this says "Pick up a
+conversation from the list", because that is what is in the sidebar beside it.
+
+## The chats home page is the library's home page, and three numbers said otherwise
+
+Both screens are a greeting over a composer with a list beside them, and the
+difference is meant to be which list. Three things made the chat mode's read as a
+different app, and all three are measured against the other screen rather than
+chosen:
+
+- **A scroll bar down the right-hand edge.** On a page `AskView`'s scroll view
+  reaches both edges of the window, and a Mac set to show scroll bars always
+  draws the track whether or not anything scrolls. A greeting and a composer do
+  not. `autohidesScrollers` on that view and on `ChatNav`'s, which had the same
+  full-height track down a list of nine conversations that fits twice over. The
+  recordings list is deliberately left alone: it overflows, and its bar has a
+  thumb in it that means something.
+- **A 620 point composer in the middle of a 1512 point window.** The column
+  exists so a line of an answer is readable and so the well lines up with the
+  text above it. An empty page has neither, so it takes the width the same
+  composer has on every other screen: `pageWide`, 40 points either side, which is
+  the drawer's 16 plus this pane's 24, both of which go to zero on a page and are
+  spent here instead.
+- **The search field, one control's height too low.** See the note above.
+
+`applyWidths` is what picks between the three sets, and it runs on `redraw` as
+well as on `setPage`, because the third state depends on whether there are any
+turns: asking the first question on the chats home page is exactly the moment the
+composer stops being the home page's and becomes the conversation's. Everything
+off before anything on, or two width constraints on one view are a conflict the
+solver resolves by guessing.
+
+Measured through accessibility on the built app, window (0, 33, 1512, 949). The
+library home page and the chats page agree to the point: search field at (17, 82)
+272 by 26 on both, composer field at (359, 893) 981 by 21 on both, and the only
+scroll bar in either is the recordings list's.

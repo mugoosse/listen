@@ -507,3 +507,38 @@ and `notesCeilingHeight` came down by 14 with it.
 The rule that generalises: use a content inset for what a scroll view should be
 able to reach, never for where something is. Anything a second view has to line
 up against belongs in a constraint, where nothing can reclaim it.
+
+## A leading image is laid out at the button's edge, not beside its title
+
+`ChipButton` sizes its own capsule, so a glyph added later has padding reserved
+for it: the width is the title, plus the image, plus one gap, plus 13 either
+side. `AnswerTurn` sets a checkmark on the Save chip the moment it is pressed,
+which is the whole of how that press is confirmed, and it came out hard against
+the rounded left edge with a gap the width of the padding between it and the
+word.
+
+The reserved space was spent in the wrong place. `NSButtonCell` with
+`.imageLeading` puts the image against the leading edge of the frame and lays
+the title out in what is left, and the title's own paragraph style is centred, so
+the two drifted to opposite ends of a capsule that was exactly wide enough for
+them side by side.
+
+`imageHugsTitle = true` is the whole fix, and it is the second time this app has
+paid for it: `DetailWithComposer.titleButton` records the same behaviour for a
+*trailing* chevron, which sat at the far right of a button wider than its text.
+Set in `ChipButton.init` rather than at the two call sites, so any chip that ever
+gains a glyph gets it.
+
+## An `NSToolbarItem` lays out its own image and title, and has no gap to give
+
+An item with both `image` and `title` draws them side by side in an `.iconOnly`
+toolbar, which is how "History" and "Chats" get a word next to a clock rather
+than under it. There is no spacing property: no `imageHugsTitle`, no insets, and
+setting the item's `view` to get them means building the button and its glass
+capsule by hand.
+
+The clock came out against the C of "Chats". The gap is a leading space in the
+title, `" Chats"`, which is the same one-character shape as the trailing space
+`DetailWithComposer.titleButton` puts before its chevron, and for the same
+reason: the control lays itself out and the only thing left to say is what the
+string is.

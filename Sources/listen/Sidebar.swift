@@ -471,7 +471,11 @@ final class SidebarViewController: NSViewController {
             || note.body.localizedCaseInsensitiveContains(wanted)
     }
 
-    private static func heading(for date: Date?) -> String {
+    /// Internal rather than private: `ChatNav` files conversations under the
+    /// same days, and two copies of "Today, Yesterday, then the weekday for a
+    /// week and the date after that" would be two lists that agree until one of
+    /// those three numbers is changed.
+    static func heading(for date: Date?) -> String {
         guard let date else { return "Earlier" }
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "Today" }

@@ -1405,6 +1405,13 @@ final class DetailView: NSView {
             "What you are thinking. Only you write this, and an agent can read it."
         notesPlaceholder.isHidden = recording == nil
             || showing != .page
+            // With the note box itself away while the transcript is being made.
+            // It is a sibling of that box rather than a child of it, which is
+            // the trap this file records against the empty label, so hiding the
+            // box left its invitation drawn over the progress picture. This runs
+            // *after* `applyShowing` sets the rest of the page, so the rule has
+            // to be here rather than there or it would be set and then undone.
+            || isLoadingTranscript
             || !showingYours
             || !notesText.string.isEmpty
     }
@@ -1481,6 +1488,30 @@ final class DetailView: NSView {
     }
 
     /// Put the chosen document on screen. The only place either pane is hidden.
+    /// The meeting on screen is the job the queue is running now.
+    ///
+    /// The same test `updateEmpty` makes to put the transcription picture up
+    /// (`showPicture`), named once because three other things on this page
+    /// depend on it and the window depends on it too: nothing can be asked about
+    /// a transcript that does not exist yet.
+    ///
+    /// Deliberately not "has no transcript". A recording whose audio is on
+    /// another Mac has none either, and that is not a loading state: nothing is
+    /// running, the page says so, and its note and its player belong on screen.
+    var isLoadingTranscript: Bool {
+        if previewingTranscription { return true }
+        guard let recording else { return false }
+        return Queue.shared.running == recording.id
+    }
+
+    /// `LISTEN_PANEL=transcribing:<fraction>` is showing the picture on a
+    /// recording the queue is not actually running.
+    ///
+    /// Without this the preview drew the *old* page around the picture, player
+    /// and note box included, which is a picture of a state the app is never in.
+    /// The same reason `previewRecording` sets `showsComposer` by hand.
+    private var previewingTranscription = false
+
     private func applyShowing() {
         modePicker.setSelected(showing == .ask, forSegment: 0)
         // Collapsed while asking, and for a recording that is still running:
@@ -1488,7 +1519,8 @@ final class DetailView: NSView {
         // besides, since its audio is on *this* Mac and simply is not finished.
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
-                  hidden: showing == .ask || recording?.isLive == true)
+                  hidden: showing == .ask || recording?.isLive == true
+                      || isLoadingTranscript)
         // **Every piece of the page is gated on there being a page.** The
         // heading, the note and the transcript are furniture belonging to a
         // meeting, and with nothing selected the pane's whole content is one
@@ -1500,21 +1532,40 @@ final class DetailView: NSView {
         let page = showing == .page
         let open = page && recording != nil
         scroll.isHidden = !open
+        // **A meeting being transcribed is a loading state, and a loading state
+        // has one thing on it.** The picture in the middle of the pane is what
+        // this screen is about until the job finishes; a transport over audio
+        // whose transcript does not exist yet, and a note box under a heading,
+        // are two documents' worth of furniture around a progress bar. Measured
+        // by looking at an hour-long call at 82%: three empty regions and the
+        // one live thing in the middle of them.
+        let readable = open && !isLoadingTranscript
         // Both halves of the page, together. This is the change: a note and the
         // dialogue it was taken during are one document, and choosing between
         // them was never a choice anybody wanted to make.
-        notesScroll.isHidden = !open
-        notesHeight.constant = open ? notesHeight.constant : 0
+        notesScroll.isHidden = !readable
+        // **Re-measured on the way back rather than remembered.** This kept
+        // whatever the constant already was, which was right while the only way
+        // to lose it was to select nothing (and selecting a recording again
+        // re-renders the note, which re-measures). A job finishing does neither:
+        // same recording, same note, so `reloadNotes` finds the signature
+        // unchanged and skips the render, and a height zeroed on the way in
+        // would have stayed zero with the note hidden inside it.
+        if readable { sizeNotes() } else { notesHeight.constant = 0 }
         // Collapsed as well as hidden, spacing included, which this file
         // records three times over.
-        notesHeading.isHidden = !open
-        notesHeadingHeight.constant = open ? 16 : 0
-        notesHeadingTop.constant = open ? 12 : 0
+        notesHeading.isHidden = !readable
+        notesHeadingHeight.constant = readable ? 16 : 0
+        notesHeadingTop.constant = readable ? 12 : 0
         // No heading over a meeting with nothing under it either. The sentence
         // `updateEmpty` writes there already says why the transcript is absent,
         // and a label naming a document that is not present is furniture
         // pretending to be content.
-        recordingHeading.isHidden = !open || turns.isEmpty
+        // **And not over the picture either**, which is what Transcribe Again
+        // made visible: that job replaces a transcript that already exists, so
+        // `turns` is not empty, and the heading stood alone over a progress
+        // picture naming a document that had been taken off the screen.
+        recordingHeading.isHidden = !readable || turns.isEmpty
         // Collapsed as well as hidden, spacing included: a hidden view keeps its
         // frame, which is the trap this file already records three times.
         recordingHeadingHeight.constant = recordingHeading.isHidden ? 0 : 16
@@ -1589,6 +1640,7 @@ final class DetailView: NSView {
 
     func previewTranscribing(_ fraction: Double) {
         showing = .page
+        previewingTranscription = true
         applyShowing()
         transcribing.progress = TranscriptionProgress(
             message: fraction < 0.5 ? "transcribing the other participants"
@@ -3327,6 +3379,8 @@ final class DetailViewController: NSViewController {
     var isAsking: Bool { detail.isAsking }
 
     var isShowingLive: Bool { detail.isShowingLive }
+
+    var isLoadingTranscript: Bool { detail.isLoadingTranscript }
 
     var onShowingChanged: (() -> Void)? {
         get { detail.onShowingChanged }

@@ -201,7 +201,7 @@ The three things written about a recording rather than extracted from it.
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
 
-### `.agents/notes/window.md` (61k)
+### `.agents/notes/window.md` (71k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -238,8 +238,9 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Stopping a recording is a reload, and it wiped the name being typed
 - The meeting page's largest gap was a row holding nothing
 - The drawer was never laid out until agent detection finished
+- A meeting being transcribed is a loading state, and three things were still on it
 
-### `.agents/notes/appkit.md` (20k)
+### `.agents/notes/appkit.md` (29k)
 
 Things AppKit does that no documentation warns about. These generalise past
 this app, so read them before building any new window, menu or popover.
@@ -262,6 +263,8 @@ this app, so read them before building any new window, menu or popover.
 - An attributed title's colour wins over `contentTintColor`
 - `glyphIndex(for:in:)` answers with the nearest glyph, however far away
 - A disabled button greys its title, unless the title is attributed
+- A leading image is laid out at the button's edge, not beside its title
+- An `NSToolbarItem` lays out its own image and title, and has no gap to give
 - A content inset is a scroll offset, and it will not hold a view in place
 
 ### `.agents/notes/dictation.md` (18k)
@@ -307,12 +310,12 @@ that repo is being archived.**
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
-### `.agents/notes/agent.md` (107k)
+### `.agents/notes/agent.md` (144k)
 
 Asking questions about the library, through an agent CLI the user already has
 or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 `AgentRun`, `AgentChat`, `AgentEndpoint`, `AgentKey`, `AskView`, `AnswerTurn`,
-`AgentPane`, `listen ask`, `listen endpoint`.
+`AgentPane`, `ChatNav`, `listen ask`, `listen endpoint`.
 
 - The model is the user's, and Listen never sees a key
 - The agent cannot reach the library except through `listen mcp`
@@ -408,6 +411,13 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The status line holds its slot, so a message never moves the composer
 - The bar's height has to count every gap, and the status line proved it did not
 - The library composer has four starters of its own, and a person still has none
+- A conversation full width is a mode, and the sidebar under it was live
+- The list is the sidebar, and History is what this page was asked
+- Where Back goes is where the conversation came from
+- The meeting being recorded has no History either, and the toolbar had to be told twice
+- The search field belongs where the list it swaps with keeps its own
+- The chats home page is the library's home page, and three numbers said otherwise
+- An empty page needs the greeting the home page has
 
 ### `.agents/notes/release.md` (5k)
 

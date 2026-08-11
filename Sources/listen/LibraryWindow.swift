@@ -27,16 +27,27 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// What the window is showing. Settings is a mode of this window rather
     /// than a window of its own: the sidebar swaps the recording list for the
     /// section list and the content side swaps the transcript for a pane.
-    private enum Mode { case library, settings, people, notes }
+    /// **A conversation read full width is a mode, and it took two goes to say
+    /// so.** It was an extent of the drawer first: the page covered the content
+    /// pane while the sidebar went on listing recordings, so a click in that
+    /// list changed a view that `applyHeight` had hidden. The recording never
+    /// appeared, the click read as a dead control, and a conversation opened
+    /// from History had no way back to the library at all. A mode has no such
+    /// conflict, because the list under it is the list of conversations: there
+    /// is nothing left for the page to swallow.
+    ///
+    /// The drawer keeps its two other sizes. A card resting over the meeting it
+    /// is about is still the right shape for asking about that meeting, and that
+    /// is what `standard` stays.
+    private enum Mode { case library, settings, people, notes, chat }
     private var mode: Mode = .library
-    /// Is the conversation a page rather than a card? Not a fifth `Mode`,
-    /// because it is not one: the mode underneath is still there, still
-    /// selected, and comes back untouched when the page is put away. It only
-    /// changes what the toolbar's content half holds.
-    private var chatting = false
-    /// Whether that page has a card under it, which decides whether the way out
-    /// of it is in the title bar. See `DetailWithComposer.overACard`.
-    private var composerCanCollapse = false
+    /// Where Back goes, which is wherever chat mode was entered from.
+    ///
+    /// A conversation is reached from the screen it is about as often as from
+    /// the list, so "back to the library" would be wrong exactly when somebody
+    /// grew a card over a meeting into a page. Recorded on the way in rather
+    /// than inferred on the way out.
+    private var chatReturn: Mode = .library
 
     /// The two split items' view controllers, which never change. Swapping a
     /// child inside them is the only way to change what a split view item shows:
@@ -58,6 +69,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// can name four recordings, so a recording-centric list cannot show one.
     private let notesNav = NotesNav()
     private let notePane = NotePane()
+    /// The conversations, in the sidebar's slot while one is being read. See
+    /// `ChatNav`, and `Mode.chat` above for why they are there rather than in a
+    /// menu.
+    private let chatNav = ChatNav()
     /// Built once each and kept, so returning to a section finds it where it
     /// was left rather than scrolled back to the top with its fields cleared.
     private var panes: [SettingsTab: Pane] = [:]
@@ -73,8 +88,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
     private static let historyItem = NSToolbarItem.Identifier("chatHistory")
+    private static let chatsItem = NSToolbarItem.Identifier("openChats")
+    private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
-    private static let leaveChatItem = NSToolbarItem.Identifier("leaveChat")
     private static let chatActionsItem = NSToolbarItem.Identifier("chatActions")
 
     /// The drawer, so the History toolbar item can borrow its menu.
@@ -90,6 +106,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
     fileprivate var actionsMenu: NSMenu?
+    /// The same, for the History item's menu. See `sourceHistoryMenu`.
+    fileprivate var historyMenu: NSMenu?
 
     /// The toolbar item holding `recordFAB`, kept so its size can be re-stated as
     /// the label grows. Rebuilt whenever `rebuildToolbar` runs.
@@ -171,6 +189,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         return name
     }()
 
+    /// And what it says in chat mode, in the same slot for the same reason.
+    ///
+    /// "Chats" rather than "History": the list under it is every conversation
+    /// including the one being had right now, and a screen called History is a
+    /// screen about the past. The word History is kept for the control that
+    /// really is one, which is the menu on a meeting naming the conversations
+    /// about it.
+    private lazy var chatsMark: NSTextField = {
+        let name = NSTextField(labelWithString: "Chats")
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.lineBreakMode = .byClipping
+        name.sizeToFit()
+        return name
+    }()
+
     /// A calm masthead for the sidebar, not a new action. The toolbar's items
     /// before `sidebarTrackingSeparator` belong to the sidebar, which lets the
     /// name and coloured mascot use the otherwise empty title-bar space without
@@ -216,7 +249,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        // Once, and after the library is up, which is what makes it stick. See
+        // `launchChat`.
+        if let chat = launchChat {
+            launchChat = nil
+            composerHost?.open(chat, as: .page)
+        }
     }
+
+    /// The conversation named by `LISTEN_CHAT`, waiting for the window to have
+    /// finished opening on the library. Scaffolding, in the family of
+    /// `LISTEN_PANEL` and `LISTEN_SHOT`: opening a conversation is a click, and a
+    /// click is the one input this window cannot be driven by, since every
+    /// control on the composer is laid out by frame and invisible to
+    /// accessibility. Without it a bug in the restore path can only be reported,
+    /// never reproduced.
+    private var launchChat: Chat?
 
     /// Open settings, on `tab` or on whichever section was last open.
     ///
@@ -239,8 +287,32 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// the same label, and no response. Anything that is not the library goes
     /// back to the library.
     @objc func exitSettings() {
+        // Chat mode is the one that does not go back to the library, because it
+        // is the one you can arrive at from anywhere: a conversation grown out
+        // of a card over a meeting has that meeting to go back to, and dropping
+        // somebody on the home page instead would be the toolbar answering a
+        // question nobody asked. See `chatReturn`.
+        if mode == .chat {
+            enter(chatReturn, keepingCard: true)
+            return
+        }
         guard mode != .library else { return }
         enter(.library)
+    }
+
+    /// Open the conversations, which is the sidebar's list and one of them on
+    /// the page. The Chats item in the title bar, and nothing else.
+    ///
+    /// It opens onto whatever the composer already holds, which on the home page
+    /// is an empty one: a fresh page with the field in the middle of it, and the
+    /// list beside it for going back to something. That is deliberate, and it is
+    /// the rule the composer already follows everywhere else. Arriving somewhere
+    /// never resumes a conversation you did not ask for.
+    @objc func openChats() {
+        if window == nil { build() }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        enter(.chat)
     }
 
     var isShowingSettings: Bool { mode == .settings }
@@ -299,7 +371,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         self.composerHost = composerHost
         // Conversations named on a page open in the window's composer, which is
         // the only one on screen.
-        detail.onOpenChat = { [weak composerHost] chat in composerHost?.open(chat) }
+        //
+        // **As a card, because the page it is named on is the page it is
+        // about.** Every other route in opens a page: the list of conversations
+        // is a mode, and reading one there means the meeting is not on screen.
+        // This link is the opposite case, and taking it to a full-width page
+        // would put away the transcript whose "Also about this" line was just
+        // clicked.
+        detail.onOpenChat = { [weak self] chat in
+            guard let self else { return }
+            // The home page is the exception, and it is the reason opening a
+            // conversation ever became a page: picked out of the greeting it
+            // used to open as a panel resting over a greeting it had nothing to
+            // do with. There is nothing behind it there, so it takes the window.
+            self.composerHost?.open(chat, as: self.isHome ? .page : .card)
+        }
         // The page's centred sentence steps aside for the drawer. Only that
         // label: a meeting page is happy to be partly covered, and an empty one
         // arguing with the conversation on top of it is not.
@@ -309,17 +395,34 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         composerHost.onDrawerHeight = { [weak self] points in
             self?.detail.setBottomInset(points)
         }
-        // The chat page's chrome is the toolbar, so entering and leaving it is
-        // a swap of items exactly like a mode change.
-        composerHost.onPageChanged = { [weak self] page in
+        // **The drawer asks; the window decides.** A page is a mode now, and a
+        // mode change is the window's to make: it swaps the sidebar's list, its
+        // masthead and the toolbar's items, none of which the drawer can see.
+        // What the drawer still owns is the moment, because the two things that
+        // want a page (a conversation opened, and a card grown by its own disc)
+        // both happen inside it.
+        composerHost.onWantsPage = { [weak self] in
             guard let self else { return }
-            self.chatting = page
-            // Cached beside `chatting` for the same reason: the delegate is
-            // asked for the items at moments of AppKit's choosing, and reaching
-            // back into the host from there would be a second owner of the
-            // state the callback exists to hand over.
-            self.composerCanCollapse = composerHost.overACard
-            self.rebuildToolbar()
+            // Already there, which is a second conversation opened out of the
+            // list. `enter` returns early on a mode it is already in, so the
+            // drawer would be left to find out from its next height report that
+            // it is still a page.
+            guard self.mode != .chat else {
+                self.composerHost?.enterPage()
+                self.syncChatSelection()
+                return
+            }
+            self.enter(.chat)
+        }
+        // A conversation written to is a row in the list whose title, subtitle
+        // or day heading has just changed. Only while that list is the sidebar:
+        // `reload` re-reads every conversation on disk, and doing it after every
+        // exchange for a list nobody is looking at would be a directory listing
+        // per answer. Entering the mode reloads anyway.
+        composerHost.onChatsChanged = { [weak self] in
+            guard let self, self.mode == .chat else { return }
+            self.chatNav.reload()
+            self.syncChatSelection()
         }
         let main = NSSplitViewItem(viewController: composerHost)
         main.minimumThickness = 420
@@ -336,16 +439,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // has no equivalent moment unless it is given one here.
         askBar.show(nil)
         askBar.reload()
-        // `LISTEN_CHAT=<id>` opens a conversation at launch, in the family of
-        // `LISTEN_PANEL` and `LISTEN_SHOT`. Scaffolding: opening one is a click
-        // on a link, and a click is the one input this window cannot be driven
-        // by, since every control here is laid out by frame and invisible to
-        // accessibility. Without it a bug in the restore path can only be
-        // reported, never reproduced.
-        if let id = ProcessInfo.processInfo.environment["LISTEN_CHAT"],
-           let chat = Chat.load(id: id) {
-            composerHost.open(chat)
-        }
 
         // The button is a toolbar item now, built in
         // `toolbar(_:itemForItemIdentifier:)`, so nothing anchors it to the
@@ -441,6 +534,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
+        // The one route into a conversation from the list that has replaced the
+        // library while one is being read. It is already the mode by the time a
+        // row can be clicked, so this opens the page and nothing else.
+        chatNav.onSelect = { [weak self] chat in
+            self?.composerHost?.open(chat, as: .page)
+        }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         // The list, and not the pane that just wrote the change. `reload` calls
         // `detail.show`, which stops playback, puts the playhead back to zero
@@ -522,6 +621,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         sidebarHost.show(sidebar)
         detailHost.show(detail)
+
+        // `LISTEN_CHAT=<id>` opens a conversation at launch, in the family of
+        // `LISTEN_PANEL` and `LISTEN_SHOT`. Scaffolding: opening one is a click
+        // on a link, and a click is the one input this window cannot be driven
+        // by, since every control here is laid out by frame and invisible to
+        // accessibility. Without it a bug in the restore path can only be
+        // reported, never reproduced.
+        //
+        // **Recorded here and opened in `show`**, because opening it is a mode
+        // change and this method is called *by* `show`, which enters the library
+        // immediately afterwards: done here, the conversation came up as a page
+        // and was put straight back down again by the line after the call.
+        if let id = ProcessInfo.processInfo.environment["LISTEN_CHAT"] {
+            launchChat = Chat.load(id: id)
+        }
     }
 
     /// One modification date per recording folder, which is as much as is worth
@@ -589,7 +703,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     // MARK: - Modes
 
-    private func enter(_ next: Mode) {
+    /// Change what the window is showing.
+    ///
+    /// `keepingCard` is for the one caller that is a *return* rather than a
+    /// navigation: Back, out of chat mode, which puts the conversation down over
+    /// the meeting it grew from. Every other way out of that mode is somebody
+    /// asking for a different page (a reference clicked in an answer, a note
+    /// link, a person), and landing them on it under a card about the
+    /// conversation they have just left would cover the thing they asked for.
+    private func enter(_ next: Mode, keepingCard: Bool = false) {
         guard let sidebarItem, let split, mode != next else { return }
         // A mode change leaves nothing behind to inspect afterwards, and "the
         // window went back to the library on its own" is otherwise unanswerable.
@@ -604,7 +726,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // A transport nobody can see is a transport nobody can pause, which
             // is the same reason `windowWillClose` stops playback.
             detail.stopPlayback()
-            sidebarWasCollapsed = sidebarItem.isCollapsed
+            // Not when the mode being left already forced it open: chat locks
+            // the sidebar too, so re-reading it here would record "open" as the
+            // preference and a collapsed sidebar would not survive a trip
+            // through a conversation into settings and back.
+            if was != .chat { sidebarWasCollapsed = sidebarItem.isCollapsed }
             // Directly and not through `animator()`: the content is being
             // swapped underneath, and a sidebar sliding open around a list that
             // has already changed reads as a glitch rather than as an opening.
@@ -617,6 +743,35 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             sidebarItem.canCollapse = false
             split.canToggleSidebar = false
             sidebarHost.show(settingsNav)
+
+        case .chat:
+            // Where Back goes. Taken before anything else, because everything
+            // below this line has already left wherever that was.
+            chatReturn = was
+            // Both for the reason settings has them: a keystroke that has not
+            // reached disk, and a transport nobody can see is one nobody can
+            // pause. The meeting the conversation is about is often the meeting
+            // that was playing when the question was asked.
+            detail.saveYours()
+            detail.stopPlayback()
+            // See the settings branch: whichever of the two locked it first is
+            // the one holding the preference.
+            if was != .settings { sidebarWasCollapsed = sidebarItem.isCollapsed }
+            if sidebarItem.isCollapsed { sidebarItem.isCollapsed = false }
+            // Locked open like settings, and for the same reason: the list is
+            // the only navigation this screen has, and Back is in the slot the
+            // collapse control would occupy. A control that is always disabled
+            // should not be drawn, and one that is drawn should not be missing.
+            sidebarItem.canCollapse = false
+            split.canToggleSidebar = false
+            chatNav.reload()
+            syncChatSelection()
+            sidebarHost.show(chatNav)
+            // **`detailHost` is left exactly as it was.** The page covers it and
+            // `applyHeight` hides it, and what it holds is where Back goes: the
+            // meeting, the note or the person somebody was looking at. Swapping
+            // it here would make Back a second navigation rather than a return.
+            composerHost?.enterPage()
 
         case .people:
             // The sidebar stays collapsible, unlike settings. It used to be
@@ -653,6 +808,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                table.isDescendant(of: settingsNav.view) {
                 window?.makeFirstResponder(sidebar.view)
             }
+        }
+        // Leaving the page is one rule as well, and it is stated once here
+        // rather than in each of the three branches that can be arrived at from
+        // chat mode. The sidebar is put back the way settings puts it back,
+        // except on the way into settings, which is about to lock it again.
+        if was == .chat {
+            if next != .settings { sidebarItem.isCollapsed = sidebarWasCollapsed }
+            composerHost?.leavePage(keepingCard: keepingCard)
         }
         // Set here rather than in each branch, because it is one rule about
         // which screen is up and four copies of it is four places for the next
@@ -694,17 +857,50 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// `showsComposer` ignores a value it already has, so an extra call costs a
     /// comparison.
     private func updateComposer() {
-        let live = detailHost.current === detail && detail.isShowingLive
-        composerHost?.showsComposer = mode != .settings && !live
+        // **And the meeting being transcribed, which is the same argument one
+        // step later.** Capture ends and the job starts, and for the length of
+        // that job there is still no transcript: a field offering to answer
+        // about this meeting can only fail, and the pane underneath it is a
+        // progress picture with everything else on the page already taken away.
+        // It comes back when the job finishes, which is a queue change, which is
+        // a reload, which is here.
+        let live = isShowingLiveMeeting
+            || (mode == .library && detailHost.current === detail
+                && detail.isLoadingTranscript)
+        // **Chat mode always has one, whatever is behind it.** The composer is
+        // that screen: hiding the drawer there would hide the conversation and
+        // leave a mode with nothing in it. It cannot be reached from a meeting
+        // being recorded anyway, because that screen has no composer to grow and
+        // no History to open, but a rule that depends on a screen being
+        // unreachable is a rule waiting to be broken.
+        composerHost?.showsComposer = mode == .chat || (mode != .settings && !live)
     }
 
-    /// Settings has no segment, so it leaves the three controls alone.
+    /// Put the list's highlight on the conversation the page is showing.
+    ///
+    /// The page leads and the list follows, which is the opposite of the other
+    /// three modes: a conversation is started from the composer as often as it
+    /// is picked from the list, and one that has just been given an id by its
+    /// first answer has a row that did not exist a second ago. An empty composer
+    /// highlights nothing, because a fresh conversation is not on the list until
+    /// something has been asked.
+    private func syncChatSelection() {
+        if let id = composerHost?.openConversationID {
+            chatNav.select(id)
+        } else {
+            chatNav.clearSelection()
+        }
+    }
+
+    /// Settings and chat have no segment, so they leave the three controls
+    /// alone. Neither is a collection of the library: one is about the app and
+    /// the other is about the working-out.
     private static func collection(for mode: Mode) -> LibraryCollection? {
         switch mode {
         case .library:  return .recordings
         case .people:   return .people
         case .notes:    return .notes
-        case .settings: return nil
+        case .settings, .chat: return nil
         }
     }
 
@@ -922,6 +1118,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // After the selection: `select` re-shows the recording, which rebuilds
         // the empty area and would put the picture straight back away again.
         detail.previewTranscribing(fraction)
+        // And the composer goes with the page's other furniture, which is what
+        // it does for a real job. `updateComposer` can work this one out for
+        // itself, unlike the recording preview's, because the pane reports the
+        // preview through `isLoadingTranscript`.
+        updateComposer()
     }
 
     /// Show the recording screen on a real recording, driven by a synthetic
@@ -997,7 +1198,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem,
-         Self.newChatItem, Self.leaveChatItem, Self.chatActionsItem]
+         Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -1018,40 +1219,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // set itself: recorded there, the flag would say "not home" about a
         // window that launched on the home page, and the first click in the list
         // would rebuild a toolbar that was already right.
-        builtForHome = isHome
-        let items = modeItemIdentifiers()
-        // **The chat page keeps the sidebar's half and replaces the content's.**
-        // The left of the title bar belongs to the list, which is still there
-        // and still works; everything after the tracking separator belongs to
-        // the pane, and on a page the pane is the conversation. So the verbs on
-        // a recording go, because the recording is not on screen, and what
-        // takes their place is the two things a conversation has: a way back
-        // out of it, and a way to start another.
-        guard chatting, let cut = items.firstIndex(of: .sidebarTrackingSeparator) else {
-            return items
-        }
-        var page = Array(items[...cut])
-        // **The way back only when there is one.** `leaveChatItem` collapses the
-        // page onto the card it grew from; a conversation opened straight out of
-        // History never was a card, so the control would offer a return to
-        // somewhere nobody has been, resting the conversation over a greeting or
-        // a meeting it is not about. `DetailWithComposer.overACard` is the test.
-        if composerCanCollapse { page.append(Self.leaveChatItem) }
-        page += [Self.historyItem, .flexibleSpace]
-        // **Except Stop, which outranks the page.** The one control that must
-        // never be hidden is the one that ends a meeting being recorded now:
-        // the rule the Ask pane already had, kept here because a page covers
-        // more than that pane ever did.
-        if Capture.shared.isRecording { page += [Self.recordItem, .space] }
-        page.append(Self.newChatItem)
-        // **The verbs on the conversation, where the verbs on a recording are.**
-        // The ellipsis is the rightmost item in the library and on a person's
-        // card, and a page is the third of those screens: what it is about is a
-        // conversation, so what belongs there is what you can do to one. It sits
-        // after New chat rather than before it because the two are read in that
-        // order everywhere else in this window, the common move first.
-        page.append(Self.chatActionsItem)
-        return page
+        builtFor = contentShape
+        return modeItemIdentifiers()
     }
 
     private func modeItemIdentifiers() -> [NSToolbarItem.Identifier] {
@@ -1094,26 +1263,33 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // glass: measured on the running window, "New Recording" and the
             // ellipsis came out inside a single rounded shape reading as one
             // control, with no edge between them to say where one ended.
-            // History is the first thing after the tracking separator, which is
-            // the top left of the *content*, immediately right of the divider.
-            // That is where it belongs and not beside Record: the conversations
-            // are the other half of this window and this is their way back, so
-            // it sits at the start of the pane they open into rather than among
-            // the verbs on the right.
+            // The conversations are the first thing after the tracking
+            // separator, which is the top left of the *content*, immediately
+            // right of the divider. That is where they belong and not beside
+            // Record: they are the other half of this window and this is the
+            // way in, so it sits at the start of the pane it opens rather than
+            // among the verbs on the right.
             //
-            // **And only on the home page.** Over a meeting it was a clock at
-            // the top of a page about something else, naming nothing on screen
-            // and offering a list of conversations none of which was open. The
-            // two places it says something are the two `isHome` and `chatting`
-            // pick out: the home page, whose greeting already lists the recent
-            // conversations underneath it, and a conversation itself, where it
-            // is how you reach the rest of them. A conversation opened over a
-            // meeting keeps its own route regardless, because the drawer's
-            // title is a menu with the same rows in it.
+            // **Two controls, not one, and which of them is up depends on what
+            // is on screen.** They used to be the same item, a History menu on
+            // the home page listing every conversation there is. That is two
+            // questions with one answer: "take me to my conversations" and
+            // "which conversations are about this meeting". So the home page
+            // gets `chatsItem`, a way into the mode where the list is the
+            // sidebar, and a meeting gets `historyItem`, a menu of the
+            // conversations about *it*, which is a thing the meeting page could
+            // not say before at all.
             var items: [NSToolbarItem.Identifier] =
                 [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                  .sidebarTrackingSeparator]
-            if isHome { items.append(Self.historyItem) }
+            // **And neither of them on the meeting being recorded.** See
+            // `isShowingLiveMeeting`: that screen has no composer either, and it
+            // is the same reason twice. Its title bar is the one place Stop has
+            // to be unmissable, so what is next to it is worth being strict
+            // about.
+            if !isShowingLiveMeeting {
+                items.append(isHome ? Self.chatsItem : Self.historyItem)
+            }
             items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
             return items
         case .settings:
@@ -1141,10 +1317,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // longer lock the sidebar open, because the segmented control in it
             // is the navigation and collapsing is a choice like any other.
             //
-            // No History, for the reason the library case gives: a person's
-            // card is a page about them, and the conversations are not on it.
+            // History is here now, and it is the person's own. It used to be
+            // left out on the argument that a card about somebody is not a
+            // screen about conversations, which was right about a menu listing
+            // every conversation in the library and wrong about this one: what
+            // you asked about somebody is part of what this window knows about
+            // them, and their card was the one page that could not say so.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace,
+                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
                     Self.personActionsItem]
         case .notes:
             // Nothing on the right. A note has no verbs yet: it is deleted
@@ -1156,6 +1336,31 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // rather than three views of one library.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                     .sidebarTrackingSeparator, .flexibleSpace]
+
+        case .chat:
+            // **Settings' shape, because this is settings' kind of mode.** The
+            // word takes the masthead's slot, Back takes the collapse control's,
+            // and both sit before the tracking separator where the sidebar's own
+            // controls live. What differs is the right-hand half: a conversation
+            // has verbs and a settings section does not, so New chat and the
+            // ellipsis are there, in the slots Record and the recording's
+            // actions menu occupy in the library.
+            //
+            // **No History.** The list it used to open *is* the sidebar here,
+            // and a menu of the rows already down the left of the window is the
+            // same navigation offered twice, one of them worse.
+            var items: [NSToolbarItem.Identifier] =
+                [Self.chatsTitleItem, .flexibleSpace, Self.backItem,
+                 .sidebarTrackingSeparator, .flexibleSpace]
+            // **Except Stop, which outranks the page.** The one control that
+            // must never be hidden is the one that ends a meeting being recorded
+            // now: the rule the Ask pane already had, kept here because a mode
+            // covers more than that pane ever did.
+            if Capture.shared.isRecording { items += [Self.recordItem, .space] }
+            // The common move first, which is the order New Recording and the
+            // ellipsis are read in on every other screen in this window.
+            items += [Self.newChatItem, Self.chatActionsItem]
+            return items
         }
     }
 
@@ -1172,6 +1377,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             && sidebar.selectedRecording == nil
     }
 
+    /// The meeting on screen is the one being recorded now.
+    ///
+    /// The same test `updateComposer` makes, and named once because it decides
+    /// two things about the same screen: that it has no composer, and that it
+    /// has no History. Both for one reason. Nothing is transcribed until Stop,
+    /// so there is nothing to have asked about this meeting and nothing that
+    /// could be asked; the menu could only ever open onto "Nothing asked about
+    /// this meeting yet" over a page whose bottom edge is already the two
+    /// meters and the device row.
+    private var isShowingLiveMeeting: Bool {
+        mode == .library && detailHost.current === detail && detail.isShowingLive
+    }
+
     /// Swap the items for the current mode.
     ///
     /// `NSToolbar` has no "reload your items" call, so this removes and
@@ -1186,19 +1404,34 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
     }
 
-    /// What `isHome` was when the items were last built.
-    private var builtForHome = false
+    /// Everything about the *content* the library's item set depends on: the
+    /// home page, and the meeting being recorded. Both are about which page is
+    /// open rather than which mode is, which is why the mode change rebuilds
+    /// unconditionally and this exists for the clicks in between.
+    private struct ContentShape: Equatable {
+        var home: Bool
+        var live: Bool
+    }
 
-    /// Rebuild, but only if leaving or arriving at the home page changed which
-    /// items belong.
+    private var contentShape: ContentShape {
+        ContentShape(home: isHome, live: isShowingLiveMeeting)
+    }
+
+    /// What it was when the items were last built.
+    private var builtFor = ContentShape(home: false, live: false)
+
+    /// Rebuild, but only if what is open changed which items belong.
     ///
     /// A click in the list used to be a validation pass and nothing more, and
     /// the comment in `sidebar.onSelect` says why: five items removed and
     /// re-inserted on every row is a title bar that flickers while somebody
-    /// reads down a library. History brought a dependence on the selection back,
-    /// but only on one bit of it, so this compares that bit and usually returns.
+    /// reads down a library. The conversations brought a dependence on the
+    /// selection back, and it is two bits rather than one: clicking from the
+    /// meeting being recorded to yesterday's call changes neither the mode nor
+    /// whether this is the home page, and it is exactly the move that has to put
+    /// History back.
     private func syncToolbarWithHome() {
-        guard builtForHome != isHome else { return }
+        guard builtFor != contentShape else { return }
         rebuildToolbar()
     }
 
@@ -1247,13 +1480,48 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = "History"
             item.title = "History"
-            item.toolTip = "Every conversation, and a way to start another"
+            // **What was asked about the thing on screen, not what was asked.**
+            // The menu was every conversation in the library while it was the
+            // only route to any of them; the sidebar is that route now, so this
+            // is free to be the useful narrow thing instead. A meeting knows
+            // which conversations name it (`Chat.about`) and a person knows
+            // which name them, and neither could say so anywhere before.
+            item.toolTip = "Conversations about this page"
             item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
                                  accessibilityDescription: "History")
-            // The host owns the menu and fills it as it opens: which
-            // conversations exist, and which of them is on screen, are both
-            // answers that go stale the moment anything is asked or deleted.
-            item.menu = composerHost?.historyMenu ?? NSMenu()
+            // This window owns the menu and fills it as it opens, where the
+            // page-wide one belonged to the drawer: which conversations are
+            // about the open recording is a question about the selection, and
+            // the selection is here.
+            item.menu = sourceHistoryMenu
+            return item
+
+        case Self.chatsItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Chats"
+            // `title` as well as `image`, for the reason New chat has both: the
+            // toolbar is `.iconOnly`, and this is how a word gets into the item
+            // rather than under it.
+            //
+            // **With a leading space, which is the only gap available.** An
+            // `NSToolbarItem` lays its own image and title out and exposes no
+            // spacing, and the clock came out against the C of Chats. The same
+            // fix, and the same one-character shape, as the trailing space
+            // `DetailWithComposer.titleButton` puts before its chevron.
+            item.title = " Chats"
+            item.toolTip = "Everything you have asked"
+            item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                                 accessibilityDescription: "Chats")
+            item.target = self
+            item.action = #selector(openChats)
+            return item
+
+        case Self.chatsTitleItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Chats"
+            item.view = chatsMark
+            item.minSize = chatsMark.frame.size
+            item.maxSize = chatsMark.frame.size
             return item
 
         case Self.newChatItem:
@@ -1284,19 +1552,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // delete is an answer that goes stale the moment one is started.
             item.menu = composerHost?.chatActionsMenu ?? NSMenu()
             item.showsIndicator = false
-            return item
-
-        case Self.leaveChatItem:
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "Done"
-            item.toolTip = "Put the conversation back over the page"
-            // The same glyph the card's resize disc wears while expanded, so
-            // the two directions of one control look like each other whichever
-            // strip they are in.
-            item.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left",
-                                 accessibilityDescription: "Smaller")
-            item.target = composerHost
-            item.action = #selector(DetailWithComposer.leavePage)
             return item
 
         case Self.peopleItem:
@@ -1576,9 +1831,13 @@ final class DetailWithComposer: NSViewController {
 
     /// The window hides the page's empty sentence while this is up.
     var onCoveringChanged: ((Bool) -> Void)?
-    /// The chat page has taken the window, or given it back. The toolbar is the
-    /// page's own chrome, so the window swaps its items on this.
-    var onPageChanged: ((Bool) -> Void)?
+    /// A conversation wants the whole window. The window answers by entering
+    /// chat mode, which calls `enterPage` back: the drawer owns the moment, the
+    /// window owns the mode. See `Mode.chat`.
+    var onWantsPage: (() -> Void)?
+    /// A conversation has been written or thrown away, so the list of them is
+    /// stale.
+    var onChatsChanged: (() -> Void)?
     /// How much of the page the drawer is standing over, so the content
     /// underneath can be scrolled clear of it.
     var onDrawerHeight: ((CGFloat) -> Void)?
@@ -1847,11 +2106,20 @@ final class DetailWithComposer: NSViewController {
         composer.onWantsOpen = { [weak self] in
             guard let self else { return }
             self.putAway = false
-            self.extent = .full
-            // Opened, not grown, so there is no card under it. See `overACard`.
-            self.overACard = false
-            self.applyHeight(animated: true)
+            switch self.pending {
+            case .page:
+                // Opened, not grown, so there is no card under it and Back does
+                // not put one there. See `overACard`.
+                self.overACard = false
+                self.onWantsPage?()
+            case .card:
+                self.extent = .standard
+                self.applyHeight(animated: true)
+            }
         }
+        // Straight through: what the list of conversations shows has changed,
+        // and only the window knows whether that list is on screen.
+        composer.onSaved = { [weak self] in self?.onChatsChanged?() }
         composer.onExpand = { [weak self] in
             guard let self else { return }
             self.putAway = false
@@ -1959,127 +2227,71 @@ final class DetailWithComposer: NSViewController {
         applyHeight(animated: true)
     }
 
+    /// The card's resize disc, which now means "read this properly".
+    ///
+    /// **It is a mode change, not a taller card.** Full used to be a third
+    /// extent of this drawer: the page covered the content pane while the
+    /// sidebar went on listing recordings, so the list underneath went on
+    /// selecting them and nothing on screen moved. The window owns that state
+    /// now, and all this does is ask, which is why the disc no longer toggles:
+    /// the way back is Back, in the title bar, where the way out of settings is.
     @objc private func toggleFull() {
-        extent = extent == .full ? .standard : .full
-        // Grown from the card this disc is on, so the card is where it goes
-        // back to and the toolbar may say so. See `overACard`.
-        if extent == .full { overACard = true }
-        applyHeight(animated: true)
+        // Grown from the card this disc is on, so the card is where Back goes
+        // and the window may say so. See `overACard`.
+        overACard = true
+        onWantsPage?()
     }
 
-    /// Every conversation, newest first, and a way to start another.
+    /// The conversations about the page this card is resting on, and a way to
+    /// start another.
     ///
-    /// A menu rather than a list in the sidebar, which is the decision this
-    /// redesign already took: the library's list holds artifacts somebody kept,
-    /// and a conversation is working-out until it becomes a note. This is where
-    /// it lives instead, next to the field it was typed into.
+    /// The same rows as the toolbar's History, because they are the same
+    /// question asked from two controls six points apart: this one names the
+    /// conversation you are in, that one names the page you are on, and a menu
+    /// under each that disagreed about which conversations exist would be one
+    /// screen with two histories.
     @objc private func showTitleMenu() {
-        showHistory(from: titleButton)
-    }
-
-    /// The History toolbar item's menu.
-    ///
-    /// Kept rather than built per item, for the reason `recordingActionsMenu`
-    /// is: the toolbar rebuilds its items on every mode change, and the
-    /// identity of this menu is what `menuNeedsUpdate` uses to tell the
-    /// pull-down apart from the one popped up under the drawer's title, which
-    /// must not lose its first item.
-    lazy var historyMenu: NSMenu = {
         let menu = NSMenu()
-        menu.delegate = self
-        return menu
-    }()
+        menu.autoenablesItems = false
+        let fresh = NSMenuItem(title: "New conversation",
+                               action: #selector(newConversation), keyEquivalent: "")
+        fresh.target = self
+        menu.addItem(fresh)
+        LibraryWindow.shared.appendSourceHistory(to: menu)
+        // Anchored to the control that was pressed. It used to be anchored to
+        // a button this class still owned but had stopped putting on screen,
+        // so the menu opened relative to a view with no window: built, popped,
+        // and invisible.
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: titleButton.bounds.maxY + 4),
+                   in: titleButton)
+    }
 
     /// The chat page's actions menu, beside New chat in the toolbar.
     ///
-    /// Kept for the same two reasons `historyMenu` is: the toolbar rebuilds its
-    /// items whenever the page is entered or left, and `menuNeedsUpdate` tells
-    /// the two menus apart by identity.
+    /// Kept rather than built per item, for the reason `recordingActionsMenu`
+    /// is: the toolbar rebuilds its items on every mode change, and a menu
+    /// rebuilt with them would be a menu whose delegate is set after AppKit has
+    /// already asked it for its rows.
     lazy var chatActionsMenu: NSMenu = {
         let menu = NSMenu()
         menu.delegate = self
         return menu
     }()
 
-    private func showHistory(from anchor: NSView) {
-        let menu = NSMenu()
-        fillHistory(menu, forPullDown: false)
-        // Anchored to the control that was pressed. It used to be anchored to
-        // a button this class still owned but had stopped putting on screen,
-        // so the menu opened relative to a view with no window: built, popped,
-        // and invisible.
-        menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
-                   in: anchor)
-    }
-
-    /// Every conversation, newest first, under the day it was last touched.
+    /// **Nothing destructive on the history menus.** Delete used to be the last
+    /// row of the one this class built, first as a submenu naming every
+    /// conversation and then as one row about the open one. Both were the wrong
+    /// menu for it: those are the lists you open to get *back into* a
+    /// conversation, and every row on them opens one, so the row that throws one
+    /// away sat one place below the row that reads almost the same and does the
+    /// opposite. It is on the page's own actions menu, `fillChatActions`, next
+    /// to New chat, which is where the verbs on what is on screen live in every
+    /// other mode.
     ///
-    /// **Every conversation, not this page's.** It used to filter to the
-    /// context you were standing in, on the argument that a flat list of
-    /// everything was a second, worse library list. That was true while the
-    /// only way in was a title at the top of the drawer, which is a label on
-    /// the thing you are already looking at. It is not true of a control called
-    /// History in the window's title bar: a history that hides most of itself
-    /// depending on which page you are on is a history you cannot trust, and
-    /// the page's own conversations are still named on it under "Also about
-    /// this".
+    /// The flat list of every conversation that used to live here is gone
+    /// entirely: it is `ChatNav`, in the sidebar, where a list belongs.
     ///
-    /// Twenty, because this is a menu and not a browser, and grouped by day
-    /// because "when did I ask that" is the only thing anybody remembers about
-    /// a question they want back.
-    ///
-    /// `forPullDown` prepends a placeholder, for the reason
-    /// `recordingActionsMenu` does: an `NSMenuToolbarItem` takes item 0 as its
-    /// own title and never draws it, so without one "New conversation" would be
-    /// eaten. The popped-up version shows every item it is handed.
-    func fillHistory(_ menu: NSMenu, forPullDown: Bool) {
-        menu.removeAllItems()
-        // Otherwise `NSMenu` re-enables everything as it opens, from the
-        // responder chain, and the day headings come back as live rows: they do
-        // nothing when pressed, because they carry no action, so the menu grew
-        // three items that look pressable and are not. Measured through
-        // accessibility, which reported `enabled=true` on "Today" after it had
-        // been built disabled.
-        menu.autoenablesItems = false
-        if forPullDown { menu.addItem(NSMenuItem()) }
-        let fresh = NSMenuItem(title: "New conversation",
-                               action: #selector(newConversation), keyEquivalent: "")
-        fresh.target = self
-        menu.addItem(fresh)
-
-        let chats = Array(Chat.all().prefix(20))
-        var lastGroup: String?
-        for chat in chats {
-            let group = Self.historyGroup(chat)
-            if group != lastGroup {
-                menu.addItem(.separator())
-                let heading = NSMenuItem(title: group, action: nil, keyEquivalent: "")
-                heading.isEnabled = false
-                menu.addItem(heading)
-                lastGroup = group
-            }
-            let item = NSMenuItem(title: chat.displayTitle,
-                                  action: #selector(openConversation(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = chat.id
-            // A tick on the one already open, so the menu says where you are
-            // as well as where you can go.
-            item.state = chat.id == composer.currentID ? .on : .off
-            menu.addItem(item)
-        }
-
-        // **Nothing destructive on this menu.** Delete used to be the last row
-        // here, first as a submenu naming every conversation and then as one row
-        // about the open one. Both were the wrong menu for it: this is the list
-        // you open to get *back into* a conversation, and every row on it opens
-        // one, so the row that throws one away sat one place below the row that
-        // reads almost the same and does the opposite. It is on the page's own
-        // actions menu now, `fillChatActions`, next to New chat, which is where
-        // the verbs on what is on screen live in every other mode.
-    }
-
     /// What can be done with the conversation on screen. The chat page's
     /// ellipsis menu, and the only route to deleting one.
     ///
@@ -2088,13 +2300,13 @@ final class DetailWithComposer: NSViewController {
     /// is also where the rest of them will go, and it is the same menu the
     /// library and a person's card carry in the same corner.
     ///
-    /// `forPullDown` for the reason `fillHistory` takes it: an
+    /// `forPullDown` for the reason `fillSourceHistory` takes it: an
     /// `NSMenuToolbarItem` takes item 0 as its own title and never draws it.
     func fillChatActions(_ menu: NSMenu, forPullDown: Bool) {
         menu.removeAllItems()
-        // Set for the reason `fillHistory` sets it: `NSMenu` re-enables items
-        // from the responder chain as it opens, which would light up a delete
-        // aimed at no conversation.
+        // Set for the reason the history menus set it: `NSMenu` re-enables
+        // items from the responder chain as it opens, which would light up a
+        // delete aimed at no conversation.
         menu.autoenablesItems = false
         if forPullDown { menu.addItem(NSMenuItem()) }
         // **A sentence instead, never a dimmed Delete.** New chat on a page
@@ -2127,28 +2339,23 @@ final class DetailWithComposer: NSViewController {
         menu.addItem(delete)
     }
 
-    /// Which day heading a conversation sits under.
-    ///
-    /// The same three the sidebar uses, and for the same reason: a date is a
-    /// worse answer than "Yesterday" for anything inside the week somebody
-    /// actually remembers.
-    private static func historyGroup(_ chat: Chat) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let stamp = chat.updated, let date = parser.date(from: stamp) else {
-            return "Earlier"
-        }
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return "Earlier"
-    }
+    /// The conversation on screen, so the menus can tick the row that is open.
+    var openConversationID: String? { composer.currentID }
 
     @objc private func deleteConversation() {
         settle { composer.discard() }
-        extent = .bar
+        // **A page stays a page.** Deleting from the chat mode leaves the mode
+        // up with an empty composer in it, which is what New chat there does and
+        // for the same reason: the sidebar beside it is still the list of
+        // conversations, and dropping somebody back onto a meeting because they
+        // threw one away would be answering a different question. From a card it
+        // still collapses, because what is behind that card is the page the
+        // conversation was about.
+        if extent != .full { extent = .bar }
         putAway = false
         applyHeight(animated: true)
+        // The row has gone from disk, so it has to go from the list.
+        onChatsChanged?()
     }
 
     /// Start another one. The card's own disc, the History menu's row, and the
@@ -2165,35 +2372,90 @@ final class DetailWithComposer: NSViewController {
         if extent != .full { extent = .bar }
         applyHeight(animated: true)
         composer.focusField()
+        // Nothing has been written, so the list has not changed. What has
+        // changed is which row of it is the one on screen, and the answer is
+        // none: a conversation nobody has asked anything is not on the list yet.
+        onChatsChanged?()
     }
 
-    /// Leave the page, keeping the conversation. The toolbar's way back, and
-    /// the same move the card's resize disc makes in the other direction.
-    @objc func leavePage() {
-        guard extent == .full else { return }
-        extent = .standard
+    /// Take the page. Called by the window on its way into chat mode, and never
+    /// from inside this class: what makes a page is the mode, and this is only
+    /// its geometry.
+    func enterPage() {
+        putAway = false
+        extent = .full
         applyHeight(animated: true)
     }
 
+    /// Give it back. The other half of `enterPage`, called as the window leaves
+    /// chat mode for whatever it is going back to.
+    ///
+    /// **Where it lands depends on whether there was a card.** Grown from one,
+    /// the conversation goes back over the meeting it is about, which is where
+    /// it was a moment ago. Opened out of the list, there is no card to go back
+    /// to and the page behind it has nothing to do with the conversation, so the
+    /// drawer becomes a bar and the conversation is one row into the list it
+    /// came from. `overACard` is that test, and it is why the state exists.
+    func leavePage(keepingCard: Bool) {
+        // **An answer still being written outranks all of it.** Cancelling a
+        // forty-second run because somebody clicked away is the one loss on this
+        // path that cannot be undone by opening the conversation again, so a
+        // running one comes down to a card and stays readable over whatever page
+        // is underneath.
+        if composer.isRunning || (keepingCard && overACard && composer.hasConversation) {
+            extent = .standard
+        } else {
+            // **And otherwise it is let go, exactly as the cross lets it go.**
+            // Left loaded in a bar, the next question would silently continue a
+            // conversation about last month's meetings from under a placeholder
+            // offering to answer about this one. Nothing is lost: the list it
+            // came from is one press of Chats away, and it is the first row.
+            settle {
+                composer.startNew()
+                composer.endComposing()
+            }
+            extent = .bar
+        }
+        overACard = false
+        // Set for `closeConversation`'s reason: the drawer is being put down
+        // deliberately, and the height the composer reports next must not
+        // reopen what a mode change has just closed.
+        putAway = extent == .bar
+        applyHeight(animated: true)
+    }
+
+    /// How a conversation arrives on screen.
+    ///
+    /// **A page or a card, and the caller says which.** Both used to be one
+    /// call, and this class decided: everything opened became a page. That was
+    /// right for the list and wrong for the "Also about this" link on a meeting,
+    /// which put away the transcript whose own conversation had just been
+    /// clicked.
+    enum Presentation {
+        /// The mode, with the conversations in the sidebar. Reading one.
+        case page
+        /// A card over the page it is about. Carrying on with one.
+        case card
+    }
+
     /// Load a conversation and show it. The one entry point, so a link on a
-    /// page and a pick from the title menu cannot come apart.
-    func open(_ chat: Chat) {
+    /// page, a row in the list and a pick from a menu cannot come apart.
+    ///
+    /// **Filled, then sized, and the sizing is asked for rather than inferred.**
+    /// Sizing first meant `applyHeight` read the *previous* conversation, found
+    /// it empty, forced the bar and hid the view that the turns were about to be
+    /// drawn into: a full-height drawer with a header and nothing under it.
+    /// `onWantsOpen` fires after the turns are in, which is the only moment at
+    /// which un-hiding shows anything.
+    func open(_ chat: Chat, as presentation: Presentation) {
+        pending = presentation
         putAway = false
         composer.open(chat)
     }
 
-    @objc private func openConversation(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let chat = Chat.load(id: id) else { return }
-        // **Filled, then opened, and the opening is asked for rather than
-        // inferred.** Sizing first meant `applyHeight` read the *previous*
-        // conversation, found it empty, forced the bar and hid the view that
-        // the turns were about to be drawn into: a full-height drawer with a
-        // header and nothing under it. `onWantsOpen` fires after the turns are
-        // in, which is the only moment at which un-hiding shows anything.
-        putAway = false
-        composer.open(chat)
-    }
+    /// What the conversation being opened asked to be shown as, read by the
+    /// `onWantsOpen` hook a moment later.
+    private var pending: Presentation = .page
 
     /// Whether this screen has a composer at all.
     ///
@@ -2349,12 +2611,14 @@ final class DetailWithComposer: NSViewController {
         // would be the same action offered twice, six points apart.
         composer.setExpanded(expanded)
 
+        // One direction only, because this control is only ever on a card: the
+        // header it sits in is hidden on a page, where the way back is Back in
+        // the title bar. It used to be a toggle drawn either way round, from
+        // when full was a size of this drawer rather than a mode of the window.
         fullButton.image = NSImage(
-            systemSymbolName: extent == .full
-                ? "arrow.down.right.and.arrow.up.left"
-                : "arrow.up.left.and.arrow.down.right",
-            accessibilityDescription: extent == .full ? "Smaller" : "Fill the page")
-        fullButton.toolTip = extent == .full ? "Smaller" : "Fill the page"
+            systemSymbolName: "arrow.up.left.and.arrow.down.right",
+            accessibilityDescription: "Fill the page")
+        fullButton.toolTip = "Fill the page"
         let name = composer.hasConversation ? composer.conversationTitle : ""
         titleButton.attributedTitle = NSAttributedString(
             // One trailing space, because `imageHugsTitle` puts the chevron
@@ -2372,9 +2636,8 @@ final class DetailWithComposer: NSViewController {
         // becoming a page changes four edges and can leave the number alone, so
         // the state is part of the test or the one transition that most needs
         // easing would be the one that jumps.
-        let becamePage = page != pageNow || overACard != collapsibleNow
+        let becamePage = page != pageNow
         pageNow = page
-        collapsibleNow = overACard
         if animated, drawerHeight.constant != target || becamePage {
             // **The constant is set plainly and the layout pass is what
             // animates.** Driving it through `animator()` *and* calling
@@ -2399,7 +2662,6 @@ final class DetailWithComposer: NSViewController {
         // the two owners of that state are told rather than left holding what
         // was true before Settings opened.
         onCoveringChanged?(showsComposer && expanded)
-        if becamePage { onPageChanged?(showsComposer && page) }
         // The drawer's own bottom margin counts: what the page loses is
         // everything from the container's floor to the drawer's top edge.
         //
@@ -2465,26 +2727,24 @@ final class DetailWithComposer: NSViewController {
     /// What the geometry was last laid out as, so becoming a page is animated
     /// even when the height happens not to change.
     private var pageNow = false
-    /// The same for `overACard`, which the toolbar reads. Opening a second
-    /// conversation out of History while a page is already up changes it
-    /// without changing the page, so it needs a comparison of its own or the
-    /// way back would still be in the title bar with nothing behind it.
-    private var collapsibleNow = false
 
     /// **Is there a card under this page, or is the page where it opened?**
     ///
-    /// The way out of a page is `leavePage`, and what it does is put the
-    /// conversation back over the meeting it was asked about. That is a real
-    /// place to go back to only when the page was reached by growing a card.
-    /// Opened straight out of History it is not: the conversation is about some
-    /// other day's meeting, or about the library, and collapsing it would rest
-    /// it over a greeting it has nothing to do with. So the toolbar leaves the
-    /// control out rather than offering a way back to somewhere nobody was.
+    /// It decides where `leavePage` lands. Grown from a card, the conversation
+    /// goes back over the meeting it is about, because that is where it was.
+    /// Opened out of the list it did not come from anywhere: the conversation is
+    /// about some other day's meeting, or about the library, and resting it over
+    /// whatever page happens to be behind it would be a card about one thing
+    /// sitting on another.
     ///
-    /// The cost, taken deliberately: a conversation opened from History has no
-    /// way back to the library short of starting another one or deleting this
-    /// one. The sidebar cannot do it either, because `AskView.show` returns
-    /// early while a conversation is pinned.
+    /// **This used to decide whether there was a way out at all.** The way back
+    /// was a toolbar item that collapsed the page onto its card, so a
+    /// conversation opened from History had no card, no item, and no route to
+    /// the library short of starting another conversation or deleting this one:
+    /// the sidebar could not do it either, since it went on listing recordings
+    /// under a page that hid the pane they were shown in. A mode has a Back
+    /// button whatever it was entered from, and this is left deciding only where
+    /// Back goes.
     private(set) var overACard = false
 
     private lazy var drawerHeight =
@@ -2492,16 +2752,12 @@ final class DetailWithComposer: NSViewController {
 }
 
 extension DetailWithComposer: NSMenuDelegate {
-    /// Only the toolbar's two pull-downs reach here, and they are told apart by
-    /// identity. The menu popped up under the drawer's title is built and thrown
-    /// away by `showHistory`, so it needs no placeholder and would show one if
-    /// it were given it.
+    /// One menu reaches here: the chat page's actions pull-down. The menu popped
+    /// up under the drawer's title is built and thrown away by `showTitleMenu`,
+    /// so it needs no placeholder and would show one if it were given it, and
+    /// the toolbar's History belongs to the window now.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu === chatActionsMenu {
-            fillChatActions(menu, forPullDown: true)
-        } else {
-            fillHistory(menu, forPullDown: true)
-        }
+        fillChatActions(menu, forPullDown: true)
     }
 }
 
@@ -2651,11 +2907,153 @@ extension LibraryWindow: NSMenuDelegate {
         }
     }
 
+    /// The conversations about whatever page is open, as a menu the toolbar
+    /// owns. Kept rather than built per item for `recordingActionsMenu`'s
+    /// reason: `menuNeedsUpdate` tells the menus on this delegate apart by
+    /// identity.
+    var sourceHistoryMenu: NSMenu {
+        if let built = historyMenu { return built }
+        let menu = NSMenu()
+        menu.delegate = self
+        historyMenu = menu
+        return menu
+    }
+
+    /// What was asked about the thing on screen, and the way to everything else.
+    ///
+    /// **Scoped, where the old History menu was not.** That menu listed every
+    /// conversation in the library from every screen, because it was the only
+    /// route into any of them and a route that hides most of itself is a route
+    /// you cannot trust. The list is a mode now, reached from the home page and
+    /// from the last row here, so this control is free to answer the narrower
+    /// question the page it sits on actually raises: what have I asked about
+    /// *this* meeting, or about *this* person.
+    ///
+    /// Uncapped, unlike the twenty the flat list took: a source has as many
+    /// conversations as somebody asked about it, which is single figures, and
+    /// the one that matters may well be the oldest.
+    ///
+    /// A note has no row here and gets no such menu. `Chat` records the
+    /// recordings and the person a question was about and has no field for a
+    /// note, so a note page can only be scoped by the meetings underneath it,
+    /// which is a different claim from "conversations about this note" and would
+    /// read as the same one.
+    private func fillSourceHistory(_ menu: NSMenu, forPullDown: Bool) {
+        menu.removeAllItems()
+        // Otherwise `NSMenu` re-enables everything as it opens, from the
+        // responder chain, and the day headings come back as live rows: they do
+        // nothing when pressed, because they carry no action, so the menu grows
+        // items that look pressable and are not. Measured through accessibility,
+        // which reported `enabled=true` on "Today" after it had been built
+        // disabled.
+        menu.autoenablesItems = false
+        // A pull-down takes item 0 as the button's own title and never draws it,
+        // so the toolbar's copy needs something expendable there.
+        if forPullDown { menu.addItem(NSMenuItem()) }
+        appendSourceHistory(to: menu)
+    }
+
+    /// The rows themselves, without the housekeeping, so the card's title menu
+    /// can put its own "New conversation" above them and show the same list.
+    func appendSourceHistory(to menu: NSMenu) {
+        menu.autoenablesItems = false
+        let chats: [Chat]
+        let subject: String
+        // **On the mode first, and then on the selection.** Asking
+        // `sidebar.selectedRecording` from the People collection reads the
+        // recording list's own state, which is whatever was open before somebody
+        // switched lists: a person with no card would have been given the
+        // conversations about last week's meeting under their name.
+        if mode == .people {
+            let person = peopleNav.selected?.label
+            chats = person.map { name in Chat.all().filter { $0.person == name } } ?? []
+            subject = person ?? "this person"
+        } else if let recording = sidebar.selectedRecording {
+            chats = Chat.about(recording.id)
+            subject = "this meeting"
+        } else if isHome {
+            // The home page is a page about no meeting, so what belongs to it is
+            // the questions that were about no meeting either. The same set the
+            // greeting lists under it, and the only menu on that screen is the
+            // card's own title: the toolbar there offers Chats instead.
+            chats = Chat.all().filter { $0.sources.isEmpty && $0.person == nil }
+            subject = "your library"
+        } else {
+            chats = []
+            subject = "this page"
+        }
+
+        if chats.isEmpty {
+            // A sentence rather than an empty menu, which is what the recording
+            // actions menu does with no recording: a control that opens onto
+            // nothing reads as broken, and AppKit will not put up an empty menu
+            // at all.
+            menu.addItem(withTitle: "Nothing asked about \(subject) yet",
+                         action: nil, keyEquivalent: "").isEnabled = false
+        }
+        var lastGroup: String?
+        for chat in chats {
+            let group = Self.historyGroup(chat)
+            if group != lastGroup {
+                menu.addItem(.separator())
+                let heading = NSMenuItem(title: group, action: nil, keyEquivalent: "")
+                heading.isEnabled = false
+                menu.addItem(heading)
+                lastGroup = group
+            }
+            let item = NSMenuItem(title: chat.displayTitle,
+                                  action: #selector(openSourceConversation(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = chat.id
+            item.state = chat.id == composerHost?.openConversationID ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        // The way to the rest of them, which is the mode this menu is no longer
+        // trying to be. Last, because it leaves the page: everything above it
+        // stays on the meeting you are reading.
+        let all = NSMenuItem(title: "All conversations…",
+                             action: #selector(openChats), keyEquivalent: "")
+        all.target = self
+        menu.addItem(all)
+    }
+
+    /// Which day heading a conversation sits under, in this menu and in the
+    /// drawer's. Three groups rather than the list's weekdays, because a menu is
+    /// short and a date is a worse answer than "Yesterday" for anything inside
+    /// the week somebody actually remembers.
+    static func historyGroup(_ chat: Chat) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let stamp = chat.updated, let date = parser.date(from: stamp) else {
+            return "Earlier"
+        }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return "Earlier"
+    }
+
+    /// Open one of the page's own conversations, over the page it is about.
+    ///
+    /// A card rather than the mode, which is the whole reason this menu is
+    /// scoped: it names the conversations about the meeting on screen, so
+    /// picking one has no business putting that meeting away.
+    @objc private func openSourceConversation(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let chat = Chat.load(id: id) else { return }
+        composerHost?.open(chat, as: .card)
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         // The File menu's model list, which is the one menu here that is kept
         // rather than rebuilt. Before the recording actions below, which would
         // otherwise fill it with Export and Delete.
         if menu === fileModelMenu { fill(menu, for: selected); return }
+        // The toolbar's History, likewise told apart by identity.
+        if menu === historyMenu { fillSourceHistory(menu, forPullDown: true); return }
 
         menu.removeAllItems()
         // A pull-down menu takes its **first** item as the button's own title

@@ -123,6 +123,16 @@ enum MainMenu {
         add(menu, "Recordings Needing a Speaker",
             #selector(LibraryWindow.showUnnamedSpeakers(_:)), "u")
         menu.addItem(.separator())
+        // The toolbar's Chats button is on the home page only, and the History
+        // menu it shares the slot with is scoped to whatever page you are on, so
+        // the Notes collection has no route into the conversations at all. This
+        // is that route, and it is the one that works from every mode.
+        //
+        // A shared target rather than nil, for `openLibrary`'s reason: it opens
+        // the window when there is not one, and a responder chain has nothing in
+        // it to reach then.
+        add(menu, "Chats", #selector(MenuActions.openChats), "0", [.command, .shift])
+            .target = MenuActions.shared
         add(menu, "Open Listen", #selector(MenuActions.openLibrary), "0")
             .target = MenuActions.shared
         return item
@@ -146,6 +156,7 @@ final class MenuActions: NSObject {
 
     @objc func openSettings() { LibraryWindow.shared.showSettings() }
     @objc func openLibrary() { LibraryWindow.shared.show() }
+    @objc func openChats() { LibraryWindow.shared.openChats() }
     @objc func showAbout() { LibraryWindow.shared.showSettings(.about) }
 
     @objc func newRecording() {

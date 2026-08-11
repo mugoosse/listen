@@ -292,7 +292,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // which is a true page and not the one anybody is taking a picture of.
         if env["LISTEN_PANEL"] == nil {
             LibraryWindow.shared.show()
-            if let first = Recording.all().first { LibraryWindow.shared.reveal(first.id) }
+            // Unless a conversation was named, which is a subject of its own:
+            // `show` has just opened it as a page, and revealing a recording
+            // would be a navigation straight back out of the thing being
+            // photographed.
+            if env["LISTEN_CHAT"] == nil, let first = Recording.all().first {
+                LibraryWindow.shared.reveal(first.id)
+            }
         }
 
         var taken = 0

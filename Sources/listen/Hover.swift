@@ -186,6 +186,15 @@ class ChipButton: HoverButton {
 
     init(_ title: String) {
         super.init(.fill(idle: 0.08))
+        // **The glyph belongs beside the words, not at the capsule's edge.**
+        // An untouched leading image is laid out against the leading edge while
+        // the title, whose paragraph style centres it, stays in the middle of
+        // what is left: the Saved chip came out as a checkmark hard against the
+        // rounded edge with a gap the width of the padding after it. The width
+        // below already reserves the glyph and one gap, so hugging is what
+        // spends it in the right place. Same fix, same reason, as the drawer's
+        // title button.
+        imageHugsTitle = true
         setLabel(title)
     }
 

@@ -79,6 +79,20 @@ final class AskView: NSView {
     /// alternatives rather than neighbours: one invites a question and the other
     /// says why there is nobody to ask.
     private let invitation = NSStackView()
+    /// The greeting over an empty chat page: mascot, name, and what to do.
+    ///
+    /// **The same block the library's home page draws, because it is the same
+    /// screen for the same moment.** Chat mode with nothing open used to be a
+    /// composer at the foot of a window-high emptiness, which reads as a page
+    /// that failed to load rather than as an invitation. `DetailView` answers
+    /// exactly this with a mascot and a question, and a second answer to it in
+    /// another visual language would say the two screens are different kinds of
+    /// place.
+    ///
+    /// It is not the same *code*, and cannot be: that one is the empty state of
+    /// the detail pane, which is the view a page hides. The numbers are taken
+    /// from it rather than invented, which is why they are named here.
+    private let welcome = NSStackView()
     private let field = ComposerField()
     private let sendButton = SendButton()
     private let modelButton = HoverButton()
@@ -208,6 +222,13 @@ final class AskView: NSView {
 
         scroll.documentView = document
         scroll.hasVerticalScroller = true
+        // **No bar when there is nothing to scroll.** On a page this scroll view
+        // reaches both edges of the window, so a Mac set to show scroll bars
+        // always drew a full-height track down the right-hand edge of a screen
+        // holding a greeting and a composer. The library's home page next door
+        // has no such line, and the two are meant to be the same screen with a
+        // different list beside them.
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.automaticallyAdjustsContentInsets = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -294,6 +315,8 @@ final class AskView: NSView {
         status.lineBreakMode = .byTruncatingTail
         status.translatesAutoresizingMaskIntoConstraints = false
 
+        buildWelcome()
+
         for view in [scroll, invitation, composer, status] { addSubview(view) }
 
         // Never wider than its text wants, and never wider than the pane.
@@ -335,6 +358,34 @@ final class AskView: NSView {
                        column(invitation, in: self), column(composer, in: self),
                        column(status, in: self)].flatMap { $0 }
 
+        // **A third width, for a page with nothing on it yet.**
+        //
+        // The column exists so a line of an answer is readable and so the well
+        // under it lines up with the text. An empty page has neither: no answer
+        // to measure a line of, and nothing above the composer to line it up
+        // with. What it is instead is the library's home screen with a different
+        // list beside it, and that screen's composer is as wide as the pane, so
+        // a 620 point well in the middle of a window looked like a narrower app.
+        //
+        // 40 either side, which is what the same composer sits at over a meeting
+        // or the home page: `DetailWithComposer` insets the drawer by 16 and
+        // this pane by 24 inside it, and on a page both of those go to zero and
+        // are spent here instead.
+        pageWide = [
+            invitation.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                                constant: Self.pageWideMargin),
+            invitation.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                                 constant: -Self.pageWideMargin),
+            composer.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                              constant: Self.pageWideMargin),
+            composer.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                               constant: -Self.pageWideMargin),
+            status.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                            constant: Self.pageWideMargin + 4),
+            status.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                             constant: -(Self.pageWideMargin + 4)),
+        ] + column(turns, in: document, centredOn: scroll)
+
         NSLayoutConstraint.activate(edgeWidth + [
             // **The clip view's width, not the scroll view's.** They differ by
             // the scroller on a Mac set to show them always, which is a mouse
@@ -371,6 +422,64 @@ final class AskView: NSView {
             status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
             status.heightAnchor.constraint(equalToConstant: Self.statusHeight),
         ])
+
+        // Over the scroll view rather than inside it, and centred on it. In the
+        // stack of turns it would sit at the top of a page whose whole point is
+        // that there are no turns; centred on the area they would fill, it lands
+        // where the library's greeting lands, which is what makes the two
+        // screens read as one app.
+        addSubview(welcome)
+        NSLayoutConstraint.activate([
+            welcome.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            welcome.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
+            welcome.widthAnchor.constraint(lessThanOrEqualTo: scroll.widthAnchor,
+                                           constant: -40),
+        ])
+    }
+
+    /// The greeting block, built once. See `welcome`.
+    private func buildWelcome() {
+        // 64, 26 semibold and 13 secondary, all three taken from `DetailView`'s
+        // empty state, as are the 16 and 14 between them.
+        let icon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
+        welcomeGreeting.font = .systemFont(ofSize: 26, weight: .semibold)
+        welcomeGreeting.textColor = .labelColor
+        welcomeGreeting.alignment = .center
+        welcomeHint.font = .systemFont(ofSize: 13)
+        welcomeHint.textColor = .secondaryLabelColor
+        welcomeHint.alignment = .center
+        welcomeHint.maximumNumberOfLines = 0
+        welcomeHint.preferredMaxLayoutWidth = 320
+        welcomeHint.cell?.wraps = true
+
+        welcome.orientation = .vertical
+        welcome.alignment = .centerX
+        welcome.translatesAutoresizingMaskIntoConstraints = false
+        welcome.setViews([icon, welcomeGreeting, welcomeHint], in: .leading)
+        welcome.setCustomSpacing(16, after: icon)
+        welcome.setCustomSpacing(14, after: welcomeGreeting)
+        welcome.isHidden = true
+    }
+
+    private let welcomeGreeting = NSTextField(labelWithString: "")
+    private let welcomeHint = NSTextField(labelWithString: "")
+
+    /// Show it only where it belongs: a page with nothing in it.
+    ///
+    /// Never in a card or a bar, which are a strip over a meeting and have no
+    /// room for a mascot, and never once a question has been asked, because then
+    /// the page has its subject. The wording is the library's, adjusted for the
+    /// one thing that differs: what is in the sidebar beside it is the
+    /// conversations rather than the recordings.
+    private func updateWelcome() {
+        let show = isPage && !hasConversation
+        welcome.isHidden = !show
+        guard show else { return }
+        welcomeGreeting.stringValue = Settings.userName.flatMap {
+            $0.isEmpty ? nil : "What's cooking, \($0)?"
+        } ?? "What's cooking?"
+        welcomeHint.stringValue =
+            "Pick up a conversation from the list, or ask about your library below."
     }
 
     /// One view, centred in a column of `Self.pageColumn` points.
@@ -412,10 +521,7 @@ final class AskView: NSView {
     func setPage(_ on: Bool) {
         guard on != isPage else { return }
         isPage = on
-        // Off before on: the two sets both state a width, and a moment with
-        // both active is a conflict the solver logs.
-        NSLayoutConstraint.deactivate(on ? edgeWidth : columnWidth)
-        NSLayoutConstraint.activate(on ? columnWidth : edgeWidth)
+        applyWidths()
         // **The conversation stops at the toolbar rather than scrolling under
         // it.** A content inset was the other way, and is what `DetailView`
         // does with its notes pane, but the page's own controls sit in that
@@ -423,7 +529,27 @@ final class AskView: NSView {
         // in it is legible through the glass and reads as two things in one
         // place.
         scrollTop.constant = on ? Self.pageTopPad : 0
+        updateWelcome()
         needsLayout = true
+    }
+
+    /// Pick one of the three widths and put the other two away.
+    ///
+    /// Everything off before anything on: all three sets state a width for the
+    /// same views, and a moment with two of them active is a conflict the solver
+    /// logs and resolves by guessing.
+    ///
+    /// Called on becoming a page and on every redraw, because the third state
+    /// depends on whether there are any turns and that changes without the page
+    /// changing: asking the first question on the chats home page is exactly
+    /// that moment.
+    private func applyWidths() {
+        NSLayoutConstraint.deactivate(edgeWidth + columnWidth + pageWide)
+        guard isPage else {
+            NSLayoutConstraint.activate(edgeWidth)
+            return
+        }
+        NSLayoutConstraint.activate(hasConversation ? columnWidth : pageWide)
     }
 
     /// See `column`. 620 is 105 characters of the 13 point body, which measures
@@ -432,12 +558,17 @@ final class AskView: NSView {
     private static let pageColumn: CGFloat = 620
     /// The least a column may have between it and the window's edge.
     private static let pageMargin: CGFloat = 24
+    /// What a page with no conversation on it insets its composer by instead of
+    /// stating a column. See `pageWide`: 16 from the drawer plus 24 from this
+    /// pane, which is where the same well sits on every other screen.
+    private static let pageWideMargin: CGFloat = 40
     /// Clear of the toolbar, which floats over the content because the window
     /// is full-size-content.
     private static let pageTopPad: CGFloat = 52
     private var isPage = false
     private var edgeWidth: [NSLayoutConstraint] = []
     private var columnWidth: [NSLayoutConstraint] = []
+    private var pageWide: [NSLayoutConstraint] = []
     private lazy var scrollTop = scroll.topAnchor.constraint(equalTo: topAnchor)
 
     /// The input row: one glass capsule holding the field, the model chooser
@@ -866,6 +997,12 @@ final class AskView: NSView {
         // The chips are drawn by `updateStatus`, which is the only thing that
         // knows whether there is anything to ask.
         updateStatus()
+        // The greeting goes when the first question arrives and comes back on
+        // New chat, both of which land here. See `welcome`.
+        updateWelcome()
+        // And the composer's width goes with it: an empty page is as wide as the
+        // pane, a conversation is a column. See `applyWidths`.
+        applyWidths()
         // And the caret is re-evaluated here rather than only when the drawer
         // resizes. Starting a new conversation changes what there is to expand
         // without changing any height, so the caret was left offering to open a
@@ -1157,6 +1294,9 @@ final class AskView: NSView {
     /// one is unambiguous, and it arrives *after* the turns are in, so the view
     /// being un-hidden already has something in it.
     var onWantsOpen: (() -> Void)?
+
+    /// Fired whenever the conversation has been written to disk. See `persist`.
+    var onSaved: (() -> Void)?
 
     private func reportHeight() {
         // A conversation needs the room a bar does not have. The owner clamps
@@ -1588,6 +1728,12 @@ final class AskView: NSView {
         }
         if chat.person == nil { chat.person = person }
         chat.save()
+        // The list of conversations is a table in the sidebar now, not a menu
+        // built each time it is opened, so it has to be told. Every write comes
+        // through here, which is why the hook is on this rather than on the four
+        // callers: a conversation gains its title on the first save and moves to
+        // the top of the list on every one after it.
+        onSaved?()
     }
 
     func stop() {

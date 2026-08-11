@@ -282,8 +282,13 @@ final class DictationHUD: NSObject {
     /// Bottom centre of whichever screen has the mouse, above the Dock. Near
     /// where the eye already is when typing, and out of the way of content.
     ///
-    /// Also out of the way of Listen's own meeting panel, which is top right.
-    /// Both are on screen together whenever somebody dictates during a call.
+    /// Also out of the way of Listen's own meeting panel, which starts top
+    /// right. Both are on screen together whenever somebody dictates during a
+    /// call. Only *starts*: that panel is draggable, so this is where the two
+    /// do not collide by default rather than a place they cannot collide. The
+    /// avoidance stays one-sided on purpose, because a pill that moved itself
+    /// out from under a dragged panel would be a second thing on screen going
+    /// somewhere nobody asked it to.
     private func position(_ p: NSPanel) {
         let screen = NSScreen.screens.first {
             NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)

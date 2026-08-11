@@ -254,9 +254,11 @@ final class QuitConfirm {
 
     /// Centred and a little above the middle, on the screen with the mouse.
     ///
-    /// Not the top right, where the recording indicator already is: a prompt
+    /// Not the top right, where the recording indicator starts: a prompt
     /// landing on top of the panel that says "Recording" would hide the one
-    /// thing worth seeing before answering it.
+    /// thing worth seeing before answering it. That panel can be dragged, so
+    /// the two can be made to overlap; the middle is still where they do not
+    /// by default.
     private func position(_ p: NSPanel) {
         let screen = NSScreen.screens.first {
             NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)

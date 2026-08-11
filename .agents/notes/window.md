@@ -154,8 +154,8 @@ still looks like a time.
 
 `setElapsed` therefore re-lays the panel out when the string's **length**
 changes, which for `monospacedDigitSystemFont` is exactly when its width does,
-and re-positions it because the panel is pinned to the right edge of the screen.
-Once per digit, not twice a second.
+and re-positions it because the panel is pinned by a corner rather than by its
+origin. Once per digit, not twice a second.
 
 It took ten minutes of a real meeting to see, which is the actual bug:
 `LISTEN_PANEL=recording` could only ever show "0:00", because a preview launch is
@@ -169,6 +169,76 @@ staged recordings, sweep staging and resume the queue like any other launch, so
 looking at a panel beside the running app meant two processes transcribing the
 same audio. `MainMenu.install()` moved above the check so a preview still has a
 Cmd-Q; everything after it is skipped.
+
+## The panel is dragged by its whole face, and parked by a corner rather than a point
+
+The panel can be moved, and the hard half was not the dragging.
+
+**A corner, not an origin.** `PanelPlacement` stores which two edges of the
+screen's `visibleFrame` the panel is measured from and how far in it sits, and
+the whole reason is the note above: this panel resizes as its strings change, so
+it has to know which of its own corners is nailed down. Parked against the right
+edge it has to grow leftwards, parked against the left edge it has to grow
+rightwards, and an origin cannot say which. Measured on a 1512x982 screen, panel
+252 points wide at "10:00" and 263 at "1:00:00":
+
+| stored | clock | frame |
+|---|---|---|
+| `right top 620 252` | 10:00 | x 640, right edge 892 |
+| `right top 620 252` | 1:00:00 | x 629, right edge 892 |
+| `left top 100 100` | 10:00 | x 100 |
+| `left top 100 100` | 1:00:00 | x 100 |
+
+The corner is chosen for you, from whichever corner of the screen the panel was
+nearest when it was let go. Nobody is asked which edge they meant.
+
+The same shape is what makes the placement portable between screens. The panel
+appears on whichever screen has the mouse, which is unchanged and is exactly why
+an origin would not do: a point read off a 27-inch display is off the bottom of a
+laptop's. `origin(for:in:)` clamps as well, so `left top 5000 5000` lands at
+1260,893 rather than nowhere, and there is deliberately no reset command. A
+placement that cannot put the panel off screen does not need one, and
+`defaults delete com.mgo.listen recordingPanelPlacement` is the way back to the
+corner it starts in. Nothing is stored until somebody drags, so that corner can
+change later without stranding anybody.
+
+**`isMovableByWindowBackground` is the one-liner and it is not enough.** The flag
+only starts a drag when the click reaches the window, and the labels are
+`NSTextField`s, which are controls and eat it. Dragging worked over the padding
+and died over the word "Recording", which reads as a broken panel rather than as
+a rule anybody could learn. `DragBackground.hitTest` answers `self` for
+everything that is not inside an `NSButton`, so the labels, the dot and both
+strips are grab area and the buttons keep their own clicks. `mouseDown` then
+hands off to `performDrag`, because the system's drag loop is the one that knows
+about display edges and the spaces this panel joins all of.
+
+**Telling a drag from our own placing.** `NSWindow.didMoveNotification` is where
+the placement is written, and it fires for everything: the user's drag, the
+`setFrameOrigin` in `position`, and the `setContentSize` in `layout`, which moves
+the origin because it keeps the top left corner. Two guards, because they cover
+each other's hole: `placing` is up for the whole of `replace`, which catches a
+notification delivered inside the relayout, and `placedOrigin` catches one
+delivered after it, when the flag has already gone back down. `settle` runs when
+a drag ends and only clamps a panel dropped over an edge; it stores nothing, so
+there is one writer.
+
+Measured, over `LISTEN_PANEL=recording:600` on a copy of the app with its own
+bundle identifier, so none of this touched the real preferences:
+
+- nothing stored puts it at 1244,45: 16 in from the right and 12 below a 33-point
+  menu bar, which is where it has always been
+- a drag from 40,853 to 640,285 stored `right top 620 252`, and the next launch
+  opened at 640,285
+- a click on the panel's face neither moved it nor rewrote the preference
+- the dismiss button still dismisses, so `hitTest` is routing controls correctly
+
+Those drags and clicks were synthesised, and that is worth naming: they exercise
+exactly the routing `hitTest` governs, which is why they are here, but a
+synthetic drag agreeing is not a real drag agreeing. The panel's neighbours are
+also worth knowing about. `DictationHUD` and `QuitConfirm` both place themselves
+away from the top right *because this panel is there*, and now it need not be.
+Their avoidance is one-sided on purpose: a pill that moved itself out from under
+a dragged panel would be a second thing on screen going somewhere nobody asked.
 
 ## Setting `editing = false` is not what closes the person editor
 

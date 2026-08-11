@@ -50,6 +50,49 @@ final class FilledButton: NSButton {
     }
 }
 
+/// The panel's background, and the thing you drag the panel by.
+///
+/// The whole panel is the grab area rather than a strip along the top. It is 52
+/// points tall in its usual state and a title bar's worth of that would be most
+/// of it, so the rule is the other way round: buttons keep their own clicks and
+/// everything else, the labels, the dot and the two strips, drags.
+///
+/// `hitTest` rather than `isMovableByWindowBackground`, which is the one-liner
+/// and does not work here: that flag only starts a drag when the click reaches
+/// the window, and the labels are `NSTextField`s, which are controls and eat it.
+/// Dragging by the padding while the word "Recording" was dead to the touch
+/// reads as a broken panel rather than as a rule anybody could learn.
+final class DragBackground: NSVisualEffectView {
+    /// Called when a drag finishes. See `RecordingIndicator.settle`.
+    var onDragEnd: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        // Anything inside a button is that button's, including the image view
+        // inside an image-only one. Everything else is grab area.
+        var view: NSView? = hit
+        while let v = view, v !== self {
+            if v is NSButton { return hit }
+            view = v.superview
+        }
+        return self
+    }
+
+    /// The panel is `.nonactivatingPanel` and never becomes key, so a click on
+    /// it arrives without the app being brought forward first. That is the
+    /// whole point of the panel and it is also why this is stated: a view in a
+    /// background window is not sent the click that activates its window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        // The system's own drag loop, rather than tracking `mouseDragged` by
+        // hand: it is the one that knows about display edges and about the
+        // spaces this panel joins all of.
+        window?.performDrag(with: event)
+        onDragEnd?()
+    }
+}
+
 @MainActor
 final class RecordingIndicator {
     enum State: Equatable {
@@ -85,7 +128,20 @@ final class RecordingIndicator {
     /// What the panel is currently showing. Kept because the clock re-lays the
     /// panel out as it grows, and the layout depends on the state.
     private var showing: State?
-    private var background: NSVisualEffectView?
+    private var background: DragBackground?
+
+    /// The origin `position` last set, and whether it is setting one now.
+    ///
+    /// Both exist to answer one question in `panelMoved`: did the user move
+    /// this panel, or did we? `NSWindow.didMoveNotification` fires for both,
+    /// and for the `setContentSize` in `layout` as well, since that keeps the
+    /// top left corner and therefore moves the origin. Two guards because they
+    /// cover each other: `placing` catches a notification delivered inside the
+    /// relayout, and the origin comparison catches one delivered after it,
+    /// which is when the flag has already gone back down.
+    private var placedOrigin: NSPoint?
+    private var placing = false
+
     private var dot: NSView!
     private var iconView: NSImageView!
     private var titleLabel: NSTextField!
@@ -259,8 +315,7 @@ final class RecordingIndicator {
         refreshAudio()
 
         showing = state
-        layout(state)
-        position(p)
+        replace(state, p)
         // orderFrontRegardless, not makeKeyAndOrderFront: taking key would pull
         // focus out of the meeting window the user is in.
         p.orderFrontRegardless()
@@ -319,8 +374,7 @@ final class RecordingIndicator {
         // of a panel sized before the microphone went quiet, which is precisely
         // the moment it has to be readable.
         guard wasHidden != warnLabel.isHidden, let showing, let p = panel else { return }
-        layout(showing)
-        position(p)
+        replace(showing, p)
     }
 
     /// Drive the strips from a synthetic envelope, for a preview launch where
@@ -387,14 +441,26 @@ final class RecordingIndicator {
         p.hasShadow = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
-        let bg = NSVisualEffectView(frame: p.contentLayoutRect)
+        let bg = DragBackground(frame: p.contentLayoutRect)
         bg.material = .hudWindow
         bg.blendingMode = .behindWindow
         bg.state = .active
         bg.wantsLayer = true
         bg.layer?.cornerRadius = 14
         bg.layer?.masksToBounds = true
+        bg.onDragEnd = { [weak self] in self?.settle() }
         background = bg
+
+        // Where the panel ends up after a drag is worth keeping, and the
+        // notification is what keeps it: it fires throughout the system's drag
+        // loop, so the placement is stored even if `performDrag` returns before
+        // the mouse comes up. `onDragEnd` above only puts a panel dropped over
+        // a screen edge back on screen.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: p, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panelMoved() }
+        }
 
         let d = NSView()
         d.wantsLayer = true
@@ -679,21 +745,80 @@ final class RecordingIndicator {
         onDismiss?()
     }
 
-    /// Top right, like Blackbox, on whichever screen has the mouse.
+    /// Re-measure the panel and put it back where it belongs, as one step.
+    ///
+    /// The two halves are never useful apart. Every string that changes the
+    /// size also moves the panel, because it is placed by a corner rather than
+    /// by its origin, and a resize that skipped the placing would grow the
+    /// panel through whichever screen edge it is parked against.
+    private func replace(_ state: State, _ p: NSPanel) {
+        placing = true
+        layout(state)
+        position(p)
+        placing = false
+    }
+
+    /// Top right, like Blackbox, unless somebody has dragged it somewhere else.
+    /// On whichever screen has the mouse, either way.
     ///
     /// Inset from `visibleFrame` rather than `frame` so it sits under the menu
     /// bar rather than behind it, and clear of the notch on the Macs that have
     /// one.
+    ///
+    /// The size is read here rather than assumed: the states are different
+    /// sizes, and a constant would push the wide one off the edge it is
+    /// measured from.
     private func position(_ p: NSPanel) {
         let screen = NSScreen.screens.first {
             NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
         } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
-        // The panel's own size, not a constant: the states are different sizes
-        // and a constant would push the wide one off the right edge.
-        p.setFrameOrigin(NSPoint(
-            x: frame.maxX - p.frame.width - 16,
-            y: frame.maxY - p.frame.height - 12))
+        let origin = (Settings.recordingPanelPlacement ?? .default)
+            .origin(for: p.frame.size, in: frame)
+        placedOrigin = origin
+        p.setFrameOrigin(origin)
+    }
+
+    /// A drag finished. Put the panel wholly back on screen if it was dropped
+    /// over an edge.
+    ///
+    /// Only the clamp: moving it fires `didMove`, and `panelMoved` is the one
+    /// place the placement is written, so what gets stored is where the panel
+    /// can be seen rather than where the mouse was let go.
+    ///
+    /// Deliberately after the drag rather than during it. Clamping on every
+    /// `didMove` would mean setting the origin inside the system's own drag
+    /// loop, which is a fight over the same number sixty times a second.
+    private func settle() {
+        guard let p = panel, let frame = screen(mostlyUnder: p.frame)?.visibleFrame
+        else { return }
+        let origin = PanelPlacement(p.frame, in: frame)
+            .origin(for: p.frame.size, in: frame)
+        guard origin != p.frame.origin else { return }
+        p.setFrameOrigin(origin)
+    }
+
+    /// The panel moved, and we did not move it, so somebody dragged it.
+    ///
+    /// Read against the screen the panel is mostly on rather than the one with
+    /// the mouse. They are the same screen at the end of a drag and different
+    /// in the middle of one that is crossing displays, and the panel is the
+    /// thing being placed.
+    private func panelMoved() {
+        guard !placing, let p = panel, p.frame.origin != placedOrigin,
+              let frame = screen(mostlyUnder: p.frame)?.visibleFrame else { return }
+        placedOrigin = p.frame.origin
+        Settings.recordingPanelPlacement = PanelPlacement(p.frame, in: frame)
+    }
+
+    /// The screen a rect covers most of, which for a panel dragged across a
+    /// display boundary is the one it now belongs to.
+    private func screen(mostlyUnder rect: NSRect) -> NSScreen? {
+        func overlap(_ s: NSScreen) -> CGFloat {
+            let r = s.frame.intersection(rect)
+            return r.width * r.height
+        }
+        return NSScreen.screens.max { overlap($0) < overlap($1) } ?? NSScreen.main
     }
 
     // MARK: - Timers
@@ -718,10 +843,9 @@ final class RecordingIndicator {
         // Monospaced digits, so the character count *is* the width, and this
         // re-lays out once per digit rather than twice a second.
         guard text.count != was.count, let showing, let p = panel else { return }
-        layout(showing)
-        // The panel is pinned to the right edge of the screen, so a width that
-        // grows past the minimum moves its origin too.
-        position(p)
+        // The panel is pinned by a corner, so a width that grows past the
+        // minimum moves its origin too.
+        replace(showing, p)
     }
 
     private func startTimers() {
@@ -752,5 +876,126 @@ final class RecordingIndicator {
         pulse?.invalidate(); pulse = nil
         fake?.invalidate(); fake = nil
         dot?.alphaValue = 1
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------
+
+/// Where the recording panel sits: a corner of the screen, and an inset from
+/// it in each direction.
+///
+/// Not an origin, which is the obvious shape and the wrong one twice over.
+///
+/// The panel is measured from the strings it is drawing and resizes as they
+/// change, so it needs to know which of its own corners is nailed down: a panel
+/// parked against the right edge has to grow leftwards and one parked against
+/// the left edge has to grow rightwards, or the growth goes off the screen. An
+/// origin cannot say that, and the old code did not have to, because the corner
+/// was always the top right.
+///
+/// A stored origin is also read on a screen that may not be the screen it was
+/// written on. The panel appears wherever the mouse is, so an origin taken off
+/// a 27-inch display lands below the bottom edge of a laptop's, while an inset
+/// from a corner means the same thing on both.
+struct PanelPlacement: Equatable {
+    /// Which edges the insets are measured from, and therefore which corner of
+    /// the panel stays put when it resizes.
+    var fromLeft: Bool
+    var fromTop: Bool
+    /// Inset from those two edges of the screen's `visibleFrame`, in points.
+    var dx: CGFloat
+    var dy: CGFloat
+
+    init(fromLeft: Bool, fromTop: Bool, dx: CGFloat, dy: CGFloat) {
+        self.fromLeft = fromLeft
+        self.fromTop = fromTop
+        self.dx = dx
+        self.dy = dy
+    }
+
+    /// Top right, 16 points in from the side and 12 down from under the menu
+    /// bar. Where this panel has always been, and where it still starts.
+    static let `default` = PanelPlacement(fromLeft: false, fromTop: true, dx: 16, dy: 12)
+
+    /// Read a placement off a panel somebody has just dragged.
+    ///
+    /// The nearest corner wins, and that one decision is what makes a dragged
+    /// panel behave like the one that was only ever top right: it fixes the
+    /// corner the panel keeps still, so it goes on growing away from the edge
+    /// it was parked against rather than through it.
+    init(_ rect: NSRect, in frame: NSRect) {
+        let left = rect.midX < frame.midX
+        let top = rect.midY > frame.midY
+        self.init(fromLeft: left, fromTop: top,
+                  dx: left ? rect.minX - frame.minX : frame.maxX - rect.maxX,
+                  dy: top ? frame.maxY - rect.maxY : rect.minY - frame.minY)
+    }
+
+    /// Where a panel of `size` goes on a screen whose `visibleFrame` is
+    /// `frame`, clamped so all of it is on that screen.
+    ///
+    /// The clamp is not defensive tidying. A placement is applied on whichever
+    /// screen has the mouse, which is not necessarily the screen it was read
+    /// on, and it is also applied to a panel that has grown since: both are
+    /// ways for an inset that was on screen to stop being one.
+    func origin(for size: NSSize, in frame: NSRect) -> NSPoint {
+        let x = fromLeft ? frame.minX + dx : frame.maxX - size.width - dx
+        let y = fromTop ? frame.maxY - size.height - dy : frame.minY + dy
+        // The outer `max` is for a panel taller or wider than the screen,
+        // where the two bounds cross and the top left corner is the only one
+        // worth keeping.
+        return NSPoint(
+            x: min(max(x, frame.minX), max(frame.minX, frame.maxX - size.width)),
+            y: min(max(y, frame.minY), max(frame.minY, frame.maxY - size.height)))
+    }
+
+    /// `"right top 16 12"`, in the order it reads out loud.
+    ///
+    /// Whole points, because this is a plist a person may end up looking at and
+    /// a stored `16.000001` tells them nothing they need.
+    var stored: String {
+        "\(fromLeft ? "left" : "right") \(fromTop ? "top" : "bottom")"
+            + " \(Int(dx.rounded())) \(Int(dy.rounded()))"
+    }
+
+    init?(stored raw: String) {
+        let parts = raw.split(separator: " ")
+        guard parts.count == 4,
+              parts[0] == "left" || parts[0] == "right",
+              parts[1] == "top" || parts[1] == "bottom",
+              let dx = Double(parts[2]), let dy = Double(parts[3]) else { return nil }
+        self.init(fromLeft: parts[0] == "left", fromTop: parts[1] == "top",
+                  dx: CGFloat(dx), dy: CGFloat(dy))
+    }
+}
+
+extension Settings {
+    private static let panelPlacementKey = "recordingPanelPlacement"
+
+    /// Where the recording panel was last dragged to, and nil until somebody
+    /// drags it.
+    ///
+    /// nil rather than storing the default, so "never moved" stays
+    /// distinguishable from "moved back to the corner it starts in". That is
+    /// what lets the starting corner change later without stranding everyone
+    /// who never had an opinion about it, and it makes `defaults delete
+    /// com.mgo.listen recordingPanelPlacement` a way back for anybody who does.
+    ///
+    /// One string rather than four keys: a placement is only ever read and
+    /// written whole, and four keys can be half-written.
+    static var recordingPanelPlacement: PanelPlacement? {
+        get {
+            guard let raw = defaults.string(forKey: panelPlacementKey) else { return nil }
+            return PanelPlacement(stored: raw)
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: panelPlacementKey)
+                return
+            }
+            defaults.set(newValue.stored, forKey: panelPlacementKey)
+        }
     }
 }

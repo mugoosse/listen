@@ -210,6 +210,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - One elapsed clock per screen, and the row is the one that always counts
 - A sidebar reload is not somebody choosing a recording
 - The floating panel is sized from its strings, and one of them changes
+- The panel is dragged by its whole face, and parked by a corner rather than a point
 - Setting `editing = false` is not what closes the person editor
 - A recording nobody named is called "Untitled"
 - Collection navigation is in the sidebar, not the toolbar

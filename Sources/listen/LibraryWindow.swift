@@ -398,6 +398,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // open is about the library. `AskView.show` is a no-op when the id
             // has not moved, so this costs a comparison per click.
             self.askBar.show(recording)
+            // And whether it is on screen at all: the recording in progress is
+            // the one row that takes it away.
+            self.updateComposer()
             // No rebuild, unless this click was the one that left the home page
             // or came back to it. Which items belong used to depend on whether
             // the recording in progress was the one selected, because the stop
@@ -419,6 +422,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.detail.stopPlayback()
             self.notePane.show(note)
             self.detailHost.show(self.notePane)
+            // A pane swap can be the way off the recording screen too.
+            self.updateComposer()
             self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
@@ -432,6 +437,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.personPane.show(person)
             self.detailHost.show(self.personPane)
             self.askBar.show(person: person.display)
+            self.updateComposer()
             self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
@@ -648,10 +654,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 window?.makeFirstResponder(sidebar.view)
             }
         }
-        // Settings is the one screen with no composer. Set here rather than in
-        // each branch, because it is one rule about one mode and four copies of
-        // it is four places for the next mode to be forgotten.
-        composerHost?.showsComposer = next != .settings
+        // Set here rather than in each branch, because it is one rule about
+        // which screen is up and four copies of it is four places for the next
+        // mode to be forgotten.
+        updateComposer()
 
         // All three, not just the one on screen: the next mode change swaps in
         // a list whose control was last touched by a click that took the user
@@ -663,6 +669,33 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         updateRecordFAB()
         rebuildToolbar()
+    }
+
+    /// Which screens have a composer, and the two that do not.
+    ///
+    /// **Settings**, because it is a screen about the app rather than about the
+    /// library: "Ask about your library…" there offers something the page
+    /// cannot do.
+    ///
+    /// **The meeting that is being recorded**, which is the one page whose
+    /// bottom edge is already occupied. The two meters and the device row live
+    /// there, and the card sat on top of them: the strip that says whether your
+    /// own voice is arriving was behind a field asking about a transcript that
+    /// does not exist yet, since nothing is transcribed until Stop. It comes
+    /// back the instant capture ends, on the same meeting, which is also the
+    /// first moment there is anything to ask about.
+    ///
+    /// Keyed on the page rather than on `Capture.isRecording`, so clicking away
+    /// to read yesterday's call while today's records still has a composer: the
+    /// question is about the meeting on screen, and that one is finished.
+    ///
+    /// Called from every place either half can move, which is a mode change, a
+    /// click in any of the three lists, a reload, and both edges of capture.
+    /// `showsComposer` ignores a value it already has, so an extra call costs a
+    /// comparison.
+    private func updateComposer() {
+        let live = detailHost.current === detail && detail.isShowingLive
+        composerHost?.showsComposer = mode != .settings && !live
     }
 
     /// Settings has no segment, so it leaves the three controls alone.
@@ -821,6 +854,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         } else if sidebar.selectedRecording == nil {
             detail.show(nil)
         }
+        // After the pane has been re-shown, because what it is showing is half
+        // of the answer. Both edges of capture come through here, so this is
+        // where the composer goes away as a meeting starts and comes back as it
+        // stops.
+        updateComposer()
         // Deleting what was selected, or a lens that empties the list, both land
         // back on the home page without anybody clicking a row.
         syncToolbarWithHome()
@@ -909,6 +947,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // be a picture of a state the app is never in.
         recordFAB.state = .stop
         if let item = recordToolbarItem { syncRecordItem(item) }
+        // And the composer goes, for the same reason the button says Stop.
+        // `updateComposer` cannot work this one out for itself: the preview's
+        // recording is a finished one from the library, so `isLive` is false
+        // and every honest test of it says the composer belongs. Set here
+        // instead, which also makes this the way to see the real thing without
+        // holding a meeting.
+        composerHost?.showsComposer = false
     }
 
     /// Select a recording from somewhere that is not the list, which today
@@ -2147,13 +2192,12 @@ final class DetailWithComposer: NSViewController {
 
     /// Whether this screen has a composer at all.
     ///
-    /// False in Settings. The composer belongs to the window rather than to the
-    /// detail pane, which is what lets a question survive the pane changing
-    /// underneath it, and the cost of that is that it also survives panes it has
-    /// no business being on. Settings is one: it is a screen about the app
-    /// rather than about the library, so "Ask about your library…" is offering
-    /// something the page cannot do, and the card floated over the bottom of
-    /// every pane, covering the last control on the taller ones.
+    /// The composer belongs to the window rather than to the detail pane, which
+    /// is what lets a question survive the pane changing underneath it, and the
+    /// cost of that is that it also survives panes it has no business being on.
+    /// Settings is one, and the meeting being recorded is the other; the window
+    /// owns that rule, in `LibraryWindow.updateComposer`, because only it knows
+    /// which screen is up.
     ///
     /// The whole drawer goes, not just the bar. `applyHeight` decides which of
     /// the glass, the header and the page background are visible, and hiding
@@ -2263,7 +2307,15 @@ final class DetailWithComposer: NSViewController {
         // the eye, and not for accessibility: a transcript still in the tree
         // under a full-screen conversation is a page VoiceOver can read and
         // nobody can see.
-        content.view.isHidden = page
+        //
+        // **`showsComposer` is part of it, because the extent survives the
+        // drawer going away.** Leaving a conversation at full and then arriving
+        // on a screen with no composer hid the drawer and left the pane
+        // underneath hidden with it: an empty window, in Settings and on the
+        // recording screen alike, since nothing in either path puts the extent
+        // back to a bar. Nothing is a page while the drawer is away, which is
+        // what the two lines at the end of this method already say.
+        content.view.isHidden = page && showsComposer
 
         // The edges, all of which move together. Zero on every side is what
         // makes this a page rather than a taller card, and the pane goes flush

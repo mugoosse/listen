@@ -2167,6 +2167,48 @@ stopped; not survivable now that Stop is also how a waiting question is taken
 back, which would have made that a pointer-only route. Pressed through AX in the
 verification above, which is the same call VoiceOver makes.
 
+## The meeting being recorded has no composer
+
+The card sat over the bottom of the recording screen, which is the one page
+whose bottom edge is already spoken for: the two meters and the device row live
+there, and "Ask about this meeting…" was drawn across the strip that says
+whether your own voice is arriving. It was also offering something that cannot
+happen yet, because nothing is transcribed until Stop.
+
+`LibraryWindow.updateComposer` is the one owner of `showsComposer` now. It used
+to be a single line inside `enter` reading `next != .settings`, and two screens
+have no composer rather than one. The second is not a mode, it is a page, so the
+test is the page and never `Capture.isRecording`: clicking away to read
+yesterday's call while today's records keeps its composer, because that meeting
+is finished and the question is about the one on screen. Called from a mode
+change, a click in any of the three lists, `reload`, and both edges of capture.
+`Recording.isLive` reads capture rather than a flag written when the screen was
+built, so it goes false as Stop is pressed and the composer comes back on the
+same meeting at the first moment there is anything to ask about.
+
+**The extent survives the drawer going away, and that was a blank window.**
+`applyHeight` hides the pane underneath while the conversation is a page
+(`content.view.isHidden = page`), and nothing in either path that takes the
+composer away puts the extent back to a bar. Leaving a conversation at full and
+then opening Settings, or starting a recording, therefore hid the drawer and
+left the pane hidden with it: a window with nothing in it and no error anywhere.
+`page && showsComposer` is the fix, and it is the same sentence the two
+callbacks at the end of that method already make, that nothing is covered and
+nothing is a page while the drawer is away.
+
+**`LISTEN_PANEL=live` has to say it itself.** The preview drives the recording
+screen from a finished recording in the library, so `isLive` is false there and
+every honest test of it says the composer belongs. It sets `showsComposer =
+false` directly, next to the line that already makes the toolbar button read
+Stop, and for the same reason: the one way to look at this screen without
+holding a meeting must not be a picture of a state the app is never in.
+
+Measured on the built app against a scratch `LISTEN_LIBRARY`, with File › New
+Recording pressed through `AXUIElementCreateApplication(pid)` and `LISTEN_SHOT`
+every 5 seconds. During the 8 second recording the bottom of the window is the
+two meters and the device row with nothing over them; after Stop the same
+meeting has its player, its transcript and the composer back.
+
 ## Delete is a verb on the conversation, so it is not on History
 
 History is the list you open to get *back into* a conversation, and every row on

@@ -1961,6 +1961,12 @@ final class DetailView: NSView {
     /// its own in the bottom right corner.
     var isAsking: Bool { showing == .ask }
 
+    /// True while this pane is the recording screen, which is what the window
+    /// takes the composer away for. `Recording.isLive` reads capture rather
+    /// than a flag written when the screen was built, so it goes false the
+    /// instant Stop is pressed, before anything reloads.
+    var isShowingLive: Bool { recording?.isLive == true }
+
     /// Fired whenever the document on screen changes, so the window can decide
     /// again whether its floating button belongs over this pane.
     var onShowingChanged: (() -> Void)?
@@ -3301,6 +3307,8 @@ final class DetailViewController: NSViewController {
     func endEditing() { detail.endEditing() }
 
     var isAsking: Bool { detail.isAsking }
+
+    var isShowingLive: Bool { detail.isShowingLive }
 
     var onShowingChanged: (() -> Void)? {
         get { detail.onShowingChanged }

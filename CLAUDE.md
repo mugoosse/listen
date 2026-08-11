@@ -396,6 +396,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - One question waits, and Stop is the way to take it back
 - The stop button drew itself as Ask for the whole run
 - A conversation you go back to opens as a page
+- The meeting being recorded has no composer, and an extent outlived its drawer
 - Delete is a verb on the conversation, so it is not on History
 
 ### `.agents/notes/release.md` (5k)

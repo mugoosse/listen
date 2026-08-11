@@ -377,12 +377,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // open is about the library. `AskView.show` is a no-op when the id
             // has not moved, so this costs a comparison per click.
             self.askBar.show(recording)
-            // No rebuild. Which items belong used to depend on whether the
-            // recording in progress was the one selected, because the stop
+            // No rebuild, unless this click was the one that left the home page
+            // or came back to it. Which items belong used to depend on whether
+            // the recording in progress was the one selected, because the stop
             // control stood in for People and Actions on that one screen.
-            // Stopping is `recordFAB`'s now, so a mode's items are fixed and a
-            // click in the list is a validation pass rather than five items
-            // removed and re-inserted.
+            // Stopping is `recordFAB`'s now, so a mode's items are otherwise
+            // fixed and a click in the list is a validation pass rather than
+            // five items removed and re-inserted.
+            self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
         // A note picked out of the one list. The transcript pane is put away
@@ -396,6 +398,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.detail.stopPlayback()
             self.notePane.show(note)
             self.detailHost.show(self.notePane)
+            self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
         // A person picked out of the results shows the card, in the pane the
@@ -408,6 +411,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.personPane.show(person)
             self.detailHost.show(self.personPane)
             self.askBar.show(person: person.display)
+            self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
@@ -704,6 +708,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         detail.stopPlayback()
         notePane.show(note)
         detailHost.show(notePane)
+        syncToolbarWithHome()
         window?.toolbar?.validateVisibleItems()
     }
 
@@ -790,6 +795,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         } else if sidebar.selectedRecording == nil {
             detail.show(nil)
         }
+        // Deleting what was selected, or a lens that empties the list, both land
+        // back on the home page without anybody clicking a row.
+        syncToolbarWithHome()
     }
 
     /// Commit any field the detail pane has open.
@@ -935,6 +943,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// control that stops it are in the same place, and a button that moves
     /// between those two moments is a button somebody has to find twice.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        // Here rather than in `rebuildToolbar`, because AppKit builds the first
+        // set itself: recorded there, the flag would say "not home" about a
+        // window that launched on the home page, and the first click in the list
+        // would rebuild a toolbar that was already right.
+        builtForHome = isHome
         let items = modeItemIdentifiers()
         // **The chat page keeps the sidebar's half and replaces the content's.**
         // The left of the title bar belongs to the list, which is still there
@@ -1003,9 +1016,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // are the other half of this window and this is their way back, so
             // it sits at the start of the pane they open into rather than among
             // the verbs on the right.
-            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
-                    Self.recordItem, .space, Self.actionsItem]
+            //
+            // **And only on the home page.** Over a meeting it was a clock at
+            // the top of a page about something else, naming nothing on screen
+            // and offering a list of conversations none of which was open. The
+            // two places it says something are the two `isHome` and `chatting`
+            // pick out: the home page, whose greeting already lists the recent
+            // conversations underneath it, and a conversation itself, where it
+            // is how you reach the rest of them. A conversation opened over a
+            // meeting keeps its own route regardless, because the drawer's
+            // title is a menu with the same rows in it.
+            var items: [NSToolbarItem.Identifier] =
+                [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
+                 .sidebarTrackingSeparator]
+            if isHome { items.append(Self.historyItem) }
+            items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
+            return items
         case .settings:
             // The same shape as every other mode: what this pane is on the
             // left, one control on the right, both inside the sidebar's own
@@ -1030,8 +1056,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // The sidebar toggle is here now, unlike before: these modes no
             // longer lock the sidebar open, because the segmented control in it
             // is the navigation and collapsing is a choice like any other.
+            //
+            // No History, for the reason the library case gives: a person's
+            // card is a page about them, and the conversations are not on it.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
+                    .sidebarTrackingSeparator, .flexibleSpace,
                     Self.personActionsItem]
         case .notes:
             // Nothing on the right. A note has no verbs yet: it is deleted
@@ -1042,8 +1071,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // as you move between segments reads as three different screens
             // rather than three views of one library.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace]
+                    .sidebarTrackingSeparator, .flexibleSpace]
         }
+    }
+
+    /// The content pane is the home page: the library, with nothing open in it.
+    ///
+    /// What is on screen then is the greeting, the recent conversations and the
+    /// composer under them, which is the one screen in this window that is about
+    /// asking rather than about a document. A note or a person picked out of the
+    /// sidebar is a page like a meeting is, so `detailHost.current` is asked as
+    /// well as the selection: both of those leave `selectedRecording` nil while
+    /// putting a page on screen.
+    private var isHome: Bool {
+        mode == .library && detailHost.current === detail
+            && sidebar.selectedRecording == nil
     }
 
     /// Swap the items for the current mode.
@@ -1058,6 +1100,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         for (index, id) in toolbarDefaultItemIdentifiers(toolbar).enumerated() {
             toolbar.insertItem(withItemIdentifier: id, at: index)
         }
+    }
+
+    /// What `isHome` was when the items were last built.
+    private var builtForHome = false
+
+    /// Rebuild, but only if leaving or arriving at the home page changed which
+    /// items belong.
+    ///
+    /// A click in the list used to be a validation pass and nothing more, and
+    /// the comment in `sidebar.onSelect` says why: five items removed and
+    /// re-inserted on every row is a title bar that flickers while somebody
+    /// reads down a library. History brought a dependence on the selection back,
+    /// but only on one bit of it, so this compares that bit and usually returns.
+    private func syncToolbarWithHome() {
+        guard builtForHome != isHome else { return }
+        rebuildToolbar()
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,

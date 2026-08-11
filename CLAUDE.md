@@ -321,6 +321,7 @@ Asking questions about the library through an agent CLI the user already has.
 - A width nobody else may have an opinion about
 - The document was as wide as the scroll view, and the scroller took the difference
 - The page's controls are the window's toolbar
+- History belongs to the two screens that are about conversations
 
 ### `.agents/notes/release.md` (5k)
 

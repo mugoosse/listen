@@ -1054,3 +1054,51 @@ bar" rule is narrowed to cards, which is what makes an empty page possible at
 all. Opening one from History does the same: `onWantsOpen` only forces a card
 when it is not already a page.
 
+## History belongs to the two screens that are about conversations
+
+It was in the title bar of every screen except settings: over a meeting page,
+over a person's card, over a note. On all of those it is a clock at the top of a
+page about something else, offering a list of twenty conversations none of which
+is open, next to a transcript it names nothing in.
+
+The two places it says something are the two it is now in:
+
+- **The home page**, which is the library with nothing selected. That screen is
+  the greeting, the recent conversations and the composer under them, and it is
+  already the one screen in this window that is about asking rather than about a
+  document. `LibraryWindow.isHome` is the test, and it asks
+  `detailHost.current === detail` as well as `sidebar.selectedRecording == nil`:
+  a note or a person picked out of the sidebar leaves the selection nil while
+  putting a page on screen, so the selection alone would have called both of
+  those home.
+- **The chat page**, `chatting`, where History is how you reach the other
+  conversations from inside one. That half was already conditional and is
+  unchanged.
+
+A conversation opened as a card *over* a meeting keeps its own route regardless:
+the drawer's title is a menu with the same rows in it, which is what
+`fillHistory(_:forPullDown:)` serves twice.
+
+The cost of making it conditional is a toolbar rebuild, and `sidebar.onSelect`
+had a comment explaining why there is deliberately none: five items removed and
+re-inserted on every row is a title bar that flickers while somebody reads down
+a library. So `syncToolbarWithHome` compares `isHome` against `builtForHome` and
+usually returns, and the rebuild happens only on the click that leaves the home
+page or comes back to it. `builtForHome` is set in
+`toolbarDefaultItemIdentifiers` rather than in `rebuildToolbar`, because AppKit
+builds the first set itself and a flag written only by our own rebuilds would
+say "not home" about a window that launched on the home page.
+
+Measured through accessibility on the built app, over a scratch `LISTEN_LIBRARY`
+of copied sidecars, reading the toolbar's children in each state:
+
+```
+home (nothing selected):  Settings  Sidebar  History  Record  Actions
+row 1 selected:           Settings  Sidebar           Record  Actions
+deselected:               Settings  Sidebar  History  Record  Actions
+chat page:                Settings  Sidebar  Done  History  New chat
+```
+
+Selecting a **header** row rather than a recording is the trap in testing this:
+it deselects, so the toolbar correctly does not change and the run looks like the
+change did nothing.

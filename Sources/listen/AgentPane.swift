@@ -577,32 +577,64 @@ final class AgentPane: Pane {
     }
 
     /// The command that would fix this row, or nil when nothing needs fixing.
+    ///
+    /// Nil for a provider in every state, and that is not an omission: what
+    /// fixes one is a field in this very pane, so a button offering to copy a
+    /// command would be offering the wrong gesture.
     private func fixFor(_ status: AgentStatus) -> String? {
         if status.path == nil { return status.backend.installCommand }
         if status.signedIn == false { return status.backend.signInCommand }
         return nil
     }
 
+    /// Store what a row's combo box says, against the provider that row is for.
+    private func saveModel(_ box: NSComboBox) {
+        guard let id = boxOwner[ObjectIdentifier(box)] else { return }
+        let typed = box.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Unchanged means nobody changed it, whatever event brought us here.
+        guard typed != (boxInitial[ObjectIdentifier(box)] ?? "") else { return }
+        boxInitial[ObjectIdentifier(box)] = typed
+        Settings.setAgentModel(id, typed.isEmpty ? nil : typed)
+        Settings.noteModelUsed(id, typed.isEmpty ? nil : typed)
+    }
+
     // MARK: - The test question
 
     private func tryIt() {
-        guard let chosen = AgentCLI.chosen(), let path = chosen.path else { return }
+        // From `latest` too. Pressing a button is not a reason to re-probe
+        // every backend, and detection has already run by the time this
+        // button is enabled.
+        guard let chosen = AgentCLI.choose(from: latest), let path = chosen.path else { return }
         tryButton?.isEnabled = false
         result?.isHidden = false
-        result?.stringValue = "Asking \(chosen.backend.name)…"
+        result?.stringValue = "Asking \(chosen.name)…"
         resizeDocument()
 
         var answer = ""
         let question = AgentRun.Question(
             text: "How many recordings are in the library? Answer in one short sentence.",
-            backend: chosen.backend, path: path)
-        let run = AgentRun(question) { [weak self] event in
+            backend: chosen.backend, path: path, provider: chosen.provider,
+            // A provider has no model of its own to fall back on, so the test
+            // question has to carry the chosen one or it fails on the guard
+            // rather than on anything worth learning from.
+            model: Settings.agentModel(chosen.key))
+        let run = question.session { [weak self] event in
             guard let self else { return }
             switch event {
             case .text(let text):
                 answer += (answer.isEmpty ? "" : "\n") + text
             case .toolCall(let name, _):
-                self.result?.stringValue = "\(chosen.backend.name) is calling \(name)…"
+                self.result?.stringValue = "\(chosen.name) is calling \(name)…"
+            case .offline(let trouble):
+                // The test question is the one place somebody comes to when the
+                // agent is not working, so a network fault has to be readable
+                // here rather than looking like the CLI being broken. And it has
+                // to be taken back down when the connection returns: the next
+                // event might be a whole answer away, and an amber line left
+                // under a working reply is worse than no line at all.
+                self.result?.stringValue = trouble ?? "Asking \(chosen.name)…"
+                self.result?.textColor = trouble == nil ? .secondaryLabelColor : .systemOrange
+                self.resizeDocument()
             case .finished(let outcome):
                 var line = outcome.failure ?? answer
                 // How long, and nothing about money. See

@@ -25,6 +25,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
 
+        // At launch, not when the first question is asked. The monitor's first
+        // update is asynchronous, so one started at the moment somebody presses
+        // send has nothing to say about the moment somebody presses send.
+        Reachability.begin()
+
         // Installed first so a preview launch has a Cmd-Q, and unchanged for a
         // real one: `QuitConfirm` still goes on top of it below.
         MainMenu.install()

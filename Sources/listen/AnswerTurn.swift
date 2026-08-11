@@ -33,11 +33,27 @@ final class AnswerTurn: NSView {
     private let activity = ShimmerLabel()
     private let footer = NSStackView()
     private let save = NSButton()
+    private let again = NSButton()
 
     /// Told the answer and the question it came from, and answers whether a note
     /// was written. See `saveTapped`.
     private let onSave: (String, String) -> Bool
     let question: String
+
+    /// Ask this question again, in place.
+    ///
+    /// Set by whoever owns the conversation, and only on a turn it is willing
+    /// to run again: the button is hidden while this is nil. That is what keeps
+    /// "Try again" off the failed turn in the *middle* of a reopened
+    /// conversation, where re-asking would put an old question after everything
+    /// that was said since.
+    var onRetry: (() -> Void)? {
+        didSet { again.isHidden = onRetry == nil || !failed }
+    }
+
+    /// The turn ended with a failure and no answer, so there is nothing to keep
+    /// and something to try again.
+    private(set) var failed = false
 
     /// Every block, in order, so the turn can be written to `chat.json` and
     /// come back looking the same.
@@ -117,9 +133,18 @@ final class AnswerTurn: NSView {
         save.action = #selector(saveTapped)
         save.isHidden = true
 
+        again.title = "Try again"
+        again.bezelStyle = .rounded
+        again.controlSize = .large
+        again.font = .systemFont(ofSize: 12)
+        again.target = self
+        again.action = #selector(againTapped)
+        again.isHidden = true
+
         footer.orientation = .horizontal
         footer.spacing = 10
         footer.addArrangedSubview(save)
+        footer.addArrangedSubview(again)
 
         // No rule under the header. Codex draws one and it is wrong here: a
         // separator implies two regions, and once the working-out is collapsed
@@ -202,14 +227,51 @@ final class AnswerTurn: NSView {
         return "\(whole / 60)m \(whole % 60)s"
     }
 
+    /// What the activity line would say if the network were not the news, kept
+    /// so that it can be put back when it stops being the news. See `offline`.
+    private var activityText = ""
+    /// The network line is up, and outranks whatever the agent is doing.
+    private var stalled = false
+
     /// The line at the bottom, replaced rather than added to.
     private func show(activity text: String) {
+        activityText = text
+        guard !stalled else { return }
         activity.isHidden = false
+        activity.tint = .secondaryLabelColor
         activity.text = text
         activity.start()
     }
 
+    /// The network is why nothing is happening.
+    ///
+    /// Amber and **not shimmering**, which is the whole point of the sweep read
+    /// backwards: it is there to say the process is alive between changes, and
+    /// this is the one state where it is not making progress. A shimmering
+    /// "no internet connection" would be the same reassuring movement that made
+    /// a hung run look like a working one.
+    ///
+    /// The run is not stopped. Both CLIs retry, so a connection that comes back
+    /// finishes the answer that was already half paid for, and the Stop button
+    /// is where it always is for somebody who does not want to wait.
+    func offline(_ trouble: String?) {
+        guard running else { return }
+        stalled = trouble != nil
+        if let trouble {
+            activity.isHidden = false
+            activity.stop()
+            activity.tint = .systemOrange
+            activity.text = trouble
+        } else if !activity.isHidden {
+            // Back, with the line still up: put back what it was saying. If
+            // words have started arriving instead, the line is already gone and
+            // restoring "Thinking" under a paragraph would be a step backwards.
+            show(activity: activityText)
+        }
+    }
+
     private func hideActivity() {
+        stalled = false
         activity.stop()
         activity.isHidden = true
     }
@@ -296,6 +358,8 @@ final class AnswerTurn: NSView {
         let label = paragraph(message, colour: .systemRed)
         addBlock(label)
         openText = nil
+        failed = true
+        again.isHidden = onRetry == nil
     }
 
     func finish(_ outcome: AgentRun.Outcome) {
@@ -365,6 +429,8 @@ final class AnswerTurn: NSView {
 
         if let failure = turn.failure, body.isEmpty {
             addBlock(paragraph(failure, colour: .systemRed))
+            failed = true
+            again.isHidden = onRetry == nil
         }
         save.isHidden = body.isEmpty
         disclosure.isHidden = blocks.arrangedSubviews.count < 2
@@ -452,6 +518,35 @@ final class AnswerTurn: NSView {
                              accessibilityDescription: nil)
         save.imagePosition = .imageLeading
         save.isEnabled = false
+    }
+
+    /// Disabled on the way out rather than left pressable.
+    ///
+    /// The owner answers by calling `restart`, and it can decline: a run is
+    /// already going, or the agent has gone away since. A button that can be
+    /// pressed four times while nothing visibly happens is how one failed
+    /// question becomes four.
+    @objc private func againTapped() {
+        again.isEnabled = false
+        onRetry?()
+    }
+
+    /// Put a failed turn back into a running one, in place.
+    ///
+    /// The question bubble above it is untouched, because the question was
+    /// asked once and asking it again is not a second question. What goes is
+    /// the red paragraph, which is a fact about an attempt rather than about
+    /// the conversation, and it would otherwise sit in the transcript for ever
+    /// under an answer that worked.
+    func restart(with backend: String) {
+        failed = false
+        again.isHidden = true
+        again.isEnabled = true
+        save.isHidden = true
+        disclosure.isHidden = true
+        setCollapsed(false)
+        reset()
+        begin(with: backend)
     }
 
     // MARK: - Words
@@ -722,6 +817,16 @@ final class ShimmerLabel: NSView {
         }
     }
 
+    /// The colour of the words. Not a constant because the line also carries
+    /// the one state where nothing is happening, and that one is amber and
+    /// still: see `AnswerTurn.offline`.
+    var tint: NSColor = .secondaryLabelColor {
+        didSet {
+            guard tint != oldValue else { return }
+            apply()
+        }
+    }
+
     private let base = CATextLayer()
     private let sheen = CAGradientLayer()
     private let sheenMask = CATextLayer()
@@ -789,7 +894,7 @@ final class ShimmerLabel: NSView {
             layer.truncationMode = .end
             layer.alignmentMode = .left
         }
-        base.foregroundColor = NSColor.secondaryLabelColor.cgColor
+        base.foregroundColor = tint.cgColor
         // The mask only cares about alpha, so the colour is arbitrary as long
         // as it is opaque.
         sheenMask.foregroundColor = NSColor.white.cgColor
@@ -827,6 +932,15 @@ final class ShimmerLabel: NSView {
         // light and dark switch leaves the old one behind.
         apply()
     }
+
+    /// The words are `CATextLayer` contents, which no assistive technology can
+    /// see, so without this the one line that says what is happening right now
+    /// was missing from the accessibility tree entirely. It is also the only way
+    /// to read this line from outside the process, which is what made "no
+    /// internet connection" testable rather than something to take on trust.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+    override func accessibilityValue() -> Any? { text }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

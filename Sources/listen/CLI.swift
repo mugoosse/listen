@@ -2912,15 +2912,27 @@ enum CLI {
                 break
             case .note(let text):
                 log("  ! \(text)")
+            case .offline(let trouble):
+                // On stderr with the rest of the tracing, because stdout is the
+                // answer. A run that is waiting for the network says so once
+                // here and once again when it comes back.
+                log("  ! " + (trouble ?? "the connection is back."))
             case .text(let text):
+                // With --json the raw payloads are already going to stdout, and
+                // a second, cooked copy of the same words interleaved with them
+                // would make the one output nobody may misread unreadable.
+                guard !rawStream else { break }
                 print(text)
             case .textDelta(let text):
+                guard !rawStream else { break }
                 // Unbuffered and without a newline, because a delta is a few
                 // characters in the middle of a sentence. `print` would break
                 // the line and stdout would stop being the answer.
                 FileHandle.standardOutput.write(Data(text.utf8))
             case .finished(let outcome):
-                if query.streaming { FileHandle.standardOutput.write(Data("\n".utf8)) }
+                if query.streaming && !rawStream {
+                    FileHandle.standardOutput.write(Data("\n".utf8))
+                }
                 var parts = ["\(outcome.toolCalls) tool call"
                              + (outcome.toolCalls == 1 ? "" : "s")]
                 if let ms = outcome.durationMS {

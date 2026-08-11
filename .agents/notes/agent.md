@@ -1054,6 +1054,136 @@ bar" rule is narrowed to cards, which is what makes an empty page possible at
 all. Opening one from History does the same: `onWantsOpen` only forces a card
 when it is not already a page.
 
+## Neither CLI says the network is gone, and both were measured saying nothing
+
+A question asked with no connection used to be a pane that said "Thinking" until
+somebody pressed Stop. The obvious fix, waiting for the CLI to report the
+failure, does not exist. Against a blackholed API (`192.0.2.1`, which drops
+packets rather than refusing them, so it looks like an unplugged uplink):
+
+- `claude -p --output-format stream-json` ran for **100 seconds** emitting
+  nothing but its own hook events, wrote nothing to stderr, and did not exit.
+- `codex exec --json` ran the same 100 seconds, printed `thread.started` and
+  `turn.started`, then nothing. Its only stderr was
+  `failed to refresh available models: timeout waiting for child process to
+  exit`, which names neither the network nor the question.
+
+With the connection **refused** rather than dropped, which is the fast and
+unambiguous error, `claude` got as far as `system init` and then sat silent for
+90 more seconds. So even the case the CLI could report instantly is retried in
+silence for longer than anybody waits. `Reachability` exists because of these
+three measurements and nothing else.
+
+## The path is certain and the probe is truthful, and neither is enough alone
+
+`Reachability` has two halves on purpose.
+
+`NWPathMonitor` is cheap, continuous and sends no traffic, and `.unsatisfied`
+is definite: no interface can carry anything. It covers the Wi-Fi being
+switched off and the cable coming out. It does **not** cover the commonest
+outage there is, a router still happily handing out addresses over a dead
+uplink, where the path stays `.satisfied` throughout.
+
+So `.satisfied` proves nothing, and the second half is a TCP connection to the
+backend's own API host, opened only when a run has already gone quiet.
+Nothing is sent and nothing is read: the handshake completing is the whole
+answer, so it costs no request against anybody's account and says nothing about
+whether the credentials are good. `.waiting` counts as a no, because that is
+the state `NWConnection` sits in with no route, and it will sit there for ever
+rather than fail, which is the same trap as the CLIs one level down.
+
+`api.anthropic.com` for Claude and `chatgpt.com` for Codex, which are the
+default providers' hosts and nothing cleverer. Codex on an API key talks to
+`api.openai.com`, and either CLI behind a corporate proxy talks to neither.
+Both make the probe say less than the truth, which is survivable only because a
+failed probe never stops or fails a run. It puts a sentence on the screen.
+
+## Twenty seconds of silence, and why that is not a guess
+
+The watchdog probes after 20 seconds with nothing from the process. Events
+arrive far more often than that in a working run: streaming is on, so a
+thinking model emits deltas continuously, and the longest natural gap is a tool
+call into this app's own MCP server, which answers from local files in well
+under a second. A silence that long is already abnormal. The probe is what
+decides whether it is the network or a model taking its time, and a probe that
+succeeds emits nothing at all, so a slow answer is never accused of being an
+outage.
+
+Anything arriving withdraws a report the **probe** made, because output is
+proof the run is moving. It does not withdraw one the **path** made: with the
+interface still down, a line of hook output says nothing about whether the
+question can reach a model.
+
+## A run is never killed for the network, and the line stops shimmering
+
+Two states, one place. Offline before the process starts is a refusal:
+`AgentRun.start()` throws `Failure.offline` and no process is spawned, because
+starting one is 100 measured seconds of silence for nothing. Offline **under** a
+running process is a sentence on the activity line and nothing more. A blip
+mid-answer would otherwise cost the words already streamed and the session
+behind them, both CLIs retry, and Stop is where it has always been.
+
+The line goes amber and **stops sweeping**, which is the shimmer's own argument
+read backwards: it is there to say the process is alive between changes, and
+this is the one state where it is making no progress. A shimmering "no internet
+connection" is the same reassuring movement that made the hang look like work.
+
+The composer's status line says it too, before anything is typed. What neither
+does is **disable** anything: `.satisfied` is not a promise and a wrong reading
+has to cost a sentence rather than the feature.
+
+## The failed turn had to end the turn, not just colour it
+
+The catch around `start()` called `fail` on the answer view alone. That left
+`answering` set, no turn in `chat.json`, and `updateStatus` never called, so the
+send button kept the Stop it had been given a moment earlier with nothing left
+to stop. It went unnoticed while the only way to reach it was a missing binary.
+It routes through `finish` now, with a real `Outcome`, so the failure is on
+screen, in the file, and the button says Ask again. Read back from disk the
+turn renders the same red paragraph, which the stored `failure` field already
+supported.
+
+## `LISTEN_OFFLINE` and `LISTEN_PROBE_HOST`, because unplugging is not a test
+
+`LISTEN_OFFLINE=1` makes every reachability check say offline, which drives the
+whole pre-flight path without touching the Mac's connection. `LISTEN_PROBE_HOST`
+replaces the host the probe opens a socket to; point it at `192.0.2.1` and
+point the CLI at the same address with `ANTHROPIC_BASE_URL`, and the silent hang
+reproduces end to end in about 25 seconds. In the family of `LISTEN_CHUNK` and
+`LISTEN_PANEL`: measurement, not a user-facing switch.
+
+The sentence names `Reachability.host(...)` rather than the backend's host, for
+a reason worth keeping: it first named `api.anthropic.com` while the override
+sent the connection somewhere else entirely, which is a test that lies about
+what it tested.
+
+## The shimmer line was invisible to accessibility, and that is why it was untestable
+
+`ShimmerLabel` draws into `CATextLayer`s, so the one line that says what is
+happening right now was missing from the accessibility tree, and
+`LibraryWindow.writeShot` cannot help either: the conversation page is Liquid
+Glass and comes out of a bitmap render as a white sheet. Between them there was
+no way to read this state from outside the process at all.
+
+`isAccessibilityElement`, `accessibilityRole` and `accessibilityValue` on the
+label fix a real defect for anybody using VoiceOver and, incidentally, are what
+made every claim above checkable:
+
+```sh
+ANTHROPIC_BASE_URL=http://192.0.2.1:443 LISTEN_PROBE_HOST=192.0.2.1 \
+  LISTEN_LIBRARY=/tmp/scratch ./Listen.app/Contents/MacOS/Listen
+# 6s:  "Working for 6s"  / "Thinking"
+# 32s: "Working for 32s" / "Nothing back for 20s, and 192.0.2.1 is not answering."
+```
+
+One thing that does **not** work: setting `AXValue` on the composer's field and
+posting a Return. The text lands in the cell, no edit ever starts, so there is
+no field editor for the Return to reach and the send action never fires: the
+question sits there looking sent. The app has to be activated and the
+characters typed as `CGEvent`s. The send button itself is a plain `NSView` with
+a target and action, so `AXPress` on it returns `-25206`, which is the same
+`HoverRow` gap the root `CLAUDE.md` already records.
+
 # The third backend: an OpenAI-compatible endpoint
 
 Everything above is about driving somebody else's agent. This part is about the
@@ -1802,3 +1932,67 @@ Selecting a **header** row rather than a recording is the trap in testing this:
 it deselects, so the toolbar correctly does not change and the run looks like the
 change did nothing.
 
+## Try again replaces the attempt, and never appends to the conversation
+
+A failure with no way back to the question is a dead end: the text has already
+been cleared out of the composer, so the only route left was to type it again
+from memory. `AnswerTurn` grows a **Try again** button beside Save as note,
+shown only when the turn ended with a failure and no answer.
+
+What it does is deliberately narrow. The failed answer is dropped from
+`chat.turns` before the retry starts, and the same `AnswerTurn` is restarted in
+place by `restart(with:)`. So:
+
+- The **question bubble stays.** It was asked once, and asking it again is not
+  a second question. Appending instead would leave a duplicate question and a
+  red paragraph above an answer that worked.
+- The failed attempt leaves **nothing on disk**. Measured on the finished file:
+  after fail, retry-while-still-offline, and retry-once-back, `chat.json` holds
+  exactly two turns, the question and the answer. A failure is a fact about an
+  attempt, not about the conversation.
+- Pressing it while still offline fails again and leaves **one** red paragraph
+  and **one** button, not a growing stack.
+
+The button disables itself on the way out, because the owner can decline the
+press (a run is already going, the agent has gone away since) and a button that
+can be pressed four times while nothing visibly happens is how one failed
+question becomes four.
+
+**Nothing retries by itself when the connection returns.** Listen knows the
+moment it comes back and deliberately does not act on it: a question somebody
+has stopped wanting is worse than one they press a button for, and by then they
+may have typed a different one.
+
+## Only the last turn may be retried
+
+`AskView.redraw` sets `onRetry` on the last turn and no other, and `AnswerTurn`
+hides the button while that closure is nil. A failure halfway up a reopened
+conversation is history: re-asking it would put an old question *after*
+everything said since and answer it with all of that as context. Verified both
+ways against a hand-written `chat.json`: a failed last turn offers the button, a
+failed turn with a successful exchange after it offers nothing and still shows
+its red paragraph.
+
+## `LISTEN_OFFLINE` also takes a path, because recovery is the interesting half
+
+An environment variable cannot change under a running app, and Try again is
+only worth anything when the retry *succeeds*. `LISTEN_OFFLINE=<path>` means
+offline for as long as that file exists, so `rm` is the connection coming back,
+mid-conversation, with the window still open.
+
+Two traps in driving that test, both of which cost a run each:
+
+- **`make_app.sh` does not build.** It wraps whatever is in `.xcbuild`, so a
+  source edit followed by `make_app.sh` packages the *previous* binary. The
+  symptom was an app that ignored `LISTEN_OFFLINE` entirely and quietly asked
+  the question for real.
+- **A second bundle identifier gets Sparkle's "Check for updates
+  automatically?" prompt**, which is a modal on top of the window and eats every
+  synthesised keystroke, so the composer looked broken. `defaults write
+  com.mgo.listen-uitest SUEnableAutomaticChecks -bool false` before launching.
+
+The test app is pinned with `defaults write com.mgo.listen-uitest agentBackend
+claude`: the pre-flight refusal lives in `AgentRun`, which only runs the two
+CLIs, and the shipped preference is now an endpoint. Testing this against the
+default backend tests nothing, which is worth knowing before reading a green
+result.

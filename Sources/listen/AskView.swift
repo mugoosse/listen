@@ -120,9 +120,18 @@ final class AskView: NSView {
     /// being switched to and back.
     var onNoteWritten: (() -> Void)?
 
+    /// Watches the network, so the line under the composer is right before a
+    /// question is typed rather than only after one has failed. Released with
+    /// the view, which is what unsubscribes it.
+    private var connection: Reachability.Watcher?
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         build()
+        connection = Reachability.watch { [weak self] _ in
+            // Off the monitor's queue: everything below this line is AppKit.
+            DispatchQueue.main.async { self?.updateStatus() }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }
@@ -752,9 +761,21 @@ final class AskView: NSView {
         // a conversation saved before `Chat.Turn.question` existed still titles
         // its notes from the right place.
         var asked = ""
-        for turn in chat.turns {
+        for (index, turn) in chat.turns.enumerated() {
             if turn.who == Chat.you { asked = turn.text }
-            addTurn(view(for: turn, asking: turn.question ?? asked))
+            let built = view(for: turn, asking: turn.question ?? asked)
+            // Only the last turn may offer Try again, and `view(for:)` cannot
+            // know which one that is. A failure halfway up a conversation is
+            // history: re-asking it would put an old question after everything
+            // said since, and answer it with all of that as context.
+            if index == chat.turns.count - 1, let answer = built as? AnswerTurn,
+               answer.failed {
+                answer.onRetry = { [weak self, weak answer] in
+                    guard let self, let answer else { return }
+                    self.retry(answer)
+                }
+            }
+            addTurn(built)
         }
         // The chips are drawn by `updateStatus`, which is the only thing that
         // knows whether there is anything to ask.
@@ -901,13 +922,37 @@ final class AskView: NSView {
         notice.isHidden = true
         setAskable(true)
         reportHeight()
+        // A provider's catalogue goes stale while the app sits in the menu bar
+        // for a week. This is a date comparison in the common case and a few
+        // background HTTP GETs when it is not, and it lands in the cache for
+        // the next menu rather than this one. `updateStatus` runs on every
+        // selection and after every answer, which is often enough that the list
+        // is rarely more than its staleness window behind.
+        AgentCLI.refreshStaleProviders()
+
+        // A fact about right now, which is exactly what this label is for.
+        //
+        // Said here as well as on the failed turn because the two arrive at
+        // different moments: this one is up before the question is typed, and
+        // costs nobody the wait. The composer is deliberately **not** disabled:
+        // see `Reachability.offline`, a wrong reading has to cost a sentence
+        // rather than the feature.
+        // `needsNetwork`, not the bare check: a model running on this Mac
+        // answers with the Wi-Fi off, and there is nothing to warn somebody on
+        // that backend about.
+        if chosen.needsNetwork, Reachability.offline(waitingUpTo: 0) {
+            say("No internet connection. \(chosen.name) answers over the "
+                + "network, so a question asked now will not get through.")
+            return
+        }
+
         // Nothing at all when everything is working.
         //
         // It said "Answers come from your recordings only", which is true and
         // was still the wrong thing to put under every question forever: it is
         // a fact about the feature, not a fact about right now, and a standing
         // line of small grey text is read once and then becomes furniture. The
-        // place for it is Settings › Agent, which says it in full.
+        // place for it is Settings › Ask, which says it in full.
         //
         // The label stays for the things that *are* about right now: looking
         // for an agent, not finding one, and confirming a note was written.
@@ -1114,27 +1159,54 @@ final class AskView: NSView {
         let answer = AnswerTurn(question: text) { [weak self] body, asked in
             self?.saveAsNote(body, asked: asked) ?? false
         }
+        answer.onRetry = { [weak self, weak answer] in
+            guard let self, let answer else { return }
+            self.retry(answer)
+        }
         answering = answer
         addTurn(answer)
-        answer.begin(with: chosen.backend.name)
+        answer.begin(with: chosen.name)
         updateSendButton()
         scrollToEnd()
 
-        start(text, backend: chosen.backend, path: path, resuming: chat.session)
+        start(text, status: chosen, path: path, resuming: chat.session)
     }
 
     /// Run one question. Split out because a failed resume runs it again.
-    private func start(_ text: String, backend: AgentBackend, path: URL,
+    private func start(_ text: String, status: AgentStatus, path: URL,
                        resuming: String?) {
+        let backend = status.backend
+        // Everything before this question, which an endpoint needs and a CLI
+        // does not: a CLI is handed `resume` and remembers its own thread,
+        // while an endpoint is stateless and is handed the messages every time.
+        // The turn just appended by `ask` is dropped, because it is `text`.
+        let history = Array(chat.turns.dropLast())
+
+        // **Does the model know anything about this conversation yet?**
+        //
+        // `resuming == nil` used to be the whole test, and it was right while
+        // every backend was a CLI that owns its thread. An endpoint has no
+        // thread and no id, so that test is true on every turn and would
+        // prefix "About the recording …" onto question five of a conversation
+        // that has been about that recording since question one.
+        //
+        // History cannot replace it either, and the case that proves it is the
+        // retry below: a CLI whose session has been forgotten starts again
+        // knowing nothing, while `chat.turns` is full. It would lose the one
+        // sentence saying which meeting is being discussed.
+        //
+        // So the question is asked of each backend in its own terms.
+        let opening = backend.isCLI ? resuming == nil : history.isEmpty
+
         // The question is asked *about* a recording, and the agent is given
         // that as a sentence rather than as a hidden filter. It can still look
         // at the rest of the library, which is the point: "is this the same
         // thing we said last week" is a reasonable follow-up and a hard filter
         // would make it unanswerable.
         var scoped = text
-        if resuming == nil, let recording {
+        if opening, let recording {
             scoped = "About the recording `\(recording.id)` (\(recording.metadata.title)): \(text)"
-        } else if resuming == nil, let person {
+        } else if opening, let person {
             // Named, not filtered, for the reason above. The instruction points
             // at the person's own material first, which is the retrieval ladder
             // the brief already describes, rather than fencing the library off.
@@ -1170,6 +1242,8 @@ final class AskView: NSView {
                 self.scrollToEnd()
             case .note(let text):
                 answer.tool("note", text)
+            case .offline(let trouble):
+                answer.offline(trouble)
             case .toolResult:
                 break
             case .finished(let outcome):
@@ -1191,13 +1265,53 @@ final class AskView: NSView {
         do {
             try run.start()
         } catch {
-            answer(error.localizedDescription)
+            // Through `finish`, not through `fail` alone. A run that never
+            // started still has to end the turn: clear `answering`, write the
+            // failure into `chat.json` so it is still there tomorrow, and put
+            // the send button back. Without it the composer kept the Stop it
+            // had been given a moment earlier and there was nothing left to
+            // stop, which is how "no internet" would have looked worse than
+            // the hang it replaces.
+            if let answering {
+                finish(AgentRun.Outcome(session: chat.session, costUSD: nil,
+                                        durationMS: nil, toolCalls: 0,
+                                        failure: error.localizedDescription),
+                       answering)
+            }
         }
     }
 
-    private func answer(_ failure: String) {
-        answering?.fail(failure)
-        run = nil
+    /// Ask a failed turn's question again, in place.
+    ///
+    /// The failed answer is dropped from `chat.turns` first, so the retry is
+    /// not appended *after* a red paragraph saying the same question could not
+    /// be sent. The question turn above it stays: it was asked once.
+    ///
+    /// Nothing here is automatic. The connection coming back does not re-send a
+    /// question by itself, because a question somebody has stopped wanting is
+    /// worse than one they press a button for, and by then they may have typed
+    /// a different one.
+    private func retry(_ answer: AnswerTurn) {
+        guard run == nil else { return }
+        guard let chosen = AgentCLI.cachedChosen(), let path = chosen.path else {
+            // The agent went away between the failure and the press. The line
+            // under the composer says which, and it is the same sentence
+            // somebody would get by typing the question again.
+            updateStatus()
+            return
+        }
+        // The last turn, and only if it is the failure this button belongs to.
+        // A conversation that has moved on since is not one to rewrite.
+        if let last = chat.turns.last, last.who == Chat.agent, last.failure != nil,
+           last.text.isEmpty {
+            chat.turns.removeLast()
+            persist()
+        }
+        answering = answer
+        answer.restart(with: chosen.name)
+        updateSendButton()
+        scrollToEnd()
+        start(answer.question, status: chosen, path: path, resuming: chat.session)
     }
 
     private func finish(_ outcome: AgentRun.Outcome, _ answer: AnswerTurn) {

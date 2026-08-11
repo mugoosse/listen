@@ -121,23 +121,67 @@ enum AgentBackend: String, CaseIterable {
     /// to *run* rather than to read: the Agent pane's copy button and the Ask
     /// pane's setup notice. A command that differs between the two is a command
     /// one of them is wrong about.
-    var installCommand: String {
+    /// Optional, because an endpoint is not installed and is not signed into.
+    /// It is a URL somebody types, and the thing to do about it is open the
+    /// settings pane, which is a button rather than a command to copy.
+    var installCommand: String? {
         switch self {
-        case .claude: return "npm install -g @anthropic-ai/claude-code"
-        case .codex:  return "brew install codex"
+        case .claude:   return "npm install -g @anthropic-ai/claude-code"
+        case .codex:    return "brew install codex"
+        case .endpoint: return nil
         }
     }
 
-    var signInCommand: String {
+    var signInCommand: String? {
         switch self {
-        case .claude: return "claude auth login"
-        case .codex:  return "codex login"
+        case .claude:   return "claude auth login"
+        case .codex:    return "codex login"
+        case .endpoint: return nil
         }
     }
 
-    /// Claude first when both are present, for the tool-isolation reason in the
-    /// type comment above.
-    static var preferenceOrder: [AgentBackend] { [.claude, .codex] }
+    /// The host its answers come from, which `Reachability.answers(_:)` asks
+    /// when a run has gone quiet.
+    ///
+    /// The default provider's host and nothing cleverer: Codex signed in with an
+    /// API key talks to `api.openai.com` instead, and either CLI behind a
+    /// corporate proxy talks to neither. Both cases make the probe say less than
+    /// the truth, which is survivable precisely because a failed probe only ever
+    /// puts a sentence on screen. It never stops or fails a run.
+    /// Does a question to this backend have to leave the Mac?
+    ///
+    /// Only false for a loopback endpoint, and that case is the reason this
+    /// exists at all: a model running under Ollama answers with the Wi-Fi off,
+    /// so telling somebody on that backend that their question "will not get
+    /// through" is untrue, and untrue in the direction that stops them asking.
+    /// The LAN case counts as needing the network, because the interface being
+    /// down takes the other machine with it.
+    /// **Only a CLI can answer this from its case alone.** Whether an endpoint
+    /// needs the network is a fact about the provider's URL, so the useful
+    /// answer is `AgentStatus.needsNetwork`, which has one. True here is the
+    /// conservative default, and the only caller that reaches it with
+    /// `.endpoint` would be a bug: `AgentRun` runs the two CLIs and nothing
+    /// else.
+    var needsNetwork: Bool { true }
+
+    var apiHost: String {
+        switch self {
+        case .claude: return "api.anthropic.com"
+        case .codex:  return "chatgpt.com"
+        // Its own host, and for a loopback endpoint that is `localhost`, which
+        // answers whether or not there is any internet at all. That is the
+        // right answer rather than a special case: a question put to a model on
+        // this Mac genuinely does not need a network, and a probe that reported
+        // otherwise would put an untrue sentence under it.
+        case .endpoint: return "localhost"
+        }
+    }
+
+    /// Claude first when all three are present, for the tool-isolation reason
+    /// in the type comment above. The endpoint is last because it is the only
+    /// one that has to be configured before it can work, so a Mac with a CLI
+    /// installed behaves exactly as it did before this existed.
+    static var preferenceOrder: [AgentBackend] { [.claude, .codex, .endpoint] }
 }
 
 // ---------------------------------------------------------------------------
@@ -887,7 +931,32 @@ final class AgentRun {
         case toolResult(name: String, ok: Bool)
         /// Something worth saying that is not part of the answer.
         case note(String)
+        /// The network went away under a run that had already started, and came
+        /// back (`nil`). Carries the sentence to show, because the two ways this
+        /// is noticed are worth telling apart on screen: the path going down is
+        /// certain, and a host that stopped answering while the path stayed up
+        /// is an inference from a silence.
+        ///
+        /// A run is never killed for this. A blip mid-answer would cost the
+        /// words already streamed and the session behind them, and both CLIs
+        /// retry, so the honest thing is to say what is happening and leave Stop
+        /// where it has always been.
+        case offline(String?)
         case finished(Outcome)
+    }
+
+    /// The reasons a run refuses to start, as opposed to the ones it reports
+    /// once it has.
+    enum Failure: LocalizedError {
+        case offline(AgentBackend)
+
+        var errorDescription: String? {
+            switch self {
+            case .offline(let backend):
+                return "No internet connection, so the question cannot be sent. "
+                     + "Recording and transcription are local; \(backend.name) is not."
+            }
+        }
     }
 
     struct Outcome {
@@ -1211,6 +1280,28 @@ final class AgentRun {
                                   toolCalls: 0, failure: nil)
     private var finished = false
 
+    /// When the process last said anything at all, so a silence can be timed.
+    /// Read and written on `parsing`, like everything else it is derived from.
+    private var lastHeard = Date()
+    /// Whether `.offline` has already been emitted, so the state changes once
+    /// rather than every time the watchdog ticks.
+    private var reportedOffline = false
+    private var connection: Reachability.Watcher?
+    private var watchdog: DispatchSourceTimer?
+    /// A probe is in flight, so ticks in the meantime do not start a second one.
+    private var probing = false
+
+    /// How long a run may say nothing before its backend's host is asked
+    /// whether it is there.
+    ///
+    /// 20 seconds. Not a guess: the events arrive far more often than that in a
+    /// working run, because streaming is on and a thinking model emits deltas
+    /// continuously, and the longest natural gap is a tool call against this
+    /// app's own MCP server, which answers from local files in well under a
+    /// second. A silence this long is already abnormal, and the probe is what
+    /// decides whether it is the network or a model taking its time.
+    private static let silence: TimeInterval = 20
+
     /// Parsing happens here and nowhere else.
     ///
     /// `consume` is reached from two directions: the pipe's readability handler
@@ -1238,6 +1329,17 @@ final class AgentRun {
     }
 
     func start() throws {
+        // Before the process, not after. Started, it would sit there retrying in
+        // silence for as long as anybody left it: measured at 100 seconds
+        // without a word from either CLI, which is the whole reason
+        // `Reachability` exists. Throwing here costs nothing and says why.
+        // `needsNetwork` is always true for the two CLIs this class runs, and it
+        // is asked anyway: the refusal has to read from the same property the
+        // composer's line does, or the two can disagree about one backend.
+        if question.backend.needsNetwork, Reachability.offline() {
+            throw Failure.offline(question.backend)
+        }
+
         process.executableURL = question.path
         process.arguments = Self.arguments(for: question)
         process.currentDirectoryURL = Self.workspace
@@ -1276,17 +1378,92 @@ final class AgentRun {
 
         whileRunning = self
         startedAt = Date()
+        lastHeard = Date()
         do {
             try process.run()
         } catch {
             whileRunning = nil
             throw error
         }
+        watchNetwork()
     }
 
     func cancel() {
+        stopWatching()
         guard process.isRunning else { return }
         process.terminate()
+    }
+
+    // MARK: The network under a running process
+
+    /// Two detectors, because neither is enough on its own.
+    ///
+    /// The path going down is certain and immediate, and covers the lid closing,
+    /// the Wi-Fi being switched off and the cable coming out. It does not cover
+    /// the commonest outage of all, which is a router that is still happily
+    /// handing out addresses over a dead uplink: the path stays `.satisfied`
+    /// throughout. That one only shows up as an unusual silence, so a silence is
+    /// what starts the second detector asking.
+    private func watchNetwork() {
+        let watcher = Reachability.watch { [weak self] online in
+            self?.networkIs(online ? nil : "No internet connection. Waiting for it to come back.")
+        }
+        let timer = DispatchSource.makeTimerSource(queue: probes)
+        timer.schedule(deadline: .now() + Self.silence, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.checkSilence() }
+        parsing.sync {
+            connection = watcher
+            watchdog = timer
+        }
+        timer.resume()
+    }
+
+    /// On `parsing`, like every other piece of shared state here, because the
+    /// two ways out overlap: `cancel()` arrives on the main thread and the
+    /// termination handler arrives on its own, and both end up here. Two threads
+    /// clearing the same two references is an over-release rather than a
+    /// visible bug, which is the kind that turns up in a crash log weeks later.
+    private func stopWatching() {
+        parsing.sync {
+            connection = nil
+            watchdog?.cancel()
+            watchdog = nil
+        }
+    }
+
+    /// Where the probe's callback and the watchdog's ticks land. Not `parsing`:
+    /// the probe takes seconds to answer and parsing must never wait on it.
+    private let probes = DispatchQueue(label: "listen.agent.probe")
+
+    private func checkSilence() {
+        let quiet: Bool = parsing.sync {
+            !finished && !probing && !reportedOffline
+                && Date().timeIntervalSince(lastHeard) >= Self.silence
+        }
+        guard quiet else { return }
+        parsing.sync { probing = true }
+        let host = Reachability.host(question.backend.apiHost)
+        Reachability.answers(host) { [weak self] answered in
+            guard let self else { return }
+            self.parsing.sync { self.probing = false }
+            guard !answered else { return }
+            // Worded as what was observed rather than as a diagnosis. The host
+            // not answering is a fact; "you are offline" would be a claim, and
+            // a proxy or an API-key provider is enough to make it a wrong one.
+            self.networkIs("Nothing back for \(Int(Self.silence))s, and \(host) is not answering.")
+        }
+    }
+
+    /// `nil` means it is back. Emitted on change only, so the line on screen is
+    /// replaced once rather than rewritten every tick.
+    private func networkIs(_ trouble: String?) {
+        let changed: Bool = parsing.sync {
+            guard !finished, reportedOffline == (trouble == nil) else { return false }
+            reportedOffline = trouble != nil
+            return true
+        }
+        guard changed else { return }
+        emit(.offline(trouble))
     }
 
     private func emit(_ event: Event) {
@@ -1294,7 +1471,18 @@ final class AgentRun {
     }
 
     private func consume(_ data: Data) {
+        var recovered = false
         parsing.sync {
+            lastHeard = Date()
+            // Anything at all arriving is proof the run is moving, so a report
+            // the *probe* made is withdrawn. A report the path made is not: if
+            // the interface is still down, a line of hook output says nothing
+            // about whether the question can reach a model, and taking the
+            // sentence away would leave the pane exactly as mute as before.
+            if reportedOffline && !Reachability.offline(waitingUpTo: 0) {
+                reportedOffline = false
+                recovered = true
+            }
             buffer.append(data)
             // Line-delimited, and a read can end mid-line, so the tail is kept.
             while let newline = buffer.firstIndex(of: 0x0A) {
@@ -1306,12 +1494,21 @@ final class AgentRun {
                 switch question.backend {
                 case .claude: readClaude(json)
                 case .codex:  readCodex(json)
+                // Unreachable: an endpoint question never reaches `AgentRun` at
+                // all. `Question.session(on:onEvent:)` sends it to `AgentChat`,
+                // which speaks a different protocol over a socket rather than a
+                // different dialect over a pipe.
+                case .endpoint: break
                 }
             }
         }
+        // Outside the block: `networkIs` takes `parsing` itself, and a `sync`
+        // onto the queue you are already on is a deadlock rather than an error.
+        if recovered { emit(.offline(nil)) }
     }
 
     private func complete(status: Int32) {
+        stopWatching()
         // On the parsing queue, so the outcome cannot be read while the last
         // few lines are still being folded into it.
         parsing.sync {

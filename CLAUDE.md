@@ -300,7 +300,7 @@ that repo is being archived.**
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
-### `.agents/notes/agent.md` (94k)
+### `.agents/notes/agent.md` (107k)
 
 Asking questions about the library, through an agent CLI the user already has
 or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
@@ -379,6 +379,16 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - A width nobody else may have an opinion about
 - The document was as wide as the scroll view, and the scroller took the difference
 - The page's controls are the window's toolbar
+- Neither CLI says the network is gone, and both were measured saying nothing
+- The path is certain and the probe is truthful, and neither is enough alone
+- Twenty seconds of silence, and why that is not a guess
+- A run is never killed for the network, and the line stops shimmering
+- The failed turn had to end the turn, not just colour it
+- `LISTEN_OFFLINE` and `LISTEN_PROBE_HOST`, because unplugging is not a test
+- The shimmer line was invisible to accessibility, and that is why it was untestable
+- Try again replaces the attempt, and never appends to the conversation
+- Only the last turn may be retried
+- `LISTEN_OFFLINE` also takes a path, because recovery is the interesting half
 - History belongs to the two screens that are about conversations
 
 ### `.agents/notes/release.md` (5k)

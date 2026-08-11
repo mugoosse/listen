@@ -91,6 +91,7 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - `RunLoop.current.run()` returns immediately
 - WAV headers are rewritten as the recording runs
 - Meeting detection asks while recording, not before
+- Dictating made Listen a call, and the guard was on the pid rather than on the app
 - The app the call was in is a field, and never the title
 - Nothing asks "keep this recording?" any more
 

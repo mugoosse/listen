@@ -278,14 +278,27 @@ enum CLI {
                          p.bundleID ?? "(none)"))
         }
 
+        // Listen's own processes match the rule while somebody dictates, and
+        // they are dropped before anything else in the app sees the list. Said
+        // out loud here because this command is the only place that decision is
+        // visible: without it, a copy of Listen sitting there with `* y y` and
+        // no prompt on screen reads as detection being broken.
         let callers = MeetingDetector.activeCallers()
+        let ours = processes.filter {
+            $0.input && $0.output
+                && $0.bundleID.map(MeetingDetector.parentBundleID) == AppInfo.bundleID
+        }
         print("")
-        if callers.isEmpty {
+        if callers.isEmpty && ours.isEmpty {
             print("nothing looks like a call. Run this during one.")
         } else {
             for id in callers {
                 print(skipped.contains(id) ? "on a call, skipped: \(id)"
                                            : "on a call: \(id)")
+            }
+            for p in ours {
+                print("on a call by the rule, ignored because it is Listen: "
+                      + "\(AppInfo.bundleID ?? "?") (pid \(p.pid.map(String.init) ?? "?"))")
             }
         }
         if !skipped.isEmpty {

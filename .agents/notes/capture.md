@@ -249,6 +249,62 @@ it cannot tell "not set yet" from "turned off on purpose": a default of true
 would be inexpressible, and anyone who turned detection off would have it
 switched back on for them.
 
+### Dictating made Listen a call, and the guard was on the pid rather than on the app
+
+A push-to-talk dictation with no meeting anywhere put "Are you in a meeting?
+Recording · Listen" on screen, twice on 11 August 2026, and left two 6.4 second
+recordings in the library stamped `app_bundle_id: com.mgo.listen` and
+`source: detected`.
+
+Two things had to be true at once, and each was written down here as safe.
+
+**Dictation makes Listen match Blackbox's rule exactly.** The microphone is an
+input stream and `Cue.start` plays a system sound as the microphone goes live,
+so for as long as that sound lasts the app is running an input and an output
+stream at the same time. This is the case the self-PID guard's own comment
+predicted: the day capture plays anything at all, Listen starts matching its
+own rule.
+
+**The guard asked the wrong question.** `process.pid != me` is "is this me?"
+when the question is "is this Listen?". A second copy of the app is a second
+pid with the same bundle identifier, so it walked straight through. Detection
+is per process; the thing being detected is an app.
+
+Measured by firing the chord at two copies running side by side and sampling
+the HAL four times a second from a third process:
+
+| | |
+|---|---|
+| the dictating copy | `in y, out y, pid 88102, com.mgo.listen` |
+| the rule as it was, on the pid | `com.mgo.listen` |
+| the rule now, pid then app | `[]` |
+| how long the two streams overlap | about 1.8 s, which is the length of the cue |
+| how often detection polls | every 3 s |
+
+The last two rows are why this was occasional rather than constant, which is
+the part that made it hard to believe: a two second window against a three
+second poll misses more often than it lands, so most dictations produced
+nothing and the ones that did looked like the app inventing a meeting.
+
+With the identifier compared, the same run leaves no recording and no staging
+folder in either copy's library, and neither trace says `meeting detected`.
+
+Both guards stay in `activeCallers`, because they fail apart: the identifier is
+what covers a sibling process, and the pid is what still holds when `AppInfo`
+cannot resolve an identifier to compare against, which is every unbundled
+build.
+
+`listen sources` prints the decision now, as `on a call by the rule, ignored
+because it is Listen: com.mgo.listen (pid 88102)`. Without it a copy of Listen
+sitting in that table with `* y y` and no prompt on screen reads as detection
+being broken, which is the question the command exists to answer.
+
+A copy signed with a different identifier, which is what the ui-test recipe in
+`CLAUDE.md` builds, is a different app by this rule and would still be asked
+about. That is the right answer for something calling itself
+`com.mgo.listen-uitest`, and worth knowing before wondering why a test copy
+asks.
+
 ### The app the call was in is a field, and never the title
 
 Blackbox names the recording after it (`title: titlePrefix + appName`), which is
@@ -332,9 +388,10 @@ Three things were measured with `listen sources`, which exists because
 detection leaves nothing behind to inspect afterwards:
 
 1. **A process tap is not an output stream on the tapping process.** Listen
-   while capturing reports `in y / out -` (measured, pid 8859). So Listen does
-   not match its own rule and the self-PID guard is not currently load-bearing.
-   It stays: the day capture plays anything, the app detects itself forever.
+   while capturing reports `in y / out -` (measured, pid 8859), so capturing
+   alone does not match the rule. Dictating does, because of the cue, and the
+   day it did is written up above: the guard on the pid was never enough by
+   itself, and the one that carries the weight is on the bundle identifier.
 2. **Every process that links CoreAudio gets a process object**, streams or
    not. `listen sources` lists 30 on this machine with two on any kind of
    stream, so filtering on the flags rather than on the list is the whole job.

@@ -180,6 +180,13 @@ final class MeetingDetector {
         }
     }
 
+    /// Listen's own identifier, resolved once.
+    ///
+    /// `AppInfo` rather than `Bundle.main`, for the reason `Settings` reads it
+    /// that way: launched through the installed symlink, `Bundle.main` is
+    /// `~/.local/bin` and has no `Info.plist` in it at all.
+    private nonisolated static let ownBundleID = AppInfo.bundleID
+
     /// Bundle identifiers of every process currently running both an input and
     /// an output stream, with helper processes resolved to their parent app.
     ///
@@ -188,12 +195,32 @@ final class MeetingDetector {
         let me = ProcessInfo.processInfo.processIdentifier
         var seen: [String] = []
         for process in report() where process.input && process.output {
-            // Measured: Listen while capturing reports `input` and not
-            // `output`, because a process tap is not an output stream on the
-            // tapping process. So this guard is not currently load-bearing, and
-            // it stays anyway: the day capture plays anything at all, Listen
-            // starts matching its own rule, and the symptom is a recording that
-            // re-detects itself forever with no way to stop it from the panel.
+            // Whatever else is on a call, Listen is not, and that has to be
+            // decided by the app rather than by the process.
+            //
+            // The pid was the whole of this guard and it asks the wrong
+            // question: "is this me?" rather than "is this Listen?". Two copies
+            // of the app is two pids with one bundle identifier, which is the
+            // ordinary state of this machine while the app is being worked on
+            // and is reachable by anyone who keeps a second copy anywhere.
+            //
+            // What makes Listen match its own rule is dictation: the
+            // microphone is an input stream and `Cue.start` plays a system
+            // sound as it goes live, so a Listen being dictated into runs both
+            // at once for about the length of the cue. Capturing a meeting
+            // never did, because a process tap is not an output stream on the
+            // tapping process, and that measurement is where the comfortable
+            // reading of this guard came from.
+            //
+            // It fired twice on 11 August 2026, over a push-to-talk with no
+            // meeting anywhere: the other copy asked "are you in a meeting?"
+            // and left two recordings on disk stamped
+            // `app_bundle_id: com.mgo.listen`.
+            //
+            // Both guards stay, because they can fail apart. The identifier is
+            // the one that covers a sibling process, and the pid is the one
+            // that still holds when `AppInfo` cannot resolve an identifier to
+            // compare against, which is every unbundled build.
             guard process.pid != me else { continue }
             // A process with no bundle identifier cannot be a meeting app, and
             // dropping it here is what keeps daemons out of the prompt. This is
@@ -204,6 +231,7 @@ final class MeetingDetector {
             // asks.
             guard let id = process.bundleID else { continue }
             let parent = parentBundleID(id)
+            guard parent != ownBundleID else { continue }
             if !seen.contains(parent) { seen.append(parent) }
         }
         return seen

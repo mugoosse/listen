@@ -146,6 +146,23 @@ footer a { color: var(--grey); }
 </section>
 
 <section>
+  <h2>Dictate into anything</h2>
+  <p class="lead">Press <strong>fn + left shift</strong> wherever you are
+  typing, say what you want written, and press it again. The words are typed
+  in where the cursor is: an email, Slack, a search bar, a code comment.</p>
+  <p>They go on the clipboard every time as well, so <code>&#8984;V</code>
+  still gets you the words when the app in front will not accept a keystroke
+  from Listen. Escape cancels, and so does the trash button on the floating
+  pill.</p>
+  <p>It is the same speech model that transcribes your meetings, running on
+  the same Mac, so there is nothing extra to download and nothing you dictate
+  is uploaded.</p>
+  <p>Dictating needs Accessibility, which is what lets Listen see the shortcut
+  and type for you. Recording meetings never uses it, so if you only want the
+  recorder you can ignore this and Listen will not ask.</p>
+</section>
+
+<section>
   <h2>Your meetings stay on your Mac</h2>
   <p class="lead">There is no meeting bot and no account. Your audio,
   transcripts and voiceprints never leave your Mac.</p>
@@ -160,10 +177,15 @@ footer a { color: var(--grey); }
 </section>
 
 <section>
-  <h2>Speak before the meeting</h2>
-  <p class="lead">For thoughts you want to get down before the call, there is
-  <a href="https://mugoosse.github.io/speak/">Speak</a>. It turns your voice
-  into text in any Mac app.</p>
+  <h2>Coming from Speak</h2>
+  <p class="lead">Dictation used to be
+  <a href="https://mugoosse.github.io/speak/">Speak</a>, a separate app. It is
+  part of Listen from 0.12.0, and Speak 1.6.0 is its last release.</p>
+  <p>The speech model carries over on its own: both apps always used the same
+  download, so there is nothing to fetch again. The configuration does not.
+  Set the shortcut again in Settings, Dictation, and bring your Speak
+  dictionary across in one press from Settings, Dictionary.</p>
+  <p>Your copy of Speak keeps working. It will not be updated again.</p>
 </section>
 
 <section id="install">

@@ -673,22 +673,9 @@ Two menu traps, both measured through accessibility rather than by looking:
   so the day headings came back live: three rows that look pressable and do
   nothing, because they carry no action.
 
-Delete is one item at the foot and it acts on the **open** conversation, so the
-rows above it only ever open. It was briefly a submenu naming every
-conversation, and that failed on its own data: a conversation is titled by the
-first question asked in it, the same question gets asked of different meetings,
-and the list came out as four rows of which two pairs were identical. A delete
-you cannot aim is worse than no delete, and it doubled the length of a menu
-whose job is to get you back into a conversation with a second copy of the same
-list doing the opposite.
-
-Deleting a different one is still reachable and costs one more move: open it,
-then delete it. That is the right price for the destructive half of a control
-whose other half is one click, and it is why the item is disabled rather than
-absent when nothing is open, so the menu keeps its shape.
-
-It does not ask twice: a conversation is working-out rather than evidence, and
-anything worth keeping was already saved as a note.
+Delete used to be one item at the foot of it, and it is not on this menu at all
+any more. "Delete is a verb on the conversation, so it is not on History" below
+says where it went, and why it took two goes to get off this menu.
 
 ## Save as note did nothing on the screen most questions are asked from
 
@@ -2179,3 +2166,52 @@ announced a control that only a mouse could use. Survivable while Stop only
 stopped; not survivable now that Stop is also how a waiting question is taken
 back, which would have made that a pointer-only route. Pressed through AX in the
 verification above, which is the same call VoiceOver makes.
+
+## Delete is a verb on the conversation, so it is not on History
+
+History is the list you open to get *back into* a conversation, and every row on
+it opens one. Delete sat at the foot of that list, one place below rows that
+read almost the same and do the opposite, which is the second time it has been
+on the wrong menu: before that it was a submenu naming every conversation, and
+that failed on its own data, because a conversation is titled by the first
+question asked in it and the same question gets asked of different meetings, so
+the list came out as four rows of which two pairs were identical.
+
+Both failures are the same mistake. The chat page had no menu of its own, so the
+one destructive thing you can do to a conversation went wherever there was room.
+Every other screen in this window already has the place for it: an ellipsis at
+the trailing end of the toolbar, holding the verbs on what is on screen. The
+library has one about the selected recording, a person's card has one about
+them, and `chatActionsItem` is the third. It goes after `newChatItem` because
+the common move is read first everywhere else here.
+
+The item is "Delete", `trash`, `NSColor.systemRed`, character for character the
+recording's and the person's. It was briefly "Delete this conversation" with no
+glyph in the label colour, and a fourth spelling of one decision makes it read
+as a different kind of decision.
+
+It parts company with those two on the alert: there isn't one. A conversation is
+working-out rather than evidence, what it throws away is a question you can ask
+again, and anything worth keeping was already saved as a note.
+
+**The empty state is a sentence, not a dimmed Delete.** New chat on a page
+leaves the page up with nothing in it, so this menu opens over no conversation,
+and an attributed title's colour wins over the disabled look (`appkit.md` records
+that against `contentTintColor`): the greyed-out item came out in full red and
+read as live. So it is "No conversation", disabled, which is the row the
+recording menu already puts up as "No recording selected".
+
+Two traps carried over from `fillHistory` rather than rediscovered:
+`NSMenuToolbarItem` eats item 0, so `fillChatActions` takes the same
+`forPullDown` flag; and `autoenablesItems` is off, or `NSMenu` lights the item
+back up from the responder chain. The menu is held on `DetailWithComposer` for
+the reason `historyMenu` is: the toolbar rebuilds its items whenever the page is
+entered or left, and `menuNeedsUpdate` tells the two apart by identity.
+
+Measured on the built app against a scratch `LISTEN_LIBRARY` holding one seeded
+`chats/seed.json`, driven through `AXUIElementCreateApplication(pid)`. History
+opens with New conversation, a day heading and the conversation, and no delete
+row. Opening it puts up the page toolbar as `History  New chat  Actions`, whose
+menu is one enabled `Delete`; pressing it takes the file off disk and the
+toolbar goes back to the library's. After New chat the same menu is one disabled
+`No conversation`.

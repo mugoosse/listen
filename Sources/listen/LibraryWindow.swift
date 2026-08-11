@@ -75,6 +75,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let historyItem = NSToolbarItem.Identifier("chatHistory")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
     private static let leaveChatItem = NSToolbarItem.Identifier("leaveChat")
+    private static let chatActionsItem = NSToolbarItem.Identifier("chatActions")
 
     /// The drawer, so the History toolbar item can borrow its menu.
     private weak var composerHost: DetailWithComposer?
@@ -951,7 +952,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem,
-         Self.newChatItem, Self.leaveChatItem]
+         Self.newChatItem, Self.leaveChatItem, Self.chatActionsItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -998,6 +999,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // more than that pane ever did.
         if Capture.shared.isRecording { page += [Self.recordItem, .space] }
         page.append(Self.newChatItem)
+        // **The verbs on the conversation, where the verbs on a recording are.**
+        // The ellipsis is the rightmost item in the library and on a person's
+        // card, and a page is the third of those screens: what it is about is a
+        // conversation, so what belongs there is what you can do to one. It sits
+        // after New chat rather than before it because the two are read in that
+        // order everywhere else in this window, the common move first.
+        page.append(Self.chatActionsItem)
         return page
     }
 
@@ -1218,6 +1226,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                                  accessibilityDescription: "New chat")
             item.target = composerHost
             item.action = #selector(DetailWithComposer.newConversation)
+            return item
+
+        case Self.chatActionsItem:
+            let item = NSMenuToolbarItem(itemIdentifier: id)
+            item.label = "Actions"
+            item.toolTip = "What you can do with this conversation"
+            item.image = NSImage(systemSymbolName: "ellipsis",
+                                 accessibilityDescription: "Actions")
+            // The drawer owns the menu and fills it as it opens, for the reason
+            // History's is owned there: whether there is a conversation to
+            // delete is an answer that goes stale the moment one is started.
+            item.menu = composerHost?.chatActionsMenu ?? NSMenu()
+            item.showsIndicator = false
             return item
 
         case Self.leaveChatItem:
@@ -1919,6 +1940,17 @@ final class DetailWithComposer: NSViewController {
         return menu
     }()
 
+    /// The chat page's actions menu, beside New chat in the toolbar.
+    ///
+    /// Kept for the same two reasons `historyMenu` is: the toolbar rebuilds its
+    /// items whenever the page is entered or left, and `menuNeedsUpdate` tells
+    /// the two menus apart by identity.
+    lazy var chatActionsMenu: NSMenu = {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }()
+
     private func showHistory(from anchor: NSView) {
         let menu = NSMenu()
         fillHistory(menu, forPullDown: false)
@@ -1988,31 +2020,60 @@ final class DetailWithComposer: NSViewController {
             menu.addItem(item)
         }
 
-        // **The open one, and only the open one.**
+        // **Nothing destructive on this menu.** Delete used to be the last row
+        // here, first as a submenu naming every conversation and then as one row
+        // about the open one. Both were the wrong menu for it: this is the list
+        // you open to get *back into* a conversation, and every row on it opens
+        // one, so the row that throws one away sat one place below the row that
+        // reads almost the same and does the opposite. It is on the page's own
+        // actions menu now, `fillChatActions`, next to New chat, which is where
+        // the verbs on what is on screen live in every other mode.
+    }
+
+    /// What can be done with the conversation on screen. The chat page's
+    /// ellipsis menu, and the only route to deleting one.
+    ///
+    /// One item, and that is not a reason to make it a button: a page whose
+    /// single visible verb is Delete reads as a screen about deleting. The menu
+    /// is also where the rest of them will go, and it is the same menu the
+    /// library and a person's card carry in the same corner.
+    ///
+    /// `forPullDown` for the reason `fillHistory` takes it: an
+    /// `NSMenuToolbarItem` takes item 0 as its own title and never draws it.
+    func fillChatActions(_ menu: NSMenu, forPullDown: Bool) {
+        menu.removeAllItems()
+        // Set for the reason `fillHistory` sets it: `NSMenu` re-enables items
+        // from the responder chain as it opens, which would light up a delete
+        // aimed at no conversation.
+        menu.autoenablesItems = false
+        if forPullDown { menu.addItem(NSMenuItem()) }
+        // **A sentence instead, never a dimmed Delete.** New chat on a page
+        // leaves the page up with nothing in it, so this menu can be opened with
+        // nothing to act on. The red attributed title below wins over the
+        // disabled look, so a greyed-out delete is drawn in full red and reads
+        // as live; the recording menu answers the same problem with "No
+        // recording selected", and this is that row.
+        guard composer.hasConversation, composer.currentID != nil else {
+            menu.addItem(withTitle: "No conversation", action: nil, keyEquivalent: "")
+                .isEnabled = false
+            return
+        }
+        // **"Delete", trash, red: the same item as the recording's and the
+        // person's.** All three are the one irreversible thing on a menu about
+        // what is on screen, and a fourth spelling of it ("Delete this
+        // conversation", no glyph, black) made the same decision look like a
+        // different kind of decision.
         //
-        // This was a submenu naming every conversation, so that any of them
-        // could be deleted from here. Two things were wrong with it. A
-        // conversation is titled by the first question asked in it, and the
-        // same question gets asked of different meetings, so the list came out
-        // as four rows of which two pairs were identical: a delete you cannot
-        // aim is worse than no delete. And it doubled the length of a menu whose
-        // job is to get you back into a conversation, with a second copy of the
-        // same list that does the opposite.
-        //
-        // Deleting another one is still reachable, and costs one more move than
-        // it did: open it, then delete it. That is the right price for the
-        // destructive half of a control whose other half is one click.
-        //
-        // It does not ask twice. A conversation is working-out rather than
-        // evidence: what it throws away is a question you can ask again, and
-        // anything worth keeping was already saved as a note.
-        menu.addItem(.separator())
-        let delete = NSMenuItem(title: "Delete this conversation",
+        // It does not ask twice, which is where it parts company with those two:
+        // a conversation is working-out rather than evidence, what it throws
+        // away is a question you can ask again, and anything worth keeping was
+        // already saved as a note.
+        let delete = NSMenuItem(title: "Delete",
                                 action: #selector(deleteConversation), keyEquivalent: "")
         delete.target = self
-        // Disabled rather than absent, so the menu keeps its shape and says why
-        // there is nothing to do instead of quietly being one item shorter.
-        delete.isEnabled = composer.hasConversation && composer.currentID != nil
+        delete.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
+        delete.attributedTitle = NSAttributedString(
+            string: "Delete", attributes: [.foregroundColor: NSColor.systemRed])
         menu.addItem(delete)
     }
 
@@ -2374,11 +2435,16 @@ final class DetailWithComposer: NSViewController {
 }
 
 extension DetailWithComposer: NSMenuDelegate {
-    /// Only the toolbar's pull-down reaches here. The menu popped up under the
-    /// drawer's title is built and thrown away by `showHistory`, so it needs no
-    /// placeholder and would show one if it were given it.
+    /// Only the toolbar's two pull-downs reach here, and they are told apart by
+    /// identity. The menu popped up under the drawer's title is built and thrown
+    /// away by `showHistory`, so it needs no placeholder and would show one if
+    /// it were given it.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        fillHistory(menu, forPullDown: true)
+        if menu === chatActionsMenu {
+            fillChatActions(menu, forPullDown: true)
+        } else {
+            fillHistory(menu, forPullDown: true)
+        }
     }
 }
 

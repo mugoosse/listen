@@ -6,6 +6,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status: NSStatusItem?
     private let indicator = RecordingIndicator()
 
+    /// Both only ever built by a `LISTEN_PANEL` launch. The real dictation pill
+    /// belongs to `Dictation`, which owns the state it draws; these exist so the
+    /// states can be put on screen without holding a chord, and held so the
+    /// timers behind them are not released the moment the preview is set up.
+    private var dictationHUD: DictationHUD?
+    private var dictationDemo: DictationHUDDemo?
+
     /// The app whose call started the recording that is running now, while the
     /// "are you in a meeting?" question is still unanswered. Nil for a manual
     /// recording, and nil again the moment it is answered.
@@ -63,6 +70,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
 
         Capture.shared.onChange = { [weak self] in self?.rebuildMenu() }
+        Dictation.shared.onChange = { [weak self] in self?.rebuildMenu() }
 
         let detector = MeetingDetector.shared
         detector.onMeetingStarted = { [weak self] in self?.meetingStarted($0) }
@@ -107,6 +115,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Onboarding.shared.show()
         } else {
             LibraryWindow.shared.show()
+            // Arm the dictation shortcut and warm the speech model. Deliberately
+            // not on a first run: nothing has been granted, no model has been
+            // chosen, so there is no tap to install and nothing to warm. Setup's
+            // last step is what calls this the first time.
+            Dictation.shared.activate()
         }
         _ = Updater.shared
 
@@ -177,6 +190,33 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LibraryWindow.shared.previewRecording(silent: want.hasSuffix("silent"))
         case "ask":
             LibraryWindow.shared.previewAsk()
+        case let want where want.hasPrefix("dictation-demo"):
+            // Every meter style at once, on one microphone. `:fake` drives it
+            // from a synthetic envelope, which is the only way to watch the
+            // handover out of recording.
+            dictationDemo = DictationHUDDemo(fake: want.hasSuffix("fake"))
+            dictationDemo?.run()
+        case let want where want.hasPrefix("dictation"):
+            // `dictation`, or `dictation:transcribing` / `dictation:polishing`
+            // for the states a real dictation passes through faster than anybody
+            // can look at them, and `dictation:recording:orb` to force a meter
+            // style. The style component is what makes the picker checkable
+            // without writing the preference the app itself reads, which on a
+            // developer's own Mac is their real one.
+            let parts = want.split(separator: ":").dropFirst().map(String.init)
+            let state: DictationHUD.State
+            switch parts.first ?? "" {
+            case "transcribing": state = .transcribing
+            case "polishing":    state = .polishing(step: 1, of: 2)
+            // The widest string the pill can be asked to hold, which is the one
+            // the trailing column is measured for.
+            case "polishing-long": state = .polishing(step: 10, of: 12)
+            default:             state = .recording
+            }
+            let hud = DictationHUD(style: parts.count > 1 ? MeterStyle(rawValue: parts[1]) : nil)
+            hud.show(state)
+            hud.previewLevels()
+            dictationHUD = hud
         case let want where want.hasPrefix("settings"):
             // `settings`, or `settings:developers` for a particular tab.
             let name = want.dropFirst("settings".count).drop { $0 == ":" }
@@ -213,6 +253,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
         return !want.hasPrefix("transcribing") && !want.hasPrefix("live")
             && !want.hasPrefix("settings") && want != "ask"
+            && !want.hasPrefix("dictation")
+    }
+
+    /// The dictation pill is a third window, so it needs a third answer. The
+    /// demo stacks several and photographing one of them would be arbitrary, so
+    /// it is deliberately not shootable: it is for watching, not for stills.
+    private var previewingDictation: Bool {
+        guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
+        return want.hasPrefix("dictation") && !want.hasPrefix("dictation-demo")
     }
 
     /// `LISTEN_SHOT=<prefix>` writes a numbered series of window PNGs, then
@@ -249,9 +298,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // The panel is its own window, so photographing the library
                 // would produce a picture of whatever the library happened to be
                 // showing and none of the state being previewed.
-                let wrote = self.previewingPanel
-                    ? self.indicator.writeShot(to: path)
-                    : LibraryWindow.shared.writeShot(to: path)
+                let wrote = self.previewingDictation
+                    ? self.dictationHUD?.writeShot(to: path) ?? false
+                    : self.previewingPanel
+                        ? self.indicator.writeShot(to: path)
+                        : LibraryWindow.shared.writeShot(to: path)
                 log(wrote ? "shot \(path)" : "shot failed: \(path)")
                 guard taken >= count else { return }
                 timer.invalidate()
@@ -351,6 +402,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             start.image = symbol("record.circle")
             menu.addItem(start)
         }
+
+        addDictationRows(to: menu)
 
         // Said here because this is the menu recording starts from, and it is
         // the last moment it costs nothing to know.
@@ -470,6 +523,121 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Right before it is displayed, so the clock, the library count and the
     /// recent list are what they are now rather than what they were the last
     /// time capture changed.
+    /// The dictation section: what the shortcut is, or why it is not working.
+    ///
+    /// Only reachable from `refreshMenu`, which only runs from `menuWillOpen`.
+    /// That is load-bearing for `SecureInput`: it goes on for a second or two
+    /// whenever anybody types a password anywhere, so anything polling it would
+    /// spend its life crying wolf at people who are only logging in. Asked when
+    /// somebody opens the menu, the answer only ever reaches a person who came
+    /// looking for it, and the menu is also the one channel that still works,
+    /// since mouse events are unaffected.
+    private func addDictationRows(to menu: NSMenu) {
+        let dictation = Dictation.shared
+
+        // One row for somebody who has never noticed the feature. Dictation
+        // arrived in an app that had never had it, so there is a population of
+        // users for whom nothing on screen would ever mention it. Dismissed by
+        // opening it, and never shown again.
+        guard Settings.dictationEnabled else { return }
+        menu.addItem(.separator())
+
+        if !Settings.dictationIntroSeen {
+            let intro = NSMenuItem(title: "New: dictate with a shortcut",
+                                   action: #selector(openDictationSettings),
+                                   keyEquivalent: "")
+            intro.target = self
+            intro.image = symbol("sparkles")
+            menu.addItem(intro)
+            // Deliberately falls through to the status rows rather than
+            // returning. It returned once, and that hid the one row that
+            // matters: somebody who presses the shortcut before granting
+            // Accessibility gets silence, opens the menu to find out why, and
+            // was shown an advertisement for the feature instead of the reason
+            // it did nothing.
+        }
+
+        if SecureInput.isOn {
+            // Before everything else, because it is upstream of everything
+            // else. Secure input can remove all ordinary key events while still
+            // letting a modifier-only chord through, so do not promise that any
+            // keyboard control will work while it is on.
+            let who = SecureInput.holder()
+            let item = info("\(who ?? "Another app") has secure input on")
+            item.image = symbol("exclamationmark.triangle")
+            menu.addItem(item)
+            let hint = info("The dictation shortcut may not reach Listen until it is off")
+            hint.image = symbol("keyboard")
+            menu.addItem(hint)
+            return
+        }
+
+        if !Permissions.accessibility {
+            let item = NSMenuItem(title: "Dictation needs Accessibility",
+                                  action: #selector(openPermissions), keyEquivalent: "")
+            item.target = self
+            item.image = symbol("exclamationmark.triangle")
+            menu.addItem(item)
+            return
+        }
+
+        if let why = dictation.micError {
+            // A microphone failure is not a model failure, so it does not
+            // belong in the model rows, but it does have to reach the menu.
+            let item = info(why)
+            item.image = symbol("exclamationmark.triangle")
+            menu.addItem(item)
+            let hint = info("Press \(dictation.shortcutDescription) to try again")
+            hint.image = symbol("arrow.clockwise")
+            menu.addItem(hint)
+        } else if !dictation.isReady {
+            let item = info("Loading the speech model for dictation…")
+            item.image = symbol("arrow.down.circle")
+            menu.addItem(item)
+        } else {
+            let hint = info("\(dictation.shortcutDescription) starts a dictation")
+            hint.image = symbol("keyboard")
+            menu.addItem(hint)
+        }
+
+        // Straight to the clipboard rather than to a window, because a
+        // dictation *is* its text. A meeting is an hour of audio, a transcript
+        // and a set of speakers, so the useful thing to do with one in a menu is
+        // open it; the useful thing to do with a dictation is paste it again.
+        let recent = DictationHistory.recent(5)
+        guard !recent.isEmpty else { return }
+        let parent = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
+        parent.image = symbol("text.quote")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        let stamp = DateFormatter()
+        stamp.dateFormat = "HH:mm"
+        for (i, entry) in recent.enumerated() {
+            var preview = entry.text.replacingOccurrences(of: "\n", with: " ")
+            if preview.count > 52 { preview = String(preview.prefix(51)) + "…" }
+            let item = NSMenuItem(title: "\(stamp.string(from: entry.date))  \(preview)",
+                                  action: #selector(copyDictation(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            submenu.addItem(item)
+        }
+        parent.submenu = submenu
+        menu.addItem(parent)
+    }
+
+    @objc private func copyDictation(_ sender: NSMenuItem) {
+        let entries = DictationHistory.recent(5)
+        guard sender.tag < entries.count else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(entries[sender.tag].text, forType: .string)
+    }
+
+    @objc private func openDictationSettings() {
+        Settings.dictationIntroSeen = true
+        LibraryWindow.shared.showSettings(.dictation)
+    }
+
     func menuWillOpen(_ menu: NSMenu) { refreshMenu() }
 
     /// A row that reports something rather than doing something.

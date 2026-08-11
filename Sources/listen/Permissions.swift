@@ -66,10 +66,35 @@ enum Permissions {
         return false
     }
 
-    /// Deliberately excludes the calendar. Onboarding and the recording path
-    /// both gate on this, and a recorder that refuses to record because it
-    /// cannot read your diary would be trading the feature for the garnish.
+    /// Deliberately excludes the calendar **and Accessibility**. Onboarding and
+    /// the recording path both gate on this, and a recorder that refuses to
+    /// record because it cannot read your diary, or because you never switched
+    /// dictation on, would be trading the feature for the garnish.
     static var allGranted: Bool { microphone && (!systemAudioSupported || systemAudio) }
+
+    // MARK: - Accessibility
+
+    /// Whether Listen may watch the keyboard and press keys.
+    ///
+    /// Dictation needs it twice over: the global shortcut is a `CGEventTap`,
+    /// which an untrusted process is refused, and auto-paste posts a synthetic
+    /// Cmd-V. Recording a meeting needs none of it, which is why this is not in
+    /// `allGranted`: somebody who never turns dictation on should never be asked.
+    ///
+    /// `prompt: false`, always. Asking with `kAXTrustedCheckOptionPrompt` puts
+    /// up a dialog whose default button is **Deny**, and a denial is recorded
+    /// and sticky, so the helpful-looking call is the one that can lock the
+    /// feature off. Reading it without prompting is also what registers Listen
+    /// in the Accessibility list, so the row the user is being sent to exists by
+    /// the time they get there.
+    static var accessibility: Bool {
+        AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary)
+    }
+
+    static func openAccessibilitySettings() {
+        openPane("com.apple.preference.security?Privacy_Accessibility")
+    }
 
     // MARK: - Calendar
 

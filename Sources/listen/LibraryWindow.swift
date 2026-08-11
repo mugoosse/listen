@@ -241,6 +241,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     var isShowingSettings: Bool { mode == .settings }
 
+    /// Redraw the settings sidebar, for the Permissions warning badge.
+    ///
+    /// Called by the panes that can change the answer rather than polled here:
+    /// `PermissionsPane` while it watches for a grant landing, and
+    /// `DictationPane` when the switch that decides whether Accessibility even
+    /// counts is flipped. Cheap and idempotent, so calling it on every refresh
+    /// costs nothing when nothing moved.
+    func refreshSettingsBadges() {
+        guard window != nil else { return }
+        settingsNav.refreshBadges()
+    }
+
     private func build() {
         let controller = LibrarySplitViewController()
 
@@ -627,6 +639,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 window?.makeFirstResponder(sidebar.view)
             }
         }
+        // Settings is the one screen with no composer. Set here rather than in
+        // each branch, because it is one rule about one mode and four copies of
+        // it is four places for the next mode to be forgotten.
+        composerHost?.showsComposer = next != .settings
+
         // All three, not just the one on screen: the next mode change swaps in
         // a list whose control was last touched by a click that took the user
         // somewhere else.
@@ -2038,6 +2055,30 @@ final class DetailWithComposer: NSViewController {
         composer.open(chat)
     }
 
+    /// Whether this screen has a composer at all.
+    ///
+    /// False in Settings. The composer belongs to the window rather than to the
+    /// detail pane, which is what lets a question survive the pane changing
+    /// underneath it, and the cost of that is that it also survives panes it has
+    /// no business being on. Settings is one: it is a screen about the app
+    /// rather than about the library, so "Ask about your library…" is offering
+    /// something the page cannot do, and the card floated over the bottom of
+    /// every pane, covering the last control on the taller ones.
+    ///
+    /// The whole drawer goes, not just the bar. `applyHeight` decides which of
+    /// the glass, the header and the page background are visible, and hiding
+    /// them one by one here would be a second opinion about the same thing;
+    /// hiding their parent leaves that logic to run untouched and simply not be
+    /// seen. The reported inset goes to zero with it, or the pane would reserve
+    /// a strip at the bottom for a card that is not there.
+    var showsComposer = true {
+        didSet {
+            guard showsComposer != oldValue else { return }
+            drawer.isHidden = !showsComposer
+            applyHeight()
+        }
+    }
+
     private func applyHeight(animated: Bool = false) {
         // **`container`, never `view`.** `AskView` can report a height while it
         // is being added to the hierarchy, which is inside `loadView`, and
@@ -2206,8 +2247,11 @@ final class DetailWithComposer: NSViewController {
             drawerHeight.constant = target
             settleComposer()
         }
-        onCoveringChanged?(expanded)
-        if becamePage { onPageChanged?(page) }
+        // Nothing is covered and nothing is a page while the drawer is away, so
+        // the two owners of that state are told rather than left holding what
+        // was true before Settings opened.
+        onCoveringChanged?(showsComposer && expanded)
+        if becamePage { onPageChanged?(showsComposer && page) }
         // The drawer's own bottom margin counts: what the page loses is
         // everything from the container's floor to the drawer's top edge.
         //
@@ -2216,7 +2260,8 @@ final class DetailWithComposer: NSViewController {
         // is not on screen at all has nothing to clear: reserving its whole
         // height instead would leave it scrolled somewhere else on the way
         // back.
-        onDrawerHeight?(page ? 0 : drawerHeight.constant + Self.cardBottomInset)
+        onDrawerHeight?(page || !showsComposer
+                        ? 0 : drawerHeight.constant + Self.cardBottomInset)
     }
 
     /// Always present, so the history and the way back are never taken away.

@@ -41,7 +41,9 @@ different front end and a longer pipeline behind it.
    Sparkle update checks. Audio never leaves the machine. This is the product,
    not a preference.
 3. **Reuse speak's model files.** See §4.1. A user with both apps installed
-   must not download Parakeet twice.
+   must not download Parakeet twice. Superseded in part by §11: from 0.12.0
+   there is no second app, and the sharing is now between two pipelines inside
+   this one.
 4. **AppKit, not SwiftUI**, for consistency with speak and because the settings
    and list/detail patterns there are already debugged. SwiftUI is acceptable
    for isolated new views if it does not fragment the window management.
@@ -523,3 +525,38 @@ Do not guess these silently. Investigate, then report with a recommendation.
   document that came from a measurement says so; keep that habit.
 - No test target is required, matching speak. Verification is manual through the
   CLI plus debug tracing. `LISTEN_DEBUG=1` should trace capture state changes.
+
+---
+
+## 11. Dictation, and the end of Speak
+
+Added in 0.12.0, and it makes the brief above one app rather than two. Speak was
+the template this was built from; by the time dictation moved, the two shared a
+microphone path, a speech model, a Hugging Face cache, a custom dictionary, a
+settings framework, a build system and a release pipeline. The delta was a
+global shortcut and a way to type.
+
+What it adds, all of it Speak's design ported rather than redesigned:
+
+- A `CGEventTap` chord (`DictationHotkey`), because `NSEvent` cannot see fn on
+  Apple Silicon. This brings the one permission the brief never needed:
+  Accessibility, which is deliberately **not** in `Permissions.allGranted`, so a
+  user who only records meetings is never asked for it.
+- An in-memory capture path (`DictationRecorder`), separate from `MicRecorder`
+  because a dictation is seconds and a meeting is an hour. Dictating during a
+  meeting listens in on the track the recording already has rather than opening
+  a second unit on a held device.
+- An optional copy-editing pass (`Polisher`, `SpeechRepair`) on macOS 26, with
+  every threshold in it measured. This is the one place a model is allowed to
+  rewrite text, and it is confined to dictation: a meeting transcript is
+  evidence, and constraint 6's spirit extends to not putting words in a
+  colleague's mouth.
+- One dictionary across both pipelines, which is the point of merging.
+
+Constraint 2 is unchanged: the polish model is Apple's, on-device, and nothing
+new goes near the network. Constraint 6 is unchanged and does not extend to
+dictations, which keep no audio by design.
+
+What is deliberately not here: no MCP tool for dictation history, and no
+automatic import of Speak's settings. Both are argued in
+`.agents/notes/dictation.md`.

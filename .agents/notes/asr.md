@@ -607,3 +607,33 @@ the same thing.
 `ModelDownload` remembers the model whose last attempt failed, and a second
 press deletes the copy before fetching. Only after a failure, and only on a
 press: throwing away 2.5 GB on a hunch is worse than the problem.
+
+
+## One engine for the process, and a yield so dictation can interleave
+
+`ASR.shared` is the only instance the app builds. The weights are about 2.5 GB
+resident and both the meeting queue and dictation want them, so two instances is
+two copies, which is the difference between fitting and not fitting on an 8 GB
+Mac. Nothing changed for meetings: `Queue.shared` already held one `Pipeline`
+for the life of the process, so its engine was a de-facto singleton already. The
+CLI still builds its own where it runs one job and exits, because there is
+nothing to share with.
+
+`transcribe(samples:)` is the dictation entry point. A meeting is an hour on
+disk that needs pieces, timings, segments and a progress count; a dictation is a
+few seconds that never touched a file and needs one string. Writing a temp WAV
+to reach `transcribe(_ url:)` would round-trip through the encoder and the
+decoder for nothing, since Parakeet takes an `MLXArray` and that is what the
+recorder already has. It pads to one second for the same reason the file path
+does.
+
+`transcribe(_ url:)` is `async` for exactly one reason, and it is not the
+decoding: the `await Task.yield()` at the top of the chunk loop. An actor method
+with no suspension point runs to completion before anything else on the actor
+gets a turn, so a dictation asked for while an hour-long recording transcribes
+would wait for the whole hour, which is 30 pieces at roughly a second each. The
+yield lets a queued dictation run between pieces and bounds that wait to one.
+
+The transcript is unaffected and the reentrancy is safe: each piece decodes from
+`flat`, which nothing else writes, and the accumulators are actor state only
+that call touches. A reentrant dictation reads no part of them.

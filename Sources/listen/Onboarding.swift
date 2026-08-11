@@ -34,7 +34,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// and the feature is silently off for them. Its buttons say so: the way
     /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, calendar, model, done
+        case welcome, microphone, systemAudio, calendar, model, dictation, done
     }
 
     private var window: NSWindow?
@@ -196,6 +196,10 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // authorization status at all.
             String(Permissions.calendar),
             String(Permissions.calendarAsked),
+            // The grant is made in System Settings, in another app, and
+            // there is no notification for it. The poll is the only thing
+            // that notices, and it only re-renders when this changes.
+            String(Permissions.accessibility),
             Settings.modelChosen ? Settings.model.id : "none",
             String(Settings.model.isDownloaded),
             // The phase, never the byte count. Starting, finishing and failing
@@ -325,6 +329,23 @@ final class Onboarding: NSObject, NSWindowDelegate {
             line.preferredMaxLayoutWidth = 460
             body.addArrangedSubview(line)
             modelNote = line
+
+        case .dictation:
+            titleLabel.stringValue = "Dictation"
+            paragraph("Listen also types for you. Press a shortcut anywhere on the Mac, "
+                      + "say what you want written, press it again, and the words are "
+                      + "put into whatever you were using. The same speech model, still "
+                      + "on this machine.")
+            paragraph("The shortcut is \(DictationShortcut.description), and Settings, "
+                      + "Dictation is where you change it or switch the whole thing off.")
+            // Said plainly, because this is the one grant that sounds alarming
+            // and the honest description is also the reassuring one.
+            paragraph("This needs Accessibility, which is what lets Listen see the "
+                      + "shortcut and type for you. Recording meetings never uses it, so "
+                      + "skipping here costs you nothing else.")
+            status(Permissions.accessibility, "Accessibility granted",
+                   "Not granted yet. This opens System Settings, where Listen can be "
+                   + "switched on under Accessibility.")
 
         case .done:
             titleLabel.stringValue = "You are set"
@@ -476,6 +497,13 @@ final class Onboarding: NSObject, NSWindowDelegate {
                     awaitingModel = false
                 }
             }
+        case .dictation:
+            // One label whichever way it goes, like the calendar step: the
+            // promise is dictation, and the route underneath it changes.
+            primary.title = Permissions.accessibility ? "Continue" : "Open System Settings"
+            primary.isEnabled = true
+            secondary.isHidden = Permissions.accessibility
+            secondary.title = "Skip"
         case .done:
             primary.title = "Start using Listen"
             primary.isEnabled = true
@@ -560,6 +588,13 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
         case .model where Settings.modelChosen:
             startModel()
+            return
+
+        case .dictation where !Permissions.accessibility:
+            Permissions.openAccessibilitySettings()
+            // Armed the moment the grant lands, without a relaunch. The window
+            // stays on this step so the tick can appear where it was promised.
+            Dictation.shared.activate()
             return
 
         case .done:
@@ -686,6 +721,14 @@ final class Onboarding: NSObject, NSWindowDelegate {
     private func finish() {
         Settings.onboarded = true
         stopPolling()
+        // Setup is the only thing that arms dictation on a first run: launch
+        // deliberately skips it, because on a fresh install nothing is granted
+        // and no model is chosen, so there is no tap to install and nothing to
+        // warm. Somebody who skipped the step gets a `dictationEnabled` that is
+        // true and inert, which is the same state they would be in anyway.
+        Dictation.shared.activate()
+        // Setup mentioned it, so the menu row would be telling them twice.
+        Settings.dictationIntroSeen = true
         window?.orderOut(nil)
         LibraryWindow.shared.show()
     }
@@ -696,6 +739,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
         // having forgotten.
         Settings.onboarded = true
         stopPolling()
+        Dictation.shared.activate()
     }
 
     // MARK: - Building

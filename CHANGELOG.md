@@ -8,6 +8,85 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.12.0 (unreleased)
+
+### Listen dictates now, and Speak is retired
+
+Press **fn + left shift** anywhere on the Mac, say what you want written, press
+it again, and the words are typed into whatever you were using. Escape cancels,
+and so does the trash button on the floating pill. Everything is in Settings,
+Dictation: the shortcut, the engine, the sounds, the pill.
+
+This is [Speak](https://mugoosse.github.io/speak/) folded in rather than
+rebuilt. Listen was built from Speak as a template, so by the time dictation
+moved the two already shared a microphone path, a speech model, a Hugging Face
+cache, a custom dictionary, a settings framework and a release pipeline. What
+dictation needed that meeting recording did not was a global shortcut and a way
+to type. That is the whole difference, and it was not worth a second app, a
+second menu bar icon, or a second 2.5 GB of weights held in memory.
+
+It needs Accessibility, which is what lets Listen see the shortcut and type for
+you. Recording meetings never uses it, so anyone who only wants the recorder can
+ignore the whole feature and will not be asked for anything.
+
+### One vocabulary, two pipelines
+
+The custom dictionary now applies to dictations as well as meeting transcripts.
+A name Listen mishears in a meeting is the same name it mishears when you
+dictate, so one rule fixes both. Both halves of a term are live again: the
+phonetic match, which needs no model and works on any macOS, and the spelling
+hint that stops the polishing model rewriting a word it does not know.
+
+### Tidying up what you said
+
+On macOS 26 with Apple Intelligence, dictations can go through a copy-editing
+pass before they reach the clipboard: punctuation and capitalisation added, um
+and uh removed, paragraphs where the topic turns. Off by default, because it
+costs about a second and rewrites your words.
+
+It is a copy editor and never an assistant, which took some doing. Told it was
+an assistant, the model answered the text: "what time is the meeting tomorrow"
+came back as "The meeting tomorrow is at 3 PM", inventing the time. A dictated
+question now comes back as a question, a sentence you cut off stays cut off, and
+a reply that collapses or grows past what editing can explain is thrown away in
+favour of what you actually said.
+
+There is a second pass for false starts, where you begin a phrase, break off and
+say it again. It runs only on sentences that look like that, which measured over
+a real 260-dictation history is about one dictation in ten, so the other nine
+pay nothing for it.
+
+### Dictating during a meeting
+
+Works, and your dictation is also on the meeting's microphone track, because it
+is your voice in the room. Listen does not open a second microphone to do it:
+the recording already holds the device, and a second claim on it would
+renegotiate the Bluetooth profile the meeting is being recorded through.
+
+One speech model serves both now instead of one each, which is the difference
+between fitting and not fitting on an 8 GB Mac. A dictation asked for while an
+hour-long recording is being transcribed no longer waits for the hour.
+
+### Coming from Speak
+
+The speech model carries over on its own: both apps always used the same
+download, so there is nothing to fetch again. The configuration does not. Set
+the shortcut again in Settings, Dictation, and bring your Speak dictionary
+across in one press from Settings, Dictionary.
+
+### Also
+
+- Three new commands: `listen dictate <file>` runs the dictation pipeline over
+  audio, `listen polish [text|-]` runs the text half, and `listen dictations`
+  reads what you have said. The first two exist because dictation is otherwise
+  only reachable by holding a key and talking, so a change to it could only be
+  tested by hand.
+- Dictation history is a plain JSONL file beside the library, including what the
+  speech model said before anything rewrote it. Nothing reads it for the agent:
+  a dictation is a keyboard, not a meeting.
+- An Accessibility row in Settings, Permissions that says what it is for and,
+  more usefully, what it is not for.
+
 ## 0.11.0 (2026-08-09)
 
 ### One list, and a meeting is one page

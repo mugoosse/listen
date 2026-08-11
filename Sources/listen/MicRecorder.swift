@@ -50,6 +50,27 @@ final class MicRecorder {
     /// place. Same ordering trap as `installHotkey` in Speak.
     var onLevel: (@Sendable (Float) -> Void)?
 
+    /// Every converted 16 kHz mono buffer, for anyone who wants the samples
+    /// themselves rather than a level. Nil except while a dictation is running
+    /// during a meeting.
+    ///
+    /// This exists so dictating mid-meeting does not open a second capture unit
+    /// on a device this one already holds. Two units on one microphone is not a
+    /// supported thing to do: on a Bluetooth headset the second open renegotiates
+    /// the profile the first one is recording through, and on any device it is a
+    /// second claim macOS may simply refuse, which would make dictation fail for
+    /// exactly the hour it is most useful.
+    ///
+    /// So the meeting's own capture is the only reader of the device and a
+    /// dictation is a second consumer of what it already has. The consequence is
+    /// stated in the UI rather than hidden: your dictation is also on the
+    /// meeting's mic track, because it is your voice in the room.
+    ///
+    /// Called on the audio thread, like `onLevel`. The consumer buffers under
+    /// its own lock; nothing here hops to the main actor, because a dictation
+    /// wants the samples, not the ordering.
+    var onSamples: (@Sendable ([Float]) -> Void)?
+
     /// True while the device is running and handing over bit-exact silence.
     ///
     /// This is the state the rest of the silence handling exists to reach, and
@@ -501,6 +522,10 @@ final class MicRecorder {
             }
         }
         report(chunk)
+        // After the writer, never instead of it. A dictation listening in must
+        // not be able to cost the meeting a sample, so it reads what has already
+        // been written rather than sitting anywhere in that path.
+        onSamples?(chunk)
         return noErr
     }
 

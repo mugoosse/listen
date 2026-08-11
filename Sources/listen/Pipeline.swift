@@ -121,7 +121,11 @@ private final class Tally: @unchecked Sendable {
 /// parallel jobs fight over the same hardware rather than finishing sooner.
 /// `Pipeline` is an actor, and `Queue` below serialises the whole app onto it.
 actor Pipeline {
-    private let asr = ASR()
+    /// Shared with dictation rather than owned, so the 2.5 GB of weights are
+    /// resident once. `Queue.shared` holds one `Pipeline` for the life of the
+    /// process, so this was already the only instance in the app; the change is
+    /// that dictation now loads the same one. See `ASR.shared`.
+    private let asr = ASR.shared
     private let diarizer = Diarizer()
 
     /// What the user's own track is called before anyone names it.

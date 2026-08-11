@@ -12,6 +12,7 @@ enum SettingsTab: CaseIterable {
     case general, storage, permissions
     case meetings, audio
     case models, dictionary
+    case dictation
     case agent
     case devices
     case developers, about
@@ -25,6 +26,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       return "Audio"
         case .models:      return "Models"
         case .dictionary:  return "Dictionary"
+        case .dictation:   return "Dictation"
         case .agent:       return "Agent"
         case .devices:     return "Devices"
         case .developers:  return "Developers"
@@ -41,6 +43,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       return "mic"
         case .models:      return "cpu"
         case .dictionary:  return "character.book.closed"
+        case .dictation:   return "mic.badge.plus"
         case .agent:       return "bubble.left.and.text.bubble.right"
         case .devices:     return "iphone.and.arrow.forward"
         case .developers:  return "terminal"
@@ -59,6 +62,7 @@ enum SettingsTab: CaseIterable {
         case .audio:       pane = AudioPane()
         case .models:      pane = ModelsPane()
         case .dictionary:  pane = DictionaryPane()
+        case .dictation:   pane = DictationPane()
         case .agent:       pane = AgentPane()
         case .devices:     pane = DevicesPane()
         case .developers:  pane = DevelopersPane()
@@ -78,13 +82,14 @@ enum SettingsTab: CaseIterable {
 /// "Recording" is what happens while a meeting runs and "Transcription" is what
 /// happens to it afterwards, which is also the order they happen in.
 enum SettingsGroup: CaseIterable {
-    case app, recording, transcription, advanced
+    case app, recording, transcription, dictation, advanced
 
     var title: String {
         switch self {
         case .app:           return "App"
         case .recording:     return "Recording"
         case .transcription: return "Transcription"
+        case .dictation:     return "Dictation"
         case .advanced:      return "Advanced"
         }
     }
@@ -94,6 +99,12 @@ enum SettingsGroup: CaseIterable {
         case .app:           return [.general, .storage, .permissions]
         case .recording:     return [.meetings, .audio]
         case .transcription: return [.models, .dictionary]
+        // A group of one, and worth the header. Dictation is a second thing the
+        // app does rather than a detail of the first: "Recording" is what
+        // happens during a meeting and "Transcription" is what happens to it
+        // afterwards, and this is neither. Folding it under Transcription would
+        // file the feature under the machinery it happens to share.
+        case .dictation:     return [.dictation]
         // Agent sits beside Devices rather than under Transcription, because
         // the two are the same kind of thing: an integration with something
         // outside the app that has to be installed and signed into elsewhere
@@ -850,27 +861,54 @@ final class StoragePane: Pane {
 // ---------------------------------------------------------------------------
 
 final class PermissionsPane: Pane {
-    private var micLabel: NSTextField?
-    private var tapLabel: NSTextField?
-    private var calendarLabel: NSTextField?
+    private var micLabel: PermissionStatusRow?
+    private var tapLabel: PermissionStatusRow?
+    private var calendarLabel: PermissionStatusRow?
     private var calendarButton: NSButton?
+    private var accessibilityLabel: PermissionStatusRow?
+
+    /// Watches for a grant landing while this pane is on screen.
+    ///
+    /// Every one of these is granted in System Settings, in another app, and
+    /// macOS sends no notification when one changes. Without this the pane goes
+    /// on reporting the state it was built with, so somebody who followed a
+    /// button out, switched Listen on and came back is looking at a stale answer
+    /// to the question they left to resolve. A few microseconds, once a second,
+    /// and only while the pane is visible.
+    private var poll: Timer?
+    private var lastKey = ""
 
     override func build() {
         heading("Microphone")
-        micLabel = note("")
+        micLabel = statusRow()
         button("Open System Settings") { Permissions.openMicrophoneSettings() }
 
         separator()
         heading("System audio")
-        tapLabel = note("")
+        tapLabel = statusRow()
         note("Listen records the other side of a call with a Core Audio process tap, "
              + "which asks for audio recording and not screen recording. That is the "
              + "whole reason it works this way: hearing a meeting should not cost access "
              + "to everything on your screen.")
 
         separator()
+        heading("Accessibility")
+        accessibilityLabel = statusRow()
+        button("Open System Settings") { [weak self] in
+            Permissions.openAccessibilitySettings()
+            // Granted in another app, minutes from now. Arming the tap the
+            // moment it lands is what stops the shortcut looking broken until
+            // the next launch.
+            Dictation.shared.activate()
+            self?.refresh()
+        }
+        note("Only for dictation, and only if you use it: this is what lets Listen watch "
+             + "for the shortcut and type what you said into the app in front. Recording, "
+             + "transcribing and labelling meetings never touch it.")
+
+        separator()
         heading("Calendar")
-        calendarLabel = note("")
+        calendarLabel = statusRow()
         // One button for both jobs, dispatching at click time. macOS only lists
         // an app under Privacy, Calendars once it has asked, so before the
         // first request there is no switch in System Settings to send anyone
@@ -891,20 +929,54 @@ final class PermissionsPane: Pane {
     }
 
     override func refresh() {
-        micLabel?.stringValue = Permissions.microphone
-            ? "Granted. Your own voice is recorded."
-            : (Permissions.microphoneDenied
-               ? "Denied. Listen can still record the other side of a call, but not you."
-               : "Not granted yet. Listen asks the first time you record.")
+        // Microphone. Blocked and not optional: without it Listen records only
+        // the other side of a call, which is half a meeting.
+        if Permissions.microphone {
+            micLabel?.set(.granted, "Granted. Your own voice is recorded.")
+        } else if Permissions.microphoneDenied {
+            micLabel?.set(.blocked, "Denied. Listen can still record the other side of "
+                          + "a call, but not you.")
+        } else {
+            micLabel?.set(.blocked, "Not granted yet. Listen asks the first time you "
+                          + "record.")
+        }
 
         if !Permissions.systemAudioSupported {
-            tapLabel?.stringValue = "Needs macOS 14.2 or later. On this Mac only your "
-                + "microphone can be recorded."
+            // Not a fault and not fixable: there is no switch in System Settings
+            // that adds process taps to macOS 14.1, so colouring it as a problem
+            // would be pointing at something nobody can act on.
+            tapLabel?.set(.optional, "Needs macOS 14.2 or later. On this Mac only your "
+                          + "microphone can be recorded.")
+        } else if Permissions.systemAudio {
+            tapLabel?.set(.granted, "Working. The other side of a call is recorded.")
         } else {
-            tapLabel?.stringValue = Permissions.systemAudio
-                ? "Working. The other side of a call is recorded."
-                : "Not available. Grant the microphone permission above, which is the "
-                  + "same permission a process tap needs."
+            tapLabel?.set(.blocked, "Not available. Grant the microphone permission "
+                          + "above, which is the same permission a process tap needs.")
+        }
+
+        if Permissions.accessibility {
+            // Read from the setting, not from `hotkeyInstalled`. The tap can be
+            // absent for reasons that are nothing to do with the switch: a
+            // preview launch never arms it, and neither does a first run before
+            // setup finishes. Both reported "dictation is switched off" about a
+            // dictation that was switched on.
+            accessibilityLabel?.set(
+                .granted,
+                Settings.dictationEnabled
+                    ? "Granted. \(DictationShortcut.description) starts a dictation."
+                    : "Granted, but dictation is switched off in the Dictation tab.")
+        } else if Settings.dictationEnabled {
+            // Blocked, because dictation is on and this is the reason it does
+            // nothing. That state was invisible for a release: the switch read
+            // as on, the shortcut was listed, and pressing it produced silence,
+            // because a tap without this grant is refused and there is no
+            // keystroke left to report the refusal with.
+            accessibilityLabel?.set(.blocked, "Not granted, so the dictation shortcut "
+                                    + "does nothing. Everything else in Listen works "
+                                    + "without it.")
+        } else {
+            accessibilityLabel?.set(.optional, "Not granted, and not needed: dictation "
+                                    + "is switched off in the Dictation tab.")
         }
 
         switch Permissions.calendarAction {
@@ -914,24 +986,61 @@ final class PermissionsPane: Pane {
             // calendar store looks identical to a working one from here, and
             // that is the failure this row exists to make visible.
             let count = MeetingCalendar.calendars().count
-            calendarLabel?.stringValue = count == 0
-                ? "Granted, but there are no calendars on this Mac to read."
-                : "Granted. Reading \(count) calendar\(count == 1 ? "" : "s")."
+            if count == 0 {
+                calendarLabel?.set(.blocked, "Granted, but there are no calendars on "
+                                   + "this Mac to read.")
+            } else {
+                calendarLabel?.set(.granted,
+                                   "Granted. Reading \(count) calendar\(count == 1 ? "" : "s").")
+            }
         case .canAsk:
             calendarButton?.title = "Allow calendar access"
-            calendarLabel?.stringValue = "Not granted yet."
+            // Optional throughout. Listen records, transcribes and labels
+            // without it, so a warning colour here would be nagging somebody
+            // about a choice rather than reporting a fault.
+            calendarLabel?.set(.optional, "Not granted yet.")
         case .settingsOnly:
             calendarButton?.title = "Open System Settings"
             // Split from "denied", because the two look identical from here and
             // are fixed the same way, but only one of them is a decision
             // anybody made: a dismissed prompt records nothing, so the status
             // still says nobody has been asked.
-            calendarLabel?.stringValue = Permissions.calendarDenied
+            calendarLabel?.set(.optional, Permissions.calendarDenied
                 ? "Denied. Recordings keep the name you give them, and speakers are "
                   + "named by hand."
                 : "Asked, and not granted. The button below opens System Settings, "
-                  + "where Listen can be switched on under Calendars."
+                  + "where Listen can be switched on under Calendars.")
         }
+
+        // The sidebar carries the same answer, so a missing grant is visible
+        // without opening this pane at all.
+        LibraryWindow.shared.refreshSettingsBadges()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        poll?.invalidate()
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Only on a change. `refresh` reads the calendar store and
+                // rebuilds four rows, and doing that every second under
+                // somebody reading the pane is work nobody asked for.
+                let key = "\(Permissions.microphone)|\(Permissions.systemAudio)"
+                    + "|\(Permissions.accessibility)|\(Permissions.calendar)"
+                guard key != self.lastKey else { return }
+                self.lastKey = key
+                self.refresh()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        poll = timer
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        poll?.invalidate()
+        poll = nil
     }
 }
 

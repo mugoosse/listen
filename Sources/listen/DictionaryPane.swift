@@ -49,8 +49,11 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
              + "transcript that sounds like one, and is not a word in its own right, is "
              + "corrected to it. Corrections are exact replacements, for mishearings that "
              + "sound nothing like the word you meant.")
-        note("Applied once, when a meeting is transcribed, to what is written to the "
-             + "library. Adding a rule does not change transcripts you already have, and "
+        note("One list, used twice: once when a meeting is transcribed, to what is written "
+             + "to the library, and again on every dictation before it reaches the "
+             + "clipboard. A name Listen mishears in a meeting is the same name it "
+             + "mishears when you dictate, so fixing it here fixes both.")
+        note("Adding a rule does not change transcripts you already have, and "
              + "re-transcribing a recording applies the list as it stands then.")
 
         let picker = NSSegmentedControl(

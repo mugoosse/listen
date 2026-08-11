@@ -120,8 +120,27 @@ enum ASRError: Error, LocalizedError {
 /// and ANE bound, and parallel jobs fight over the same hardware rather than
 /// finishing sooner.
 actor ASR {
+    /// One engine for the whole process.
+    ///
+    /// The weights are about 2.5 GB resident, and dictation and the meeting
+    /// queue both want them. Two instances is two copies, which is the
+    /// difference between fitting and not fitting on an 8 GB Mac, so the
+    /// pipeline and `DictationEngine` share this one rather than each owning an
+    /// `ASR()`. Behaviour is unchanged for meetings: `Queue.shared` already held
+    /// a single `Pipeline` for the life of the process, so its engine was
+    /// already a de-facto singleton.
+    ///
+    /// The CLI still builds its own where it runs one job and exits, because
+    /// there is nothing to share with.
+    static let shared = ASR()
+
     private var model: (any STTGenerationModel)?
     private var loadedRepo: String?
+
+    /// Whether weights are resident, so a caller can prewarm without asking for
+    /// a download. Nothing may start a 2.5 GB fetch on the strength of a
+    /// feature being switched on.
+    var isLoaded: Bool { model != nil }
 
     /// Two minutes, on every machine.
     ///
@@ -220,8 +239,10 @@ actor ASR {
     ///
     /// Returns segments with whatever timings the engine exposes. Read the note
     /// on word timings below before building speaker assignment on this.
+    /// `async` for one reason, and it is not the decoding: see the `Task.yield`
+    /// in the loop below.
     func transcribe(_ url: URL,
-                    progress: (@Sendable (Double) -> Void)? = nil) throws -> Transcript {
+                    progress: (@Sendable (Double) -> Void)? = nil) async throws -> Transcript {
         guard let model else { throw ASRError.modelUnavailable("model not loaded") }
 
         let audio: MLXArray
@@ -263,6 +284,21 @@ actor ASR {
         var hardCuts = 0
 
         for (index, piece) in pieces.enumerated() {
+            // A suspension point between pieces, and the only reason this
+            // method is `async`.
+            //
+            // An actor method with no `await` in it runs to completion before
+            // anything else on the actor gets a turn, so a dictation asked for
+            // while an hour-long meeting is transcribing would wait for the
+            // whole hour: 30 pieces at roughly a second each. Yielding here lets
+            // a queued `transcribe(samples:)` run between pieces, which bounds
+            // that wait to one piece.
+            //
+            // The transcript is unaffected. Each piece is decoded from `flat`,
+            // which nothing else writes, and the accumulators below are actor
+            // state that only this call touches: a reentrant dictation reads no
+            // part of them.
+            await Task.yield()
             let slice = pieces.count == 1 ? flat : flat[piece.start..<piece.end]
             let out = model.generate(
                 audio: slice,
@@ -297,6 +333,59 @@ actor ASR {
             model: loadedRepo ?? "unknown",
             chunks: pieces.count,
             hardCuts: hardCuts)
+    }
+
+    /// Read a file as 16 kHz mono samples, which is the shape a dictation
+    /// arrives in.
+    ///
+    /// Only `listen dictate` needs it: the microphone hands the samples over
+    /// directly, and `transcribe(_ url:)` does its own loading because it also
+    /// wants the `MLXArray` to slice pieces out of without copying. This exists
+    /// so the dictation path can be driven from a file without a microphone,
+    /// which is how it is verified.
+    nonisolated static func samples(from url: URL) throws -> [Float] {
+        do {
+            let (_, audio) = try loadAudioArray(from: url, sampleRate: Int(SAMPLE_RATE))
+            return audio.asArray(Float.self)
+        } catch {
+            throw ASRError.audioUnreadable(url.path, error)
+        }
+    }
+
+    /// Transcribe samples already in memory, returning the text and nothing
+    /// else.
+    ///
+    /// For dictation, which is the other shape of this job. A meeting is an
+    /// hour on disk that needs pieces, timings, segments and a progress count;
+    /// a dictation is a few seconds that never touched a file and needs one
+    /// string. Writing a temp WAV to reach `transcribe(_ url:)` would round-trip
+    /// through the encoder and the decoder for nothing, since Parakeet takes an
+    /// `MLXArray` and that is what the recorder already has.
+    ///
+    /// Ported from Speak's `Transcriber.transcribe`, including the padding.
+    func transcribe(samples pcm: [Float]) -> String? {
+        guard let model else { return nil }
+
+        // Pad very short clips with silence. Parakeet degrades badly on inputs
+        // shorter than about a second, and a one-word dictation is easily that
+        // short. Same rule and the same constant as the file path above.
+        var samples = pcm
+        let minimum = Int(SAMPLE_RATE)
+        if samples.count < minimum {
+            samples.append(contentsOf: repeatElement(0, count: minimum - samples.count))
+        }
+
+        // Utterances are short, so a single chunk is the common case; the 120 s
+        // ceiling only matters for a long unbroken dictation. This is
+        // mlx-audio's own chunking rather than `Chunking`'s, which is the right
+        // way round here: `Chunking` exists to put seams in pauses across an
+        // hour, and a dictation that reaches two minutes has no pause budget
+        // worth spending the complexity on.
+        let out = model.generate(
+            audio: MLXArray(samples),
+            generationParameters: STTGenerateParameters(chunkDuration: 120))
+        let text = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     /// Pull segments out of `STTOutput`'s untyped dictionaries.

@@ -82,6 +82,57 @@ final class SettingsNavViewController: NSViewController {
         table.scrollRowToVisible(row)
     }
 
+    /// Redraw the rows, for the badge.
+    ///
+    /// The selection is put back by hand: `reloadData` drops it, and a settings
+    /// sidebar that deselects itself while somebody is reading the pane it
+    /// selected looks like the window lost its place.
+    func refreshBadges() {
+        guard isViewLoaded, !reloading else { return }
+        // **Only when the answer changed, and this is what makes it safe.**
+        //
+        // The `reloading` flag below is not enough on its own: restoring the
+        // selection posts `tableViewSelectionDidChange`, AppKit does not
+        // guarantee to post it synchronously, and one that arrives after the
+        // flag has been cleared calls `onSelect`, which shows the pane, which
+        // calls `refresh`, which asks for the badges again. That loop hung the
+        // app on the first draw with no window and no output, and it survived
+        // the flag.
+        //
+        // Comparing state terminates it whatever the notification does: the
+        // second time round nothing has changed, so there is no second reload.
+        let blocked = PermissionsSummary.blocked
+        guard blocked != lastBadge else { return }
+        lastBadge = blocked
+
+        reloading = true
+        defer { reloading = false }
+        let selected = table.selectedRow
+        table.reloadData()
+        if selected >= 0 {
+            table.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false)
+        }
+    }
+
+    /// Set while `refreshBadges` is putting the selection back.
+    ///
+    /// Without it this hangs the app on the first draw, and the loop is short
+    /// enough to be worth spelling out: restoring the selection posts
+    /// `tableViewSelectionDidChange`, which calls `onSelect`, which shows the
+    /// pane, which calls `refresh`, which asks for the badges again. Measured by
+    /// a preview launch that produced no window and no output at all.
+    ///
+    /// Guarding the notification rather than skipping the reselect, because the
+    /// selection genuinely has to come back: `reloadData` drops it, and a
+    /// settings sidebar that deselects itself while somebody reads the pane it
+    /// selected looks like the window lost its place.
+    private var reloading = false
+
+    /// What the badge last showed. nil until the first row is built, so the
+    /// first `refreshBadges` after launch does not redraw a table that already
+    /// drew the right thing.
+    private var lastBadge: Bool?
+
     /// Put the keyboard on the list, so the arrow keys move between sections
     /// rather than doing nothing.
     func focusList() {
@@ -155,15 +206,52 @@ extension SettingsNavViewController: NSTableViewDataSource, NSTableViewDelegate 
                 icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                 icon.widthAnchor.constraint(equalToConstant: 18),
                 label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-                label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor,
-                                                constant: -6),
                 label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             ])
+
+            // A warning on the Permissions row when something switched on does
+            // not work.
+            //
+            // The pane says so too, but only once you are in it, and the state
+            // this exists for is the one nobody goes looking for: dictation
+            // enabled with no Accessibility grant, where the shortcut is silent
+            // and there is nothing anywhere to say why. A permissions screen you
+            // have to think to open is a permissions screen that answers the
+            // question too late.
+            //
+            // Only on Permissions, and only for a real fault. `blocked` excludes
+            // the calendar and excludes Accessibility while dictation is off,
+            // because a dot that means "you declined something optional" is a
+            // dot people learn to ignore, and then it cannot mean anything else.
+            let blocked = tab == .permissions ? PermissionsSummary.blocked : false
+            if tab == .permissions { lastBadge = blocked }
+            if blocked {
+                let badge = NSImageView()
+                badge.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                                      accessibilityDescription: "Needs attention")
+                badge.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
+                badge.contentTintColor = .systemOrange
+                badge.translatesAutoresizingMaskIntoConstraints = false
+                cell.addSubview(badge)
+                NSLayoutConstraint.activate([
+                    badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor,
+                                                    constant: -8),
+                    badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    label.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor,
+                                                    constant: -6),
+                ])
+            } else {
+                label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor,
+                                                constant: -6).isActive = true
+            }
             return cell
         }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        // A reload putting the selection back is not somebody choosing a
+        // section. See `reloading`.
+        guard !reloading else { return }
         guard case .section(let tab) = rows[safe: table.selectedRow] else { return }
         selectedTab = tab
         onSelect?(tab)

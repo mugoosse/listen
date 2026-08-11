@@ -100,6 +100,12 @@ enum CLI {
         switch command {
         case "transcribe":
             await transcribe(rest)
+        case "dictate":
+            await dictate(rest)
+        case "polish":
+            await polish(rest)
+        case "dictations":
+            dictations(rest)
         case "record":
             await record(rest)
         case "list":
@@ -1309,6 +1315,9 @@ enum CLI {
     usage: listen <command> [options]
 
       transcribe <file|id>       transcribe a file, or a whole recording
+      dictate <file>             run the dictation pipeline over a file
+      polish [text|-]            polish and correct text, as a dictation would
+      dictations [--limit N]     what you have dictated. --json for the fields.
       record [--seconds N]       capture until stopped, or for N seconds
       list [--limit N] [--tag T]
                                  recordings as a table. --json for the metadata.
@@ -1444,6 +1453,202 @@ enum CLI {
     """
 
     // -----------------------------------------------------------------------
+
+    /// `listen dictations [--limit N] [--json]`: what you have dictated.
+    ///
+    /// Read-only, and it stays that way. There is nothing to edit here: a
+    /// dictation is a moment that already happened and whose text is on the
+    /// clipboard, so the useful operations are reading the tail and grepping the
+    /// file, which `jq` does better than any flag this could grow.
+    ///
+    /// Deliberately not an MCP tool either. The server's rule is that the agent
+    /// reads evidence and writes opinion, and a dictation is neither: it is
+    /// whatever the user last typed with their voice, which may be a password
+    /// hint, a message to somebody else, or half a thought. Meetings are
+    /// recorded knowingly and shared knowingly; this is a keyboard.
+    private static func dictations(_ args: [String]) -> Never {
+        var limit = 20
+        var asJSON = false
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--limit":
+                i += 1
+                guard i < args.count, let n = Int(args[i]), n > 0 else {
+                    fail("--limit needs a positive number")
+                }
+                limit = n
+            case "--json": asJSON = true
+            default: fail("unknown option `\(args[i])`. Try `listen help`.")
+            }
+            i += 1
+        }
+
+        let entries = DictationHistory.recent(limit)
+        guard !entries.isEmpty else {
+            log("nothing dictated yet. The shortcut is in Settings, Dictation.")
+            exit(0)
+        }
+
+        if asJSON {
+            // Rebuilt rather than echoed, so the shape is this command's and not
+            // whatever the file happens to hold. Same key names, though: the
+            // file is the documented artifact and two spellings of `duration_sec`
+            // would be a needless thing to know.
+            let rows: [[String: Any]] = entries.map { e in
+                var row: [String: Any] = [
+                    "at": ISO8601DateFormatter().string(from: e.date),
+                    // Through `NSDecimalNumber`, for the reason written up on
+                    // `DictationHistory.tenths`: a rounded `Double` still
+                    // serialises as 6.5999999999999996. The same helper, so the
+                    // file and this command cannot print a duration two ways.
+                    "duration_sec": DictationHistory.tenths(e.duration),
+                    "words": e.text.split(separator: " ").count,
+                    "text": e.text,
+                ]
+                if let raw = e.raw { row["raw"] = raw }
+                if !e.fired.isEmpty { row["dictionary"] = e.fired }
+                return row
+            }
+            guard let data = try? JSONSerialization.data(
+                withJSONObject: rows,
+                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+                let text = String(data: data, encoding: .utf8)
+            else { fail("could not render the history as JSON") }
+            print(text)
+            exit(0)
+        }
+
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyy-MM-dd HH:mm"
+        for e in entries {
+            let words = e.text.split(separator: " ").count
+            print("\(stamp.string(from: e.date))  \(String(format: "%5.1fs", e.duration))"
+                  + "  \(String(format: "%4d", words))w  "
+                  + e.text.replacingOccurrences(of: "\n", with: " "))
+        }
+        // The file, because the useful next step is almost always grep or jq
+        // over the whole thing rather than a longer --limit.
+        log("\(DictationHistory.file.path)")
+        exit(0)
+    }
+
+    /// `listen polish [text|-]`: the post-processing chain, on text.
+    ///
+    /// The other half of `dictate`'s escape hatch, and the one that matters most,
+    /// because every defence in `Polisher` is a measured response to a real
+    /// failure and none of them can be checked by reading the code. `-` reads
+    /// stdin, so a whole history can be replayed through it.
+    ///
+    /// `LISTEN_POLISH=0` skips the model so the dictionary can be exercised on
+    /// its own, and `LISTEN_REPAIR=1` / `LISTEN_REPAIR=0` forces the
+    /// self-correction pass, which is how to A/B it without touching the saved
+    /// setting. `verify_polish.sh` drives all three.
+    private static func polish(_ args: [String]) async -> Never {
+        var pieces: [String] = []
+        for arg in args {
+            if arg == "-" {
+                let data = FileHandle.standardInput.readDataToEndOfFile()
+                pieces.append(String(data: data, encoding: .utf8) ?? "")
+            } else if arg.hasPrefix("-") {
+                fail("unknown option `\(arg)`. Try `listen help`.")
+            } else {
+                pieces.append(arg)
+            }
+        }
+        let text = pieces.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            fail("polish needs text, or `-` to read stdin. Try `listen help`.")
+        }
+
+        // Said rather than left to be inferred from unchanged output: on a Mac
+        // that cannot polish, text coming back identical is the correct result
+        // and looks exactly like a broken command.
+        if let why = Polisher.unavailableReason { log(why) }
+
+        let t0 = Date()
+        // `force`, because this is somebody asking for it explicitly. The
+        // environment override still wins, which is what makes
+        // `LISTEN_POLISH=0 listen polish` reach the corrections-only path.
+        let polished = await Polisher.shared.polish(text, force: true) { step, total in
+            if total > 1 { log("chunk \(step)/\(total)") }
+        }
+        // Corrections after, matching `applyAround`'s second pass. The first pass
+        // belongs to the raw transcript and there is no transcript here.
+        let corrected = CustomDictionary.apply(to: polished)
+
+        log(String(format: "%.1fs for %d characters", Date().timeIntervalSince(t0), text.count))
+        if !corrected.fired.isEmpty {
+            log("dictionary: " + corrected.fired.map { "\($0.key) x\($0.value)" }
+                .sorted().joined(separator: ", "))
+        }
+        print(corrected.text)
+        exit(0)
+    }
+
+    /// `listen dictate <file>`: the dictation pipeline over one file.
+    ///
+    /// The same escape hatch `transcribe` is, for the other pipeline. Dictation
+    /// is otherwise only reachable by holding a chord and talking, which needs
+    /// Accessibility, a microphone and a person, so a change to it could
+    /// otherwise only be tested by hand. This runs everything the shortcut runs
+    /// except the shortcut, the microphone and the clipboard: engine, then the
+    /// custom dictionary, then the fragment trim.
+    ///
+    /// Speak's equivalent is `--transcribe`, and its notes call it the fastest
+    /// way to separate a model problem from a shortcut problem before touching
+    /// UI code. That is exactly what it is for here.
+    private static func dictate(_ args: [String]) async -> Never {
+        var path: String?
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case let other where other.hasPrefix("-"):
+                fail("unknown option `\(other)`. Try `listen help`.")
+            default:
+                guard path == nil else { fail("dictate takes one file.") }
+                path = args[i]
+            }
+            i += 1
+        }
+        guard let path else { fail("dictate needs an audio file. Try `listen help`.") }
+
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            fail("no such file: \(url.path)")
+        }
+
+        do {
+            let choice = Settings.model
+            try await ASR.shared.load(choice) { log($0) }
+            let samples = try ASR.samples(from: url)
+            let t0 = Date()
+            guard let raw = await ASR.shared.transcribe(samples: samples) else {
+                log("nothing transcribed")
+                exit(0)
+            }
+            let spoken = Date()
+
+            // The same two steps, in the same order, as `Dictation.finish`.
+            let corrected = CustomDictionary.apply(to: raw)
+            let text = Punctuation.trimFragment(corrected.text)
+
+            // Timings and what changed on stderr, so stdout stays pipeable.
+            log(String(format: "transcribe %.1fs for %.0fs of audio",
+                       spoken.timeIntervalSince(t0),
+                       Double(samples.count) / SAMPLE_RATE))
+            if !corrected.fired.isEmpty {
+                log("dictionary: " + corrected.fired.map { "\($0.key) x\($0.value)" }
+                    .sorted().joined(separator: ", "))
+            }
+            if text != raw { log("raw: \(raw)") }
+            print(text)
+        } catch {
+            fail("\(error.localizedDescription)")
+        }
+        exit(0)
+    }
 
     /// `listen transcribe <file>`.
     ///

@@ -503,3 +503,30 @@ and a broken sink draws a flat strip over a perfectly good recording, which on
 screen is indistinguishable from the dead microphone the strips exist to report.
 A peak of 0 on a track whose file has audio in it means the meter is broken, not
 the microphone.
+
+
+## A dictation listens in on the meeting's microphone, and never opens a second unit
+
+`MicRecorder.onSamples` hands every converted buffer to a second consumer, wired
+and unwired by `Capture.beginDictationTap` / `endDictationTap`. It is nil except
+while somebody dictates during a recording.
+
+The alternative was a second capture unit on the same device, and it is not
+available. The device is already held: a second claim on it is either refused
+outright or renegotiates the Bluetooth profile the meeting is recording through,
+which would break the recording to serve the dictation. So the meeting's capture
+stays the only reader of the hardware and the dictation is a second consumer of
+what it already has.
+
+Two consequences, both deliberate. The sink is called *after* the writer, so a
+dictation listening in cannot cost the meeting a sample. And what you dictate is
+also in the meeting's microphone track, which the Dictation pane says out loud
+rather than leaving to be discovered: it is your voice in the room, and a
+recorder that quietly excised part of it would be lying about the hour.
+
+`DictationRecorder` is the other path, for dictating with no meeting running. It
+is a separate file carrying the same HAL ordering fix rather than a mode of this
+one, because an hour of meeting and four seconds of dictation want opposite
+things: streaming to a `WAVWriter` against holding samples in memory, and a
+watchdog that switches devices against disposing the unit the moment the key
+comes up. See `.agents/notes/dictation.md`.

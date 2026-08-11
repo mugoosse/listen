@@ -12,7 +12,7 @@
 <plist version="1.0">
 <dict>
     <key>ApplicationDescription</key>
-    <string>Push-to-talk dictation that transcribes entirely on your Mac.</string>
+    <string>Records, transcribes and dictates entirely on your Mac.</string>
     <key>Connections</key>
     <array>
         <dict>

@@ -5,12 +5,11 @@ import Foundation
 /// Named `CustomDictionary` because `Dictionary` is `Swift.Dictionary`, and
 /// shadowing that in a codebase full of `[String: Any]` would be a cruelty.
 ///
-/// Ported from Speak, where the rules were tuned, minus the one mechanism Listen
-/// cannot use. Speak has three: a term is a spelling hint in the polishing
-/// model's prompt, a term is also matched by sound, and a correction is a
-/// literal replacement. Listen has no polishing model, so the prompt half is
-/// dropped and the two that remain are pure text over Foundation. Nothing here
-/// loads a model or needs one.
+/// Ported from Speak, where the rules were tuned. All three of its mechanisms
+/// are here now: a term is matched by sound, a term is also a spelling hint in
+/// the polishing model's prompt, and a correction is a literal replacement. The
+/// prompt half was dropped while Listen had no polisher and came back with
+/// dictation. The other two are pure text over Foundation and need no model.
 ///
 /// - A **term** is a word Listen should know: a name, a product, a piece of
 ///   jargon. Anything in the transcript that sounds like one, and is not a word
@@ -23,12 +22,21 @@ import Foundation
 ///
 /// ## Where this runs, and why it counts itself
 ///
+/// **One list, two pipelines.** A name Listen mishears in a meeting is the same
+/// name it mishears in a dictation, so there is one file and one editor rather
+/// than a second list to fix the same word in twice.
+///
 /// In `Pipeline.run`, once, on the segments that are about to be written to the
-/// library. That is a stronger commitment than Speak makes, and it needs saying
-/// plainly: Speak's transcript is text you are about to paste and can see, while
-/// Listen's is an archive of a meeting nobody may read for a week. A bad rule
-/// applied here rewrites recordings quietly, and the only surviving evidence is
-/// the audio.
+/// library. And in `Dictation.finish`, through `applyAround`, which runs the
+/// corrections either side of polishing and the sounds-like pass only on the raw
+/// transcript. The two entry points differ because the pipelines do: a meeting
+/// has no model between its halves, and a dictation has one that rewrites the
+/// very words the rules look for.
+///
+/// The meeting side is the stronger commitment, and it needs saying plainly: a
+/// dictation is text you are about to paste and can see, while a meeting
+/// transcript is an archive nobody may read for a week. A bad rule applied there
+/// rewrites recordings quietly, and the only surviving evidence is the audio.
 ///
 /// So every rewrite leaves a number behind. `apply` returns how often each rule
 /// fired, `Pipeline` totals it into `StoredTranscript.dictionary`, and the
@@ -265,6 +273,88 @@ enum CustomDictionary {
         for (key, n) in counts { total[key, default: 0] += n }
     }
 
+    /// Corrections around a polishing pass: once on the raw transcript, once on
+    /// what came back.
+    ///
+    /// Dictation only. The meeting pipeline has no polisher between its two
+    /// halves, so `apply` is the whole story there and this would be a second
+    /// pass over the same text for nothing.
+    ///
+    /// Both runs are needed, and each fixes what the other cannot.
+    ///
+    /// Before, because polishing rewrites the very words the rules look for.
+    /// Measured on a real dictionary: "pagament to the Portagens" was tidied
+    /// into "payment to the Portagens" and "maxim Gusens" into "Maxim Gusens",
+    /// and in both cases the rule written for the raw transcript then matched
+    /// nothing. Correcting first also hands the model the right proper nouns,
+    /// which is the difference between it keeping "Hetzner" and inventing a
+    /// spelling for a word it does not know.
+    ///
+    /// After, because the model is free to change anything it was given, so this
+    /// is what makes a rule the user wrote the final word.
+    ///
+    /// Sounds-like runs only on the raw transcript. Mishearings come from the
+    /// microphone, not from the model.
+    static func applyAround(_ text: String,
+                            polish: (String) async -> String) async -> Applied {
+        // Loaded once: the file is small, but the two passes must agree, and
+        // re-reading between them would let an edit land in the middle.
+        let entries = load()
+        guard !entries.isEmpty else { return Applied(text: await polish(text)) }
+
+        var out = corrections(in: text, entries: entries)
+        let sounded = terms(in: out.text, entries: entries)
+        out.text = sounded.text
+        combine(sounded.fired, into: &out.fired)
+
+        let after = corrections(in: await polish(out.text), entries: entries, again: true)
+        out.text = after.text
+        combine(after.fired, into: &out.fired)
+        return out
+    }
+
+    /// Whether applying a correction to its own replacement changes it again.
+    private static func growsItself(_ e: Entry, pattern: String) -> Bool {
+        replace(pattern, with: e.replacement, in: e.replacement,
+                caseSensitive: e.caseSensitive).text != e.replacement
+    }
+
+    /// The enabled terms as a comma-separated list for the polish prompt, capped
+    /// at `capChars`.
+    ///
+    /// Capped because the model's context window holds the instructions, the
+    /// transcript and the reply together: a long list would crowd out the text it
+    /// is meant to help. Entries are taken in order, so the top of the list is
+    /// the part that survives a cap.
+    ///
+    /// Terms do two jobs, and this is the weaker one. The repair happens in
+    /// `terms(in:entries:)`, deterministically and with no model, which is what
+    /// makes it work with polishing off. This stops the model rewriting words it
+    /// does not know: measured in Speak, `flyinpublic.com` survived 0 of 6 runs
+    /// without a hint and 5 of 6 with one.
+    static func termHints(_ entries: [Entry]? = nil, capChars: Int = 600) -> String {
+        let terms = (entries ?? load())
+            .filter { $0.kind == .term && $0.enabled }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var out = ""
+        for term in terms {
+            let addition = out.isEmpty ? term : ", " + term
+            if out.count + addition.count > capChars { break }
+            out += addition
+        }
+        return out
+    }
+
+    /// Build the word list before anybody is waiting on it.
+    ///
+    /// `lexicon` is lazy and reads `/usr/share/dict/words`, which is a fraction
+    /// of a second nobody should spend between letting go of a key and seeing
+    /// their words. Called when a dictation starts, alongside the polisher's own
+    /// prewarm.
+    static func warm() { _ = lexicon.isEmpty }
+
     // MARK: Corrections
 
     /// Apply every enabled correction, longest pattern first.
@@ -279,7 +369,9 @@ enum CustomDictionary {
     ///
     /// Equal-length patterns keep the list's order, and each correction still
     /// sees what earlier ones produced.
-    private static func corrections(in text: String, entries: [Entry]) -> Applied {
+    /// `again: true` is the pass that runs *after* polishing. See `applyAround`.
+    private static func corrections(in text: String, entries: [Entry],
+                                    again: Bool = false) -> Applied {
         let rules = entries
             .enumerated()
             .filter { $0.element.kind == .correction && $0.element.enabled }
@@ -295,6 +387,11 @@ enum CustomDictionary {
         for entry in rules {
             let pattern = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !pattern.isEmpty else { continue }
+            // A rule whose replacement still contains its own pattern cannot run
+            // twice: "Speak" to "Speak app" would give "Speak app app" on the
+            // second pass. Skipped after polishing, where the first pass has
+            // already done the work.
+            if again, growsItself(entry, pattern: pattern) { continue }
             let result = replace(pattern, with: entry.replacement,
                                  in: out.text, caseSensitive: entry.caseSensitive)
             guard result.count > 0 else { continue }

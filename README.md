@@ -44,6 +44,10 @@ roots that remains clear at 16 points.
   you name a speaker. Google and Microsoft calendars come through whatever you
   have already added in System Settings, so there is no sign-in, no
   subscription and no server in the middle.
+- **Dictates, anywhere on the Mac.** Press a shortcut in any app, talk, press
+  it again, and what you said is typed in. The same speech model, still on this
+  machine, and the same custom vocabulary the meetings use. This was
+  [Speak](https://mugoosse.github.io/speak/), which is now part of Listen.
 - **Keeps your own notes**, typed during the call or after it, one per
   recording. An agent can read them and cannot change them.
 - **Tags a recording** with what it is about, in your own words, so "the job
@@ -260,6 +264,53 @@ somebody, and typing a name from scratch files nothing.
 This is optional, and refusing costs exactly those two things. Recording,
 transcription and speaker labelling are unaffected.
 
+
+## Dictating
+
+Listen types for you as well as writing meetings down. Press **fn + left
+shift** anywhere on the Mac, say what you want written, press it again, and the
+words go to the clipboard and are typed into whatever you were using. Escape
+cancels, and so does the trash button on the floating pill.
+
+It is off until you grant Accessibility, which is the permission that lets
+Listen see the shortcut and type for you. Recording meetings never uses it, so
+if you only want the recorder you can ignore this entirely. Everything else is
+in Settings, Dictation: the shortcut itself, which speech engine to use, the
+sounds, and whether the pill appears.
+
+The custom vocabulary is shared. A name Listen mishears in a meeting is the
+same name it mishears when you dictate, so a rule you add in Settings,
+Dictionary fixes both.
+
+### Tidying up what you said
+
+On macOS 26 with Apple Intelligence, Listen can run what you said through a
+copy-editing pass before it reaches the clipboard: punctuation and
+capitalisation added, um and uh removed, paragraphs where the topic turns. It
+adds about a second and it rewrites your words, so it is off until you ask for
+it in Settings, Dictation.
+
+It is a copy editor and never an assistant. A dictated question comes back as a
+question rather than an answer, and a sentence you cut off stays cut off. If a
+reply ever collapses or grows past what editing can explain, Listen throws it
+away and keeps what you actually said.
+
+There is a second pass for false starts, the case where you begin a phrase,
+break off and say it again: "send me the notes the meeting notes" becomes "send
+me the meeting notes". It only runs on sentences that look like that, which
+over a real history is about one dictation in ten.
+
+### Coming from Speak
+
+Speak's dictation is here, and Speak itself is retired. The speech model
+carries over on its own, because both apps always used the same download, so
+there is nothing to fetch again.
+
+What does not carry over is the configuration: the shortcut, the sounds and the
+polishing settings all start at their defaults, and the dictation history stays
+in Speak's folder. Set the shortcut again in Settings, Dictation. Your Speak
+dictionary can be brought across in one press from Settings, Dictionary.
+
 ## Notes
 
 Two kinds, and the difference is the whole design.
@@ -298,6 +349,9 @@ symlinked rather than copied, so it never falls behind the app it came from.
 
 ```
 listen transcribe <file|id>       transcribe a file, or a whole recording
+listen dictate <file>             run the dictation pipeline over a file
+listen polish [text|-]            polish and correct text, as a dictation would
+listen dictations [--limit N]     what you have dictated
 listen record [--seconds N]       capture until stopped, or for N seconds
 listen list [--limit N] [--tag T]  recordings as a table
 listen show <id>                  metadata and transcript

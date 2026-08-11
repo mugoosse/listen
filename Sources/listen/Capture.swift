@@ -135,6 +135,31 @@ final class Capture {
     var onChange: (() -> Void)?
 
     // -----------------------------------------------------------------------
+    // Dictating while a meeting is being recorded
+    // -----------------------------------------------------------------------
+
+    /// Listen in on the microphone track a running recording is already
+    /// capturing. Returns false when there is no recording to listen in on, or
+    /// when the microphone track failed to start.
+    ///
+    /// A dictation started while a meeting is running cannot open its own
+    /// capture unit: the device is held, and a second claim on it is refused or
+    /// renegotiated rather than shared. See `MicRecorder.onSamples`.
+    ///
+    /// Deliberately one listener. Two dictations at once is not a state that
+    /// exists, and a dictionary of sinks here would be a general mechanism
+    /// standing in for a thing that happens once.
+    func beginDictationTap(_ sink: @escaping @Sendable ([Float]) -> Void) -> Bool {
+        guard isRecording, mic.isRecording else { return false }
+        mic.onSamples = sink
+        return true
+    }
+
+    func endDictationTap() {
+        mic.onSamples = nil
+    }
+
+    // -----------------------------------------------------------------------
 
     /// Begin capturing. Writes into staging from the first second.
     ///

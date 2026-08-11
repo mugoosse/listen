@@ -257,6 +257,35 @@ this app, so read them before building any new window, menu or popover.
 - `intrinsicContentSize` is four points narrower than the text
 - A typed chevron is not aligned with the text beside it
 
+### `.agents/notes/dictation.md` (18k)
+
+Push-to-talk: a chord, a microphone, and the words typed into whatever is in
+front. `Dictation`, `DictationHotkey`, `DictationRecorder`, `DictationEngine`,
+`DictationHUD`, `Cue`, `SecureInput`, `Punctuation`, `Polisher`, `SpeechRepair`,
+`AppleEngine`, `DictationPane`. **Mostly Speak's measurements, kept here because
+that repo is being archived.**
+
+- The event tap must stay ordered and synchronous
+- fn is invisible to NSEvent on Apple Silicon
+- Secure input takes character key events away
+- Two capture paths, and why they are not one
+- One `ASR`, and a yield so dictation can get a word in
+- Polishing answers the transcript unless you stop it
+- Polishing finishes the sentence you did not
+- The polisher sees only one kind of speech repair
+- The repair pass is only affordable because of the gate
+- Sentence units have to tile the text exactly
+- Polish requests are greedy, not sampled
+- FoundationModels needs permissive guardrails and small chunks
+- The first polish request of the process costs about 50 seconds
+- The full stop on a one-word dictation is Parakeet's
+- A term is a phonetic rule, not just a prompt hint
+- Corrections run either side of polishing
+- The pill has to be driven by the microphone, not by a timer
+- One column edge decides the pill's whole layout
+- Signing decides whether the Accessibility grant survives a rebuild
+- What is deliberately not here: no MCP tool, no import from Speak
+
 ### `.agents/notes/cli-mcp.md` (6k)
 
 `CLI`, `Settings`, `AppInfo`, `CLIInstall`, `MCP`.

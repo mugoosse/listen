@@ -257,6 +257,10 @@ this app, so read them before building any new window, menu or popover.
 - The sidebar width fought the split view
 - `intrinsicContentSize` is four points narrower than the text
 - A typed chevron is not aligned with the text beside it
+- A tool tip is a tracking area, so clearing them all takes it with it
+- An attributed title's colour wins over `contentTintColor`
+- `glyphIndex(for:in:)` answers with the nearest glyph, however far away
+- A disabled button greys its title, unless the title is attributed
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -395,6 +399,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The composer cleared the field before the guard, and the follow-up went nowhere
 - One question waits, and Stop is the way to take it back
 - The stop button drew itself as Ask for the whole run
+- Every control on the Ask surfaces was silent until it was pressed
 - A conversation you go back to opens as a page
 - The meeting being recorded has no composer, and an extent outlived its drawer
 - Delete is a verb on the conversation, so it is not on History

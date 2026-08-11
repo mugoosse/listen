@@ -1539,8 +1539,12 @@ final class DetailWithComposer: NSViewController {
     /// The drawer's own background, so a conversation is not read through the
     /// transcript underneath it.
     private let drawer = NSView()
-    private let collapseButton = NSButton()
-    private let titleButton = NSButton()
+    /// The header's controls, all four of them borderless and therefore all
+    /// four of them silent until pressed before `HoverButton` existed. The
+    /// three on the discs fill their disc under the pointer; the title, which
+    /// is a word in a line rather than a shape, brightens instead.
+    private let collapseButton = HoverButton(.fill(idle: 0))
+    private let titleButton = HoverButton()
 
     /// The same glass the composer well is made of, so the drawer under it is
     /// one material rather than two that nearly match.
@@ -1648,11 +1652,8 @@ final class DetailWithComposer: NSViewController {
         // button's `image`, which is the alignment fix `SpeakerPill` records: an
         // `.imageTrailing` glyph sits on the title's baseline and lands a couple
         // of points below the centre of the letters beside it.
-        titleButton.isBordered = false
-        titleButton.bezelStyle = .inline
         titleButton.target = self
         titleButton.action = #selector(showTitleMenu)
-        titleButton.translatesAutoresizingMaskIntoConstraints = false
         // **A symbol, not a typed glyph.** The caret used to be "⌄" appended to
         // the title string, U+2304 DOWN ARROWHEAD, and it sat visibly below the
         // words next to it: that character is centred on its own em box rather
@@ -1664,7 +1665,6 @@ final class DetailWithComposer: NSViewController {
         titleButton.image = NSImage(systemSymbolName: "chevron.down",
                                     accessibilityDescription: "")
         titleButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
-        titleButton.contentTintColor = .secondaryLabelColor
         titleButton.imagePosition = .imageTrailing
         // Beside the words rather than pushed to the far edge of the button,
         // which is what an untouched trailing image does when the button is
@@ -1674,8 +1674,6 @@ final class DetailWithComposer: NSViewController {
         // Its own glass disc, and big enough to be a target rather than a hint.
         // A bare chevron at 11 points is the control somebody hunts for after
         // the drawer has already swallowed the page.
-        collapseButton.isBordered = false
-        collapseButton.bezelStyle = .inline
         collapseButton.imagePosition = .imageOnly
         collapseButton.contentTintColor = .labelColor
         collapseButton.symbolConfiguration = .init(pointSize: 13, weight: .semibold)
@@ -1705,8 +1703,6 @@ final class DetailWithComposer: NSViewController {
         // Beside the collapse control, and the same size, because they are the
         // two directions of one thing: how much of the page the conversation
         // is allowed to have.
-        fullButton.isBordered = false
-        fullButton.bezelStyle = .inline
         fullButton.imagePosition = .imageOnly
         fullButton.contentTintColor = .labelColor
         fullButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
@@ -1726,8 +1722,6 @@ final class DetailWithComposer: NSViewController {
         // already on screen, and it was costing a menu and a read of every row
         // in it. The menu keeps its row, because the pull-down in the title bar
         // is the only route in when no card is up.
-        newButton.isBordered = false
-        newButton.bezelStyle = .inline
         newButton.imagePosition = .imageOnly
         newButton.contentTintColor = .labelColor
         newButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
@@ -1802,6 +1796,13 @@ final class DetailWithComposer: NSViewController {
             newGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             newGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
             newGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            // **The button is the disc, not the glyph in the middle of it.**
+            // Sized to its symbol it was a 14 point target inside a 30 point
+            // circle, so half of what looks like the control did nothing, and
+            // the hover fill it now draws would have been a small blob floating
+            // inside the glass rather than the disc lighting up.
+            newButton.widthAnchor.constraint(equalTo: newGlass.widthAnchor),
+            newButton.heightAnchor.constraint(equalTo: newGlass.heightAnchor),
             newButton.centerXAnchor.constraint(equalTo: newGlass.centerXAnchor),
             newButton.centerYAnchor.constraint(equalTo: newGlass.centerYAnchor),
 
@@ -1810,6 +1811,8 @@ final class DetailWithComposer: NSViewController {
             fullGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             fullGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
             fullGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            fullButton.widthAnchor.constraint(equalTo: fullGlass.widthAnchor),
+            fullButton.heightAnchor.constraint(equalTo: fullGlass.heightAnchor),
             fullButton.centerXAnchor.constraint(equalTo: fullGlass.centerXAnchor),
             fullButton.centerYAnchor.constraint(equalTo: fullGlass.centerYAnchor),
             collapseGlass.trailingAnchor.constraint(equalTo: header.trailingAnchor,
@@ -1817,6 +1820,8 @@ final class DetailWithComposer: NSViewController {
             collapseGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             collapseGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
             collapseGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
+            collapseButton.widthAnchor.constraint(equalTo: collapseGlass.widthAnchor),
+            collapseButton.heightAnchor.constraint(equalTo: collapseGlass.heightAnchor),
             collapseButton.centerXAnchor.constraint(equalTo: collapseGlass.centerXAnchor),
             collapseButton.centerYAnchor.constraint(equalTo: collapseGlass.centerYAnchor),
 
@@ -2437,9 +2442,9 @@ final class DetailWithComposer: NSViewController {
     private static let composerInset: CGFloat = 24
 
     private var collapseGlass: NSView!
-    private let fullButton = NSButton()
+    private let fullButton = HoverButton(.fill(idle: 0))
     private var fullGlass: NSView!
-    private let newButton = NSButton()
+    private let newButton = HoverButton(.fill(idle: 0))
     private var newGlass: NSView!
     private var backdrop: NSView!
     /// The page's own opaque background, and the whole of why a page is not a

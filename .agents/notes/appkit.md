@@ -395,3 +395,88 @@ button.imageHugsTitle = true          // or it is pushed to the button's far edg
 the title keeps one trailing space. `AnswerTurn`'s disclosure records the other
 half of this: two glyphs rather than one rotated, because a rotation under Auto
 Layout is only aligned in one of its two states.
+
+## A tool tip is a tracking area, so clearing them all takes it with it
+
+The idiom every hover in this app started from clears the lot and puts one back:
+
+```swift
+override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    for area in trackingAreas { removeTrackingArea(area) }   // not on a button
+    addTrackingArea(NSTrackingArea(rect: bounds, options: […], owner: self))
+}
+```
+
+`trackingAreas` is not a list of what this class put there. `NSToolTipManager`
+installs one per tool tip rect, and `updateTrackingAreas` runs on every geometry
+change, so a view that clears the array removes its own tool tip a fraction of a
+second after AppKit installed it. `HoverRow` gets away with it because a sidebar
+row has no tool tip; the drawer's cross, resize and new-conversation buttons all
+have one, and each is the only thing that says what its glyph means.
+
+The fix is to hold your own area and remove it by name, which is what
+`HoverButton`, `LinkLine`, `SendButton` and `AnswerTurn.HeaderRow` all do now.
+
+## An attributed title's colour wins over `contentTintColor`
+
+`contentTintColor` colours a borderless button's template image and its plain
+`title`. It does nothing to an `attributedTitle`, because that string carries a
+`.foregroundColor` of its own and the string wins.
+
+Half the buttons in this app set one, for the reasons `SpeakerPill` and the
+drawer's title record: a hand-built title is the only way to control the
+paragraph style, the truncation and the trailing glyph. So a hover that only
+writes `contentTintColor` lights the chevron and leaves the word beside it grey,
+which reads as a rendering bug rather than as a highlight.
+
+`HoverButton` keeps the string as the caller set it and recolours a copy on the
+way in, which is also what puts it back. The setter is overridden to capture it,
+and the recolour writes through `super`, or the lit copy becomes the one the
+button remembers and it never goes quiet again.
+
+## `glyphIndex(for:in:)` answers with the nearest glyph, however far away
+
+Underlining the link under the pointer needs the character at a point, and
+`NSLayoutManager` will always name one: the method returns the *nearest* glyph,
+with no notion of a miss. The pointer anywhere in the margin beside a line comes
+back as the last character of that line, so a centred column of links, which is
+exactly what the landing page's recent conversations are, underlines whichever
+one the mouse is level with from anywhere on the row.
+
+The bounding rect is what tells being over a letter from being beside one:
+
+```swift
+let glyph = manager.glyphIndex(for: inside, in: container)
+let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1),
+                                in: container)
+guard rect.contains(inside) else { return nil }
+```
+
+The point has to have `textContainerInset` taken off it first, which is the same
+correction `AnswerTurn.rect(of:in:)` applies in the other direction when it puts
+a popover on a reference number.
+
+The underline itself is a *temporary attribute* on the layout manager, not an
+edit to the text storage. The storage is what `LinkLine.intrinsicContentSize`
+measures and what a streaming answer is written into, and neither should ever
+see a decoration that belongs to the mouse. Temporary attributes do not re-wrap
+the text and are dropped when it is replaced.
+
+## A disabled button greys its title, unless the title is attributed
+
+`isEnabled = false` dims a plain `title` for you. It does nothing to an
+`attributedTitle`, which is the same rule `contentTintColor` follows above and
+for the same reason: the string carries a `.foregroundColor` and the string
+wins.
+
+It is invisible until a control both draws its own shape and reports its own
+outcome. `AnswerTurn`'s Save as note becomes "Saved" with a checkmark and
+disables itself so one answer cannot become two notes, and as a `ChipButton` it
+kept full-strength `labelColor` text on a capsule that no longer responded: a
+spent control that reads as a live one, which is worse than no confirmation.
+
+`ChipButton` therefore rebuilds its title whenever `isEnabled` changes, at
+`labelColor` or `tertiaryLabelColor`. Anything that hand-builds a title has to
+answer this question; `SpeakerPill` does not only because nothing ever disables
+one.

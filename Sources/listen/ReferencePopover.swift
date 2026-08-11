@@ -93,6 +93,8 @@ private final class ReferenceCard: NSViewController {
     override func loadView() {
         let card = ClickableCard { [weak self] in self?.open() }
         card.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
+        card.onHover = { [weak self] on in self?.lightOpen(on) }
+        lightOpen(false)
 
         let stack = NSStackView(views: [kindRow(), title(), meta()])
         if let detail = detail() { stack.addArrangedSubview(detail) }
@@ -220,20 +222,38 @@ private final class ReferenceCard: NSViewController {
     /// so is a card people read and dismiss. This line is what makes the click
     /// discoverable, so it is text rather than a chevron on its own.
     private func openRow() -> NSView {
-        let label = NSTextField(labelWithString: "Open " + words.kind.lowercased())
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
-        label.textColor = Brand.accent
-
         let chevron = NSImageView(image: NSImage(
             systemSymbolName: "chevron.right", accessibilityDescription: "") ?? NSImage())
         chevron.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
         chevron.contentTintColor = Brand.accent
 
-        let row = NSStackView(views: [label, chevron])
+        let row = NSStackView(views: [openLabel, chevron])
         row.orientation = .horizontal
         row.spacing = 3
         row.alignment = .centerY
         return row
+    }
+
+    /// The verb, kept so the pointer can underline it.
+    private lazy var openLabel = NSTextField(labelWithString: "")
+
+    /// Underline the verb while the pointer is anywhere on the card.
+    ///
+    /// The whole card is the button, and the line at the foot of it is what says
+    /// so, but it was the accent colour and nothing else: the same blue as a
+    /// reference number, on a card that until now answered a pointer with only
+    /// a cursor. Underlining is what every other link in this app does under the
+    /// pointer, and it is drawn on the one line that names the destination
+    /// rather than as a wash over the card, which would highlight three lines of
+    /// description that go nowhere on their own.
+    private func lightOpen(_ on: Bool) {
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: Brand.accent,
+        ]
+        if on { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        openLabel.attributedStringValue = NSAttributedString(
+            string: "Open " + words.kind.lowercased(), attributes: attributes)
     }
 }
 
@@ -245,6 +265,9 @@ private final class ReferenceCard: NSViewController {
 /// does is one that breaks quietly.
 private final class ClickableCard: NSView {
     private let onClick: () -> Void
+    /// True while the pointer is on the card. What that looks like belongs to
+    /// the card's contents: see `ReferenceCard.lightOpen`.
+    var onHover: ((Bool) -> Void)?
 
     init(onClick: @escaping () -> Void) {
         self.onClick = onClick
@@ -253,6 +276,26 @@ private final class ClickableCard: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }
+
+    /// Ours by name rather than clearing `trackingAreas`, for the reason
+    /// `HoverButton` records.
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        // `.activeAlways` rather than in-key-window: a popover's window is not
+        // the key one, and this card lives in nothing else.
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
 
     override func mouseDown(with event: NSEvent) { onClick() }
 

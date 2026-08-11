@@ -40,7 +40,7 @@ final class AskView: NSView {
     private let starterRow = NSStackView()
     /// The starters and the drawer's collapsed-state controls, on one line.
     private let starterLine = NSStackView()
-    private let expandButton = NSButton()
+    private let expandButton = HoverButton()
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
     /// alternatives rather than neighbours: one invites a question and the other
@@ -48,7 +48,7 @@ final class AskView: NSView {
     private let invitation = NSStackView()
     private let field = ComposerField()
     private let sendButton = SendButton()
-    private let modelButton = NSButton()
+    private let modelButton = HoverButton()
     private lazy var composer = ComposerWell(field: field, model: modelButton,
                                              send: sendButton)
     private let status = NSTextField(labelWithString: "")
@@ -177,13 +177,12 @@ final class AskView: NSView {
         // The starters and the two drawer controls share one line, right
         // against left. A clock on a line of its own above the chips is a whole
         // row spent on one glyph, which is what it looked like.
+        //
+        // A `HoverButton` rather than a bare one, and that is the whole of what
+        // it is for: the rest of the styling below is what it already brings.
         for button in [expandButton] {
-            button.isBordered = false
-            button.bezelStyle = .inline
             button.imagePosition = .imageOnly
-            button.contentTintColor = .secondaryLabelColor
             button.target = self
-            button.translatesAutoresizingMaskIntoConstraints = false
         }
         expandButton.image = NSImage(systemSymbolName: "chevron.up",
                                      accessibilityDescription: "Show the conversation")
@@ -426,10 +425,7 @@ final class AskView: NSView {
         // copy is built before any agent detection has finished.
         modelButton.title = ""
         modelButton.isHidden = true
-        modelButton.bezelStyle = .inline
-        modelButton.isBordered = false
         modelButton.font = .systemFont(ofSize: 12)
-        modelButton.contentTintColor = .secondaryLabelColor
         modelButton.imagePosition = .imageRight
         // Empty rather than nil. An SF Symbol carries its own description, so
         // nil leaves the chevron announcing itself and the button read as
@@ -1902,6 +1898,7 @@ final class SendButton: NSView {
 
     private let glyph = NSImageView()
     private var pressed = false { didSet { restyle() } }
+    private var hovering = false { didSet { restyle() } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -1953,10 +1950,37 @@ final class SendButton: NSView {
         // with no glyph at all. A label colour is for labels.
         let live = isReady || isStop
         let fade: CGFloat = live ? (pressed ? 0.75 : 1) : 0.3
-        layer?.backgroundColor = Brand.accent.withAlphaComponent(fade).cgColor
+        // **Lighter under the pointer, and only while there is something to
+        // send.** The disc is already at full alpha when it is live, so hover
+        // cannot be more of the accent: it is a little white mixed into it,
+        // which is the one direction left. Dimmed, it does nothing when
+        // pressed, and a control that lights up and then ignores you is worse
+        // than one that never lit up at all.
+        let disc = live && hovering && !pressed
+            ? Brand.accent.blended(withFraction: 0.16, of: .white) ?? Brand.accent
+            : Brand.accent
+        layer?.backgroundColor = disc.withAlphaComponent(fade).cgColor
         glyph.contentTintColor = Brand.onAccent.withAlphaComponent(live ? 1 : 0.55)
         setAccessibilityLabel(isStop ? "Stop" : "Ask")
     }
+
+    /// Ours by name, for the reason `HoverButton` records: `trackingAreas` also
+    /// holds whatever AppKit put there.
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
 
     override func mouseDown(with event: NSEvent) {
         guard isReady || isStop else { return }
@@ -2141,19 +2165,19 @@ private final class SetupNotice: NSView {
 }
 
 /// A canned question, shaped like the tag chips it sits near.
-private final class StarterChip: NSButton {
+///
+/// A `ChipButton` and a closure, which is the whole class: four of these in a
+/// row over a meeting were indistinguishable from four labels until one was
+/// clicked, and the capsule that lights up under the pointer is shared with the
+/// two controls under an answer rather than invented twice.
+private final class StarterChip: ChipButton {
     private let onPress: () -> Void
 
     init(_ title: String, onPress: @escaping () -> Void) {
         self.onPress = onPress
-        super.init(frame: .zero)
-        self.title = title
-        bezelStyle = .rounded
-        controlSize = .large
-        font = .systemFont(ofSize: 12)
+        super.init(title)
         target = self
         action = #selector(fire)
-        translatesAutoresizingMaskIntoConstraints = false
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }

@@ -566,8 +566,96 @@ final class LinkLine: NSTextView {
     /// height it was last measured at, which for an answer being streamed into
     /// is the height of its first sentence.
     func set(_ text: NSAttributedString) {
+        // Before the write, not after: the range is into the storage that is
+        // about to go, and taking the attribute off afterwards would be a
+        // range into the new text.
+        underline(nil)
         textStorage?.setAttributedString(text)
         invalidateIntrinsicContentSize()
+    }
+
+    // MARK: - The link under the pointer
+
+    /// Which link is underlined, so the last one can be put back.
+    private var underlined: NSRange?
+    /// Ours, kept apart from the several an `NSTextView` installs for itself.
+    /// Clearing `trackingAreas` wholesale here is what takes the pointing hand
+    /// off every link in the app, because that cursor is one of them.
+    private var hoverArea: NSTrackingArea?
+
+    /// Underline the link the pointer is over.
+    ///
+    /// A link in this app is the accent colour and nothing else, which is
+    /// enough to read as a link in a paragraph and not enough to say *which*
+    /// one is about to be clicked when five of them are stacked, which is
+    /// exactly the shape the landing page's recent conversations are in. The
+    /// pointing hand already appears, and a cursor is 16 points of feedback
+    /// somewhere the eye is not.
+    ///
+    /// A temporary attribute rather than an edit to the text storage. The
+    /// storage is what `intrinsicContentSize` measures and what an answer
+    /// streams into, and neither should ever see a decoration that belongs to
+    /// the mouse. Temporary attributes are the layout manager's own channel for
+    /// exactly this, they do not re-wrap the text, and they are dropped when the
+    /// text is replaced.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow,
+                      .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        underline(link(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        underline(nil)
+    }
+
+    private func underline(_ range: NSRange?) {
+        guard range != underlined else { return }
+        if let old = underlined, let manager = layoutManager,
+           NSMaxRange(old) <= (textStorage?.length ?? 0) {
+            manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: old)
+        }
+        if let range {
+            layoutManager?.addTemporaryAttributes(
+                [.underlineStyle: NSUnderlineStyle.single.rawValue],
+                forCharacterRange: range)
+        }
+        underlined = range
+    }
+
+    /// The whole of the link at a point in the view, or nil for anything else.
+    private func link(at point: NSPoint) -> NSRange? {
+        guard let manager = layoutManager, let container = textContainer,
+              let storage = textStorage, manager.numberOfGlyphs > 0 else { return nil }
+        let inside = NSPoint(x: point.x - textContainerInset.width,
+                             y: point.y - textContainerInset.height)
+        let glyph = manager.glyphIndex(for: inside, in: container)
+        // **`glyphIndex(for:in:)` answers with the nearest glyph however far
+        // away the point is**, so the pointer anywhere in the margin past the
+        // end of a line comes back as the last character of it, and a centred
+        // list of links underlines whichever one the mouse is level with. The
+        // bounding rect is what tells being over a letter from being beside it.
+        let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1),
+                                        in: container)
+        guard rect.contains(inside) else { return nil }
+        let index = manager.characterIndexForGlyph(at: glyph)
+        guard index < storage.length else { return nil }
+        var range = NSRange()
+        guard storage.attribute(.link, at: index, effectiveRange: &range) != nil else {
+            return nil
+        }
+        return range
     }
 
     override var intrinsicContentSize: NSSize {

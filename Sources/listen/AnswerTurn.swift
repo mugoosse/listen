@@ -32,8 +32,10 @@ final class AnswerTurn: NSView {
     private let blocks = NSStackView()
     private let activity = ShimmerLabel()
     private let footer = NSStackView()
-    private let save = NSButton()
-    private let again = NSButton()
+    /// The same capsule the starter chips are, for the same reason: a `.rounded`
+    /// push button is the one shape a hover cannot be added to from outside.
+    private let save = ChipButton("Save as note")
+    private let again = ChipButton("Try again")
 
     /// Told the answer and the question it came from, and answers whether a note
     /// was written. See `saveTapped`.
@@ -118,6 +120,14 @@ final class AnswerTurn: NSView {
         // and every disclosure in this app that reads as a sentence should
         // behave like one.
         header.onClick = { [weak self] in self?.toggle() }
+        // The pointing hand was the only sign this line does anything, and a
+        // cursor is 16 points of feedback where the eye is not. Both the words
+        // and the chevron move up one step, because they are one control.
+        header.onHover = { [weak self] on in
+            guard let self else { return }
+            elapsedLabel.textColor = on ? .labelColor : .secondaryLabelColor
+            disclosure.contentTintColor = on ? .secondaryLabelColor : .tertiaryLabelColor
+        }
 
         blocks.orientation = .vertical
         blocks.alignment = .leading
@@ -125,18 +135,10 @@ final class AnswerTurn: NSView {
 
         activity.isHidden = true
 
-        save.title = "Save as note"
-        save.bezelStyle = .rounded
-        save.controlSize = .large
-        save.font = .systemFont(ofSize: 12)
         save.target = self
         save.action = #selector(saveTapped)
         save.isHidden = true
 
-        again.title = "Try again"
-        again.bezelStyle = .rounded
-        again.controlSize = .large
-        again.font = .systemFont(ofSize: 12)
         again.target = self
         again.action = #selector(againTapped)
         again.isHidden = true
@@ -513,10 +515,14 @@ final class AnswerTurn: NSView {
     /// Disabled with it, so an answer cannot quietly become two notes.
     @objc private func saveTapped() {
         guard onSave(AnswerReferences.strip(body), question) else { return }
-        save.title = "Saved"
+        save.setLabel("Saved")
         save.image = NSImage(systemSymbolName: "checkmark",
                              accessibilityDescription: nil)
         save.imagePosition = .imageLeading
+        // After the glyph, because the chip measures its own width and the
+        // checkmark is part of it. Disabling is what dims the words, so it goes
+        // last of all: see `ChipButton.isEnabled`.
+        save.invalidateIntrinsicContentSize()
         save.isEnabled = false
     }
 
@@ -733,9 +739,41 @@ extension AnswerTurn: NSTextViewDelegate {
 /// Nothing inside needs its own click, so the row takes them all.
 private final class HeaderRow: NSStackView {
     var onClick: (() -> Void)?
+    /// True while the pointer is on the line and there is something to open.
+    /// The row cannot draw its own answer to this: the ink belongs to the label
+    /// and the chevron, which are the turn's.
+    var onHover: ((Bool) -> Void)?
     /// False while there is nothing to disclose, so a one-block answer does not
     /// offer a pointing hand over a line that does nothing.
-    var isEnabled = false { didSet { window?.invalidateCursorRects(for: self) } }
+    var isEnabled = false {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+            // A line that stops being a control while the pointer is on it has
+            // to stop looking like one too.
+            if !isEnabled { onHover?(false) }
+        }
+    }
+
+    /// Ours by name, for the reason `HoverButton` records.
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard isEnabled else { return }
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }

@@ -2167,6 +2167,82 @@ stopped; not survivable now that Stop is also how a waiting question is taken
 back, which would have made that a pointer-only route. Pressed through AX in the
 verification above, which is the same call VoiceOver makes.
 
+## Every control on the Ask surfaces was silent until it was pressed
+
+AppKit gives a bezelled push button a resting shape, a pressed state and a focus
+ring for nothing, and gives a borderless one none of those. Every control on
+these two screens is borderless, because they float over a meeting and a row of
+grey bezels would be a toolbar lying on the page, so all of them had the same
+problem at once: the model chooser, the send disc, the drawer's title, cross,
+resize and new-conversation buttons, the disclosure on an answer, and the recent
+conversations under the greeting, which are links in a text view and were the
+accent colour and nothing else.
+
+The two bezelled ones went the same way, because being a real push button turned
+out not to be enough. Save as note and Try again *look* pressable and still
+answer nothing until they are clicked, and they sit under an answer among things
+that now do, which made them the quiet pair on the page.
+
+`HoverButton` in `Hover.swift` is the shared half. It is `HoverRow` for a button
+rather than a row, and the alphas are deliberately the same ones, so a chip and
+a sidebar row light up by the same amount. Two looks:
+
+- `.ink`, for a word or a glyph in a line of text, where a filled rectangle
+  would read as a second object. The tint moves one step up, `secondaryLabel` to
+  `label`, and never changes hue: a control that changes colour on hover reads
+  as a state change rather than as a target.
+- `.fill(idle:)`, for a control that is already a shape. `idle` is what is drawn
+  when nothing is near it, which is 0.08 for the starter chips, because they are
+  objects on the page, and zero for the drawer's glass discs, which already are
+  one.
+
+Four things that had to change to let it in:
+
+**The chips are drawn rather than bezelled.** They were `.rounded` and
+`controlSize = .large`, and a bordered `NSButton` draws its bezel over anything
+the layer holds, so there is no way to add a hover to that shape from outside
+it. 26 points tall with 13 either side is what the bezel measured, so the row it
+sits in did not move. `ChipButton` is the shape, and the starter chips, Save as
+note and Try again are all it: the same object with different words in it, which
+is what it was already true to say about them before any of them could be
+hovered.
+
+`ChipButton` owns its label rather than setting `title`, and that is not tidiness
+either. Save as note relabels itself to "Saved" with a checkmark the moment it is
+pressed, which is the whole of how that press is confirmed, and it disables
+itself so one answer cannot become two notes. **AppKit greys a disabled button's
+plain title and leaves an attributed one alone**, so the spent chip read as a
+live one. The width is ours for the same reason: the capsule is measured from
+the title, and a checkmark added afterwards would be drawn into padding nobody
+asked for.
+
+**The three disc buttons are the disc.** Sized to their symbol they were a 14
+point target inside a 30 point circle, so half of what looks like the control
+did nothing, and a fill drawn by the button would have been a small blob
+floating inside the glass rather than the disc lighting up.
+
+**The send disc lightens rather than deepens.** It is already at full alpha when
+it is live, so hover cannot be more of the accent: it is 16% white mixed into
+it, which is the one direction left. Dimmed, it does not light up at all,
+because pressing it then does nothing, and a control that answers a hover and
+then ignores the click is worse than one that never answered.
+
+**A reference card underlines its verb, not itself.** The whole card is the
+button, so the obvious answer is a wash over all of it, and it is the wrong one:
+three lines of that card are a title, a date and a list of speakers, none of
+which goes anywhere on its own. "Open recording ›" is the line that names the
+destination, so it takes the underline every other link in this app takes, and
+the card keeps the pointing hand it already had. `ClickableCard` reports the
+hover and `ReferenceCard.lightOpen` decides what it looks like, because the ink
+belongs to the contents rather than to the frame.
+
+`LISTEN_DEBUG=1` traces every hover in and out with the alpha it asked for and
+the colour that actually resolved. That is not decoration either: the sidebar's
+highlight shipped broken three times because a hover that draws nothing and a
+hover that never fires are the same screenshot, and the fault was a colour that
+changed no pixels in a vibrant appearance. `hoverTint` is the fix for that, and
+the trace is how to tell which half is at fault in one run.
+
 ## The meeting being recorded has no composer
 
 The card sat over the bottom of the recording screen, which is the one page

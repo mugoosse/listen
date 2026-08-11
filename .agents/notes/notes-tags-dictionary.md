@@ -443,3 +443,37 @@ and answering "No" to the meeting prompt, which is otherwise the one place a
 recording is deleted without being asked about, now asks exactly when there is a
 non-empty note: somebody who has typed into it has said this is a meeting more
 clearly than the panel ever asked.
+
+## A note remembers the conversation it came from, and the older ones are found by their question
+
+`Save as note` wrote the prompt and dropped everything else, so the artifact knew
+what had been asked and not where the asking was kept. That makes a note page a
+dead end from the one direction people actually arrive from: they read the note,
+they want the working-out behind a line in it, and the conversation is somewhere
+in the history under a title they have to recognise.
+
+`Note.chat` is the id, one more optional frontmatter field, written by
+`AskView.saveAsNote` from `chat.id`, which exists by then because every turn goes
+through `persist` and the button is on an answer. `NotePane` puts the link on the
+`Asked for:` text itself rather than on a row of its own: a note's provenance is
+already two lines, and "what was asked" and "where it was asked" are one fact
+written twice. It opens as a card over the note, the way a conversation opens
+from anywhere else, so the note stays behind it.
+
+**Every note written before the field has no id, which is the case that decides
+the design.** `Chat.wrote(_:)` falls back to matching the prompt against the text
+of a `you` turn, exact and trimmed: `saveAsNote` truncates the *title* to 60
+characters and passes the question through untouched, so the stored prompt is the
+turn character for character. Verified against the library's own notes:
+`what-are-open-items-with-edgar.md` carries `prompt: "what are open items with
+Edgar?"` and `chats/2026-08-11-114832-437B.json` opens with exactly that turn.
+Never fuzzy, and never a link when nothing matched, because a near-match puts
+somebody in the wrong conversation with nothing on the page to say so.
+
+A note written over MCP or from the command line has no Listen conversation
+behind it and gets no link, and neither does one whose conversation has been
+deleted. Both are the same case on screen: the words stay, the link is absent.
+
+Round-tripped through the CLI to check the field survives a writer that knows
+nothing about it: `notes write --replace` re-encodes from `decode`, and
+`chat: "2026-08-11-114832-437B"` is still in the file afterwards.

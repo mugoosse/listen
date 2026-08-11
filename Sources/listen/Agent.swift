@@ -1862,6 +1862,34 @@ extension Chat {
         all().filter { $0.sources.contains(recordingID) }
     }
 
+    /// The conversation a note was promoted out of, when this library still has
+    /// it.
+    ///
+    /// **Two answers, and the second one is a search.** A note written from now
+    /// on carries the id (`Note.chat`), which is exact and costs one file read.
+    /// Every note written before that field existed carries only the question,
+    /// so those are matched on it: the prompt a note stores *is* the text of the
+    /// turn that was asked, character for character, because `saveAsNote` passes
+    /// the question through untouched while it truncates only the title.
+    ///
+    /// Exact and trimmed, never fuzzy. A near-match here would put somebody in
+    /// the wrong conversation and there is nothing on the page to say so, which
+    /// is worse than the link simply not being offered.
+    ///
+    /// Newest first, from `all()`, so asking the same question twice links the
+    /// conversation that was touched last rather than an arbitrary one.
+    static func wrote(_ note: Note) -> Chat? {
+        if let id = note.chat, let chat = load(id: id) { return chat }
+        let asked = (note.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !asked.isEmpty else { return nil }
+        return all().first { chat in
+            chat.turns.contains {
+                $0.who == Chat.you
+                    && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == asked
+            }
+        }
+    }
+
     /// Write it, filling in whatever identity it does not have yet.
     ///
     /// `mutating` so the caller keeps the id it was given: a conversation is

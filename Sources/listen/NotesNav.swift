@@ -369,7 +369,15 @@ final class NoteCell: NSView {
 @MainActor
 final class NotePane: NSViewController {
     private let heading = NSTextField(labelWithString: "")
-    private let info = NSTextField(labelWithString: "")
+    /// Who wrote it, when, and what was asked for.
+    ///
+    /// A `LinkLine` rather than a label, because the question is a link when the
+    /// conversation it was asked in is still here. **On the prompt itself and
+    /// not on a row of its own**: a note's provenance is already two lines, and
+    /// "Asked for: …" and "the conversation that asked it" are one fact written
+    /// twice. The words that were typed are the handle, the way a source
+    /// recording's title is the handle for the meeting.
+    private let info = LinkLine()
     /// The meetings a note is about, as a line of links.
     ///
     /// A text view and not a row of buttons. Buttons with a trailing chevron
@@ -388,31 +396,18 @@ final class NotePane: NSViewController {
     /// the pane it lands on opens on the same note rather than on a transcript
     /// nobody asked for.
     var onOpenRecording: ((String, String) -> Void)?
+    /// And where the question goes: the conversation this note was promoted out
+    /// of. See `Chat.wrote(_:)` for which notes have one.
+    var onOpenChat: ((String) -> Void)?
 
     override func loadView() {
         let container = NSView()
 
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
         heading.lineBreakMode = .byTruncatingTail
-        info.font = .systemFont(ofSize: 11)
-        info.textColor = .secondaryLabelColor
-        info.maximumNumberOfLines = 0
-        info.cell?.wraps = true
-        sources.isEditable = false
-        sources.isSelectable = true
-        sources.drawsBackground = false
-        sources.delegate = self
-        sources.textContainerInset = .zero
-        sources.textContainer?.lineFragmentPadding = 0
-        sources.textContainer?.widthTracksTextView = true
-        sources.isVerticallyResizable = true
-        sources.isHorizontallyResizable = false
-        sources.setContentHuggingPriority(.required, for: .vertical)
-        sources.setContentCompressionResistancePriority(.required, for: .vertical)
-        sources.linkTextAttributes = [
-            .foregroundColor: Brand.accent,
-            .cursor: NSCursor.pointingHand,
-        ]
+        // The two lines under the title are the same kind of thing, so they are
+        // set up by one function rather than by two blocks that can part.
+        for line in [info, sources] { prepare(line) }
 
         text.isEditable = false
         text.isSelectable = true
@@ -464,6 +459,26 @@ final class NotePane: NSViewController {
         show(nil)
     }
 
+    /// A line of text with links in it: read-only, transparent, as tall as it
+    /// wraps to, and with the pointing hand on every link.
+    private func prepare(_ line: LinkLine) {
+        line.isEditable = false
+        line.isSelectable = true
+        line.drawsBackground = false
+        line.delegate = self
+        line.textContainerInset = .zero
+        line.textContainer?.lineFragmentPadding = 0
+        line.textContainer?.widthTracksTextView = true
+        line.isVerticallyResizable = true
+        line.isHorizontallyResizable = false
+        line.setContentHuggingPriority(.required, for: .vertical)
+        line.setContentCompressionResistancePriority(.required, for: .vertical)
+        line.linkTextAttributes = [
+            .foregroundColor: Brand.accent,
+            .cursor: NSCursor.pointingHand,
+        ]
+    }
+
     func show(_ note: Note?) {
         loadViewIfNeeded()
         self.note = note
@@ -489,9 +504,29 @@ final class NotePane: NSViewController {
         // second line already puts the same two facts.
         var facts = [Notes.isYours(note) ? "Yours" : "Written by an agent"]
         if let when { facts.append(Notes.isYours(note) ? "edited \(when)" : when) }
-        var line = facts.joined(separator: " · ")
-        if let prompt = note.prompt, !prompt.isEmpty { line += "\nAsked for: \(prompt)" }
-        info.stringValue = line
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let provenance = NSMutableAttributedString(
+            string: facts.joined(separator: " · "), attributes: plain)
+        if let prompt = note.prompt, !prompt.isEmpty {
+            provenance.append(NSAttributedString(string: "\nAsked for: ",
+                                                 attributes: plain))
+            var asked = plain
+            // The conversation is looked up once, here, and the question is a
+            // link only when there is one to open. A note written over MCP or
+            // from the command line came from a conversation this app never
+            // held, and one whose conversation has been deleted is the same
+            // case: the words stay, the link does not appear, and nothing on
+            // the page claims a destination that is not there.
+            if let chat = Chat.wrote(note), let id = chat.id {
+                asked[.link] = ChatLink.scheme + id
+                asked[.foregroundColor] = Brand.accent
+            }
+            provenance.append(NSAttributedString(string: prompt, attributes: asked))
+        }
+        info.set(provenance)
         text.toolTip = Notes.isYours(note)
             ? "Your notes are written on the recording itself. An agent can read "
                 + "this and cannot change it."
@@ -525,8 +560,10 @@ final class NotePane: NSViewController {
                     attributes: attributes))
             }
         }
-        sources.textStorage?.setAttributedString(list)
-        sources.invalidateIntrinsicContentSize()
+        // Through `set`, which also drops the hover underline: a note swapped
+        // under the pointer would otherwise keep a range highlighted into text
+        // that has gone.
+        sources.set(list)
 
         // The body without the heading the title already is. An agent writes
         // `# Decisions` at the top of a note called "Decisions", which is right
@@ -541,6 +578,14 @@ final class NotePane: NSViewController {
 extension NotePane: NSTextViewDelegate {
     func textView(_ textView: NSTextView, clickedOnLink link: Any,
                   at charIndex: Int) -> Bool {
+        // Both made-up schemes, and told apart rather than guessed at: a link
+        // that resolved to the wrong kind of thing is the failure the separate
+        // schemes exist to design out. Anything else is refused, which is what
+        // keeps a note's own text away from `NSWorkspace`.
+        if let id = ChatLink.id(link) {
+            onOpenChat?(id)
+            return true
+        }
         guard let id = RecordingLink.id(link), let note else { return false }
         onOpenRecording?(id, note.slug)
         return true

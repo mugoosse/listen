@@ -1800,9 +1800,13 @@ final class AskView: NSView {
         let asked = asked.isEmpty ? "Asked in Listen" : asked
         let title = String(asked.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
         do {
+            // The conversation's own id travels with the note, so the page it
+            // becomes can offer the way back to the working-out. It is written
+            // by the time this button exists: every turn goes through
+            // `persist`, and the button is on an answer.
             let note = try Notes.create(title: title, body: body, source: .agent,
                                         prompt: asked, recordings: sourcesForNote(),
-                                        requiringSources: false)
+                                        chat: chat.id, requiringSources: false)
             onNoteWritten?()
             say(note.recordings.isEmpty
                 ? "Saved as a note about the library. It is in Notes in the sidebar."

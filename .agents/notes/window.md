@@ -1225,3 +1225,50 @@ and it drew the *old* page around the picture: a preview of a state the app is
 never in. `previewingTranscription` makes `isLoadingTranscript` true for the
 length of the preview, which is what `previewRecording` does by hand with
 `showsComposer`.
+
+## The ellipsis said "No recording selected" over a note, because the menu was the recording's
+
+`LibraryWindow.menuNeedsUpdate` was written when the sidebar listed recordings
+and nothing else, so it asked one question, `selected`, and said "No recording
+selected" to everything that was not one. The one list put notes and people in
+the same column, and the sentence stopped being true rather than becoming wrong:
+a note page really has no recording, and a control reporting the state of a
+different screen is how a page comes to look unfinished. Reported from the note
+page with Close above it, which is the giveaway, since Close knew perfectly well
+that something was open (`sidebar.hasSelection`) while the line under it said
+nothing was.
+
+So the menu is the open page's, in the order the sidebar clears its own state:
+`selectedNote` first, because a note selected while `selectedRecording` still
+held the last meeting is exactly what `onSelectNote` prevents, then
+`selectedPerson`, then the recording. The person's rows are filled by the pane
+that owns them, `PersonPane.appendActions`, split out of its own
+`menuNeedsUpdate`: two menus of verbs on one card that could disagree is the
+same defect one screen along.
+
+A note's verbs are short, because a note is a small artifact: Open Conversation
+when there is one (`Chat.wrote`), Show in Finder, Delete. Delete is the reason
+the menu is worth having at all. A note could be written from the window and
+only deleted from the CLI or by an agent, which is a verb the user did not have.
+
+**The row menu had the same bug with a sharper edge.** `SidebarViewController`'s
+right-click selected the clicked row only when it was a recording, from when
+those were the only rows, so right-clicking a note left the selection on the open
+meeting and put *that meeting's* red Delete over a note somebody was pointing at.
+It now selects anything the table itself would select, which is every row that is
+not a day heading.
+
+**And the alert had to stop asking twice.** An agent's note is titled from the
+prompt, so its title is usually a question, and the recording alert's
+`"Delete \(title)?"` came out on the first one tested as `Delete what are open
+items with Edgar??`. `askingToDelete` quotes a name that ends in its own
+punctuation and drops the extra mark.
+
+Measured through accessibility on the built app against a scratch library, with
+the note page open: menu rows Close, Open Conversation, Show in Finder, Delete;
+alert `Delete “what are open items with Edgar?”` over "The note file is deleted
+from disk. This cannot be undone."; after confirming, the row is gone from the
+list, the file is gone from `notes/`, and the toolbar is back to the home page's
+(Settings, Sidebar, Chats, Record, Actions). The same pass on a person picked out
+of the one list reads Close, Edit, Merge…, Delete where it used to read "No
+recording selected".

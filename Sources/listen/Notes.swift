@@ -34,6 +34,18 @@ struct Note {
     /// the body looking for links, and nothing guesses that two notes are
     /// related because they mention the same person.
     var recordings: [String]
+    /// The conversation this note was promoted out of, when it was.
+    ///
+    /// The other half of `prompt`. The prompt says what was asked and this says
+    /// where the asking is still kept, which is what makes Save as note a step
+    /// in a conversation rather than an exit from one: the working-out behind a
+    /// note is a click away instead of being a thing you have to find again by
+    /// remembering the question.
+    ///
+    /// Absent on a note written over MCP or from the command line, because
+    /// neither is a conversation this library holds, and absent on every note
+    /// written before this field existed. `Chat.wrote(_:)` is what covers those.
+    var chat: String?
     var body: String
 
     /// The whole file as it sits on disk, frontmatter included.
@@ -295,9 +307,13 @@ enum Notes {
     /// refusing the note left the button doing nothing at all. A note about
     /// nothing is a page in its own right, which is what the sidebar's
     /// `pageless` already says.
+    ///
+    /// `chat` is only ever passed by the window, and only when the note is being
+    /// promoted out of a conversation: see `Note.chat`.
     @discardableResult
     static func create(title: String, body: String, source: Source,
                        prompt: String? = nil, recordings: [String],
+                       chat: String? = nil,
                        requiringSources: Bool = true) throws -> Note {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -309,7 +325,8 @@ enum Notes {
         let note = Note(slug: unique(slug(for: title)), title: title,
                         created: now, updated: now, source: source.rawValue,
                         prompt: prompt?.isEmpty == true ? nil : prompt,
-                        recordings: recordings, body: body)
+                        recordings: recordings,
+                        chat: chat?.isEmpty == true ? nil : chat, body: body)
         try save(note)
         return note
     }
@@ -547,6 +564,9 @@ enum Notes {
         if let prompt = note.prompt, !prompt.isEmpty {
             out += "prompt: \(quoted(prompt))\n"
         }
+        if let chat = note.chat, !chat.isEmpty {
+            out += "chat: \(quoted(chat))\n"
+        }
         // A flow sequence on one line, so `grep -l 2026-08-05 notes/*.md`
         // answers "which notes are about this meeting" without a parser.
         out += "recordings: [\(note.recordings.map(quoted).joined(separator: ", "))]\n"
@@ -605,6 +625,7 @@ enum Notes {
                     prompt: fields["prompt"],
                     recordings: listed["recordings"]
                         ?? sequence(fields["recordings"] ?? ""),
+                    chat: fields["chat"],
                     body: body)
     }
 

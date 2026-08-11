@@ -200,6 +200,7 @@ The three things written about a recording rather than extracted from it.
 - A note file has to survive being written by hand
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
+- A note remembers the conversation it came from, and the older ones are found by their question
 
 ### `.agents/notes/window.md` (71k)
 
@@ -239,6 +240,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The meeting page's largest gap was a row holding nothing
 - The drawer was never laid out until agent detection finished
 - A meeting being transcribed is a loading state, and three things were still on it
+- The ellipsis said "No recording selected" over a note, because the menu was the recording's
 
 ### `.agents/notes/appkit.md` (29k)
 
@@ -418,6 +420,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The search field belongs where the list it swaps with keeps its own
 - The chats home page is the library's home page, and three numbers said otherwise
 - An empty page needs the greeting the home page has
+- The toolbar's History is gone, and the menu under the card is the one that stays
 
 ### `.agents/notes/release.md` (5k)
 

@@ -901,9 +901,17 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 extension SidebarViewController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         // Right-clicking a row selects it first, so the menu and the toolbar
-        // menu always act on the same recording.
+        // menu always act on the same thing.
+        //
+        // **Any row, not just a recording.** It used to select only those, from
+        // when they were the only kind here, and a right-click on a note row
+        // left the selection on whatever meeting was open: the menu that came up
+        // was that meeting's, with its red Delete in it, over a note. The one
+        // list made that reachable, so the rule is now the same one the table
+        // itself uses for a left-click, which is every row that is not a day
+        // heading.
         let clicked = table.clickedRow
-        if clicked >= 0, recording(at: clicked) != nil {
+        if rows.indices.contains(clicked), tableView(table, shouldSelectRow: clicked) {
             table.selectRowIndexes([clicked], byExtendingSelection: false)
         }
         LibraryWindow.shared.menuNeedsUpdate(menu)

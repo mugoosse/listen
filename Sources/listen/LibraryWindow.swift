@@ -87,7 +87,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
-    private static let historyItem = NSToolbarItem.Identifier("chatHistory")
+    // There is no History item any more. It was a menu of the conversations
+    // about the page you were on, in the top left of every page but the home
+    // one, and it is gone rather than moved: the card's own title menu asks the
+    // same question six points from where a conversation is actually had, and
+    // `ChatNav` is the list. Three controls onto one set of rows was two too
+    // many, and this was the copy nobody was standing next to. See
+    // `appendSourceHistory`, which is what the title menu still fills itself
+    // from.
     private static let chatsItem = NSToolbarItem.Identifier("openChats")
     private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
@@ -106,8 +113,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once and kept: see `recordingActionsMenu`. A stored property
     /// rather than a `lazy var` because the menu is built in an extension.
     fileprivate var actionsMenu: NSMenu?
-    /// The same, for the History item's menu. See `sourceHistoryMenu`.
-    fileprivate var historyMenu: NSMenu?
 
     /// The toolbar item holding `recordFAB`, kept so its size can be re-stated as
     /// the label grows. Rebuilt whenever `rebuildToolbar` runs.
@@ -565,6 +570,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // navigable rather than a dead end.
         notePane.onOpenRecording = { [weak self] id, slug in
             self?.open(recording: id, note: slug)
+        }
+        // The question on a note page is a link to the conversation it was
+        // asked in. A card rather than the mode, for the reason
+        // `openSourceConversation` opens one: the note stays behind it, which is
+        // what makes this a look back at the working-out rather than a
+        // navigation away from the artifact.
+        notePane.onOpenChat = { [weak self] id in
+            guard let chat = Chat.load(id: id) else { return }
+            self?.composerHost?.open(chat, as: .card)
         }
         // A rename rewrites transcripts, so the roster beside it is stale the
         // moment it lands, and so is the recording list behind both.
@@ -1197,7 +1211,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
-         Self.actionsItem, Self.personActionsItem, Self.recordItem, Self.historyItem,
+         Self.actionsItem, Self.personActionsItem, Self.recordItem,
          Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem]
     }
 
@@ -1270,26 +1284,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // way in, so it sits at the start of the pane it opens rather than
             // among the verbs on the right.
             //
-            // **Two controls, not one, and which of them is up depends on what
-            // is on screen.** They used to be the same item, a History menu on
-            // the home page listing every conversation there is. That is two
-            // questions with one answer: "take me to my conversations" and
-            // "which conversations are about this meeting". So the home page
-            // gets `chatsItem`, a way into the mode where the list is the
-            // sidebar, and a meeting gets `historyItem`, a menu of the
-            // conversations about *it*, which is a thing the meeting page could
-            // not say before at all.
+            // **One control, and only on the home page.** There were two: Chats
+            // here, and on any open page a History menu of the conversations
+            // about *it*. The second is gone. A page already carries its
+            // conversations on the card resting at the bottom of it, whose title
+            // menu lists exactly those rows, so the toolbar copy was a second
+            // opinion in the corner furthest from where anything is asked, and
+            // the corner it sat in is a note's, a person's or a meeting's own
+            // heading. Chats stays where it is: the home page is the one screen
+            // that is about asking rather than about a document, and "take me to
+            // my conversations" is the question it should answer.
             var items: [NSToolbarItem.Identifier] =
                 [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
                  .sidebarTrackingSeparator]
-            // **And neither of them on the meeting being recorded.** See
+            // **And not on the meeting being recorded.** See
             // `isShowingLiveMeeting`: that screen has no composer either, and it
             // is the same reason twice. Its title bar is the one place Stop has
             // to be unmissable, so what is next to it is worth being strict
             // about.
-            if !isShowingLiveMeeting {
-                items.append(isHome ? Self.chatsItem : Self.historyItem)
-            }
+            if isHome && !isShowingLiveMeeting { items.append(Self.chatsItem) }
             items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
             return items
         case .settings:
@@ -1317,14 +1330,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // longer lock the sidebar open, because the segmented control in it
             // is the navigation and collapsing is a choice like any other.
             //
-            // History is here now, and it is the person's own. It used to be
-            // left out on the argument that a card about somebody is not a
-            // screen about conversations, which was right about a menu listing
-            // every conversation in the library and wrong about this one: what
-            // you asked about somebody is part of what this window knows about
-            // them, and their card was the one page that could not say so.
+            // No History, for the reason the library has none: what you asked
+            // about somebody is on the card's title menu, under the card you
+            // asked it from.
             return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace,
+                    .sidebarTrackingSeparator, .flexibleSpace,
                     Self.personActionsItem]
         case .notes:
             // Nothing on the right. A note has no verbs yet: it is deleted
@@ -1474,26 +1484,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // belong depends on who is selected and whether they have a card.
             item.menu = personPane.actionsMenu
             item.showsIndicator = false
-            return item
-
-        case Self.historyItem:
-            let item = NSMenuToolbarItem(itemIdentifier: id)
-            item.label = "History"
-            item.title = "History"
-            // **What was asked about the thing on screen, not what was asked.**
-            // The menu was every conversation in the library while it was the
-            // only route to any of them; the sidebar is that route now, so this
-            // is free to be the useful narrow thing instead. A meeting knows
-            // which conversations name it (`Chat.about`) and a person knows
-            // which name them, and neither could say so anywhere before.
-            item.toolTip = "Conversations about this page"
-            item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
-                                 accessibilityDescription: "History")
-            // This window owns the menu and fills it as it opens, where the
-            // page-wide one belonged to the drawer: which conversations are
-            // about the open recording is a question about the selection, and
-            // the selection is here.
-            item.menu = sourceHistoryMenu
             return item
 
         case Self.chatsItem:
@@ -2300,8 +2290,8 @@ final class DetailWithComposer: NSViewController {
     /// is also where the rest of them will go, and it is the same menu the
     /// library and a person's card carry in the same corner.
     ///
-    /// `forPullDown` for the reason `fillSourceHistory` takes it: an
-    /// `NSMenuToolbarItem` takes item 0 as its own title and never draws it.
+    /// `forPullDown` for the reason `menuNeedsUpdate` leads with a blank item:
+    /// an `NSMenuToolbarItem` takes item 0 as its own title and never draws it.
     func fillChatActions(_ menu: NSMenu, forPullDown: Bool) {
         menu.removeAllItems()
         // Set for the reason the history menus set it: `NSMenu` re-enables
@@ -2907,55 +2897,39 @@ extension LibraryWindow: NSMenuDelegate {
         }
     }
 
-    /// The conversations about whatever page is open, as a menu the toolbar
-    /// owns. Kept rather than built per item for `recordingActionsMenu`'s
-    /// reason: `menuNeedsUpdate` tells the menus on this delegate apart by
-    /// identity.
-    var sourceHistoryMenu: NSMenu {
-        if let built = historyMenu { return built }
-        let menu = NSMenu()
-        menu.delegate = self
-        historyMenu = menu
-        return menu
-    }
-
     /// What was asked about the thing on screen, and the way to everything else.
     ///
     /// **Scoped, where the old History menu was not.** That menu listed every
     /// conversation in the library from every screen, because it was the only
     /// route into any of them and a route that hides most of itself is a route
     /// you cannot trust. The list is a mode now, reached from the home page and
-    /// from the last row here, so this control is free to answer the narrower
-    /// question the page it sits on actually raises: what have I asked about
+    /// from the last row here, so these rows are free to answer the narrower
+    /// question the page they hang off actually raises: what have I asked about
     /// *this* meeting, or about *this* person.
+    ///
+    /// **One caller, and it is the card's own title menu.** The toolbar had a
+    /// copy of this list in every mode and no longer does: see `chatsItem`. What
+    /// is left is the menu under the title of the conversation card, which is
+    /// where somebody already is when the question "what else did I ask here"
+    /// occurs to them.
     ///
     /// Uncapped, unlike the twenty the flat list took: a source has as many
     /// conversations as somebody asked about it, which is single figures, and
     /// the one that matters may well be the oldest.
     ///
-    /// A note has no row here and gets no such menu. `Chat` records the
+    /// A note is scoped by nothing and gets a sentence. `Chat` records the
     /// recordings and the person a question was about and has no field for a
-    /// note, so a note page can only be scoped by the meetings underneath it,
-    /// which is a different claim from "conversations about this note" and would
-    /// read as the same one.
-    private func fillSourceHistory(_ menu: NSMenu, forPullDown: Bool) {
-        menu.removeAllItems()
+    /// note, so a note page could only be scoped by the meetings underneath it,
+    /// which is a different claim and would read as the same one. The link that
+    /// *is* true about a note, the conversation it was promoted out of, is on
+    /// the note page itself: see `Chat.wrote(_:)`.
+    func appendSourceHistory(to menu: NSMenu) {
         // Otherwise `NSMenu` re-enables everything as it opens, from the
         // responder chain, and the day headings come back as live rows: they do
         // nothing when pressed, because they carry no action, so the menu grows
         // items that look pressable and are not. Measured through accessibility,
         // which reported `enabled=true` on "Today" after it had been built
         // disabled.
-        menu.autoenablesItems = false
-        // A pull-down takes item 0 as the button's own title and never draws it,
-        // so the toolbar's copy needs something expendable there.
-        if forPullDown { menu.addItem(NSMenuItem()) }
-        appendSourceHistory(to: menu)
-    }
-
-    /// The rows themselves, without the housekeeping, so the card's title menu
-    /// can put its own "New conversation" above them and show the same list.
-    func appendSourceHistory(to menu: NSMenu) {
         menu.autoenablesItems = false
         let chats: [Chat]
         let subject: String
@@ -2964,8 +2938,14 @@ extension LibraryWindow: NSMenuDelegate {
         // recording list's own state, which is whatever was open before somebody
         // switched lists: a person with no card would have been given the
         // conversations about last week's meeting under their name.
-        if mode == .people {
-            let person = peopleNav.selected?.label
+        //
+        // A person is picked out of the one list as well now, which is
+        // `.library` with `selectedPerson` set: same question, same rows, and
+        // without this line their card in that mode answered "nothing asked
+        // about this page" over a stack of conversations that name them.
+        if mode == .people || sidebar.selectedPerson != nil {
+            let person = mode == .people
+                ? peopleNav.selected?.label : sidebar.selectedPerson?.label
             chats = person.map { name in Chat.all().filter { $0.person == name } } ?? []
             subject = person ?? "this person"
         } else if let recording = sidebar.selectedRecording {
@@ -3052,8 +3032,6 @@ extension LibraryWindow: NSMenuDelegate {
         // rather than rebuilt. Before the recording actions below, which would
         // otherwise fill it with Export and Delete.
         if menu === fileModelMenu { fill(menu, for: selected); return }
-        // The toolbar's History, likewise told apart by identity.
-        if menu === historyMenu { fillSourceHistory(menu, forPullDown: true); return }
 
         menu.removeAllItems()
         // A pull-down menu takes its **first** item as the button's own title
@@ -3077,6 +3055,27 @@ extension LibraryWindow: NSMenuDelegate {
             close.target = self
             menu.addItem(close)
             menu.addItem(.separator())
+        }
+        // **The verbs are the open page's, and the page is not always a
+        // meeting.** This menu was written when the sidebar listed recordings
+        // and nothing else, so it asked one question, `selected`, and answered
+        // "No recording selected" to everything else. The one list put notes and
+        // people in the same column, and the answer stopped being true rather
+        // than becoming wrong: a note page really has no recording, and saying
+        // so over somebody's note is a control reporting the state of a
+        // different screen.
+        //
+        // Note first, because a note selected while `selectedRecording` still
+        // held the last meeting is exactly the state `onSelectNote` clears.
+        if let note = sidebar.selectedNote {
+            appendNoteActions(to: menu, for: note)
+            return
+        }
+        // The person's own, filled by the pane that owns them: see
+        // `PersonPane.appendActions`.
+        if sidebar.selectedPerson != nil {
+            personPane.appendActions(to: menu)
+            return
         }
         guard let recording = selected else {
             menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
@@ -3147,6 +3146,95 @@ extension LibraryWindow: NSMenuDelegate {
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         menu.addItem(item)
         return item
+    }
+
+    /// What can be done with the note on screen.
+    ///
+    /// Short, because a note is a small artifact: it is not transcribed, it has
+    /// no model and no speakers, and its text is edited where it was written.
+    /// What is left is where it came from, where it lives, and throwing it away,
+    /// and the last of those is the reason this menu exists at all: a note the
+    /// window could create and only the CLI and an agent could delete was a
+    /// verb the user did not have.
+    private func appendNoteActions(to menu: NSMenu, for note: Note) {
+        // The working-out it was promoted out of, when the library still has it.
+        // The same destination the question on the page links to, offered here
+        // as well because the right-hand menu is where a Mac user looks for the
+        // verbs on the thing in front of them.
+        if let chat = Chat.wrote(note), let id = chat.id {
+            add(menu, "Open Conversation", #selector(openSourceConversation(_:)),
+                "bubble.left.and.bubble.right").representedObject = id
+            menu.addItem(.separator())
+        }
+        // A note is a markdown file and that is a promise this app makes rather
+        // than an implementation detail, so the way to it is on the menu.
+        add(menu, "Show in Finder", #selector(revealNote), "folder")
+        menu.addItem(.separator())
+        let delete = add(menu, "Delete", #selector(deleteSelectedNote), "trash")
+        // Red, for the reason the recording's, the person's and the
+        // conversation's are: the one irreversible item should not look like
+        // the others.
+        delete.attributedTitle = NSAttributedString(
+            string: "Delete", attributes: [.foregroundColor: NSColor.systemRed])
+    }
+
+    /// "Delete Cowork Edgar?", and the case that made this a function.
+    ///
+    /// **A note is usually named after a question**, because an agent's note is
+    /// titled from the prompt, so the recording alert's `"Delete \(title)?"`
+    /// came out as `Delete what are open items with Edgar??` on the first one
+    /// tested. A name that ends in its own punctuation is quoted and left alone
+    /// instead, which reads as an instruction naming a thing rather than as a
+    /// typo.
+    private static func askingToDelete(_ name: String) -> String {
+        guard let last = name.last, "?!.".contains(last) else { return "Delete \(name)?" }
+        return "Delete “\(name)”"
+    }
+
+    @objc private func revealNote() {
+        guard let note = sidebar.selectedNote else { return }
+        NSWorkspace.shared.selectFile(Notes.url(for: note.slug).path,
+                                      inFileViewerRootedAtPath: Library.notes.path)
+    }
+
+    /// Throw the open note away.
+    ///
+    /// **It asks, where the conversation's Delete does not.** A conversation is
+    /// working-out and the question can be asked again; a note is what somebody
+    /// decided was worth keeping out of one, and `Notes.delete` removes the file
+    /// rather than trashing it.
+    ///
+    /// The recordings it names are untouched, and so is the conversation it came
+    /// from, which is worth saying in the alert: this note is the only thing
+    /// that goes, and a page listing four meetings above the button does not
+    /// make that obvious.
+    @objc func deleteSelectedNote() {
+        guard let note = sidebar.selectedNote else { return }
+        let alert = NSAlert()
+        let sources = Notes.sources(of: note)
+        alert.messageText = Self.askingToDelete(
+            Notes.isYours(note)
+                ? "your notes on \(sources.first?.title ?? "this recording")"
+                : note.title)
+        var lost = "The note file is deleted from disk. This cannot be undone."
+        if !sources.isEmpty {
+            lost += Notes.isYours(note)
+                ? "\n\nThe recording, its audio and its transcript are kept."
+                : "\n\nThe recordings it is about are kept, and so is the "
+                    + "conversation it was written from."
+        }
+        alert.informativeText = lost
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        try? Notes.delete(note.slug)
+        // The page goes before the row does. `reload` puts a selection back by
+        // slug and finds nothing to put it on, which leaves `selectedNote`
+        // holding a note that is no longer on disk and the pane still showing
+        // it: deselecting first is what hands the pane back to the composer.
+        sidebar.deselect()
+        reload()
     }
 
     @objc func renameSelected() {

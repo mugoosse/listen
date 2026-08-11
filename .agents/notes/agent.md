@@ -2628,3 +2628,28 @@ Measured through accessibility on the built app, window (0, 33, 1512, 949). The
 library home page and the chats page agree to the point: search field at (17, 82)
 272 by 26 on both, composer field at (359, 893) 981 by 21 on both, and the only
 scroll bar in either is the recordings list's.
+
+## The toolbar's History is gone, and the menu under the card is the one that stays
+
+Three controls opened onto one set of rows. `ChatNav` is the list, the card's own
+title menu asks "what else did I ask here" from six points above where a question
+is typed, and the toolbar's History asked the same thing from the far corner of
+the window, on top of a note's, a person's or a meeting's own heading. That
+corner is the first thing read on a page, and what belonged there was the page's
+title rather than a clock about the conversations beside it.
+
+So `historyItem` is gone, with `sourceHistoryMenu` and `fillSourceHistory`.
+`appendSourceHistory` stays, because the title menu fills itself from it, and
+`chatsItem` stays on the home page: that screen is about asking rather than about
+a document, and "take me to my conversations" is the question it should answer.
+Nothing else in the library, People included, has a control in that slot now.
+
+`appendSourceHistory` gained one branch on the way past. It read the person off
+`peopleNav` when `mode == .people`, which was the only way to a card when it was
+written; a person picked out of the one list is `.library` with
+`sidebar.selectedPerson` set, and on that screen the menu answered "Nothing asked
+about this page yet" over somebody with a stack of conversations naming them.
+
+Measured through accessibility on the built app: the toolbar reads Settings,
+Sidebar, Chats, Record, Actions on the home page and Settings, Sidebar, Record,
+Actions with a page open, where it used to carry History in both.

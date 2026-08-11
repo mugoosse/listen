@@ -718,6 +718,17 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         // was being eaten by the ellipsis and the menu opened on Merge, which
         // reads as Edit not having been built.
         menu.addItem(NSMenuItem())
+        appendActions(to: menu)
+    }
+
+    /// The rows themselves, so the library's own ellipsis can show them.
+    ///
+    /// A person is picked out of the one list now as well as out of the roster,
+    /// and on that screen the toolbar's menu belongs to `LibraryWindow`. It fills
+    /// it from here rather than from a copy: two menus of verbs on the same card
+    /// that could disagree is exactly the shape "No recording selected" over a
+    /// person's page came out of.
+    func appendActions(to menu: NSMenu) {
         guard let person else {
             menu.addItem(withTitle: "No person selected", action: nil, keyEquivalent: "")
                 .isEnabled = false

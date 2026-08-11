@@ -274,6 +274,10 @@ final class AskView: NSView {
         // when the scrollers are the always-visible kind: the document is then
         // narrower than the scroll view by the scroller's width, and a column
         // centred in it sits half a scroller to the left of the well.
+        //
+        // Only safe because the document's leading edge is pinned below. This
+        // constraint reaches out of the clip view, and an unpinned document is
+        // a way to satisfy it that the first scroll then undoes.
         columnWidth = [column(turns, in: document, centredOn: scroll),
                        column(invitation, in: self), column(composer, in: self),
                        column(status, in: self)].flatMap { $0 }
@@ -286,6 +290,16 @@ final class AskView: NSView {
             // constraint said there was nothing to scroll, and the right-hand
             // edge of every question bubble was simply cut off.
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            // **And its leading edge, or the solver moves the document instead
+            // of the column.** A width on its own leaves the document's x free,
+            // and the centring above crosses out of the clip view, so the
+            // cheapest way to satisfy it is to slide the whole document
+            // sideways: measured at `document.frame.origin.x == -249` with the
+            // clip's bounds origin at -249 to match, which cancels out and looks
+            // perfectly centred. The first scroll resets the bounds origin to
+            // zero, nothing puts the document back, and the conversation jumps
+            // by that many points and stays there.
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             turns.topAnchor.constraint(equalTo: document.topAnchor),
             turns.bottomAnchor.constraint(equalTo: document.bottomAnchor),
 

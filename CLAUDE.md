@@ -379,6 +379,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The page scrolls, not a panel inside it
 - A width nobody else may have an opinion about
 - The document was as wide as the scroll view, and the scroller took the difference
+- A width was all the document had, so the first scroll moved the column
 - The page's controls are the window's toolbar
 - Neither CLI says the network is gone, and both were measured saying nothing
 - The path is certain and the probe is truthful, and neither is enough alone
@@ -391,6 +392,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Only the last turn may be retried
 - `LISTEN_OFFLINE` also takes a path, because recovery is the interesting half
 - History belongs to the two screens that are about conversations
+- A conversation you go back to opens as a page
 
 ### `.agents/notes/release.md` (5k)
 

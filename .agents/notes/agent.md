@@ -1018,6 +1018,33 @@ The same difference is why the column is centred on the **scroll view** and not
 on the document: centred in the document it sat half a scroller to the left of
 the composer under it, which is a misalignment you can see and cannot name.
 
+## A width was all the document had, so the first scroll moved the column
+
+Stating only `document.width` left the document's **x** free, and a free
+variable is one the solver may spend. Centring the column reaches out of the
+clip view, and the cheapest way to satisfy that is not to move the column inside
+the document at all: it is to slide the whole document sideways and let the clip
+view's bounds origin follow it. The two cancel, so the page opens looking
+exactly right.
+
+The first scroll is where it comes apart. Scrolling writes a new bounds origin,
+`x` goes back to zero, and nothing puts the document back, so the conversation
+jumps sideways and stays there for the rest of the session. Both numbers are
+measured: in an isolated harness the document sat at `x == -249` with the clip's
+bounds origin at `-249` to match, and in the built app at 1400 points wide the
+column opened centred at 541.5 and moved to 756.0 on the first scroll. The
+direction is arbitrary, being wherever the solver parked the document, which is
+why the report was of a page that shifts *left* and the harness shifted right.
+
+The fix is one constraint, `document.leading == scroll.contentView.leading`,
+which is the same edge the width is already taken from. Nothing else changes:
+the column is still centred on the scroll view, the card still pins its turns to
+both document edges, and no conflict is logged in either mode.
+
+The general form is worth carrying past this pane: **a document view needs a
+position as well as a size**, and a scroll view will hide the missing half until
+something scrolls.
+
 ## The page's controls are the window's toolbar
 
 A page has one strip of chrome and it is the title bar, so the drawer's header
@@ -1996,3 +2023,55 @@ claude`: the pre-flight refusal lives in `AgentRun`, which only runs the two
 CLIs, and the shipped preference is now an endpoint. Testing this against the
 default backend tests nothing, which is worth knowing before reading a green
 result.
+
+## A conversation you go back to opens as a page
+
+Picking one out of History used to give a card, unless you were already on a
+page: `onWantsOpen` read `if extent != .full { extent = .standard }`. On the
+home page that is a panel resting over a greeting, which is a card doing the one
+thing a card is for, resting over the page it is about, with nothing behind it
+that the conversation is about. Reaching for History is asking to *read*
+something, and the shape for reading is the page.
+
+So `extent = .full`, unconditionally. It is the one hook that fires on opening a
+stored conversation, which is what makes this a single line rather than a rule
+four callers have to remember: `AskView.open(_:)` is reached from the History
+menu on either screen, the recent list under the greeting, the "Also about this"
+link on a meeting, and `LISTEN_CHAT` at launch. All four now land on the page.
+
+**Starting** one is untouched and still belongs to wherever it was started, per
+`newConversation`: a question typed over a meeting is about that meeting, and
+taking the meeting off screen to ask it would be answering something else.
+
+Driven through the real menu rather than reasoned about, because the extent is
+decided three calls away from the click: `AXShowMenu` on the History toolbar
+item, `AXPress` on the row, then read the toolbar back. "New chat" with no
+Record beside it is the tell, being the swap only the page makes. Before, the
+toolbar still had Record and the drawer's title button carried the
+conversation's name, over a card 1017 points wide; after, a page of 1097. Note
+that `AXShowMenu` needs a retry: it silently did nothing on one run in three
+while the window was still settling.
+
+### And that page has no way back, which is the point
+
+`leaveChatItem` collapses a page onto the card it grew from, and a conversation
+opened out of History never was a card. Offering it anyway would rest last
+week's meeting over today's greeting, which is the state this whole change
+exists to remove, so the toolbar leaves the item out: `overACard` is set true by
+`toggleFull` and false by `onWantsOpen`, and `LibraryWindow` caches it beside
+`chatting` off the same callback.
+
+The comparison in `applyHeight` had to grow a second half. `becamePage` was
+`page != pageNow`, and opening a second conversation from History while a page
+is already up changes only `overACard`: without `collapsibleNow` the toolbar
+would never be rebuilt and the way back would still be sitting there.
+
+**A History-opened page therefore has no route back to the library**, short of
+starting another conversation or deleting this one. The sidebar cannot do it
+either: `AskView.show` returns early while a conversation is pinned, and opening
+one from History pins it. That is the user's call, taken knowingly, and it is
+recorded here because it looks exactly like an oversight from the code.
+
+Only the History half is driven. Reaching a card at all now takes a real agent
+run, since selecting a recording deliberately gives a fresh conversation, so the
+card-grown-into-a-page case is checked by reading rather than by driving.

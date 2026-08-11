@@ -34,6 +34,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// selected, and comes back untouched when the page is put away. It only
     /// changes what the toolbar's content half holds.
     private var chatting = false
+    /// Whether that page has a card under it, which decides whether the way out
+    /// of it is in the title bar. See `DetailWithComposer.overACard`.
+    private var composerCanCollapse = false
 
     /// The two split items' view controllers, which never change. Swapping a
     /// child inside them is the only way to change what a split view item shows:
@@ -310,6 +313,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         composerHost.onPageChanged = { [weak self] page in
             guard let self else { return }
             self.chatting = page
+            // Cached beside `chatting` for the same reason: the delegate is
+            // asked for the items at moments of AppKit's choosing, and reaching
+            // back into the host from there would be a second owner of the
+            // state the callback exists to hand over.
+            self.composerCanCollapse = composerHost.overACard
             self.rebuildToolbar()
         }
         let main = NSSplitViewItem(viewController: composerHost)
@@ -977,7 +985,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             return items
         }
         var page = Array(items[...cut])
-        page += [Self.leaveChatItem, Self.historyItem, .flexibleSpace]
+        // **The way back only when there is one.** `leaveChatItem` collapses the
+        // page onto the card it grew from; a conversation opened straight out of
+        // History never was a card, so the control would offer a return to
+        // somewhere nobody has been, resting the conversation over a greeting or
+        // a meeting it is not about. `DetailWithComposer.overACard` is the test.
+        if composerCanCollapse { page.append(Self.leaveChatItem) }
+        page += [Self.historyItem, .flexibleSpace]
         // **Except Stop, which outranks the page.** The one control that must
         // never be hidden is the one that ends a meeting being recorded now:
         // the rule the Ask pane already had, kept here because a page covers
@@ -1746,13 +1760,25 @@ final class DetailWithComposer: NSViewController {
             composerBottom,
         ])
 
-        // Opening a conversation from a page leaves you on the page. Everywhere
-        // else it is a card: that is what asking a question on a meeting means,
-        // and the page is somewhere you have to have gone on purpose.
+        // **A conversation you go back to opens as a page.** Not a card, and not
+        // whatever the screen underneath happened to be: reaching for History
+        // is asking to read something, and a card is the shape for asking about
+        // the meeting behind it rather than for reading a conversation that is
+        // not about it. Picked out of the home page it opened as a panel over a
+        // greeting it had nothing to do with, which is the state this replaces.
+        //
+        // This is the only fires-on-open hook, so every route in agrees without
+        // anybody having to keep them in step: the History menu on either
+        // screen, the recent list under the greeting, the "Also about this"
+        // link on a meeting, and `LISTEN_CHAT` at launch. Starting a
+        // conversation is untouched and still belongs to wherever it was
+        // started, which is what `newConversation` says.
         composer.onWantsOpen = { [weak self] in
             guard let self else { return }
             self.putAway = false
-            if self.extent != .full { self.extent = .standard }
+            self.extent = .full
+            // Opened, not grown, so there is no card under it. See `overACard`.
+            self.overACard = false
             self.applyHeight(animated: true)
         }
         composer.onExpand = { [weak self] in
@@ -1864,6 +1890,9 @@ final class DetailWithComposer: NSViewController {
 
     @objc private func toggleFull() {
         extent = extent == .full ? .standard : .full
+        // Grown from the card this disc is on, so the card is where it goes
+        // back to and the toolbar may say so. See `overACard`.
+        if extent == .full { overACard = true }
         applyHeight(animated: true)
     }
 
@@ -2225,8 +2254,9 @@ final class DetailWithComposer: NSViewController {
         // becoming a page changes four edges and can leave the number alone, so
         // the state is part of the test or the one transition that most needs
         // easing would be the one that jumps.
-        let becamePage = page != pageNow
+        let becamePage = page != pageNow || overACard != collapsibleNow
         pageNow = page
+        collapsibleNow = overACard
         if animated, drawerHeight.constant != target || becamePage {
             // **The constant is set plainly and the layout pass is what
             // animates.** Driving it through `animator()` *and* calling
@@ -2317,6 +2347,27 @@ final class DetailWithComposer: NSViewController {
     /// What the geometry was last laid out as, so becoming a page is animated
     /// even when the height happens not to change.
     private var pageNow = false
+    /// The same for `overACard`, which the toolbar reads. Opening a second
+    /// conversation out of History while a page is already up changes it
+    /// without changing the page, so it needs a comparison of its own or the
+    /// way back would still be in the title bar with nothing behind it.
+    private var collapsibleNow = false
+
+    /// **Is there a card under this page, or is the page where it opened?**
+    ///
+    /// The way out of a page is `leavePage`, and what it does is put the
+    /// conversation back over the meeting it was asked about. That is a real
+    /// place to go back to only when the page was reached by growing a card.
+    /// Opened straight out of History it is not: the conversation is about some
+    /// other day's meeting, or about the library, and collapsing it would rest
+    /// it over a greeting it has nothing to do with. So the toolbar leaves the
+    /// control out rather than offering a way back to somewhere nobody was.
+    ///
+    /// The cost, taken deliberately: a conversation opened from History has no
+    /// way back to the library short of starting another one or deleting this
+    /// one. The sidebar cannot do it either, because `AskView.show` returns
+    /// early while a conversation is pinned.
+    private(set) var overACard = false
 
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: 84)

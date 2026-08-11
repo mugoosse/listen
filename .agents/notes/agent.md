@@ -2075,3 +2075,107 @@ recorded here because it looks exactly like an oversight from the code.
 Only the History half is driven. Reaching a card at all now takes a real agent
 run, since selecting a recording deliberately gives a fresh conversation, so the
 card-grown-into-a-page case is checked by reading rather than by driving.
+
+## The composer cleared the field before the guard, and the follow-up went nowhere
+
+`send` did this, in this order:
+
+```swift
+field.stringValue = ""
+ask(text)          // guard run == nil else { return }
+```
+
+So a question typed while an answer was streaming was wiped out of the field and
+then dropped by the guard, in the same runloop pass, with nothing said. Nothing
+on screen changed at all, which is why it reads as a keystroke that did not
+register rather than as a refusal. The `Return` path was the only way in: the
+button becomes Stop while a run is going, so pressing it stopped the answer
+instead, and the bug was invisible to anybody who used the button.
+
+The comment three lines below it already recorded this exact swallowing for the
+`recording` guard that used to sit there, and that guard was removed for it. The
+`run` guard survived because it looks like a legitimate "one at a time" rule,
+which it is: the rule is fine and the clearing was the bug.
+
+The order is now **accept, then clear**. `ask` returns `Bool`, `queue` returns
+`Bool`, and `send` clears the field only when one of them says it took the text:
+
+```swift
+guard isRunning ? queue(text) : ask(text) else { return }
+field.stringValue = ""
+```
+
+Everything else in this section follows from that one inversion.
+
+## One question waits, and Stop is the way to take it back
+
+**Queueing here cannot mean what it means in Claude Code.** That composer can
+splice a message into a turn because the harness owns the agent loop. Listen
+owns no loop for two of its three backends: a CLI question is one spawned
+process carrying its own `--resume`, and the endpoint backend is one loop over
+one question. None of the three can hear a second message mid-answer. So a
+queued question is not "the agent has this too", it is "this goes next", and the
+whole design follows from being honest about that difference.
+
+- **One slot.** A second Return is refused, the text stays in the field, and the
+  line under the composer says why. A stack of questions against a session that
+  answers one at a time reads as a batch job, and the third would usually be
+  stale or already covered by the second.
+- **The bubble carries no control.** The first version put a cross in front of
+  the waiting question. It is a second way to say stop, six points from the one
+  the composer already has and pointing at something else, and it puts a control
+  in a column that is otherwise entirely things somebody said. What is there
+  instead is a caption where a timestamp would go: "Waiting for this answer to
+  finish", 10pt, tertiary, right-aligned under a bubble at half the usual tint.
+- **Stop takes it back**, and hands it to the composer rather than dropping it,
+  because somebody pressing Stop is still in the conversation. Every other
+  caller of `AskView.stop` is a context change (another meeting, another person,
+  another conversation, a new one) and those drop it, because the question was
+  about something no longer on screen. That is the whole difference between
+  `stop` and `stopAndTidy` for the queue.
+- **A failure does not dispatch it.** `finish` only sends the waiting question
+  when `outcome.failure == nil`; otherwise it goes back to the composer with a
+  line saying so. Firing it into a session that has just failed spends a second
+  question on the same broken connection and leaves two red paragraphs where
+  there was one problem, and it does it while nobody is necessarily looking. It
+  is the same argument `retry` already makes: pressed by a person, or not at all.
+- **Nothing about it is persisted.** `chat.json` is the record of what was
+  actually asked, and a question that has not been sent is not that.
+- **`returnToComposer` only writes into an empty field.** Somebody who has
+  started typing something else is owed their own words more, and there is no
+  way to hold both without inventing a second place to keep text.
+
+The placeholder is the other half, and it is the only surface left that can say
+what Return will do *before* somebody finds out by pressing it: the send button
+is the Stop control for exactly as long as queueing is possible, so it cannot
+also advertise it. It reads "Ask a follow-up. It goes when this answer finishes…"
+while a run is in flight, through `placeholder(for:person:)`, which every site
+that sets it now goes through.
+
+Measured on the built app, driven by AX and CGEvent against a scratch library:
+the follow-up survives the keystroke and appears as a waiting bubble, the field
+clears, a second one is refused with the text left in place, the waiting question
+is asked by itself when the first answer lands, and Stop returns it to the
+composer with the run cancelled. The one thing the driver could not catch is the
+refusal line, which the answer finishing clears a second later; it was read
+straight out of the AX tree instead.
+
+## The stop button drew itself as Ask for the whole run
+
+`ask` called `updateSendButton` and *then* `start`, and `run` is set inside
+`start`. `isStop = isRunning` therefore read false at the only moment anything
+asked, so the button kept the up-arrow for the entire answer, and pressing it
+still stopped the run because the press handler reads `isRunning` itself.
+
+It corrected itself the moment anybody typed, because `controlTextDidChange`
+asks again, which is exactly the case that used to be impossible to reach: the
+field was cleared before the run started and a follow-up was swallowed, so a
+pane nobody typed into while it worked was the only pane there was. Both calls
+are kept, before and after `start`, in `ask` and in `retry`.
+
+`SendButton` also grew `accessibilityPerformPress`. It is an `NSView` with a
+`mouseDown` and it had already declared itself a button with a label, so it
+announced a control that only a mouse could use. Survivable while Stop only
+stopped; not survivable now that Stop is also how a waiting question is taken
+back, which would have made that a pointer-only route. Pressed through AX in the
+verification above, which is the same call VoiceOver makes.

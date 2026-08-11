@@ -392,6 +392,9 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Only the last turn may be retried
 - `LISTEN_OFFLINE` also takes a path, because recovery is the interesting half
 - History belongs to the two screens that are about conversations
+- The composer cleared the field before the guard, and the follow-up went nowhere
+- One question waits, and Stop is the way to take it back
+- The stop button drew itself as Ask for the whole run
 - A conversation you go back to opens as a page
 
 ### `.agents/notes/release.md` (5k)

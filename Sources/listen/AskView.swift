@@ -116,6 +116,15 @@ final class AskView: NSView {
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
 
+    /// The one question typed while an answer was running, waiting its turn.
+    ///
+    /// Deliberately not in `chat.turns` and never persisted: `chat.json` is the
+    /// record of what was actually asked, and a question that has not been sent
+    /// yet is not that. If the pane goes away before it runs it goes with it.
+    private var queued: String?
+    /// Its bubble, kept so the cross can take it off screen again.
+    private var queuedTurn: QuestionTurn?
+
     /// Told when a note is written, so the Notes mode can pick it up without
     /// being switched to and back.
     var onNoteWritten: (() -> Void)?
@@ -398,7 +407,7 @@ final class AskView: NSView {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 15)
-        field.placeholderString = Self.prompt(for: nil)
+        field.placeholderString = placeholder(for: nil)
         field.target = self
         field.action = #selector(send)
         field.delegate = self
@@ -630,16 +639,32 @@ final class AskView: NSView {
         return recording == nil ? "Ask about your library…" : "Ask about this meeting…"
     }
 
+    /// And what it offers while an answer is running, which is a different
+    /// thing: Return still works, and what it does then is queue rather than
+    /// ask. The send button cannot say so, because it is the Stop control for
+    /// exactly as long as this is true, so the empty field is the only surface
+    /// left that can say it *before* somebody finds out by pressing it.
+    static let waitingPrompt = "Ask a follow-up. It goes when this answer finishes…"
+
+    private func placeholder(for recording: Recording?, person: String? = nil) -> String {
+        isRunning ? Self.waitingPrompt : Self.prompt(for: recording, person: person)
+    }
+
+    /// The same, for the places that already know what the pane is about.
+    private func refreshPlaceholder() {
+        field.placeholderString = placeholder(for: recording, person: person)
+    }
+
     func show(_ recording: Recording?) {
         // Pinned: take the new context, keep the conversation.
         if pinned {
             self.recording = recording
             person = nil
-            field.placeholderString = Self.prompt(for: recording)
+            field.placeholderString = placeholder(for: recording)
             updateStatus()
             return
         }
-        field.placeholderString = Self.prompt(for: recording)
+        field.placeholderString = placeholder(for: recording)
         // `loaded` is what gets the first call through. Both ids are nil at
         // launch, so guarding on the id alone meant the library context never
         // loaded its conversation at all: the bar came up empty next to a
@@ -677,7 +702,7 @@ final class AskView: NSView {
         if pinned {
             recording = nil
             person = name
-            field.placeholderString = Self.prompt(for: nil, person: name)
+            field.placeholderString = placeholder(for: nil, person: name)
             updateStatus()
             return
         }
@@ -685,7 +710,7 @@ final class AskView: NSView {
         loaded = true
         recording = nil
         person = name
-        field.placeholderString = Self.prompt(for: nil, person: name)
+        field.placeholderString = placeholder(for: nil, person: name)
         // Fresh, for the reason `show(_:)` records. Their conversations are in
         // History like everybody else's.
         chat = Chat()
@@ -705,7 +730,7 @@ final class AskView: NSView {
         self.chat = chat
         recording = chat.sources.first.flatMap { Recording.find($0) }
         person = chat.person
-        field.placeholderString = Self.prompt(for: recording, person: person)
+        field.placeholderString = placeholder(for: recording, person: person)
         loaded = true
         // Picked out of the history on purpose, so this one does deserve room,
         // and deserves to survive whatever selection arrives next.
@@ -771,6 +796,12 @@ final class AskView: NSView {
               + "scrollHidden \(scroll.isHidden), expandedNow \(expandedNow)")
         for view in turns.arrangedSubviews { view.removeFromSuperview() }
         answering = nil
+        // The bubble has just been removed with everything else, so this is the
+        // pointer rather than the view. Every route here goes through `stop`
+        // first, which empties the queue; this is what keeps that true if a
+        // fourth one is ever added.
+        queued = nil
+        queuedTurn = nil
         // The question each answer belongs to, tracked while walking the list so
         // a conversation saved before `Chat.Turn.question` existed still titles
         // its notes from the right place.
@@ -1113,6 +1144,10 @@ final class AskView: NSView {
     /// Cancel a running answer and leave the pane in a state somebody can use.
     private func stopAndTidy() {
         guard let answer = answering else { return }
+        // Before `stop`, which drops it. Stop means this conversation has gone
+        // far enough for now, and firing the queued question a moment later
+        // would be the pane answering a press to stop by starting something.
+        let waiting = takeQueued()
         stop()
         answer.finish(AgentRun.Outcome(session: chat.session, costUSD: nil,
                                        durationMS: nil, toolCalls: 0,
@@ -1128,31 +1163,108 @@ final class AskView: NSView {
             persist()
         }
         updateStatus()
+        if let waiting {
+            returnToComposer(waiting)
+            say("Stopped. The question waiting behind that answer is back in "
+                + "the composer.")
+        }
+        refreshPlaceholder()
     }
 
     // MARK: - Asking
 
+    /// Return, or the arrow. Which of the two things it does depends on whether
+    /// an answer is already streaming, and neither of them loses the text.
+    ///
+    /// **The field is cleared by whoever takes the question, never before.** It
+    /// used to be cleared here and the text handed to `ask`, whose first line is
+    /// `guard run == nil`: a follow-up typed while an answer was running was
+    /// wiped out of the field and then dropped by that guard, silently. Nothing
+    /// on screen changed, so it looked like a keystroke that had not registered.
+    /// Same swallowing the comment in `ask` records for a different guard on the
+    /// same path, and the fix is the same one: accept first, clear second.
     @objc private func send() {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        guard isRunning ? queue(text) : ask(text) else { return }
         field.stringValue = ""
-        ask(text)
+        updateSendButton()
     }
 
-    private func ask(_ text: String) {
-        // **No `let recording`.** `send` clears the field before calling this,
-        // so a guard that fails here swallows the question without a word: the
-        // text vanishes and nothing happens, which is what asking about the
-        // library did from the moment the composer left the meeting pane.
+    /// Park a follow-up until the answer on screen has finished.
+    ///
+    /// **Not injected into the running turn, because no backend here can take
+    /// it.** A CLI question is one spawned process carrying its own `--resume`,
+    /// and the endpoint backend is one loop over one question; none of the three
+    /// has a way to hear a second message mid-answer. Claude Code's own composer
+    /// can queue into a turn because it owns the loop. This one cannot, so
+    /// queueing means "ask this next", and the bubble is drawn as something
+    /// waiting rather than as something said.
+    ///
+    /// **One slot.** A stack of questions against a session that answers them
+    /// one at a time reads as a batch job, and by the time the third ran it
+    /// would usually be stale or already covered by the second. A further Return
+    /// is refused and the text stays in the field, which is the rule this whole
+    /// change is about: nothing typed is thrown away without being asked.
+    ///
+    /// **Stop is the way out**, and the line says so, because the bubble carries
+    /// no control of its own. See `QuestionTurn`.
+    private func queue(_ text: String) -> Bool {
+        guard queued == nil else {
+            say("One question is already waiting. It goes as soon as this answer "
+                + "finishes, and Stop brings it back to the composer.")
+            return false
+        }
+        queued = text
+        let bubble = QuestionTurn(text, waiting: true)
+        queuedTurn = bubble
+        addTurn(bubble)
+        reportHeight()
+        scrollToEnd()
+        return true
+    }
+
+    /// Take the waiting question off the screen, and hand back what it said.
+    @discardableResult
+    private func takeQueued() -> String? {
+        guard let text = queued else { return nil }
+        queued = nil
+        queuedTurn?.removeFromSuperview()
+        queuedTurn = nil
+        reportHeight()
+        return text
+    }
+
+    /// Put a question that is not going to be asked back where it was typed.
+    ///
+    /// Only into an empty field. Somebody who has started typing something else
+    /// is owed their own words more than the ones they had queued, and there is
+    /// no way to hold both without inventing a second place to keep text.
+    private func returnToComposer(_ text: String) {
+        guard field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        field.stringValue = text
+        updateSendButton()
+    }
+
+    /// Ask now. Returns whether the question was taken, which is what tells the
+    /// composer it may clear itself.
+    @discardableResult
+    private func ask(_ text: String) -> Bool {
+        // **No `let recording`.** A guard that fails here is a question that
+        // never happens, and for as long as `send` cleared the field first it
+        // was also one nobody could get back: the text vanished and nothing
+        // else moved. That is what asking about the library did from the moment
+        // the composer left the meeting pane.
         //
         // Nothing downstream needed the recording. `start` already scopes the
         // question to one only when there is one, and deliberately as a
         // sentence rather than a hard filter, so the library case was written
         // and reachable everywhere except through this line.
-        guard run == nil else { return }
+        guard run == nil else { return false }
         guard let chosen = AgentCLI.cachedChosen(), let path = chosen.path else {
             updateStatus()
-            return
+            return false
         }
 
         // A backend change invalidates the session: a Codex thread id means
@@ -1184,6 +1296,15 @@ final class AskView: NSView {
         scrollToEnd()
 
         start(text, status: chosen, path: path, resuming: chat.session)
+        // **Again, and this is the call that makes the button a Stop.** `run` is
+        // set inside `start`, so the call above it reads `isRunning == false`
+        // and styles an arrow: the stop control existed, answered to a press,
+        // and drew itself as Ask for the whole run. It corrected itself on the
+        // first keystroke, because `controlTextDidChange` asks again, which is
+        // why a pane nobody typed into while it worked never showed it.
+        updateSendButton()
+        refreshPlaceholder()
+        return true
     }
 
     /// Run one question. Split out because a failed resume runs it again.
@@ -1326,6 +1447,10 @@ final class AskView: NSView {
         updateSendButton()
         scrollToEnd()
         start(answer.question, status: chosen, path: path, resuming: chat.session)
+        // After `start`, for the reason `ask` records: `run` is what makes the
+        // button a Stop, and it is set in there.
+        updateSendButton()
+        refreshPlaceholder()
     }
 
     private func finish(_ outcome: AgentRun.Outcome, _ answer: AnswerTurn) {
@@ -1342,6 +1467,31 @@ final class AskView: NSView {
         persist()
         updateStatus()
         scrollToEnd()
+
+        // The follow-up somebody typed while this was running, which is the
+        // whole reason the queue exists: it goes now, by itself, without a
+        // second press.
+        //
+        // **Only after an answer that worked.** Sending it into a session that
+        // has just failed spends a second question on the same broken thing and
+        // leaves two red paragraphs where there was one problem, and it does it
+        // while nobody is necessarily looking. A failure hands the question back
+        // to the composer instead, where the same Try again decision applies to
+        // it: pressed by a person, or not at all.
+        if let next = takeQueued() {
+            guard outcome.failure == nil else {
+                returnToComposer(next)
+                say("That answer failed, so the question waiting behind it is "
+                    + "back in the composer rather than sent.")
+                refreshPlaceholder()
+                return
+            }
+            // `ask` can still decline it, if the agent went away in the minute
+            // this answer took. Then it goes back to the composer too, and
+            // `ask` has already put the reason on the status line.
+            if !ask(next) { returnToComposer(next) }
+        }
+        refreshPlaceholder()
     }
 
     private func append(_ turn: Chat.Turn) {
@@ -1378,6 +1528,13 @@ final class AskView: NSView {
         run?.cancel()
         run = nil
         answering = nil
+        // A question waiting behind an answer that is being abandoned goes with
+        // it, and without being handed back. `stopAndTidy` takes it before
+        // calling this and does hand it back, because somebody pressing Stop is
+        // still in the conversation; every other caller here is a context change
+        // (another meeting, another person, another conversation, a new one)
+        // where the question was about something no longer on screen.
+        takeQueued()
     }
 
     /// Throw the open conversation away and start a fresh one.
@@ -1508,18 +1665,39 @@ final class AskView: NSView {
 /// worth more here than originality: it is the only cue that separates the two
 /// speakers at a glance when both are plain text.
 private final class QuestionTurn: NSView {
-    init(_ text: String) {
+    /// `waiting` is a question that has been typed and not yet asked.
+    ///
+    /// Drawn as the same bubble, fainter, with a line under it saying what it
+    /// is waiting for. It belongs in the column because that is where it will
+    /// appear when it goes, and it has to be told apart from the questions that
+    /// were actually asked, because the difference between "the agent has heard
+    /// this" and "the agent will hear this next" is the whole of what somebody
+    /// needs to know about it.
+    ///
+    /// **No cancel control on the bubble.** A cross in front of a message is a
+    /// second way to say stop, six points from the one the composer already has
+    /// and pointing at a different thing, and it puts a control in the reading
+    /// column where everything else is text. Stop is the way back: it takes the
+    /// waiting question with it and hands it to the composer, which is where it
+    /// was typed and where it can be edited or sent again.
+    init(_ text: String, waiting: Bool = false) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityIdentifier(waiting ? "queued-question" : "question")
 
         let bubble = NSView()
         bubble.wantsLayer = true
         bubble.layer?.cornerRadius = 12
-        bubble.layer?.backgroundColor = Brand.accent.withAlphaComponent(0.16).cgColor
+        bubble.layer?.backgroundColor = Brand.accent
+            .withAlphaComponent(waiting ? 0.08 : 0.16).cgColor
         bubble.translatesAutoresizingMaskIntoConstraints = false
 
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 13)
+        label.textColor = waiting ? .secondaryLabelColor : .labelColor
+        // Said out loud, because the colour is the only other thing that says
+        // it and a colour is not readable by anything.
+        if waiting { label.setAccessibilityLabel("Waiting to be asked: \(text)") }
         label.translatesAutoresizingMaskIntoConstraints = false
         bubble.addSubview(label)
         addSubview(bubble)
@@ -1531,12 +1709,30 @@ private final class QuestionTurn: NSView {
             label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
 
             bubble.topAnchor.constraint(equalTo: topAnchor),
-            bubble.bottomAnchor.constraint(equalTo: bottomAnchor),
             bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
             // Never the full width: a question that reaches the left edge stops
             // reading as a bubble and starts reading as a paragraph.
             bubble.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor,
                                             constant: 60),
+        ])
+
+        guard waiting else {
+            bubble.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true
+            return
+        }
+        // The caption, where a timestamp would go. Text rather than a symbol,
+        // and under the bubble rather than in front of the words, so the column
+        // stays a column of things somebody said.
+        let caption = NSTextField(labelWithString: "Waiting for this answer to finish")
+        caption.font = .systemFont(ofSize: 10)
+        caption.textColor = .tertiaryLabelColor
+        caption.alignment = .right
+        caption.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(caption)
+        NSLayoutConstraint.activate([
+            caption.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: 3),
+            caption.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -2),
+            caption.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -1716,6 +1912,18 @@ final class SendButton: NSView {
         restyle()
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
+    }
+
+    /// **A button that announces itself has to be pressable.** This is an
+    /// `NSView` with a `mouseDown`, so it had a role, a label and no way for
+    /// anything but a mouse to use it. That was survivable while Stop only
+    /// stopped; it is not now, because Stop is also the way to take back a
+    /// question waiting behind an answer, and that would have been a control
+    /// only reachable by pointer.
+    override func accessibilityPerformPress() -> Bool {
+        guard isReady || isStop else { return false }
+        onPress?()
+        return true
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }

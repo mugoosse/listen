@@ -404,6 +404,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - A conversation you go back to opens as a page
 - The meeting being recorded has no composer, and an extent outlived its drawer
 - Delete is a verb on the conversation, so it is not on History
+- The status line holds its slot, so a message never moves the composer
 
 ### `.agents/notes/release.md` (5k)
 

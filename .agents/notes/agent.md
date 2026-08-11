@@ -2333,3 +2333,38 @@ row. Opening it puts up the page toolbar as `History  New chat  Actions`, whose
 menu is one enabled `Delete`; pressing it takes the file off disk and the
 toolbar goes back to the library's. After New chat the same menu is one disabled
 `No conversation`.
+
+## The status line holds its slot, so a message never moves the composer
+
+The small grey line under the composer is where the pane says what is true right
+now: no internet connection, a question already waiting behind the running
+answer, a note written, an answer that failed. Its height constraint was zero
+until there was something to say, and the well hangs off the label's top
+(`composer.bottom == status.top - 6`), so every one of those messages lifted the
+composer 14 points and dropped it back when the message went.
+
+That is the wrong way round. The composer is where the caret is and what the
+pointer is aiming at, and all four of those messages arrive mid-question: they
+are the exact moments the target must not move. A line of 10 point tertiary text
+is worth less than the field staying still under a hand that is about to press
+send.
+
+So the 14 points are held whether or not anything is in them. `say` sets the
+string and nothing else, and the label is positioned against the well rather
+than the well against the label, which is what "absolutely positioned" means in
+a layout that has no absolute positions.
+
+It costs an empty 14 point strip under an idle composer, and it is a number the
+pane had already committed to. `barHeight` has always been `ComposerWell.height
++ 6 + 14 + 12`, so the drawer's bar was sized for a line that was usually not
+there; before this the slack went to the scroll view above the invitation, and
+now the layout agrees with the number it reports. The two are one
+`Self.statusHeight`, so they cannot disagree again.
+
+Measured on the built app against an empty scratch `LISTEN_LIBRARY`, launched
+twice with `LISTEN_PANEL=ask` and read through
+`AXUIElementCreateApplication(pid)`. With and without `LISTEN_OFFLINE=1` the
+field is at y=907 and the send button at y=900, and the only difference between
+the two trees is the label's own string. Both runs are of the fixed build: the
+14 points the empty case used to sit lower by are the label's height constraint,
+not a second measurement.

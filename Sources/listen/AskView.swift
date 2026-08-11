@@ -54,10 +54,22 @@ final class AskView: NSView {
     private let status = NSTextField(labelWithString: "")
     private lazy var composerTrailing =
         composer.trailingAnchor.constraint(equalTo: trailingAnchor)
-    /// Zero unless there is something to say. A hidden view still occupies its
-    /// frame, which is the rule `setChipsCollapsed` already records, so the
-    /// height goes too or the composer sits 14 points off the floor for ever.
-    private lazy var statusHeight = status.heightAnchor.constraint(equalToConstant: 0)
+    /// **The status line is a slot, not a line that comes and goes.**
+    ///
+    /// It used to be zero points high until there was something to say, and
+    /// because the composer's bottom hangs off the label's top, every one of
+    /// those messages lifted the well 14 points and dropped it again when the
+    /// message went. Nothing else on the pane moves under the caret, and the
+    /// things that put text here are mid-question: a queued question, a note
+    /// written, an answer that failed. So the space is held whether or not
+    /// anything is in it. The label is positioned against the well, and never
+    /// the other way round.
+    ///
+    /// It costs 14 points of empty space under an idle composer, and it is the
+    /// same 14 `barHeight` has always reserved: the drawer's bar was already
+    /// sized for a line that was usually not there, so this is the layout
+    /// agreeing with the number rather than a new one.
+    private static let statusHeight: CGFloat = 14
 
     /// How much room to leave on the right of the input row.
     ///
@@ -324,7 +336,7 @@ final class AskView: NSView {
             composer.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
 
             status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
-            statusHeight,
+            status.heightAnchor.constraint(equalToConstant: Self.statusHeight),
         ])
     }
 
@@ -1041,7 +1053,7 @@ final class AskView: NSView {
     /// this, so collapsing squeezed the well until autolayout gave up somewhere
     /// and the send button came back a flattened oval.
     var barHeight: CGFloat {
-        var height = ComposerWell.height + 6 + 14 + 12
+        var height = ComposerWell.height + 6 + Self.statusHeight + 12
         if !notice.isHidden {
             height += notice.fittingSize.height + 8
         } else {
@@ -1123,11 +1135,12 @@ final class AskView: NSView {
         }
     }
 
-    /// Put a transient line under the composer, and take its space back when
-    /// there is nothing to say.
+    /// Put a transient line under the composer.
+    ///
+    /// Text only: the space it goes in is already there, for the reason
+    /// `statusHeight` records.
     private func say(_ text: String) {
         status.stringValue = text
-        statusHeight.constant = text.isEmpty ? 0 : 14
     }
 
     private func updateSendButton() {

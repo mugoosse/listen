@@ -8,7 +8,7 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
-## 0.12.0 (unreleased)
+## 0.12.0 (2026-08-11)
 
 ### Listen dictates now, and Speak is retired
 
@@ -74,6 +74,90 @@ download, so there is nothing to fetch again. The configuration does not. Set
 the shortcut again in Settings, Dictation, and bring your Speak dictionary
 across in one press from Settings, Dictionary.
 
+### Ask your library through a model on your own Mac
+
+Questions about your recordings used to need Claude Code or Codex installed.
+Any OpenAI-compatible endpoint answers them now, which covers the case this app
+should be best at: a model running on the same Mac at
+`http://localhost:11434/v1`, with no account anywhere and nothing leaving the
+machine. Twelve are set up in a press each, among them Ollama, LM Studio,
+llama.cpp, OpenRouter, OpenAI, Groq, Mistral and xAI. Any other URL can be
+typed in, several can be configured at once, and the composer switches between
+them.
+
+Which local model, measured on four questions with checkable answers against a
+five-recording library: `qwen3.5:35b` at 23 GB answered all four in 7 to 18
+seconds, and the 81 GB model matched it at roughly three times the wall clock,
+so the larger download buys nothing on this task. `gemma4` at 9.6 GB is faster
+again and got three of four.
+
+An agent CLI brings its own tool loop, and a provider is one stateless request,
+so Listen runs the loop itself. Two consequences are worth knowing. A model that
+advertises tool support will still answer from nothing, so an answer with no
+tool call behind it and no earlier conversation to draw on is flagged rather
+than trusted. And keys live in the Keychain, never in preferences: an endpoint
+that is not on this machine says in words that your transcripts go to it, before
+you save it.
+
+The model menu lists the ones you have used, with a searchable picker behind it,
+because a provider can offer 318 tool-capable models and the first twelve
+alphabetically are ones nobody chose.
+
+### A question that loses the network says so, and can be asked again
+
+Neither agent CLI reports a connection that has gone away, which was measured
+rather than assumed: against a blackholed API, `claude -p` ran 100 seconds with
+nothing on stderr and no exit, and `codex exec` did the same. The pane said
+"Thinking" until somebody pressed Stop. Listen now watches the network path and,
+once a run has been quiet for 20 seconds, opens a connection to the backend's
+own host, which is the only half that catches a router still handing out
+addresses over a dead uplink.
+
+Asking with no connection is refused with the reason. Losing it under a running
+question turns the line amber and stops the sweeping highlight, which is there
+to say the process is alive. Nothing is ever killed for a network reading, and
+nothing retries by itself: a failed turn offers Try again, which replaces the
+attempt rather than adding to the conversation.
+
+### A conversation is a page, not a panel that grew
+
+A question still starts in the composer at the bottom of whatever you are
+reading, and a conversation can now take the whole window: the frame goes, the
+text sits in a 620 point column, which is 105 characters of the body size, the
+page scrolls rather than a panel inside it, and the sidebar underneath becomes
+the list of conversations instead of going on listing recordings behind a view
+nobody can see. History belongs to the two screens that are about conversations,
+the home page and a conversation itself, and picking one out of it opens the
+page rather than a card over an unrelated meeting.
+
+With it: a follow-up typed while an answer is streaming waits its turn instead
+of vanishing, and Stop hands it back to the composer; Delete is a verb on the
+conversation's own menu and asks nothing first, because a conversation is
+working-out and anything worth keeping was already saved as a note; and the
+meeting being recorded has no composer at all, since that screen's bottom edge
+is the meters that say whether your voice is arriving, and nothing is
+transcribed until Stop.
+
+### A note remembers the conversation it came from
+
+Saving an answer as a note records which conversation it was promoted out of,
+and the "Asked for" line on the meeting page opens that conversation again.
+Notes written before this release are matched on their question instead.
+
+The ellipsis in the title bar is about what is on screen rather than always
+about a recording, so a note gets Open Conversation, Show in Finder and Delete,
+and a person gets the verbs that belong to them. The sidebar's right-click had
+the sharper half of the same bug, aiming a meeting's red Delete at a note.
+
+### The recording panel goes where you drag it
+
+An hour-long meeting spent that hour under a floating panel in one fixed corner,
+and putting the panel away was the only answer to it covering the thing the
+meeting is about. The whole face of it is a grab area now, buttons excepted.
+What is stored is a corner and two insets rather than a point, so the panel
+grows the right way as the clock reaches an hour and still lands on screen when
+it is read back on a different display.
+
 ### Also
 
 - Three new commands: `listen dictate <file>` runs the dictation pipeline over
@@ -86,6 +170,25 @@ across in one press from Settings, Dictionary.
   a dictation is a keyboard, not a meeting.
 - An Accessibility row in Settings, Permissions that says what it is for and,
   more usefully, what it is not for.
+- Dictating could make Listen believe you were in a meeting and start recording
+  one, because a dictation runs the microphone and a sound at the same moment,
+  which is the rule that spots a call. Twice in one morning, for 6.4 seconds
+  each. Listen is now never a meeting, whichever copy of Listen it is.
+- The note box on a meeting page hid its own last line: it reserved room for a
+  button that has been in the toolbar since 0.11.0, so an empty note showed 6
+  points of its 30 and a three-line note 34 of its 58, with the leftover
+  scroller appearing beside it as a sliver nothing explained.
+- Every control on the Ask surfaces lights up under the pointer and says what it
+  does, which none of them did: they are borderless because they float over a
+  meeting, and AppKit gives a borderless button no resting shape and no hover.
+- The library's home page has four starter questions of its own, all of them
+  ones that only pay off across meetings: Catch me up, Open items, Decisions,
+  Recurring themes.
+- The status line under the composer holds its slot whether or not it has
+  anything to say, so a message arriving mid-question no longer lifts the field
+  you are typing into by 14 points.
+- The expanded conversation held its column still. It slid sideways on the first
+  scroll and stayed there, measured at 541.5 points opening and 756.0 after.
 
 ## 0.11.0 (2026-08-09)
 

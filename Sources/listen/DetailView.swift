@@ -198,10 +198,19 @@ final class DetailView: NSView {
     private let noteInfo = LinkLine()
     private let notesPlaceholder = PassthroughLabel(labelWithString: "")
 
-    /// Where the note's text starts inside `notesScroll`, split the way AppKit
-    /// splits it: the scroll view's content inset, then the text view's own.
-    /// Three things read these and have to agree, or the caret and the prompt
-    /// it sits on end up on different lines.
+    /// The air above the note, which is a gap between two views and no longer
+    /// anything AppKit has an opinion about.
+    ///
+    /// **It was the scroll view's `contentInsets.top`, and a content inset is
+    /// not a position.** It is a scroll offset: the clip view honours it while
+    /// the document is scrolled to the top of its range and clamps it away when
+    /// the document is shorter than the clip view, which an empty note always
+    /// is. So the caret came out at the text view's own 2 points and the
+    /// placeholder, positioned honestly at 16, sat a line below it, on the one
+    /// screen where the two are looked at together. The 14 points now live in
+    /// the constraint above `notesScroll`, where nothing can reclaim them, and
+    /// the pane's geometry is unchanged: the box starts 14 lower and is 14
+    /// shorter, so everything below it is where it was.
     private static let notesTopInset: CGFloat = 14
     /// Small, because the provenance line above already separates the note from
     /// the toggle. It was 16, which stacked with that line and left the first
@@ -240,8 +249,13 @@ final class DetailView: NSView {
     /// meeting has no note, so on almost every page it was two blank lines
     /// between the placeholder and "Recording", which read as the page having
     /// come apart rather than as room to write.
-    private static let notesFloorHeight: CGFloat = 44
-    private static let notesCeilingHeight: CGFloat = 168
+    ///
+    /// Both are the box itself, and both went down by `notesTopInset` when the
+    /// air above the note stopped being counted inside it. The same numbers as
+    /// before: 44 and 168 measured a box that carried 14 points of nothing at
+    /// the top of it.
+    private static let notesFloorHeight: CGFloat = 30
+    private static let notesCeilingHeight: CGFloat = 154
     private var recordingHeadingTop: NSLayoutConstraint!
     private var recordingHeadingHeight: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
@@ -665,7 +679,11 @@ final class DetailView: NSView {
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             noteInfo.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
 
-            notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor, constant: 4),
+            // The 4 is the gap under the provenance line; the rest is the air
+            // above the note, which is a constraint rather than a scroll inset
+            // for the reason `notesTopInset` records.
+            notesScroll.topAnchor.constraint(equalTo: noteInfo.bottomAnchor,
+                                             constant: 4 + Self.notesTopInset),
             notesScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             notesHeight,
@@ -680,12 +698,11 @@ final class DetailView: NSView {
             askView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
 
             // Exactly where the caret will be, and derived rather than measured
-            // so the two cannot come apart again: the text starts at the scroll
-            // view's top inset plus the text view's own. An `NSTextView` has no
-            // placeholder of its own.
+            // so the two cannot come apart again: the note's first line starts
+            // at the text view's own inset and nothing else, so the prompt does
+            // too. An `NSTextView` has no placeholder of its own.
             notesPlaceholder.topAnchor.constraint(
-                equalTo: notesScroll.topAnchor,
-                constant: Self.notesTopInset + Self.notesTextInset),
+                equalTo: notesScroll.topAnchor, constant: Self.notesTextInset),
             notesPlaceholder.leadingAnchor.constraint(equalTo: notesScroll.leadingAnchor),
             notesPlaceholder.trailingAnchor.constraint(equalTo: notesScroll.trailingAnchor),
 
@@ -879,15 +896,13 @@ final class DetailView: NSView {
         // than in the transcript: this one is typed into, so what ends up under
         // the button is the caret rather than a line somebody could scroll past.
         //
-        // **The top inset has to be stated with it.** Setting `contentInsets`
-        // turns `automaticallyAdjustsContentInsets` off, and the automatic top
-        // inset here was 14: the note's first line, and therefore the caret, sat
-        // at 16 below this scroll view because of it, which is where
-        // `notesTopInset` puts the placeholder. Adding only a bottom inset
-        // silently zeroed the top one, the caret jumped a line above the prompt
-        // it is supposed to sit on, and nothing else moved to explain it.
+        // **And nothing at the top.** Setting `contentInsets` at all turns
+        // `automaticallyAdjustsContentInsets` off, so the top has to be stated
+        // whatever it is, and the honest value is zero: an inset is a scroll
+        // offset rather than a position, and the air above the note is now a
+        // constraint. See `notesTopInset`.
         notesScroll.automaticallyAdjustsContentInsets = false
-        notesScroll.contentInsets = NSEdgeInsets(top: Self.notesTopInset, left: 0,
+        notesScroll.contentInsets = NSEdgeInsets(top: 0, left: 0,
                                                  bottom: RecordButton.clearance, right: 0)
 
         // An agent writes notes while this window is open and nothing on disk
@@ -1246,7 +1261,10 @@ final class DetailView: NSView {
               let manager = notesText.layoutManager else { return }
         manager.ensureLayout(for: container)
         let text = manager.usedRect(for: container).height
-        let wanted = text + Self.notesTopInset + Self.notesTextInset * 2
+        // The text and the text view's own insets, and nothing for the air
+        // above: that is a gap between this box and the line over it now, not
+        // part of the box. See `notesTopInset`.
+        let wanted = text + Self.notesTextInset * 2
         notesHeight.constant = min(max(wanted, Self.notesFloorHeight),
                                    Self.notesCeilingHeight)
     }

@@ -262,6 +262,7 @@ this app, so read them before building any new window, menu or popover.
 - An attributed title's colour wins over `contentTintColor`
 - `glyphIndex(for:in:)` answers with the nearest glyph, however far away
 - A disabled button greys its title, unless the title is attributed
+- A content inset is a scroll offset, and it will not hold a view in place
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -405,6 +406,8 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The meeting being recorded has no composer, and an extent outlived its drawer
 - Delete is a verb on the conversation, so it is not on History
 - The status line holds its slot, so a message never moves the composer
+- The bar's height has to count every gap, and the status line proved it did not
+- The library composer has four starters of its own, and a person still has none
 
 ### `.agents/notes/release.md` (5k)
 

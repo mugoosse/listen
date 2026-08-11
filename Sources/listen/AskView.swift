@@ -35,6 +35,39 @@ final class AskView: NSView {
         ("Catch me up", "I missed this meeting. Tell me what I need to know in under 150 words."),
     ]
 
+    /// And four for the library, where the same four would be wrong.
+    ///
+    /// A question about one meeting has its answer in one transcript. A question
+    /// about the library only earns the trip if it crosses meetings, so these
+    /// are the four shapes that do: what happened lately, what is still owed,
+    /// what was settled, and what keeps coming back. "Summarise" is deliberately
+    /// not among them, because summarising a library is summarising nothing.
+    ///
+    /// Each one names its own window, because the agent's first move otherwise
+    /// is to decide how much of the library to read, and it decides badly: the
+    /// brief in `Agent.swift` is a retrieval ladder, and a prompt that says "the
+    /// last two weeks" puts it on the right rung without a round trip. They cite
+    /// their meetings for the same reason the answers do: a claim about a
+    /// library nobody can trace back is a claim nobody can check.
+    private static let libraryStarters: [(String, String)] = [
+        ("Catch me up",
+         "What happened across my meetings in the last week? Give me the "
+         + "highlights in under 200 words, and name the meeting each one is from."),
+        ("Open items",
+         "Go through my meetings from the last two weeks and list what is still "
+         + "outstanding: commitments, action items, and questions nobody "
+         + "answered. Say who owns each one and which meeting it came from."),
+        ("Decisions",
+         "What did we decide across my meetings in the last two weeks? One line "
+         + "each, with the meeting it was decided in, and say which ones were "
+         + "left open."),
+        ("Recurring themes",
+         "Look across my meetings from the last month and name the three "
+         + "subjects that keep coming back. For each one, say what changed "
+         + "between the first time it came up and the last, and cite the "
+         + "meetings."),
+    ]
+
     private let scroll = NSScrollView()
     private let turns = NSStackView()
     private let starterRow = NSStackView()
@@ -897,11 +930,6 @@ final class AskView: NSView {
         // whatever detection had found, so with no CLI installed the pane
         // offered four buttons that silently did nothing: `ask` returns at the
         // first guard, and the pane looks exactly as it did before the press.
-        // `recording != nil` stays here, unlike in `updateStatus`. These four
-        // are about *this* meeting ("Summarise", "Action items"), so over the
-        // library they would be four questions about nothing. The setup card
-        // and the model control are about the app and belong on every screen;
-        // the starters are about a document and belong on one.
         //
         // **And only once somebody is actually asking.** Standing over a
         // meeting page they were four unbacked chips lying on the transcript,
@@ -909,13 +937,22 @@ final class AskView: NSView {
         // no panel until it has something to hold. Waiting for the field solves
         // both halves at once: nothing covers the page until you mean to ask,
         // and by the time the chips are up the panel is up behind them.
-        guard composing, chat.turns.isEmpty, recording != nil,
+        //
+        // **The library gets four of its own, and a person still gets none.**
+        // `recording != nil` used to be the whole test, which was right about
+        // the meeting chips and wrong about the screen it left bare: clicking
+        // into the library composer drew a well and a frame with nothing in it,
+        // on the one screen where somebody has the least idea what to ask. A
+        // person is the case still left out, because a pane narrowed to one
+        // name has a question in it already and four chips would each have to
+        // guess which.
+        guard composing, chat.turns.isEmpty, person == nil,
               AgentCLI.cachedChosen() != nil else {
             starterRow.isHidden = true
             return
         }
         starterRow.isHidden = false
-        for (label, prompt) in Self.starters {
+        for (label, prompt) in recording != nil ? Self.starters : Self.libraryStarters {
             starterRow.addArrangedSubview(StarterChip(label) { [weak self] in
                 self?.ask(prompt)
             })
@@ -1052,8 +1089,23 @@ final class AskView: NSView {
     /// Asked for rather than assumed. The drawer hardcoded 68, which is below
     /// this, so collapsing squeezed the well until autolayout gave up somewhere
     /// and the send button came back a flattened oval.
+    ///
+    /// **Every gap is counted, and the status line is what made that worth
+    /// saying.** The old sum came to 14 points less than the constraints
+    /// require, and got away with it for exactly as long as the status label was
+    /// zero high with nothing to say: that spare 14 was quietly paying for the
+    /// gap above the starters. The moment the label became a permanent slot the
+    /// same points were spent twice, the pane was solved 14 short of its own
+    /// contents, and the starters came out flat against the top edge of the
+    /// drawer with nothing above them.
     var barHeight: CGFloat {
-        var height = ComposerWell.height + 6 + Self.statusHeight + 12
+        // Floor to ceiling, in the order the constraints below state them: the
+        // pane's own inset inside the drawer, under the status line, between it
+        // and the well, the well, and the gap over the starters row. The
+        // scrolling conversation is what takes up the difference when there is
+        // more room than this, and it is zero points high in a bar.
+        var height = Self.paneBottomInset + 6 + Self.statusHeight + 6
+            + ComposerWell.height + 8
         if !notice.isHidden {
             height += notice.fittingSize.height + 8
         } else {
@@ -1061,6 +1113,11 @@ final class AskView: NSView {
         }
         return height
     }
+
+    /// How far the pane's floor is off the drawer's, which is
+    /// `DetailWithComposer`'s number and is stated here because `barHeight` is
+    /// a height for the drawer rather than for this view.
+    private static let paneBottomInset: CGFloat = 12
 
     /// Is there a conversation to go back to, as opposed to an empty composer?
     var hasConversation: Bool { !chat.turns.isEmpty }

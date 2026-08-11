@@ -2368,3 +2368,55 @@ field is at y=907 and the send button at y=900, and the only difference between
 the two trees is the label's own string. Both runs are of the fixed build: the
 14 points the empty case used to sit lower by are the label's height constraint,
 not a second measurement.
+
+## The bar's height has to count every gap, and the status line proved it did not
+
+`barHeight` is what the drawer is told to be when the conversation is a bar, and
+it was `ComposerWell.height + 6 + 14 + 12` plus the starters row and 8. That sum
+is 14 points less than the constraints inside the pane require, and it worked
+for as long as the status label was zero high with nothing to say: the label's
+missing 14 was quietly paying for the gap above the starters, which is the
+hidden scroll view's height.
+
+Holding the status line's slot open spent the same 14 points twice. The pane was
+then solved 14 short of its own contents, and what gave way was the top: the
+starter chips came out flat against the drawer's top edge with nothing above
+them, on the surface where they are the first thing anybody reads. Nothing was
+logged, because a hidden scroll view has no intrinsic height to complain with.
+
+So the sum is now written the way the constraints are, floor to ceiling: the
+pane's 12 point inset inside the drawer, 6 under the status line, the line, 6
+above it, the well, and 8 over the starters. `paneBottomInset` names the 12,
+which is `DetailWithComposer`'s number and the reason this is a height for the
+drawer rather than for the view reporting it.
+
+Measured on the built app over a scratch `LISTEN_LIBRARY`, through
+`AXUIElementCreateApplication(pid)`: with the composer focused over a meeting,
+the chips report y=843 and the drawer's top edge is at 835, so the 8 points are
+there and the row is even with the 8 below it. No constraint conflicts in the
+run's stderr, which is the other half of the check: the old arithmetic was
+resolved silently rather than reported.
+
+## The library composer has four starters of its own, and a person still has none
+
+Clicking into the composer on the library screen drew a well and an empty frame.
+The guard in `drawStarters` was `recording != nil`, which is right about
+"Summarise" and wrong about the screen it left bare: the home page is where
+somebody has the least idea what can be asked, and it was the one page that
+offered no answer to that.
+
+The four are not the meeting four a level up. A question about one meeting has
+its answer in one transcript; a question about the library only earns the trip if
+it crosses meetings, so these are the four shapes that do: `Catch me up`, `Open
+items`, `Decisions`, `Recurring themes`. Summarising a library is summarising
+nothing, so there is no `Summarise`.
+
+Each prompt names its own window ("the last week", "the last two weeks", "the
+last month") and asks for the meetings to be cited. Both are for the agent
+rather than for the reader: the brief in `Agent.swift` is a retrieval ladder,
+and the first thing an unbounded library question costs is a round trip spent
+deciding how much to read.
+
+A person is the case still deliberately left out. A pane narrowed to one name
+has a question in it already, and four chips would each have to guess which.
+

@@ -480,3 +480,30 @@ spent control that reads as a live one, which is worse than no confirmation.
 `labelColor` or `tertiaryLabelColor`. Anything that hand-builds a title has to
 answer this question; `SpeakerPill` does not only because nothing ever disables
 one.
+
+## A content inset is a scroll offset, and it will not hold a view in place
+
+`NSScrollView.contentInsets` looks like padding and is not. It widens the
+scrollable range so the document *can* sit clear of an edge; the clip view then
+decides where the document actually is, and it clamps the range away when there
+is less content than clip view. An empty text view is always that case.
+
+The notes pane paid for the difference. The note's first line was placed by
+`contentInsets = NSEdgeInsets(top: 14, …)` on `notesScroll` plus two points of
+`textContainerInset`, and its placeholder, which is a sibling label because
+`NSTextView` has none of its own, was pinned honestly at 14 + 2 below the same
+scroll view. On an empty note the clip view dropped the 14, so the caret came up
+at 2 and the prompt it is supposed to sit on was a line below it: the two are
+looked at together on exactly the one screen where they disagree.
+
+Measured on the built app over a scratch `LISTEN_LIBRARY`, through
+`AXUIElementCreateApplication(pid)`: with the inset gone and the 14 points moved
+into the constraint above `notesScroll`, the text view reports y=242 and the
+placeholder label y=243, and a line typed into the note lands on the pixel row
+the placeholder occupied. The pane's geometry is unchanged, because the box
+starts 14 lower and `sizeNotes` no longer adds 14 to it, so `notesFloorHeight`
+and `notesCeilingHeight` came down by 14 with it.
+
+The rule that generalises: use a content inset for what a scroll view should be
+able to reach, never for where something is. Anything a second view has to line
+up against belongs in a constraint, where nothing can reclaim it.

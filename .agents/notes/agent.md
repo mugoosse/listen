@@ -1054,6 +1054,705 @@ bar" rule is narrowed to cards, which is what makes an empty page possible at
 all. Opening one from History does the same: `onWantsOpen` only forces a card
 when it is not already a page.
 
+# The third backend: an OpenAI-compatible endpoint
+
+Everything above is about driving somebody else's agent. This part is about the
+case where there is no agent, only a model, and Listen has to be the harness
+itself. `AgentChat.swift` is the whole of it.
+
+Measured against Ollama 0.20.7 with `qwen3.5:35b`, and against OpenRouter's
+live API, on this Mac.
+
+## Claude and Codex are harnesses; an endpoint is one POST
+
+This is the structural fact and everything else follows from it. A CLI is handed
+a brief, an MCP config, a tool allowlist and a model, and it runs the loop: it
+decides to call a tool, calls it, reads the result and carries on. An
+OpenAI-compatible endpoint can only answer "I would like to call this tool", so
+the loop, the tool execution, the conversation history and the streaming parse
+are Listen's.
+
+What did **not** have to change is the interesting half. `AgentRun.Event` was
+already the seam, so the pane, the settings pane and `listen ask` consume the
+same eight events and cannot tell which of the three backends produced them.
+Adding this was an addition, not a rewrite, and the diff above the seam is
+`var run: AgentRun?` becoming `var run: AgentSession?`.
+
+`Question.session(on:onEvent:)` is the one place that picks an engine. A fourth
+backend one day is a case there and nothing at any call site.
+
+## `MCP.call` is a function, and stdio is one transport onto it
+
+`MCP.tools` and `MCP.call` were `private`. They are internal now, and
+`MCP.serve()` is one of two ways in: a pipe from a child process, or a direct
+call from `AgentChat` in this process. `MCP.toolSchemas(_:)` is a mechanical
+translation of `inputSchema`, which is already JSON Schema, into OpenAI's
+function shape.
+
+The property worth protecting is that both routes reach the library through the
+same function. Two transports that resolved a recording differently would be a
+bug nobody could reproduce from one side.
+
+`MCP.call` reads the library off disk and is synchronous. Over stdio that cost
+lands in another process; in-process it is the caller's job to be off the main
+thread, which `AgentChat`'s work queue is.
+
+## Every tool failure comes back as a result, never as an error
+
+The difference between this backend and a CLI, in one rule. Claude does not hand
+Listen malformed JSON or invent a tool name. A small local model does both. A
+run that died on either would be a feature that works on frontier models and
+nowhere else.
+
+So: unparseable `arguments` return the parse error as the tool result, with an
+example of the shape wanted. An unknown tool returns `MCP.call`'s own
+"unknown tool: X". Told what it got wrong, in the place it is looking, a model
+retries and usually succeeds.
+
+Two caps for the same reason, and both say so rather than truncating quietly:
+
+- **Twelve rounds.** The retrieval ladder is four steps and a thorough answer
+  walks it more than once, so twelve is about three times the honest worst case.
+  It exists for the model that answers every tool result by calling the same
+  tool again. Hitting it fails with a sentence naming the cap, because an answer
+  that stops silently is indistinguishable from one that finished.
+- **24,000 characters per tool result**, with "call again with `offset`"
+  appended. A transcript is about 5,500 tokens and a local context is often 4k,
+  and overflowing does not fail loudly: it pushes the system prompt out of the
+  window and the answer comes back confident and baseless.
+
+## The history is the session, and only finished text turns are replayed
+
+A CLI owns its thread and is handed `resume`. An endpoint is stateless and is
+handed the messages, every time. `Question.resume` and `Question.history` are
+exclusive rather than alternative: `AgentRun` ignores one and `AgentChat`
+ignores the other, so a `Question` never has to say which kind it is.
+
+Three rules in `buildMessages`, and each was a decision:
+
+- **Tool traffic is not replayed.** Those are by far the most expensive tokens
+  in a conversation, they are already summarised into the answer that follows
+  them, and leaving them out makes every request valid by construction: a
+  `tool_call` can never appear without its result, because neither ever appears.
+- **`Step.activity` blocks are not replayed.** They are display text written for
+  a reader, "Read notes, read the transcript", not something the model said.
+- **A failed turn is skipped.** Its text is whatever got through before the
+  failure, and replaying half a sentence as a complete assistant message teaches
+  the model that half sentences are answers.
+
+Verified by hand-writing a `chats/` file whose history contained a fact nothing
+else could supply: "my favourite colour is teal", asked back in a new run with
+`--resume`, answered "teal" with zero tool calls.
+
+## The first turn is not the absence of a resume id
+
+`AskView.start` scoped a question to the open recording when `resuming == nil`,
+which was right while every backend was a CLI: a CLI has no id on question one
+and has one from question two. An endpoint has no id ever, so that test is true
+on every turn and it prefixed "About the recording …" onto question five of a
+conversation that had been about that recording since question one.
+
+**And history cannot replace it**, which is the half worth writing down. The
+retry path exists for a CLI whose session the agent has forgotten: it starts
+again knowing nothing while `chat.turns` is full, so keying off history would
+lose the one sentence saying which meeting is being discussed. The test is
+therefore asked of each backend in its own terms:
+
+```swift
+let opening = backend.isCLI ? resuming == nil : history.isEmpty
+```
+
+## `--print-request` printed a request nobody sends
+
+The endpoint's answer to `--print-command`, and the first version was wrong in
+both possible ways at once. It printed `"messages": []`, because messages are
+filled in by `start()` and printing starts nothing, and `"stream": false`,
+because it read the flag that decides whether the *reader* wants deltas rather
+than what is negotiated on the wire.
+
+Both were caught the first time it ran. The fix is that `requestBody()` is the
+single function `startRound` sends and `--print-request` prints, which is the
+only arrangement that cannot go stale. **A debugging tool that prints a request
+nobody sends costs more time than having no debugging tool at all.**
+
+The three-symptom table ports across intact: `--print-request` for the wrong
+request, the tool calls on stderr for a backend that cannot reach the library,
+and `--json` for a misread stream. `--json` matters more here than for the CLIs,
+where a misread is a bug in reading somebody else's tested output; this parser
+is new, so `AgentChat.onRawLine` taps the payloads before this file has had an
+opinion about them.
+
+## Answering is not the same as being signed in, and OpenRouter proves it
+
+Detection is a `GET /models`. For OpenAI that requires the key, so a 401 there
+is a real answer. **OpenRouter's model list is public**, so a bogus key probes
+as reachable and lists 400 models, and the refusal only arrives at the first
+question.
+
+This is why every word for an endpoint says "answering" and never "signed in",
+and why `AgentStatus.refused` is a field rather than something read back out of
+the `account` prose. Nothing claims the key is good; the row claims the server
+answered, which is literally what happened. The 401 at the first question is
+clean and names the pane that fixes it.
+
+The whole vocabulary splits per backend for this reason. A CLI is *installed*
+and *signed in*; an endpoint is *configured* and *answering*. "Codex is not
+configured" and "Ollama is not installed" are both sentences that send somebody
+to do the wrong thing.
+
+## Three answers to "is this local", not two
+
+`AgentEndpoint.Exposure`: loopback, this network, or a named host. The third one
+names the host rather than saying "remote", because the difference between
+"transcripts go somewhere else" and "transcripts go to openrouter.ai" is the
+difference between a warning somebody reads and one they skip.
+
+A hostname that resolves to a private address is reported as `.elsewhere`, which
+overstates the exposure rather than understating it. That is the right way round
+for a sentence about where somebody's meetings go, and resolving would mean a
+DNS lookup on every keystroke in a text field.
+
+The sentence is live under the URL field as it is typed, not in a dialog on
+save: "what does this URL mean" is the question somebody has while pasting one.
+The confirmation dialog is only for a non-loopback URL, because that is the only
+case that changes what the app claims about itself.
+
+## The key is in the Keychain, and the cost argument inverts
+
+Every other preference is in the `com.mgo.listen` domain, which is a plist in
+`~/Library/Preferences`: readable by anything running as the user, copied into
+every backup, printable with one `defaults read`. Right for a window width and
+wrong for a credential. `AgentKey` keys by host, so changing the URL from a
+local server to a hosted one and back does not lose either key.
+
+`listen endpoint key` reads from stdin and never from an argument, because a key
+in `argv` is in the shell history and in `ps` output while it runs.
+`LISTEN_ENDPOINT_KEY` overrides the stored one, in the family of
+`LISTEN_LIBRARY`: an environment variable, so a Finder launch inherits none of
+it.
+
+And the note above about cost needs one amendment. `Outcome.costUSD` is never
+drawn because everybody on the CLI backends pays a flat monthly price, so a
+figure reads as a meter on a plan that has none. **A metered API key genuinely
+is a meter**, so that argument now holds for two backends out of three.
+`promptTokens` and `completionTokens` are parsed and still not drawn, because
+tokens are not money without a price list and Listen has no business keeping
+one. Worth revisiting rather than worth assuming.
+
+## `padding(toLength:)` truncates
+
+`listen ask` with no question pads the backend name to a fixed 12 columns. The
+endpoint is named by whoever configured it, and the first run with three
+backends printed `Custom endpo`. The width is measured from the longest name
+now. A fixed column width is a bug waiting for a longer string.
+
+## A model that declares tool support will still answer from nothing
+
+The worst failure this backend has, and it is not a crash. Asked "how many
+recordings are in the library?" through OpenRouter,
+`qwen/qwen3-30b-a3b-instruct-2507` called **no tools at all** and answered:
+
+```
+There are 1,247 recordings in the library.[rec:0001]
+```
+
+Confident, well formatted, cited, and entirely invented. The real answer was 5.
+Asked again it said 124, with a different fabricated id, which is the tell.
+
+**It cannot be filtered out in advance, and that was checked rather than
+assumed.** That model declares `tools` in `supported_parameters` in OpenRouter's
+own catalogue, as do 333 of its 400 models. Declaring it means the API accepts
+the parameter, not that the model uses it. The identical request answered
+correctly on a local `qwen3.5:35b` and on `anthropic/claude-sonnet-5`, so it is
+a property of the model on the day, not of the catalogue.
+
+So it is caught afterwards, by an invariant that is exactly true rather than
+heuristic: **the tools are the only thing this backend can see**, which the
+brief states. Zero tool calls and no prior conversation means nothing in the
+answer came from the library.
+
+```swift
+outcome.toolCalls == 0 && question.history.isEmpty && !answer.isEmpty
+```
+
+The history clause is load-bearing, not defensive. A follow-up answered from
+what was already said legitimately calls nothing: the "teal" conversation does
+exactly that and must not be flagged. Both halves are verified, the fabrication
+warned about and the follow-up left alone.
+
+It emits a `.note` rather than failing the run, because "hello" and "what can
+you do?" are real questions that need no tools and deserve their answers. The
+note names the endpoint and says the answer is not grounded.
+
+The lesson generalises past this app: **when a model's only route to the truth
+is a tool, not calling the tool is the whole diagnosis.** Nothing else needs to
+be understood about the answer to know it is worthless.
+
+## The stored name only applies to the stored URL
+
+`listen ask --to` points at another server for one run. `AgentChat.init` took
+the display name from `Settings.endpointName` regardless, so a run against
+OpenRouter was labelled "Ollama".
+
+Cosmetic almost everywhere, and not in the one place it appeared: the warning
+above, which names the thing to stop trusting. A sentence saying "Ollama
+answered without reading anything" about an OpenRouter answer is worse than no
+sentence. The name now comes from preferences only when the URL matches the
+configured one, and is derived from the preset table or the host otherwise.
+
+## What the notes spike already knew
+
+`../listen-notes-spike` is a separate experiment about *writing* notes from a
+transcript, not about answering questions, so its prompts and templates do not
+apply here. Two things from its OpenRouter arm (`or_eval.py`) do, and both are
+now in `AgentChat`:
+
+- **Retry 429, 502 and 503**, three attempts, 3s then 6s. A hosted endpoint
+  under load answers 429, and giving up on the first one fails a question that
+  would have succeeded seconds later. Exactly those three statuses: retrying a
+  400 asks the same wrong question twice. A retry does not count towards
+  `maxRounds`, or a busy server would eat the model's allowance for thinking.
+- **`usage.cost` is real money**, streamed by OpenRouter in the final chunk.
+  Measured: `0.004878` for a two-message exchange on `claude-sonnet-5`. Summed
+  across rounds, because one answer is several requests.
+
+That second one settles the amendment above with a number. `Outcome.costUSD` is
+metered-equivalent fiction for the CLI backends and an actual charge here, and
+it is now populated for the endpoint. **Still drawn nowhere.** Capturing it is
+what makes showing it a decision somebody can take with a real figure; drawing
+it is a product change, and it must never appear under a Claude Code answer
+where it would be fiction.
+
+The spike also keeps its key at `~/.config/openrouter-key`, which is where the
+end-to-end verification of this feature got one.
+
+## Which Ollama model, measured
+
+Four questions with checkable answers against a five-recording scratch library:
+a count, a title, the speakers, and a search. Scored on whether tools were
+called at all and whether the answer was right.
+
+| model | size | score | typical |
+|---|---|---|---|
+| `gemma4:latest` | 9.6 GB | 3/4, then 4/4 | 2-8s |
+| `qwen3.5:35b` | 23 GB | 4/4 | 7-18s |
+| `qwen3.5:122b` | 81 GB | 4/4 | 21-50s |
+
+**`qwen3.5:35b` is the one to recommend.** It matches the 81 GB model on every
+question at roughly a third of the wall clock, and the extra 58 GB buys nothing
+measurable on this task. Anything that reads a transcript is already the slow
+shape; tripling it for the same answers is a bad trade.
+
+`gemma4` is worth knowing about for its speed, and it is the model that found
+the bug below.
+
+## A tool that does not say what it returns will not be used
+
+`gemma4`'s only failure was the count, and it did not get it wrong: it called
+**nothing** and answered "I cannot provide the total number of recordings. The
+available tools allow…". It had concluded there was no way to count.
+
+`list_recordings` has always returned `pagination.total`, and nothing in its
+description said so. One sentence naming the field took it from a refusal with
+zero tool calls to 3/3 correct, in one call each.
+
+The lesson is not about small models. **A description that says what a tool
+*does* but not what it *returns* leaves the model to guess whether the answer is
+reachable, and a cautious model guesses no.** The fix helps Claude and Codex
+too, and it cost eleven words.
+
+It is also the cheapest possible confirmation that the grounding check earns its
+place: the refusal was ungrounded, was flagged as such, and the flag is what
+made the cause obvious.
+
+## OpenRouter is a case, not a preset
+
+It began as one of five presets in the single endpoint slot, and that was wrong
+for four reasons that are all about configuration rather than protocol:
+
+- There is no URL to type. It has exactly one.
+- It always needs a key, where a local server never does.
+- Its catalogue is 400 models, so choosing one is a search rather than a menu.
+  319 accept tools, filtered at the source with
+  `?supported_parameters=tools`, which is the only list that stays true as
+  models come and go.
+- It is the case where transcripts leave the Mac, which deserves its own row
+  rather than being a state another row can be put into.
+
+`AgentBackend.openrouter` costs nothing structurally: the enum stays a
+raw-value enum, so `chat.json` keeps its `backend` string, and the per-backend
+settings keys and Keychain lookup work unchanged because both are keyed by the
+raw value and the host. And it buys the thing one slot could not: Ollama and
+OpenRouter configured at the same time, switched in the composer's menu.
+
+**`probe(as:)` is the trap that came with it.** `AgentEndpoint.probe()`
+hardcoded `backend: .endpoint`, so the OpenRouter probe returned a status
+claiming to be the local endpoint. The visible symptom was a row labelled
+"Ollama" pointing at `openrouter.ai`. The real one was two statuses with the
+same backend in one list, which `cachedChosen`, the composer menu and the model
+picker all key on: choosing a model for one would have set it for the other.
+
+The picker for it is an `NSComboBox` rather than an `NSPopUpButton`. A menu of
+319 items is one nobody can find anything in; a combo box completes as you type
+and still accepts an id pasted from a model released after the list was fetched.
+
+## Codex does not give an MCP server its own environment
+
+Found while comparing four backends on one question, and it is the kind of wrong
+that reports success. Pointed at a five-recording scratch library through
+`LISTEN_LIBRARY`, the four answers to "how many recordings are in the library?"
+were:
+
+```
+--claude       5
+--codex        56          <- the real library
+--endpoint     5
+--openrouter   5
+```
+
+56 is the size of the real library on this Mac. Codex had read it, through
+`listen mcp`, while every other part of the same test was pointed elsewhere.
+
+Claude forwards its environment to an MCP server it starts and Codex does not,
+so `listen mcp` came up with no `LISTEN_LIBRARY` and opened the default. The fix
+is one more `-c`:
+
+```
+-c mcp_servers.listen.env.LISTEN_LIBRARY="…"
+```
+
+passed only when the variable is set, so nothing changes for an ordinary run.
+
+Two things follow, and the second is the important one:
+
+- To a user this is nearly harmless. They have one library and never set the
+  variable.
+- **To anybody testing this app it was silently corrupting every Codex
+  measurement**, because the scratch library exists precisely so a test cannot
+  touch the real one, and `CLAUDE.md` recommends exactly that arrangement. Any
+  Codex result recorded against a scratch library before this fix was reading
+  the wrong data and looked entirely normal.
+
+The general rule this leaves: **an environment variable that scopes what an app
+reads has to be proven to reach every process that does the reading**, and a
+child process one hop down is not covered by the parent inheriting it. The test
+is a question whose answer differs between the two libraries, which is why
+"how many recordings" is the first thing to ask of any new backend.
+
+## Providers are a list, and `AgentBackend` stopped trying to name them
+
+The single-endpoint arrangement lasted about a day. What broke it was not the
+protocol, which is identical for every one of them, but the configuration:
+Ollama had a URL field, OpenRouter had a key field and a fixed URL, they shared
+no code, and a third would have meant writing a third section.
+
+**The enum was the thing in the way, and it was in the way for a good reason.**
+`AgentBackend`'s raw value is written into every `chat.json` as `backend`, so
+one case per provider would put a growing vocabulary onto disk. The resolution
+is that the enum names a *kind* and stops trying to name a *server*:
+
+- `AgentBackend` is `.claude`, `.codex`, `.endpoint`. Three cases, for ever.
+- `Provider.id` names which server, and `AgentStatus.key` is the id for a
+  provider and the raw value for a CLI. One string either way.
+- `Chat.backend` stores that string, so nothing on disk changed shape.
+- `Settings.agentChoice` and `agentModel_<key>` are keyed by the same string.
+
+`AgentStatus` grew `provider`, `key`, `name` and `needsNetwork`. That last one
+had to move off the backend: whether a question needs the network is a fact
+about a URL, and `.endpoint` no longer knows one.
+
+### The shape is anarlog's, and the lesson is the table
+
+`../anarlog`'s `owhisper-client` carries **27 providers** in
+`src/adapter/`, one directory each, over a shared `openai_compatible_batch.rs`
+parameterised by six fields. Its `groq` adapter is **62 lines** and most of them
+are boilerplate around filling those in. Its `enum Provider` answers about
+twenty small questions per provider (`auth()`, `default_api_base()`,
+`env_key_name()`, `default_batch_model()`), and its `enum Auth` has exactly
+three shapes across all 27: bearer, a different header name, or a query
+parameter.
+
+The thing worth copying is not the code, it is the claim that **a provider is a
+row in a table rather than an implementation**. Listen's catalogue is twelve
+rows and adding a thirteenth is a URL and a sentence. `Provider.authHeader`
+exists for the same reason anarlog's `Auth` does, and is nil for everything in
+the catalogue today: Azure would need it, and it costs one optional string to
+be ready rather than a refactor later.
+
+### Three migration traps, all of them silent
+
+The move from one slot to a list has to carry preferences keyed by the old
+names, and every one of these reported success while losing something:
+
+- **`agentModel_endpoint` belongs to no provider now.** Left alone, the model
+  the user had chosen simply vanished and every question failed on "No model is
+  chosen". Moved to `agentModel_<newid>`.
+- **`agentBackend = "endpoint"` matches no key**, so `cachedChosen` fell
+  through to the first usable backend. Somebody who had deliberately chosen
+  Ollama was quietly switched to Claude Code. Rewritten to the new id.
+- **OpenRouter had no URL to migrate**, because it was a hardcoded case. The
+  only evidence it was ever set up is a key in the Keychain, so that is what
+  the migration looks for.
+
+The general rule: **a rename of a preference key is a migration, and a
+preference that silently reverts to a default is worse than one that errors.**
+Both of the first two were found by running the migration against a real
+pre-migration state rather than by reading it.
+
+### `agentModel(status.backend)` was right and became wrong
+
+The same bug twice, in the CLI and in the settings pane's test question: the
+model was looked up by backend, which for every provider is `.endpoint`, so it
+read `agentModel_endpoint` and found nothing. Every provider question failed on
+"No model is chosen" while `provider list` printed the model correctly two lines
+earlier.
+
+`Settings.agentModel(_ key: String)` is the real one now, and the
+`AgentBackend` overload survives only for the two CLIs. If a third caller ever
+wants it, the overload is the thing to delete.
+
+### The composer's menu caps at twelve and says so
+
+A provider can offer 318 models. A menu that long is one nobody can find
+anything in, so the composer shows twelve per provider and a disabled row
+reading "N more in Settings › Agent". The searchable picker lives in the pane,
+where an `NSComboBox` completes as you type and still accepts an id pasted from
+a model released after the list was fetched.
+
+## A menu is for what you use; a picker is for finding
+
+The composer's model menu listed the first twelve models a backend offered,
+alphabetically. For Claude's three aliases and whatever Ollama has pulled that
+is the whole list and it is correct. For OpenRouter's 318 tool-capable models it
+produced this:
+
+```
+OpenRouter
+  Default
+  ai21/jamba-large-1.7
+  aion-labs/aion-2.0
+  aion-labs/aion-3.0
+  aion-labs/aion-3.0-mini
+  amazon/nova-2-lite-v1
+  … five more amazon/nova …
+  306 more in Settings › Agent
+```
+
+Twelve rows nobody chose, and 306 that could not be reached from the composer at
+all. **Both halves are the same mistake**, which is asking one control to be a
+catalogue and a shortcut at once. Sorting cannot fix it, because the problem is
+not the order of the twelve.
+
+So the menu became recency and the catalogue became a picker:
+
+- **A list of fifteen or fewer is shown whole**, which is the behaviour Ollama
+  and the CLIs already had and should never have lost.
+- **A longer one shows what you have used**, most recent first, capped at six,
+  with whatever is currently in use always present so that switching away from
+  it is not a one-way door. No configuration, and correct after the first
+  question.
+- **"Choose a model…"** opens `ModelPicker`, a search field over everything,
+  filtering on id *and* name because people know a model by its vendor path and
+  by its marketing name and should not have to guess which the field wants.
+
+A model is recorded as used when it is **chosen**, not when an answer succeeds.
+One that turns out not to call tools is still one the user reached for, and
+hiding it from the menu would make that failure awkward to retry. `listen
+provider model` records it too, or the menu would be wrong for whichever path
+you did not use.
+
+### The catalogue had the answer all along
+
+`/v1/models` carries `name`, `created`, `pricing` and `context_length` per
+model, and none of it was being read. Using it is most of the difference between
+a readable list and a column of vendor paths:
+
+```
+Claude Opus 5      anthropic/claude-opus-5   $5.00/Mtok   1000k context
+```
+
+**Sorted by `created`, never by name.** Newest first puts the current generation
+at the top, which is the only ordering that answers "which of these did somebody
+probably mean". `name` is often "Vendor: Model", and the vendor is already
+visible in the id underneath, so the half after the colon is the part worth
+setting in the larger face.
+
+### The picker is a sheet, and that is a concession
+
+A popover would sit closer to the composer and is what this wanted to be. It
+would also have to take first responder for a search field to work, and
+`appkit.md` records what that costs in this app: `AskView` already carries a
+local event monitor because a click so often goes nowhere. A sheet is
+unambiguous about focus, gets Escape for free, and is honest about its weight,
+since picking one of 318 things is not a glance.
+
+## A cached catalogue with no clock is a catalogue frozen at launch
+
+`AgentCLI.cache` had no timestamp and no expiry. It was filled once by `warmUp`
+and refreshed only by opening Settings › Agent or pressing "Check again". For
+the two CLIs that is correct: their models are three aliases that outlive any
+release. For a provider it is wrong in a way nobody would notice until they went
+looking for a model that was not there.
+
+Listen sits in the menu bar for weeks, and OpenRouter ships models
+continuously. Measured across about an hour of this work, its tool-capable count
+went from 318 to 319 without anybody doing anything. A list built at launch is
+as old as the launch.
+
+`refreshStaleProviders()` re-probes anything past its window, in the background,
+and **providers only**. Re-running the CLI half on a timer would mean process
+launches and possibly a login shell, which is exactly the freeze
+`statuses(_:)` was split in two to avoid.
+
+Two windows, because the two kinds of provider cost different things to ask:
+
+- **Loopback: two minutes.** The probe is a millisecond and never leaves the
+  Mac, and `ollama pull` is something people do mid-session and then expect to
+  see. Verified with `ollama cp`, which makes a new tag with no download: the
+  list went from 4 entries to 5.
+- **Hosted: one hour.** A round trip to somebody else's server for a catalogue
+  that moves about weekly, so this is already more often than the data changes.
+
+### It has to be checked in two places, and neither is tidy on its own
+
+`updateStatus` is the natural home, and it is event-driven: it runs on every
+selection change and after every answer. An app left idle for a week and then
+clicked *straight into the model menu* would never have run it, so `chooseModel`
+checks too.
+
+**The refresh lands for the next read, not the current one.** A menu that
+blocked on the network to open would be a worse bug than one that is
+occasionally a few minutes behind, and there is no version of this where a
+main-thread caller waits on a provider.
+
+### The cap that shaped a menu outlived the menu
+
+`modelLimit = 30` was applied to every provider except OpenRouter, and it
+existed because a pop-up had to list everything it knew. Once the menu showed
+recents and `ModelPicker` searched the rest, that cap stopped being a shorter
+menu and became models that could not be reached at all: the same complaint that
+produced the picker, one provider over. Gone. `modelsCeiling` is a bound on a
+malformed answer, not on choice.
+
+The general shape of this mistake is worth keeping: **a limit justified by one
+control outlives the control**, and the way to catch it is to ask what the
+number is protecting rather than whether it is still a reasonable number.
+
+### `LISTEN_DEBUG=1` prints what was refreshed
+
+A background refresh that works and one that never fires look identical from
+outside. Same switch capture state changes use.
+
+## Opening the settings pane ran detection five times, on the main thread
+
+Reported as the whole screen freezing with a spinning cursor, and it was
+exactly that. `AgentCLI.chosen()` runs full detection: `--version` and an auth
+probe for each CLI, three concurrent `claude` sessions to resolve what the
+aliases currently mean, `codex debug models`, and an HTTP probe per provider
+with a twenty second ceiling. **Measured at about three seconds a call.**
+
+`AgentPane` called it **once per row** plus once in `fillList`, so four rows was
+five detections and roughly fifteen seconds of blocked main thread.
+
+The rule is written on `chosen()` itself and in this file, and it had already
+been broken once before, in the Ask pane's status line. It came back the same
+way both times: a settings row asking the entirely reasonable question "is this
+the one in use?", which happens to be spelled as a function that probes the
+world.
+
+Three parts to the fix, and the middle one is the one that lasts:
+
+- `AgentCLI.choose(from:)` is the selection rule as a **pure function over a
+  list somebody already has**. `chosen()` and `cachedChosen()` both call it, so
+  there is one rule; the pane calls it with `latest`, which detection has just
+  produced, and pays nothing.
+- `agentReport()` was running detection twice, once directly and once through
+  `chosen()`. Measured: `listen ask` with no question went from 6.1s to 3.1s.
+- **`statuses()` now writes to stderr when it runs on the main thread.**
+  Unconditional rather than behind `LISTEN_DEBUG`, because it can only print
+  when there is a bug and the message is the whole diagnosis. Verified: the old
+  pane would have printed it five times per open, the new one prints nothing.
+
+The general shape: **a cheap-looking question that is spelled as an expensive
+function will be asked in a loop by somebody who does not know that.** The fix
+is not vigilance, it is making the cheap spelling available and the expensive
+one say so.
+
+## A pane that edited settings by being looked at
+
+Found while checking the freeze fix, and worse than the freeze. Opening
+Settings › Ask silently changed the OpenRouter model from
+`anthropic/claude-sonnet-5` to `deepseek/deepseek-v4-flash-0731` and pushed that
+to the top of the recently-used list. Nothing was clicked.
+
+`NSComboBox` is two controls in one and both of its "the user chose something"
+notifications lie:
+
+- `controlTextDidEndEditing` fires when a row is **torn down**, which
+  `fillList` does on every refresh.
+- `comboBoxSelectionDidChange` fires for a **programmatic** selection, which
+  populating the box performs.
+
+So the save path ran on events nobody caused, wrote whatever the box happened
+to hold, and then `noteModelUsed` promoted that to the front of recents, which
+is how a setting nobody touched became the default for the next question.
+
+The fix is to record what each box held when it was built and refuse to save an
+unchanged value. An incidental event carries the string it started with, so it
+is ignored; a real edit does not. That is a smaller rule than trying to work out
+which notifications are trustworthy, and it does not depend on being right about
+AppKit.
+
+**The lesson generalises past combo boxes: a control's "value changed" callback
+answers "the value is different from before", not "a person changed it".** Any
+save path hanging off one needs its own idea of what the user last saw.
+
+## Ask is its own settings section now
+
+It was in Advanced, beside Devices, on the argument that both were integrations
+with something installed and signed into elsewhere. That was true of "drive a
+CLI somebody happens to have" and stopped being true: with providers, a model on
+this Mac and a key in the Keychain, asking the library is a third thing the app
+does. Advanced is for things most people never open.
+
+A group of one, which is `Dictation`'s own arrangement and its own argument. It
+sits after Transcription and Dictation because that is the order things happen
+in: record it, transcribe it, then ask about it.
+
+And it is called **Ask**, not Agent. The window's mode is Ask, the CLI is
+`listen ask`, and "agent" describes two of the four backends: Ollama and
+OpenRouter are models Listen drives itself. The settings sidebar was the last
+place still using the word.
+
+One thing to know when testing: `LISTEN_PANEL=settings:<name>` matches on the
+tab's **title**, so it is `settings:ask` now and `settings:agent` finds nothing
+and silently falls back to General.
+
+## The loading state belongs on the control that is about to answer
+
+"Looking for an agent…" sat in the small grey status line under the composer,
+which is the wrong place for it twice over. It is a long way from the thing it
+describes, and it made the bar change height a second after launch for everybody
+whose agent was working, so a normal launch had a visible settling.
+
+The composer's model control is the thing that is about to say which model
+answers, so it is the thing that should say it is finding out. It reads
+"Loading…" while detection runs, disabled and with its chevron removed, because
+a disclosure on a control that cannot be pressed is an offer the app cannot
+keep. The status line stays empty.
+
+`updateModelButton` has three states now, and the first two used to be one:
+
+- **`AgentCLI.cached == nil`**, detection has not finished: "Loading…".
+- **`cachedChosen() == nil`**, nothing usable: hidden, because `SetupNotice` is
+  already up saying it properly and two messages about one problem means the
+  small grey one is the one nobody reads.
+- Otherwise the model's name, or the backend's when no model is chosen.
+
+The accessibility label stays "Looking for an agent" rather than "Loading",
+because a screen reader announcing a bare "Loading" on a button says nothing
+about what is loading or why the button will not press.
+
 ## History belongs to the two screens that are about conversations
 
 It was in the title bar of every screen except settings: over a meeting page,
@@ -1102,3 +1801,4 @@ chat page:                Settings  Sidebar  Done  History  New chat
 Selecting a **header** row rather than a recording is the trap in testing this:
 it deselects, so the toolbar correctly does not change and the run looks like the
 change did nothing.
+

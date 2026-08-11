@@ -57,6 +57,33 @@
             <key>DenyConsequences</key>
             <string>The model download stalls partway through.</string>
         </dict>
+        <!--
+          The one connection this file cannot name a host for, because you
+          choose it: Settings › Agent takes an OpenAI-compatible base URL, and
+          Listen talks to whatever is there when you ask a question about your
+          recordings.
+
+          Left in as a wildcard rather than omitted. An undeclared connection is
+          exactly what this file exists to rule out, and "Listen may talk to a
+          server you nominated" is a true and useful thing for a firewall to be
+          able to show you.
+
+          If that URL is on this Mac, which is the default and what Ollama gives
+          you, no outbound connection happens at all: it is loopback, and the
+          claim that your meetings never leave the machine is untouched.
+        -->
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>*</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Purpose</key>
+            <string>The OpenAI-compatible endpoint you set in Settings › Agent, if you set one. Only the meetings you ask about are sent, only at the moment you ask, and only when that endpoint is not on this Mac. There is no default and nothing is configured out of the box.</string>
+            <key>DenyConsequences</key>
+            <string>Questions put to a hosted endpoint fail. An endpoint running on this Mac, and Claude Code and Codex, are unaffected.</string>
+        </dict>
     </array>
 </dict>
 </plist>

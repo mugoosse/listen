@@ -27,7 +27,11 @@ enum SettingsTab: CaseIterable {
         case .models:      return "Models"
         case .dictionary:  return "Dictionary"
         case .dictation:   return "Dictation"
-        case .agent:       return "Agent"
+        // "Ask", not "Agent". The window calls this mode Ask, the CLI is
+        // `listen ask`, and "agent" describes two of the four backends: Ollama
+        // and OpenRouter are not agents, they are models Listen drives itself.
+        // The settings sidebar was the last place using the word.
+        case .agent:       return "Ask"
         case .devices:     return "Devices"
         case .developers:  return "Developers"
         case .about:       return "About"
@@ -82,7 +86,7 @@ enum SettingsTab: CaseIterable {
 /// "Recording" is what happens while a meeting runs and "Transcription" is what
 /// happens to it afterwards, which is also the order they happen in.
 enum SettingsGroup: CaseIterable {
-    case app, recording, transcription, dictation, advanced
+    case app, recording, transcription, dictation, ask, advanced
 
     var title: String {
         switch self {
@@ -90,6 +94,7 @@ enum SettingsGroup: CaseIterable {
         case .recording:     return "Recording"
         case .transcription: return "Transcription"
         case .dictation:     return "Dictation"
+        case .ask:           return "Ask"
         case .advanced:      return "Advanced"
         }
     }
@@ -105,11 +110,19 @@ enum SettingsGroup: CaseIterable {
         // afterwards, and this is neither. Folding it under Transcription would
         // file the feature under the machinery it happens to share.
         case .dictation:     return [.dictation]
-        // Agent sits beside Devices rather than under Transcription, because
-        // the two are the same kind of thing: an integration with something
-        // outside the app that has to be installed and signed into elsewhere
-        // before any of the switches here mean anything.
-        case .advanced:      return [.agent, .devices, .developers, .about]
+        // **A group of one, on Dictation's own argument.** This used to sit in
+        // Advanced beside Devices, because both were integrations with
+        // something installed and signed into elsewhere. That was true when the
+        // feature was "drive a CLI somebody happens to have", and it stopped
+        // being true: with providers, a model on this Mac and a key, asking the
+        // library is a third thing the app does rather than a detail of the
+        // other two. Advanced is where things go that most people never open,
+        // and this is not one of them any more.
+        //
+        // It sits after Transcription and Dictation because that is the order
+        // things happen in: record it, transcribe it, then ask about it.
+        case .ask:           return [.agent]
+        case .advanced:      return [.devices, .developers, .about]
         }
     }
 }

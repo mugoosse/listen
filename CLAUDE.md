@@ -300,11 +300,12 @@ that repo is being archived.**
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
-### `.agents/notes/agent.md` (34k)
+### `.agents/notes/agent.md` (94k)
 
-Asking questions about the library through an agent CLI the user already has.
-`Agent`, `AgentCLI`, `AgentRun`, `AskView`, `AnswerTurn`, `AgentPane`,
-`listen ask`.
+Asking questions about the library, through an agent CLI the user already has
+or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
+`AgentRun`, `AgentChat`, `AgentEndpoint`, `AgentKey`, `AskView`, `AnswerTurn`,
+`AgentPane`, `listen ask`, `listen endpoint`.
 
 - The model is the user's, and Listen never sees a key
 - The agent cannot reach the library except through `listen mcp`
@@ -345,6 +346,34 @@ Asking questions about the library through an agent CLI the user already has.
 - Clicking away gives up the caret, and the whole bar counts as inside
 - New chat is a button on the card, and the chevron became a cross
 - The height report is what reopened the card the cross had just closed
+- Claude and Codex are harnesses; an OpenAI-compatible endpoint is one POST
+- `MCP.call` is a function, and stdio is one transport onto it
+- Every tool failure comes back as a result, never as an error
+- The history is the session, and only finished text turns are replayed
+- The first turn is not the absence of a resume id
+- `--print-request` printed a request nobody sends
+- Answering is not the same as being signed in, and OpenRouter proves it
+- Three answers to "is this local", not two
+- The key is in the Keychain, and the cost argument inverts
+- `padding(toLength:)` truncates
+- A model that declares tool support will still answer from nothing
+- The stored name only applies to the stored URL
+- What the notes spike already knew
+- Which Ollama model, measured
+- A tool that does not say what it returns will not be used
+- OpenRouter is a case, not a preset
+- Codex does not give an MCP server its own environment
+- Providers are a list, and `AgentBackend` stopped trying to name them
+- Three migration traps, all of them silent
+- `agentModel(status.backend)` was right and became wrong
+- A menu is for what you use; a picker is for finding
+- The catalogue had the answer all along
+- A cached catalogue with no clock is a catalogue frozen at launch
+- The cap that shaped a menu outlived the menu
+- Opening the settings pane ran detection five times, on the main thread
+- A pane that edited settings by being looked at
+- Ask is its own settings section now
+- The loading state belongs on the control that is about to answer
 - Expanded is a page, and a page has no frame around it
 - The page scrolls, not a panel inside it
 - A width nobody else may have an opinion about

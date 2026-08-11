@@ -160,6 +160,8 @@ enum CLI {
             MCP.serve()
         case "ask":
             ask(rest)
+        case "provider":
+            provider(rest)
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }
@@ -1347,19 +1349,31 @@ enum CLI {
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
-      ask [<question>]           put a question to Claude Code or Codex, which
-                                 reads the library through `listen mcp`. No
-                                 question reports what is installed.
+      provider <sub>             the OpenAI-compatible backends: list, add,
+                                 key, model, remove. Ollama and anything else
+                                 speaking the same shape.
+      ask [<question>]           put a question to Claude Code, Codex or an
+                                 OpenAI-compatible endpoint, all of which read
+                                 the library through the tools `listen mcp`
+                                 serves. No question reports what is set up.
 
     ask options:
       --claude, --codex          which CLI, when both are installed
+      --endpoint                 the endpoint configured in Settings › Ask
+      --to <url>                 a base URL for this run only, such as
+                                 http://localhost:11434/v1 for Ollama. Changes
+                                 no preference, so trying one is free.
       --write                    let it write notes and tags. Read-only without.
-      --resume <session>         continue the session the last answer printed
-      --model <name>             pass a model through to the agent CLI
+      --resume <id>              a session id for a CLI, a conversation id from
+                                 this library for an endpoint
+      --model <name>             which model. Required for an endpoint unless
+                                 one is set in Settings.
       --stream                   type the answer out as it is written, which is
-                                 what the window does. Claude Code only.
-      --json                     the agent's own event stream, unread
+                                 what the window does. Not Codex.
+      --json                     the answer's own event stream, unread
       --print-command            the command Listen would run, and nothing else
+      --print-request            the same for an endpoint: the POST body, which
+                                 never contains the key
 
     calendar subcommands:
       status                     access, calendars and today. The default.
@@ -2703,7 +2717,8 @@ enum CLI {
 
     // MARK: - Asking an agent
 
-    /// `listen ask [<question>]`: put a question to Claude Code or Codex.
+    /// `listen ask [<question>]`: put a question to Claude Code, Codex or an
+    /// OpenAI-compatible endpoint.
     ///
     /// This is the same engine the window uses, with a terminal in front of it,
     /// and it exists first because of what it can show that a chat box cannot.
@@ -2723,7 +2738,12 @@ enum CLI {
         var model: String?
         var rawStream = false
         var printCommand = false
+        var printRequest = false
         var streaming = false
+        /// A base URL for this one run, which is the whole test mechanism for
+        /// the endpoint backend: it tries a server without writing anything
+        /// into preferences, so measuring one does not reconfigure the app.
+        var endpointOverride: URL?
         var words: [String] = []
 
         var index = 0
@@ -2732,10 +2752,20 @@ enum CLI {
             switch arg {
             case "--claude":        backend = .claude
             case "--codex":         backend = .codex
+            case "--endpoint":      backend = .endpoint
             case "--write":         allowWrites = true
             case "--stream":        streaming = true
             case "--json":          rawStream = true
             case "--print-command": printCommand = true
+            case "--print-request": printRequest = true
+            case "--to":
+                index += 1
+                guard index < args.count else { fail("--to needs a base URL.") }
+                guard let url = URL(string: args[index]), url.host != nil else {
+                    fail("--to needs a base URL, such as http://localhost:11434/v1")
+                }
+                endpointOverride = url
+                backend = .endpoint
             case "--resume":
                 index += 1
                 guard index < args.count else { fail("--resume needs a session id.") }
@@ -2760,7 +2790,14 @@ enum CLI {
         guard !question.isEmpty else { agentReport() }
 
         let status: AgentStatus
-        if let backend {
+        if let endpointOverride {
+            // **Deliberately not probed.** The point of `--to` is to try a URL
+            // that may well not be working, and a probe here would refuse it
+            // with a guess where the real request is about to say exactly what
+            // is wrong: refused key, no such model, tools unsupported.
+            status = AgentStatus(backend: .endpoint, path: endpointOverride, version: nil,
+                                 signedIn: true, account: nil)
+        } else if let backend {
             status = AgentCLI.status(backend)
             guard status.path != nil else {
                 fail("\(backend.name) is not installed. \(backend.installHint)")
@@ -2768,20 +2805,68 @@ enum CLI {
         } else if let chosen = AgentCLI.chosen() {
             status = chosen
         } else {
-            fail("no agent CLI found. `listen ask` with no question lists what "
-                 + "was looked for and where.")
+            fail("no agent found. `listen ask` with no question lists what was "
+                 + "looked for and where.")
         }
-        guard let path = status.path else { fail("\(status.backend.name) is not installed.") }
+        guard let path = status.path else { fail("\(status.name) is not set up.") }
         if status.signedIn == false {
-            fail("\(status.backend.name) is installed but not signed in. "
+            fail("\(status.name) is installed but not signed in. "
                  + status.backend.installHint)
         }
 
+        // A CLI resumes its own thread by id. An endpoint has no thread, so the
+        // same flag names a conversation in this library and the turns are
+        // replayed into the request. Same word, same intent, and the two
+        // mechanisms never meet: `AgentChat` ignores `resume` and `AgentRun`
+        // ignores `history`.
+        var history: [Chat.Turn] = []
+        if status.backend == .endpoint, let resume {
+            guard let chat = Chat.load(id: resume) else {
+                fail("no conversation `\(resume)`. For an endpoint, --resume takes a "
+                     + "conversation id from the library rather than a session id.")
+            }
+            history = chat.turns
+        }
+
         let query = AgentRun.Question(text: question, backend: status.backend, path: path,
-                                      resume: resume, allowWrites: allowWrites, model: model,
+                                      resume: status.backend == .endpoint ? nil : resume,
+                                      provider: status.provider, history: history,
+                                      allowWrites: allowWrites,
+                                      // A provider has no default model of its
+                                      // own to fall back on, so the preference
+                                      // stands in when the flag is absent. Keyed
+                                      // by `status.key`, which is the provider's
+                                      // id: `agentModel_endpoint` belongs to no
+                                      // provider now and always read as nil.
+                                      model: model ?? Settings.agentModel(status.key),
                                       streaming: streaming)
 
+        if printRequest {
+            // What `--print-command` is for the CLIs. The key is never in it:
+            // it rides in a header, and this prints the body, so there is
+            // nothing to redact and nothing that can leak into a bug report.
+            guard status.backend == .endpoint else {
+                fail("--print-request is for a provider. For \(status.name), "
+                     + "--print-command prints what would run.")
+            }
+            let chat = AgentChat(query, on: DispatchQueue(label: "listen.ask.print")) { _ in }
+            let body = chat.requestBody()
+            guard let data = try? JSONSerialization.data(
+                withJSONObject: body,
+                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+                  let text = String(data: data, encoding: .utf8) else {
+                fail("the request could not be encoded.")
+            }
+            print("POST " + path.appendingPathComponent("chat/completions").absoluteString)
+            print(text)
+            exit(0)
+        }
+
         if printCommand {
+            guard status.backend != .endpoint else {
+                fail("there is no command: an endpoint is a URL, not a program. "
+                     + "--print-request shows the request body instead.")
+            }
             // Quoted well enough to paste back into a shell, which is the only
             // reason this exists: a flag that is wrong in Listen has to be
             // reproducible outside it.
@@ -2797,15 +2882,25 @@ enum CLI {
             exit(0)
         }
 
-        if rawStream { runAgentRaw(query) }
+        // A CLI's raw stream is its own stdout, so it is dumped by running the
+        // process with nothing in the way. An endpoint's is an HTTP response
+        // that only `AgentChat` can obtain, so the raw payloads are tapped on
+        // their way past instead. Both print the bytes the parser saw and
+        // nothing this file has interpreted, which is the only property that
+        // makes either useful.
+        if rawStream && status.backend != .endpoint { runAgentRaw(query) }
 
-        log("\(status.backend.name) · \(question)")
+        // `--to` is deliberately not a configured provider, so it has no
+        // stored name. It gets one from the catalogue by URL, which names
+        // `http://localhost:11434/v1` as Ollama rather than as a bare host.
+        let label = endpointOverride.map { Provider.custom(url: $0).name } ?? status.name
+        log("\(label) · \(question)")
         let done = DispatchSemaphore(value: 0)
         var failure: String?
         // Not `.main`: this thread is about to block on the semaphore, and
         // events delivered to the main queue would never be drained.
         let events = DispatchQueue(label: "listen.ask")
-        let run = AgentRun(query, on: events) { event in
+        let run = query.session(on: events) { event in
             switch event {
             case .started(let session):
                 log("session \(session)")
@@ -2843,7 +2938,19 @@ enum CLI {
             }
         }
 
+        if rawStream, let chat = run as? AgentChat {
+            chat.onRawLine = { print($0) }
+        }
+
         do { try run.start() } catch {
+            // A refusal to start is not always a broken binary, and prefixing
+            // "could not start /opt/homebrew/bin/claude:" onto "No internet
+            // connection" sends somebody to reinstall a CLI that is fine. The
+            // endpoint's own refusals are the same shape: "no model is chosen"
+            // is not a fault in a path.
+            guard !(error is AgentRun.Failure), !(error is AgentChat.Failure) else {
+                fail(error.localizedDescription)
+            }
             fail("could not start \(path.path): \(error.localizedDescription)")
         }
         done.wait()
@@ -2872,6 +2979,132 @@ enum CLI {
         exit(process.terminationStatus)
     }
 
+    /// `listen provider`: add, key and remove the OpenAI-compatible backends.
+    ///
+    /// The settings pane is the route most people take. This exists for the
+    /// same reason `listen ask` does: a state that can only be reached by
+    /// clicking is a state nobody can set up in a script, reproduce in a bug
+    /// report, or check on a machine over SSH.
+    ///
+    /// **A key is read from stdin and never from an argument.** A key in `argv`
+    /// is in the shell history, in `ps` output while it runs, and in any
+    /// transcript of the terminal. `listen provider key <id>` reads a line
+    /// instead, so `pbpaste | listen provider key openrouter` leaves nothing
+    /// behind.
+    private static func provider(_ args: [String]) -> Never {
+        let sub = args.first ?? "list"
+        let rest = Array(args.dropFirst())
+
+        switch sub {
+        case "list":
+            let configured = Settings.providers
+            if configured.isEmpty {
+                print("No providers added.")
+            } else {
+                let width = configured.map(\.name.count).max() ?? 8
+                for provider in configured {
+                    let name = provider.name.padding(toLength: width, withPad: " ", startingAt: 0)
+                    var parts = [provider.base.absoluteString]
+                    if provider.needsKey {
+                        parts.append(AgentKey.has(provider.host) ? "key stored" : "no key")
+                    }
+                    if let model = Settings.agentModel(provider.id) { parts.append(model) }
+                    print("\(name)  \(parts.joined(separator: "   "))")
+                    log("  " + provider.exposure.sentence)
+                }
+            }
+            print("")
+            print("Available to add:")
+            let already = Set(configured.map(\.id))
+            for known in Provider.catalogue where !already.contains(known.id) {
+                let id = known.id.padding(toLength: 12, withPad: " ", startingAt: 0)
+                print("  \(id)  \(known.base.absoluteString)   (\(known.note))")
+            }
+            exit(0)
+
+        case "add":
+            guard let word = rest.first else {
+                fail("`listen provider add <id|url>` needs a catalogue id or a base URL.")
+            }
+            let provider: Provider
+            if let known = Provider.known(word.lowercased()) {
+                provider = known
+            } else if let url = URL(string: word), url.host != nil,
+                      url.scheme == "http" || url.scheme == "https" {
+                provider = Provider.custom(url: url, name: rest.dropFirst().first)
+            } else {
+                fail("`\(word)` is neither a catalogue id nor a base URL. "
+                     + "`listen provider list` shows what is available.")
+            }
+            Settings.addProvider(provider)
+            print("\(provider.name)  \(provider.base.absoluteString)")
+            // Said on the way in rather than buried in a pane nobody reopens.
+            // This is the moment the claim on the tin changes.
+            print(provider.exposure.sentence)
+            if provider.needsKey && !AgentKey.has(provider.host) {
+                print("")
+                print("Set a key with `listen provider key \(provider.id)`.")
+                if let docs = provider.docs { print("Keys: \(docs)") }
+            }
+            exit(0)
+
+        case "key":
+            guard let id = rest.first, let provider = Settings.provider(id) else {
+                fail("`listen provider key <id>` needs a provider that is added. "
+                     + "`listen provider list` shows them.")
+            }
+            if rest.contains("--clear") {
+                AgentKey.save(nil, for: provider.host)
+                print("Key for \(provider.host) removed.")
+                exit(0)
+            }
+            log("Paste the key for \(provider.host) and press return. It is stored "
+                + "in the Keychain and never in Listen's preferences.")
+            guard let key = readLine(strippingNewline: true)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
+                fail("nothing was read from stdin, so nothing was stored.")
+            }
+            guard AgentKey.save(key, for: provider.host) else {
+                fail("the Keychain refused to store the key.")
+            }
+            // Never the key, and not even its length: a length is a fact about
+            // a secret that a screenshot should not carry.
+            print("Key stored for \(provider.host).")
+            exit(0)
+
+        case "model":
+            guard let id = rest.first, let provider = Settings.provider(id) else {
+                fail("`listen provider model <id> [<model>]` needs a provider that is added.")
+            }
+            guard rest.count > 1 else {
+                let status = provider.probe()
+                print(Settings.agentModel(provider.id) ?? "(default)")
+                for model in status.models { log("  " + model.id) }
+                exit(0)
+            }
+            Settings.setAgentModel(provider.id, rest[1])
+            // The same bookkeeping the window does, so the composer's menu
+            // reflects a model chosen at the terminal. Two paths that disagree
+            // about what has been used is a menu that is wrong for whichever
+            // one you did not use.
+            Settings.noteModelUsed(provider.id, rest[1])
+            print("\(provider.name) will use \(rest[1]).")
+            exit(0)
+
+        case "remove":
+            guard let id = rest.first, let provider = Settings.provider(id) else {
+                fail("`listen provider remove <id>` needs a provider that is added.")
+            }
+            AgentKey.save(nil, for: provider.host)
+            Settings.removeProvider(provider.id)
+            print("\(provider.name) removed, with its key and model.")
+            exit(0)
+
+        default:
+            fail("unknown subcommand `\(sub)`. Try list, add, key, model or remove.")
+        }
+    }
+
     /// `listen ask` with no question: what is installed, and what Listen would
     /// use.
     ///
@@ -2879,24 +3112,48 @@ enum CLI {
     /// the answer somebody with two copies of the CLI needs least, and the path
     /// is what tells them which one Listen picked.
     private static func agentReport() -> Never {
-        for status in AgentCLI.statuses() {
-            // Padded by hand. `String(format: "%-12@", …)` does not honour the
-            // width for an object argument, so the columns did not line up.
-            let label = status.backend.name.padding(toLength: 12, withPad: " ", startingAt: 0)
+        let all = AgentCLI.statuses()
+        // Padded by hand. `String(format: "%-12@", …)` does not honour the
+        // width for an object argument, so the columns did not line up.
+        //
+        // The width is measured rather than fixed at 12, because an endpoint is
+        // named by whoever configured it: `padding(toLength:)` **truncates** as
+        // well as pads, so a hardcoded number turned "Custom endpoint" into
+        // "Custom endpo" the first time this ran with three backends.
+        let width = all.map(\.name.count).max() ?? 12
+        for status in all {
+            let label = status.name.padding(toLength: width, withPad: " ", startingAt: 0)
             print(label + "  " + status.summary)
             if status.path == nil { log("  " + status.backend.installHint) }
         }
         print("")
-        guard let chosen = AgentCLI.chosen() else {
+        // `choose(from: all)`, not `chosen()`. The latter runs the whole
+        // detection again, which doubled the cost of this report: measured at
+        // 6.1s where one detection is about 3s.
+        guard let chosen = AgentCLI.choose(from: all) else {
             print("No usable agent, so the library cannot be asked anything yet.")
             exit(1)
         }
-        print("Listen would use \(chosen.backend.name).")
+        print("Listen would use \(chosen.name).")
         print("")
-        print("It reaches the library only through `listen mcp`, which means it can")
-        print("read transcripts, people, tags and notes, and can write nothing at all")
-        print("unless you pass --write, which adds notes and tags. Your own agent")
-        print("settings, hooks, plugins and other MCP servers are not loaded.")
+        print("It reaches the library only through the tools `listen mcp` serves, which")
+        print("means it can read transcripts, people, tags and notes, and can write")
+        print("nothing at all unless you pass --write, which adds notes and tags.")
+        if chosen.backend.isCLI {
+            print("Your own agent settings, hooks, plugins and other MCP servers are not")
+            print("loaded.")
+        } else {
+            // The sentence the CLI backends earn by being sandboxed is not the
+            // one an endpoint earns, and printing theirs here would be a claim
+            // about somebody else's server. What is true of this one is where
+            // the words go, which is the only part Listen knows.
+            print("Listen runs the tool loop itself here, so no second program is started")
+            print("and no configuration of yours is read.")
+            if let provider = chosen.provider {
+                print("")
+                print(provider.exposure.sentence)
+            }
+        }
         exit(0)
     }
 

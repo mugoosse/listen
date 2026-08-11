@@ -62,13 +62,37 @@ import Foundation
 enum AgentBackend: String, CaseIterable {
     case claude
     case codex
+    /// An OpenAI-compatible base URL, which is the one backend that is not a
+    /// CLI and the one where Listen runs the tool loop itself. See
+    /// `AgentChat.swift`, which owns everything about it except this case.
+    ///
+    /// **It names a kind, not a server.** Which server is `Provider.id`, on
+    /// `AgentStatus.provider`. This case briefly had a sibling called
+    /// `openrouter`, which was the moment it became clear the enum was being
+    /// asked to enumerate the world: providers are a table now and this stays
+    /// a three-case enum whose raw value is safe to write to disk.
+    case endpoint
 
     var name: String {
         switch self {
-        case .claude: return "Claude Code"
-        case .codex:  return "Codex"
+        case .claude:     return "Claude Code"
+        case .codex:      return "Codex"
+        // Whatever the endpoint is called, which is a preset's name, a typed
+        // name, or the host. "Endpoint" is a word about plumbing and nobody
+        // picks a model from a menu row that says it.
+        // Only ever seen on a status that has no provider, which is a
+        // programming error rather than a state. The real name is
+        // `AgentStatus.name`.
+        case .endpoint:   return "Endpoint"
         }
     }
+
+    /// Whether this backend is a program on disk, which is what `AgentCLI`'s
+    /// three-pass search and everything about child processes applies to.
+    var isCLI: Bool { self == .claude || self == .codex }
+
+    /// The two that run the tool loop in this process, over HTTP.
+    var isEndpoint: Bool { !isCLI }
 
     /// The binary's name on disk, which is also the `rawValue`.
     var command: String { rawValue }
@@ -84,6 +108,9 @@ enum AgentBackend: String, CaseIterable {
                  + "then run `claude` once and sign in."
         case .codex:
             return "Install with `brew install codex`, then run `codex login` once."
+        case .endpoint:
+            return "Add a provider in Settings › Ask. For a model on this Mac, "
+                 + "install Ollama from ollama.com and run `ollama pull qwen3`."
         }
     }
 
@@ -152,7 +179,15 @@ enum AgentCLI {
     private static var shellResolved: [AgentBackend: URL?] = [:]
 
     /// The binary, or nil when it is not installed anywhere we can see.
+    ///
+    /// For the endpoint backend there is nothing to find: the base URL is the
+    /// location, and nil means nobody has typed one. Returning it here is what
+    /// lets `AgentStatus.path == nil` keep its one meaning across all three,
+    /// which is "there is nothing to talk to yet".
     static func locate(_ backend: AgentBackend) -> URL? {
+        // A provider is not located, it is configured. `statuses()` walks
+        // `Settings.providers` directly and never comes through here.
+        guard backend.isCLI else { return nil }
         if let chosen = Settings.agentPath(backend) {
             // An explicit setting wins even when it is wrong, so a broken path
             // shows up as a broken path rather than being silently replaced by
@@ -251,12 +286,42 @@ enum AgentCLI {
 // What is installed, and whether it is signed in
 // ---------------------------------------------------------------------------
 
-/// A model the user can pick, as the CLI names it.
+/// A model the user can pick, as the backend names it.
 struct AgentModel: Equatable {
-    /// What goes after `--model`.
+    /// What goes after `--model`, and what is stored.
     let id: String
     /// What the menu says.
+    ///
+    /// A provider's catalogue carries a human name beside the slug, and using
+    /// it is most of the difference between a readable menu and a list of
+    /// vendor paths: "Claude Opus 5" against `anthropic/claude-opus-5`.
     let name: String
+    /// When the provider published it, for sorting.
+    ///
+    /// **Newest first, never alphabetical.** Sorted by name, the top of
+    /// OpenRouter's 318 tool-capable models is `ai21/jamba`, four `aion-labs`
+    /// entries and five `amazon/nova` ones: twelve rows nobody chose, which is
+    /// what the composer's menu showed until this existed.
+    var created: Int?
+    /// Dollars per million prompt tokens, when the provider prices it.
+    var pricePerMTok: Double?
+    /// The context window, which is the other number worth knowing before
+    /// pointing a model at an hour-long transcript.
+    var context: Int?
+
+    /// One line under the name in the picker: what it costs and what it holds.
+    var detail: String {
+        var parts: [String] = [id]
+        if let pricePerMTok {
+            parts.append(pricePerMTok == 0
+                         ? "free"
+                         : String(format: "$%.2f/Mtok", pricePerMTok))
+        }
+        if let context, context > 0 {
+            parts.append("\(context / 1000)k context")
+        }
+        return parts.joined(separator: "   ")
+    }
 }
 
 /// One backend's answer to "could Listen use you right now?".
@@ -270,18 +335,65 @@ struct AgentStatus {
     let account: String?
     /// What this install offers, beyond whatever it would pick on its own.
     var models: [AgentModel] = []
+    /// It answered, and it refused the credentials it was given.
+    ///
+    /// Only an endpoint reaches this, and it exists because "nothing is there"
+    /// and "it is there and said no" are one URL apart and two entirely
+    /// different things to do about it. Reading that back off the `account`
+    /// prose would be this app parsing its own sentences.
+    var refused = false
+    /// Which server this is, for a `.endpoint` status. Nil for the two CLIs.
+    var provider: Provider?
+
+    /// What identifies this backend everywhere a choice is stored or compared:
+    /// the settings picker, the composer's model menu, `Chat.backend`, and the
+    /// per-backend model preference.
+    ///
+    /// A provider's id for a provider, the enum's raw value for a CLI. One
+    /// string either way, which is what let `Chat.backend` keep its type when
+    /// one endpoint became many.
+    var key: String { provider?.id ?? backend.rawValue }
+
+    /// What to call it on screen.
+    var name: String { provider?.name ?? backend.name }
+
+    /// Whether a question to this backend has to leave the Mac.
+    ///
+    /// The reason this is on the status rather than on the backend: a model
+    /// running under Ollama answers with the Wi-Fi off, so telling somebody on
+    /// that provider that their question "will not get through" is untrue, and
+    /// untrue in the direction that stops them asking. The LAN case counts as
+    /// needing the network, because the interface going down takes the other
+    /// machine with it.
+    var needsNetwork: Bool {
+        guard let provider else { return backend.needsNetwork }
+        return !provider.isLoopback
+    }
 
     var usable: Bool { path != nil && signedIn != false }
 
     /// One line, for a settings row or a CLI report.
+    ///
+    /// The two halves read differently per backend and neither wording works
+    /// for the other. A CLI is installed or not and signed in or not; an
+    /// endpoint is configured or not and answering or not. "Codex is not
+    /// configured" and "Ollama is not installed" are both sentences that send
+    /// somebody to do the wrong thing.
     var summary: String {
-        guard let path else { return "Not installed" }
-        var parts = [version ?? "installed"]
-        parts.append(path.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-        switch signedIn {
-        case true?:  parts.append(account.map { "signed in as \($0)" } ?? "signed in")
-        case false?: parts.append("not signed in")
-        case nil:    parts.append("sign-in unknown")
+        guard let path else {
+            return backend.isCLI ? "Not installed" : "Not configured"
+        }
+        var parts = [version ?? (backend.isCLI ? "installed" : "configured")]
+        parts.append(backend.isCLI
+                     ? path.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+                     : path.absoluteString)
+        switch (signedIn, backend.isCLI) {
+        case (true?, true):   parts.append(account.map { "signed in as \($0)" } ?? "signed in")
+        case (false?, true):  parts.append("not signed in")
+        case (nil, true):     parts.append("sign-in unknown")
+        case (true?, false):  parts.append(account ?? "answering")
+        case (false?, false): parts.append(refused ? "refused the key" : "not answering")
+        case (nil, false):    parts.append("not checked")
         }
         return parts.joined(separator: "   ")
     }
@@ -415,6 +527,10 @@ extension AgentCLI {
         return version.isEmpty ? family.capitalized : "\(family.capitalized) \(version)"
     }
 
+    /// One CLI's answer to "could Listen use you right now?".
+    ///
+    /// Providers do not come through here. They are probed by
+    /// `Provider.probe()` over HTTP, from `statuses()` below.
     static func status(_ backend: AgentBackend) -> AgentStatus {
         guard let path = locate(backend) else {
             return AgentStatus(backend: backend, path: nil, version: nil,
@@ -452,6 +568,11 @@ extension AgentCLI {
                     account = said.replacingOccurrences(of: "Logged in using ", with: "")
                 }
             }
+        case .endpoint:
+            // Unreachable: answered by `probe` at the top of this function,
+            // which learns all three facts from one request. Listed rather than
+            // defaulted so a fourth backend is a compile error here.
+            break
         }
         return AgentStatus(backend: backend, path: path, version: version,
                            signedIn: signedIn, account: account,
@@ -515,12 +636,64 @@ extension AgentCLI {
                     return AgentModel(id: slug,
                                       name: entry["display_name"] as? String ?? slug)
                 }
+        case .endpoint:
+            // Unreachable: `status` answers the endpoint from `probe`, which
+            // reads `/models` in the same request that establishes it is there
+            // at all. Listed rather than defaulted, so adding a fourth backend
+            // is a compile error here rather than an empty menu.
+            return []
         }
     }
 
-    /// Every backend, whether installed or not, in preference order.
+    /// The two CLIs, then every provider the user has added.
+    ///
+    /// The providers are probed **concurrently**, which is not a micro
+    /// optimisation once there can be a dozen of them: each is an HTTP round
+    /// trip with a three second timeout, and one unreachable hosted provider
+    /// would otherwise add its whole timeout to the pane's first draw. The CLIs
+    /// stay sequential because they are process launches sharing a lock.
     static func statuses() -> [AgentStatus] {
-        AgentBackend.preferenceOrder.map(status)
+        // **Says so when the rule is broken, because it has been broken twice.**
+        // The rule is on `chosen()` and in `.agents/notes/agent.md`, and both
+        // times it was reintroduced by code that looked harmless: a settings
+        // row asking which backend is in use. Unconditional rather than behind
+        // `LISTEN_DEBUG`, because this can only print when there is a bug, and
+        // the message is the whole diagnosis.
+        if Thread.isMainThread {
+            let warning = "[Listen] BUG: agent detection ran on the main thread. "
+                + "Use cachedChosen() or choose(from:).\n"
+            FileHandle.standardError.write(Data(warning.utf8))
+        }
+        var out = [status(.claude), status(.codex)]
+
+        let providers = Settings.providers
+        guard !providers.isEmpty else { return out }
+        var probed = [String: AgentStatus]()
+        let group = DispatchGroup()
+        let guard_ = NSLock()
+        for provider in providers {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let status = provider.probe()
+                guard_.lock(); probed[provider.id] = status; guard_.unlock()
+                group.leave()
+            }
+        }
+        // Generous next to the three second per-request timeout, and it is a
+        // backstop rather than a schedule: a hung DNS resolver must not leave
+        // the settings pane saying "Looking" for ever.
+        _ = group.wait(timeout: .now() + 20)
+        guard_.lock(); defer { guard_.unlock() }
+        // The staleness clock is reset here too. Without it the first check
+        // after a full detection finds every provider infinitely old and probes
+        // the lot again, seconds later.
+        lock.lock()
+        for id in probed.keys { probedAt[id] = Date() }
+        lock.unlock()
+        // In the order they were added, not the order they answered, so the
+        // list does not reshuffle itself between draws.
+        out += providers.compactMap { probed[$0.id] }
+        return out
     }
 
     /// The same, off the main thread, and remembered.
@@ -562,8 +735,20 @@ extension AgentCLI {
     /// and "still looking" are different sentences to put on a screen.
     static func cachedChosen() -> AgentStatus? {
         guard let all = cached else { return nil }
-        if let preferred = Settings.agentBackend,
-           let match = all.first(where: { $0.backend == preferred }), match.usable {
+        return choose(from: all)
+    }
+
+    /// The selection rule, over a list somebody already has.
+    ///
+    /// **Pure, and that is the point.** Every other spelling of this question
+    /// runs detection: `chosen()` probes both CLIs and every provider, which is
+    /// about three seconds of process launches and HTTP. A caller that already
+    /// holds a list of statuses, which the settings pane does the moment
+    /// detection finishes, must be able to ask which one wins without paying
+    /// for that again.
+    static func choose(from all: [AgentStatus]) -> AgentStatus? {
+        if let preferred = Settings.agentChoice,
+           let match = all.first(where: { $0.key == preferred }), match.usable {
             return match
         }
         return all.first(where: { $0.usable })
@@ -571,19 +756,110 @@ extension AgentCLI {
 
     /// Run detection once, in the background, unless it has already run.
     static func warmUp(_ completion: @escaping () -> Void = {}) {
-        if cached != nil { completion(); return }
+        if cached != nil { refreshStaleProviders(completion); return }
         statuses { _ in completion() }
+    }
+
+    /// When each provider was last asked what it offers.
+    private static var probedAt: [String: Date] = [:]
+
+    /// How old a provider's answer may get before it is worth asking again.
+    ///
+    /// **Two windows, because the two kinds of provider cost different things
+    /// to ask.** A loopback probe is a millisecond and never leaves the Mac,
+    /// and `ollama pull` is something people do in the middle of a session and
+    /// then expect to see, so two minutes there is generous. A hosted one is a
+    /// round trip to somebody else's server for a catalogue that changes about
+    /// weekly, so an hour is already more often than the data moves.
+    private static func staleAfter(_ provider: Provider) -> TimeInterval {
+        provider.isLoopback ? 120 : 3600
+    }
+
+    /// Re-ask any provider whose answer has gone stale, in the background.
+    ///
+    /// **This is what makes a new model appear without relaunching.** The cache
+    /// had no timestamp and no expiry: it was filled once by `warmUp` and
+    /// otherwise refreshed only by opening Settings › Ask or pressing "Check
+    /// again". That is fine for a CLI, whose aliases do not change, and wrong
+    /// for a provider: Listen sits in the menu bar for weeks, and OpenRouter
+    /// ships models continuously, so the list somebody searched was as old as
+    /// their last launch.
+    ///
+    /// Providers only. The two CLIs are process launches and a login shell, and
+    /// re-running those on a timer is exactly the freeze `statuses(_:)` was
+    /// split up to avoid. What a CLI offers is three aliases that outlive any
+    /// release anyway.
+    ///
+    /// The refresh lands in the cache for the *next* read rather than the
+    /// current one, which is the honest trade: a menu that blocked on the
+    /// network to open would be a worse bug than a menu that is occasionally a
+    /// few minutes behind.
+    static func refreshStaleProviders(_ completion: @escaping () -> Void = {}) {
+        let now = Date()
+        // The defaults read happens outside the lock. `NSLock` is not
+        // reentrant, and holding it across code that could one day take it
+        // again is how a deadlock gets written by somebody who is not looking
+        // for one.
+        let configured = Settings.providers
+        lock.lock()
+        let due = configured.filter { provider in
+            let age = probedAt[provider.id].map { now.timeIntervalSince($0) } ?? .infinity
+            return age >= staleAfter(provider)
+        }
+        lock.unlock()
+        guard !due.isEmpty else { completion(); return }
+
+        DispatchQueue.global(qos: .utility).async {
+            var fresh = [String: AgentStatus]()
+            let group = DispatchGroup()
+            let guard_ = NSLock()
+            for provider in due {
+                group.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    let status = provider.probe()
+                    guard_.lock(); fresh[provider.id] = status; guard_.unlock()
+                    group.leave()
+                }
+            }
+            _ = group.wait(timeout: .now() + 20)
+
+            guard_.lock(); let probed = fresh; guard_.unlock()
+            // Observable on demand, because a background refresh that works and
+            // one that never fires look identical from outside. `LISTEN_DEBUG=1`
+            // is the same switch capture state changes use.
+            if DEBUG {
+                for (id, status) in probed {
+                    FileHandle.standardError.write(Data(
+                        "[Listen] refreshed \(id): \(status.models.count) models\n".utf8))
+                }
+            }
+            lock.lock()
+            for (id, status) in probed {
+                probedAt[id] = Date()
+                if let index = cache?.firstIndex(where: { $0.key == id }) {
+                    cache?[index] = status
+                } else {
+                    cache?.append(status)
+                }
+            }
+            lock.unlock()
+            DispatchQueue.main.async { completion() }
+        }
     }
 
     /// The one Listen would use: the setting when it names an installed and
     /// signed-in backend, otherwise the first that is usable.
+    /// **Runs full detection. Never call this on the main thread.**
+    ///
+    /// Process launches for both CLIs, including three concurrent `claude`
+    /// sessions to resolve what the aliases currently mean, plus an HTTP probe
+    /// per provider with a twenty second ceiling. Measured on this Mac with two
+    /// CLIs and two providers: about three seconds.
+    ///
+    /// `cachedChosen()` is the main thread's version, and `choose(from:)` is
+    /// for anybody who already has the list.
     static func chosen() -> AgentStatus? {
-        let all = statuses()
-        if let preferred = Settings.agentBackend,
-           let match = all.first(where: { $0.backend == preferred }), match.usable {
-            return match
-        }
-        return all.first(where: { $0.usable })
+        choose(from: statuses())
     }
 }
 
@@ -627,6 +903,18 @@ final class AgentRun {
         var costUSD: Double?
         var durationMS: Int?
         var toolCalls: Int
+        /// What the endpoint backend's `usage` reported, summed over the rounds
+        /// of one answer. Nil for the CLIs, which do not break it out.
+        ///
+        /// Parsed and **not drawn**, the same as `costUSD`, but the argument is
+        /// weaker here and worth knowing about: the reason no number appears
+        /// under an answer is that everybody on the CLI backends pays a flat
+        /// monthly price, so a figure would read as a meter on a plan that has
+        /// none. A metered API key genuinely is a meter. Nothing is shown yet
+        /// because tokens are not money without a price list, and Listen has no
+        /// business keeping one.
+        var promptTokens: Int?
+        var completionTokens: Int?
         /// nil on success. Present means the answer is not to be trusted.
         var failure: String?
     }
@@ -638,6 +926,21 @@ final class AgentRun {
         /// A session to continue, so a chat is a chat rather than a series of
         /// unrelated questions.
         var resume: String?
+        /// Which server, for a `.endpoint` question.
+        ///
+        /// Carried rather than looked up from `path`. The lookup version had to
+        /// guess which configured provider a base URL meant, and got it wrong
+        /// as soon as `--to` pointed somewhere that was not the configured one.
+        var provider: Provider?
+        /// The conversation so far, for a backend that has no session to
+        /// resume.
+        ///
+        /// The two mechanisms are exclusive rather than alternative. A CLI owns
+        /// the thread and is handed an id; an endpoint is stateless and is
+        /// handed the messages, every time. `AgentRun` ignores this and
+        /// `AgentChat` ignores `resume`, so a `Question` never has to say which
+        /// kind it is.
+        var history: [Chat.Turn] = []
         /// Notes and tags become writable. Off by default: a question should
         /// not be able to change the library by accident.
         var allowWrites = false
@@ -850,6 +1153,19 @@ final class AgentRun {
                 "-c", "mcp_servers.listen.default_tools_approval_mode=\"approve\"",
                 "-C", workspace.path,
             ]
+            // **Codex does not give an MCP server its own environment.**
+            // Measured, and it is the kind of wrong that reports success:
+            // pointed at a five-recording scratch library, `listen ask --codex`
+            // answered "56", which is the size of the real one. Claude answered
+            // 5 from the identical setup, so it forwards and Codex does not.
+            //
+            // Every measurement of Codex taken against a scratch library before
+            // this was therefore reading the wrong library and looked fine. It
+            // matters to users only if they set the variable, and it matters to
+            // anybody testing this app every single time.
+            if let library = ProcessInfo.processInfo.environment["LISTEN_LIBRARY"] {
+                args += ["-c", "mcp_servers.listen.env.LISTEN_LIBRARY=\"\(library)\""]
+            }
             if let model = question.model { args += ["--model", model] }
             // Codex has no --append-system-prompt, so the brief rides in front
             // of the question. On a resumed thread it is already in the
@@ -858,6 +1174,14 @@ final class AgentRun {
                         ? brief(allowWrites: question.allowWrites) + "\n\n---\n\n" + question.text
                         : question.text)
             return args
+
+        case .endpoint:
+            // There is no command. The equivalent thing to look at is the POST
+            // body, which `AgentChat.requestBody` builds and
+            // `listen ask --print-request` prints. Empty rather than a
+            // `fatalError`, because the one caller is a debugging flag and it
+            // says so itself.
+            return []
         }
     }
 
@@ -1142,7 +1466,10 @@ final class AgentRun {
     /// A whole argument object is noise in a chat transcript and a bare tool
     /// name says nothing. The interesting field is nearly always the thing
     /// being looked for, so the first one present wins.
-    private static func detail(_ input: [String: Any]?) -> String {
+    /// Internal rather than private: `AgentChat` runs its own tool loop and has
+    /// exactly the same line to draw beside a call, and two copies of this rule
+    /// would be two answers to "what is worth showing".
+    static func detail(_ input: [String: Any]?) -> String {
         guard let input else { return "" }
         for key in ["query", "recording_id", "note", "person", "name", "tags"] {
             if let value = input[key] as? String, !value.isEmpty { return value }
@@ -1429,41 +1756,57 @@ extension Settings {
         "agentPath_" + backend.rawValue
     }
 
-    /// Which CLI to use, or nil to take whichever is installed and signed in.
+    /// Which backend to use, by `AgentStatus.key`, or nil to take whichever is
+    /// ready.
     ///
-    /// Absent by default rather than defaulting to Claude, so somebody who
-    /// installs Codex later gets a working feature without having to find a
-    /// setting they were never shown.
-    static var agentBackend: AgentBackend? {
-        get { AgentBackend(rawValue: defaults.string(forKey: agentBackendKey) ?? "") }
+    /// A string rather than an `AgentBackend`, because the thing being chosen
+    /// is no longer always an enum case: `claude` and `codex` are, and every
+    /// provider is its id. Absent by default rather than defaulting to Claude,
+    /// so somebody who adds a provider later gets a working feature without
+    /// having to find a setting they were never shown.
+    ///
+    /// **A choice that no longer exists is ignored rather than cleared.**
+    /// `cachedChosen` simply finds no match and falls through to the first
+    /// usable backend, so removing a provider and adding it back finds the same
+    /// preference waiting.
+    static var agentChoice: String? {
+        get {
+            let raw = defaults.string(forKey: agentBackendKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return raw.isEmpty ? nil : raw
+        }
         set {
-            if let newValue { defaults.set(newValue.rawValue, forKey: agentBackendKey) }
+            if let newValue, !newValue.isEmpty { defaults.set(newValue, forKey: agentBackendKey) }
             else { defaults.removeObject(forKey: agentBackendKey) }
         }
     }
 
-    private static func agentModelKey(_ backend: AgentBackend) -> String {
-        "agentModel_" + backend.rawValue
-    }
+    private static func agentModelKey(_ key: String) -> String { "agentModel_" + key }
 
-    /// The model to ask for, or nil to let the CLI choose.
+    /// The model to ask for, or nil to let the backend choose.
     ///
-    /// Per backend, so switching between them in the composer's menu and back
-    /// remembers what each was set to rather than carrying a Codex slug over to
-    /// Claude, which would be rejected.
-    static func agentModel(_ backend: AgentBackend) -> String? {
-        let stored = defaults.string(forKey: agentModelKey(backend))?
+    /// Keyed by `AgentStatus.key`, so switching between backends in the
+    /// composer's menu and back remembers what each was set to rather than
+    /// carrying a Codex slug over to Claude, or an Ollama tag over to
+    /// OpenRouter, either of which would be rejected.
+    static func agentModel(_ key: String) -> String? {
+        let stored = defaults.string(forKey: agentModelKey(key))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let stored, !stored.isEmpty else { return nil }
         return stored
     }
 
-    static func setAgentModel(_ backend: AgentBackend, _ model: String?) {
+    static func setAgentModel(_ key: String, _ model: String?) {
         if let model, !model.isEmpty {
-            defaults.set(model, forKey: agentModelKey(backend))
+            defaults.set(model, forKey: agentModelKey(key))
         } else {
-            defaults.removeObject(forKey: agentModelKey(backend))
+            defaults.removeObject(forKey: agentModelKey(key))
         }
+    }
+
+    /// The same, for a backend rather than a key.
+    static func agentModel(_ backend: AgentBackend) -> String? {
+        agentModel(backend.rawValue)
     }
 
     /// An explicit path, for an install in a place nothing can guess.

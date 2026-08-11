@@ -119,13 +119,32 @@ enum MCP {
 
     // MARK: - Tools
 
-    private static var tools: [[String: Any]] {
+    /// The tool list, and `call` below, are internal rather than private
+    /// because stdio is no longer the only transport onto them.
+    ///
+    /// `serve()` is what Claude and Codex talk to, over a pipe, in a second
+    /// process. An OpenAI-compatible endpoint has no MCP client at all, so
+    /// `AgentChat` runs the tool loop itself and calls straight into `call`.
+    /// Both routes therefore reach the library through the same function, which
+    /// is the property worth protecting: two transports that resolved a
+    /// recording differently would be a bug nobody could reproduce from one
+    /// side.
+    static var tools: [[String: Any]] {
         [
             [
                 "name": "list_recordings",
                 "description": "List recordings, newest first. Returns metadata only. "
                     + "Filters combine with AND, so person plus a date range is the "
-                    + "cheapest way to narrow a library before asking for transcripts.",
+                    + "cheapest way to narrow a library before asking for transcripts. "
+                    // Measured, and it is worth the sentence. Asked "how many
+                    // recordings are in the library?", gemma4 called nothing and
+                    // answered "I cannot provide the total number, the available
+                    // tools allow…", because nothing said the count was already
+                    // in the reply. `pagination.total` has always been there.
+                    // Naming it turns a refusal into a one-call answer, and the
+                    // smaller the model the more it needs saying.
+                    + "**`pagination.total` is how many recordings match**, whatever "
+                    + "`limit` you asked for, so counting needs one call and no paging.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
@@ -374,7 +393,41 @@ enum MCP {
         ]
     }
 
-    private static func call(_ name: String, _ args: [String: Any]) throws -> String {
+    /// The same tools, in the shape OpenAI's function calling wants them.
+    ///
+    /// A mechanical translation, and that is the whole reason this feature is
+    /// small: `inputSchema` is already JSON Schema, so there is nothing to
+    /// convert and no second description of any tool to keep in step with this
+    /// one. A tool documented here is documented everywhere.
+    ///
+    /// The caller passes which names it will allow rather than a `allowWrites`
+    /// flag, because the allowlist is the agent's decision and lives on
+    /// `AgentRun.tools(allowWrites:)`. This file knows what the tools *are*;
+    /// it has never known who is permitted to call them.
+    static func toolSchemas(_ allowed: Set<String>) -> [[String: Any]] {
+        tools.compactMap { tool in
+            guard let name = tool["name"] as? String, allowed.contains(name) else {
+                return nil
+            }
+            return [
+                "type": "function",
+                "function": [
+                    "name": name,
+                    "description": tool["description"] ?? "",
+                    "parameters": tool["inputSchema"]
+                        ?? ["type": "object", "properties": [:] as [String: Any]],
+                ] as [String: Any],
+            ]
+        }
+    }
+
+    /// Run one tool and return what it would have sent back over the wire.
+    ///
+    /// Synchronous, and it reads the library off disk: `Recording.all()` walks
+    /// every folder and `search_transcripts` reads every transcript. Over stdio
+    /// that cost lands in a second process and nobody notices. In-process it is
+    /// the caller's job to be off the main thread, which `AgentChat` is.
+    static func call(_ name: String, _ args: [String: Any]) throws -> String {
         switch name {
         case "list_recordings":
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)

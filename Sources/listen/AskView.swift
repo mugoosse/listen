@@ -112,7 +112,7 @@ final class AskView: NSView {
     /// both, which `persist` already handles by adding to `recordings` rather
     /// than replacing it.
     private var pinned = false
-    private var run: AgentRun?
+    private var run: AgentSession?
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
 
@@ -402,8 +402,7 @@ final class AskView: NSView {
         // Empty rather than nil. An SF Symbol carries its own description, so
         // nil leaves the chevron announcing itself and the button read as
         // "Claude Code, go down".
-        modelButton.image = NSImage(systemSymbolName: "chevron.down",
-                                    accessibilityDescription: "")
+        modelButton.image = Self.modelChevron
         modelButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
         modelButton.target = self
         modelButton.action = #selector(chooseModel)
@@ -429,22 +428,63 @@ final class AskView: NSView {
     /// truer to how the preferences are stored and worse to use: nobody thinks
     /// "Codex, and within Codex, Sol".
     @objc private func chooseModel() {
+        // **Opening the menu is the moment freshness matters**, and it is not
+        // covered by `updateStatus`, which is event-driven: an app left idle
+        // for a week and then clicked straight into this menu would build it
+        // from a week-old cache. This lands for the next open rather than this
+        // one, which is the same trade made there, and it is why the check is
+        // in both places rather than only the tidier one.
+        AgentCLI.refreshStaleProviders { [weak self] in self?.updateModelButton() }
+
         let menu = NSMenu()
         for status in AgentCLI.cached ?? [] {
             guard status.usable else { continue }
-            let header = NSMenuItem(title: status.backend.name, action: nil, keyEquivalent: "")
+            let header = NSMenuItem(title: status.name, action: nil, keyEquivalent: "")
             header.isEnabled = false
             menu.addItem(header)
 
-            let chosen = AgentCLI.cachedChosen()?.backend == status.backend
-            let current = Settings.agentModel(status.backend)
-            add(to: menu, status.backend, model: nil,
+            let chosen = AgentCLI.cachedChosen()?.key == status.key
+            let current = Settings.agentModel(status.key)
+            add(to: menu, status.key, model: nil,
                 title: "Default", on: chosen && current == nil)
-            for model in status.models {
-                add(to: menu, status.backend, model: model.id,
+
+            // **A short list is shown whole; a long one becomes recents.**
+            // Ollama with what you have pulled, and Claude's three aliases, are
+            // menus already. A provider offering hundreds is a catalogue, and a
+            // menu that shows the first twelve of one is twelve rows nobody
+            // chose plus no way to reach the rest.
+            let offered: [AgentModel]
+            if status.models.count <= Settings.modelsShownInFull {
+                offered = status.models
+            } else {
+                var recent = Settings.recentModels(status.key)
+                // Whatever is in use belongs in the menu whether or not it has
+                // been used since this list existed, or switching away from it
+                // would be a one-way door.
+                if let current, !recent.contains(current) { recent.insert(current, at: 0) }
+                offered = recent.compactMap { id in
+                    status.models.first { $0.id == id }
+                        // A model that is no longer offered, or was typed by
+                        // hand, still shows: it is what the user picked, and
+                        // dropping it silently would look like the setting had
+                        // been lost.
+                        ?? (id == current ? AgentModel(id: id, name: id) : nil)
+                }
+            }
+            for model in offered {
+                add(to: menu, status.key, model: model.id,
                     title: model.name, on: chosen && current == model.id)
             }
-            if status.backend != (AgentCLI.cached ?? []).last(where: { $0.usable })?.backend {
+
+            if status.models.count > Settings.modelsShownInFull {
+                let browse = NSMenuItem(title: "Choose a model…",
+                                        action: #selector(browseModels(_:)), keyEquivalent: "")
+                browse.target = self
+                browse.indentationLevel = 1
+                browse.representedObject = status.key
+                menu.addItem(browse)
+            }
+            if status.key != (AgentCLI.cached ?? []).last(where: { $0.usable })?.key {
                 menu.addItem(.separator())
             }
         }
@@ -457,7 +497,19 @@ final class AskView: NSView {
                    at: NSPoint(x: 0, y: modelButton.bounds.height + 4), in: modelButton)
     }
 
-    private func add(to menu: NSMenu, _ backend: AgentBackend, model: String?,
+    /// How many of a provider's models the composer's menu will show.
+    static let modelsInMenu = 12
+
+    /// The chevron on the model control, kept so the loading state can take it
+    /// away and put it back.
+    ///
+    /// Empty description rather than nil: an SF Symbol carries its own, so nil
+    /// leaves the chevron announcing itself and the button reads as "Claude
+    /// Code, go down".
+    static let modelChevron = NSImage(systemSymbolName: "chevron.down",
+                                      accessibilityDescription: "")
+
+    private func add(to menu: NSMenu, _ key: String, model: String?,
                      title: String, on: Bool) {
         let item = NSMenuItem(title: title, action: #selector(pickModel(_:)), keyEquivalent: "")
         item.target = self
@@ -465,34 +517,76 @@ final class AskView: NSView {
         // Indented under the backend heading, which is what makes the heading
         // read as a heading rather than as a disabled row.
         item.indentationLevel = 1
-        item.representedObject = [backend.rawValue, model as Any] as [Any]
+        item.representedObject = [key, model as Any] as [Any]
         menu.addItem(item)
     }
 
     @objc private func pickModel(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [Any],
-              let raw = pair.first as? String,
-              let backend = AgentBackend(rawValue: raw) else { return }
-        Settings.agentBackend = backend
-        Settings.setAgentModel(backend, pair.count > 1 ? pair[1] as? String : nil)
+              let key = pair.first as? String else { return }
+        use(key, model: pair.count > 1 ? pair[1] as? String : nil)
+    }
+
+    /// The whole catalogue, searchable, for the providers that have one.
+    @objc private func browseModels(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String,
+              let status = (AgentCLI.cached ?? []).first(where: { $0.key == key }) else { return }
+        ModelPicker.present(models: status.models, current: Settings.agentModel(key),
+                            over: window) { [weak self] id in
+            self?.use(key, model: id)
+        }
+    }
+
+    /// Switch to a backend and a model, and remember that the model was used.
+    private func use(_ key: String, model: String?) {
+        Settings.agentChoice = key
+        Settings.setAgentModel(key, model)
+        // Recorded on the choice rather than on a successful answer: a model
+        // that turned out not to support tools is still one that was reached
+        // for, and hiding it would make the failure awkward to retry.
+        Settings.noteModelUsed(key, model)
         updateStatus()
     }
 
     /// What the composer's chooser says right now.
     private func updateModelButton() {
+        // **"Still looking" and "nothing usable" are different states and only
+        // one of them is worth a word.** Both used to hide this control and put
+        // a line of grey text under the composer instead, which is the wrong
+        // place twice over: it is a long way from the thing it describes, and
+        // it made the bar change height a second after launch for everybody
+        // with a working agent.
+        //
+        // Detection not finished is a *loading* state, and the control that is
+        // about to say which model is the one that should say it is finding
+        // out. Nothing usable stays silent here, because `SetupNotice` is
+        // already up saying it properly.
+        guard AgentCLI.cached != nil else {
+            modelButton.isHidden = false
+            modelButton.isEnabled = false
+            modelButton.title = "Loading…"
+            // No chevron while there is nothing to pop up. A disclosure on a
+            // control that cannot be pressed is an offer the app cannot keep.
+            modelButton.image = nil
+            modelButton.setAccessibilityLabel("Looking for an agent")
+            composer.needsLayout = true
+            return
+        }
         guard let chosen = AgentCLI.cachedChosen() else {
             modelButton.isHidden = true
             return
         }
         modelButton.isHidden = false
-        let model = Settings.agentModel(chosen.backend)
+        modelButton.isEnabled = true
+        modelButton.image = Self.modelChevron
+        let model = Settings.agentModel(chosen.key)
         let name = chosen.models.first { $0.id == model }?.name
         // The backend's name when nothing is chosen, the model's when one is.
         // Never both: the row is 11 point text in a 36 point well, and "Claude
         // Code · Sonnet" is the kind of label that makes a composer look busy.
-        modelButton.title = name ?? chosen.backend.name
+        modelButton.title = name ?? chosen.name
         modelButton.setAccessibilityLabel(
-            "Agent and model: \(chosen.backend.name), \(name ?? "default")")
+            "Agent and model: \(chosen.name), \(name ?? "default")")
         composer.needsLayout = true
     }
 
@@ -770,7 +864,13 @@ final class AskView: NSView {
             // The line rather than the card, because "still looking" is not yet
             // bad news. Putting the card up here and taking it down a second
             // later would flash a setup notice at everybody who has an agent.
-            say("Looking for Claude Code or Codex…")
+            // Not "Claude Code or Codex" any more: naming two of three backends
+            // in the line that appears while all three are being looked for
+            // reads as the third one not being supported.
+            // Nothing here. The composer's model control says "Loading…"
+            // instead, which is where somebody is already looking when they
+            // want to know what will answer.
+            say("")
             notice.isHidden = true
             setAskable(false)
             // **Reported here too, and this branch is the one that runs first.**
@@ -788,7 +888,7 @@ final class AskView: NSView {
             AgentCLI.warmUp { [weak self] in self?.updateStatus() }
             return
         }
-        guard AgentCLI.cachedChosen() != nil else {
+        guard let chosen = AgentCLI.cachedChosen() else {
             // The card says all of it, so the line under the composer stays
             // empty: two messages about one problem, six points apart, and the
             // small grey one is the one nobody reads.
@@ -999,9 +1099,9 @@ final class AskView: NSView {
         // A backend change invalidates the session: a Codex thread id means
         // nothing to Claude, and resuming with one is an error rather than a
         // fresh conversation.
-        if chat.backend != chosen.backend.rawValue {
+        if chat.backend != chosen.key {
             chat.session = nil
-            chat.backend = chosen.backend.rawValue
+            chat.backend = chosen.key
         }
 
         append(Chat.Turn(who: Chat.you, text: text, at: Metadata.iso(Date())))
@@ -1043,13 +1143,14 @@ final class AskView: NSView {
         }
         let question = AgentRun.Question(
             text: scoped, backend: backend, path: path, resume: resuming,
+            provider: status.provider, history: history,
             // Writes are on because "write this up as a note" is a thing to ask
             // a meeting assistant, and refusing it would mean the Save button
             // is the only route to something the agent could do itself.
-            allowWrites: true, model: Settings.agentModel(backend), streaming: true)
+            allowWrites: true, model: Settings.agentModel(status.key), streaming: true)
 
         var wroteAnything = false
-        let run = AgentRun(question) { [weak self] event in
+        let run = question.session { [weak self] event in
             guard let self, let answer = self.answering else { return }
             switch event {
             case .started(let session):
@@ -1080,7 +1181,7 @@ final class AskView: NSView {
                 if outcome.failure != nil, resuming != nil, !wroteAnything {
                     self.chat.session = nil
                     answer.reset()
-                    self.start(text, backend: backend, path: path, resuming: nil)
+                    self.start(text, status: status, path: path, resuming: nil)
                     return
                 }
                 self.finish(outcome, answer)
@@ -1630,22 +1731,48 @@ private final class SetupNotice: NSView {
     /// whenever both are true. `usable` treats the two the same, but they are
     /// one command apart and the wrong sentence sends somebody to install
     /// something they already have.
+    /// **Two kinds of "there but not usable", and they are not one sentence.**
+    /// A CLI that was never signed into is one command away, and naming that
+    /// command is the whole value of this card. An endpoint that is not
+    /// answering is a server to start or a URL to correct, and `refused` is
+    /// what tells those apart without this card parsing prose meant for a
+    /// settings row.
+    ///
+    /// The signed-out CLIs win when both kinds are present, because that is the
+    /// one with a command in it.
     func show(_ statuses: [AgentStatus]) {
         isHidden = false
         let out = statuses.filter { $0.path != nil && $0.signedIn == false }
         guard !out.isEmpty else {
-            heading.stringValue = "Ask needs Claude Code or Codex"
-            say("Neither is installed on this Mac. The model is yours and so is "
-                + "the subscription: there is no Listen account and no key to "
-                + "paste.\n\nAgent settings has the command for each, ready to copy.")
+            heading.stringValue = "Ask needs an agent"
+            say("Neither Claude Code nor Codex is installed, and no model endpoint "
+                + "is set up. A CLI answers on a subscription you already have. An "
+                + "endpoint can be a model running on this Mac, through Ollama, "
+                + "which needs no account at all.\n\n"
+                + "Agent settings has both.")
             return
         }
-        let names = out.map(\.backend.name)
-        heading.stringValue = names.joined(separator: " and ")
-            + (out.count == 1 ? " is" : " are") + " installed but not signed in"
-        say("Run " + out.map { "`\($0.backend.signInCommand)`" }
-                .joined(separator: " or ")
-            + " in a terminal, then check again.")
+        let signedOut = out.filter { $0.backend.isCLI }
+        guard signedOut.isEmpty else {
+            heading.stringValue = signedOut.map(\.name).joined(separator: " and ")
+                + (signedOut.count == 1 ? " is" : " are") + " installed but not signed in"
+            say("Run " + signedOut.compactMap { status in
+                    status.backend.signInCommand.map { "`\($0)`" }
+                }.joined(separator: " or ")
+                + " in a terminal, then check again.")
+            return
+        }
+        // Only the endpoint is left, and it is configured and silent.
+        let endpoint = out[0]
+        heading.stringValue = "\(endpoint.name) is not answering"
+        if endpoint.refused {
+            say("It is there, and it refused the key. Settings › Ask is where to "
+                + "change it.")
+        } else {
+            say("Nothing answered at `\(endpoint.path?.absoluteString ?? "the base URL")`. "
+                + "Start the server, with `ollama serve` or whatever runs yours, then "
+                + "check again.")
+        }
     }
 
     /// The app's own renderer, for the one thing the copy needs it for: a

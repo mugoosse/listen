@@ -176,6 +176,42 @@ if [ "$PUBLISH" -eq 1 ]; then
             exit 1
         fi
     fi
+
+    # The provisioning profile, which is now load-bearing and was not before.
+    #
+    # It is what lets codesign accept the restricted iCloud entitlements. An
+    # expired one fails at signing, which is loud and fine. The case worth
+    # checking here is subtler: a profile that signs perfectly well and no
+    # longer names the container, because the App ID was edited in the portal.
+    # That ships an app whose sync fails on other people's Macs for a reason
+    # nothing local reproduces.
+    PROFILE="$ROOT/Provisioning/Listen_Developer_ID.provisionprofile"
+    if [ ! -f "$PROFILE" ]; then
+        echo "error: $PROFILE is missing, so the build cannot carry the" >&2
+        echo "       iCloud entitlements. See Provisioning/README.md." >&2
+        exit 1
+    fi
+    DECODED=$(security cms -D -i "$PROFILE" 2>/dev/null)
+    EXPIRES=$(printf '%s' "$DECODED" | plutil -extract ExpirationDate raw - 2>/dev/null)
+    if [ -n "$EXPIRES" ]; then
+        # Both are ISO 8601 in UTC, so they sort lexically. Compared with sort
+        # rather than with `[ a \< b ]`, which is a bash extension that POSIX
+        # test does not define and which this script's #!/bin/sh should not
+        # rely on.
+        NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        EARLIEST=$(printf '%s\n%s\n' "$EXPIRES" "$NOW" | sort | head -1)
+        if [ "$EARLIEST" = "$EXPIRES" ]; then
+            echo "error: the Developer ID profile expired on $EXPIRES." >&2
+            echo "       Regenerate it in the portal and replace the file." >&2
+            exit 1
+        fi
+    fi
+    if ! printf '%s' "$DECODED" | grep -q "iCloud.eu.jacarandalabs.listen"; then
+        echo "error: the Developer ID profile does not name the CloudKit" >&2
+        echo "       container. An App ID with iCloud enabled and no container" >&2
+        echo "       selected produces exactly this, and it looks fine." >&2
+        exit 1
+    fi
 fi
 
 # --- build -----------------------------------------------------------------

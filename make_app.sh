@@ -181,11 +181,62 @@ if [ -z "$SIGN_ID" ]; then
         | awk -F'"' '/Apple Development/ {print $2; exit}')
 fi
 
+# Which CloudKit container this build talks to, decided here because it is a
+# property of the signature and not a setting the app can change.
+#
+#   production   (default)  Developer ID + the Developer ID profile. What ships.
+#   development             Apple Development + the Mac Development profile,
+#                           for the scratch libraries Phase 3 develops against.
+#
+# A Developer ID build can only ever reach Production, so verifying against
+# Development proves nothing about the configuration that goes out. That is why
+# this is an explicit mode rather than something inferred from whichever
+# certificate happened to be found.
+ENTITLEMENTS="$ROOT/Listen.entitlements"
+PROFILE="$ROOT/Provisioning/Listen_Developer_ID.provisionprofile"
+if [ "${LISTEN_CLOUDKIT_ENV:-production}" = "development" ]; then
+    PROFILE="$ROOT/Provisioning/Listen_Mac_Development.provisionprofile"
+    # Derived, never a second file in the repo. The two differ in exactly two
+    # values and everything else has to stay identical, so a committed copy is
+    # a copy that eventually disagrees with the original about something that
+    # matters and says nothing when it does.
+    ENTITLEMENTS="$ROOT/.xcbuild/Listen.dev.entitlements"
+    mkdir -p "$(dirname "$ENTITLEMENTS")"
+    cp "$ROOT/Listen.entitlements" "$ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c \
+        "Set :com.apple.developer.icloud-container-environment Development" \
+        "$ENTITLEMENTS" >/dev/null
+    /usr/libexec/PlistBuddy -c \
+        "Set :com.apple.developer.aps-environment development" \
+        "$ENTITLEMENTS" >/dev/null
+    # Overriding SIGN_ID rather than LISTEN_SIGN_ID, because the preference
+    # order above has already run and picked Developer ID. A development
+    # container is only reachable by a development signature, so the two have
+    # to move together or the build claims an environment its certificate
+    # cannot enter.
+    if [ -z "${LISTEN_SIGN_ID:-}" ]; then
+        SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
+            | awk -F'"' '/Apple Development/ {print $2; exit}')
+        [ -n "$SIGN_ID" ] || { echo "no Apple Development certificate" >&2; exit 1; }
+    fi
+fi
+
+# The profile is what lets codesign accept the restricted iCloud entitlements
+# at all, and it has to be inside Contents/ before the outer signature, because
+# that signature seals whatever the bundle holds. Copied rather than referenced:
+# the app has to carry it to every Mac it runs on.
+if [ -f "$PROFILE" ]; then
+    cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+else
+    echo "warning: $PROFILE is missing, so the iCloud entitlements have" >&2
+    echo "         nothing vouching for them and codesign will refuse them." >&2
+fi
+
 # The Hardened Runtime is required for notarization and harmless without it,
 # so it is always on. It is why the entitlements file exists: without the
 # audio-input entitlement the runtime blocks the microphone.
 COMMON="--force --timestamp --options runtime \
-        --entitlements $ROOT/Listen.entitlements --identifier com.mgo.listen"
+        --entitlements $ENTITLEMENTS --identifier com.mgo.listen"
 
 # codesign, with its one routine line hidden and every other failure fatal.
 #

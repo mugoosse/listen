@@ -33,6 +33,48 @@
             <key>IsIncoming</key>
             <false/>
             <key>Host</key>
+            <string>*.apple-cloudkit.com</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>Syncing your library between your own devices, through your own iCloud account. Everything Listen puts there is sealed with a key that never leaves your devices, so Apple stores it and cannot read it.</string>
+            <key>DenyConsequences</key>
+            <string>Your devices stop seeing each other's recordings and notes. Nothing already on this Mac is lost or changed.</string>
+        </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>*.icloud.com</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>Reaching your iCloud account, and asking macOS whether you are signed into one.</string>
+            <key>DenyConsequences</key>
+            <string>The same as above: sync stops and everything local keeps working.</string>
+        </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>*.push.apple.com</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>How another of your devices tells this one that something changed. It carries no content of its own, only the fact that there is something to fetch.</string>
+            <key>DenyConsequences</key>
+            <string>Sync still works but only when Listen next looks, rather than within seconds of a change.</string>
+        </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
             <string>huggingface.co</string>
             <key>NetworkProtocol</key>
             <string>TCP</string>

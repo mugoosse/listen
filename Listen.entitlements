@@ -16,5 +16,46 @@
          Runtime, which prompted correctly from the same code. -->
     <key>com.apple.security.personal-information.calendars</key>
     <true/>
+
+    <!-- CloudKit, from here down.
+
+         These are *restricted* entitlements: unlike the two above, codesign
+         will not accept them on a claim alone. A provisioning profile has to
+         vouch for each one, which is why `Provisioning/` exists and why
+         `make_app.sh` embeds a profile before it signs. Developer ID plus
+         Hardened Runtime plus notarization with no profile, which is how this
+         app was built until now, is exactly the configuration that cannot
+         carry them. -->
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudKit</string>
+    </array>
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.eu.jacarandalabs.listen</string>
+    </array>
+
+    <!-- Which of the two containers this build talks to, and it is permanent
+         per build rather than a runtime choice. Production here; the
+         development file beside this one says Development, and `make_app.sh`
+         picks between them on LISTEN_CLOUDKIT_ENV. A Developer ID build can
+         only ever reach Production, so this file and that signature agree by
+         construction. -->
+    <key>com.apple.developer.icloud-container-environment</key>
+    <string>Production</string>
+
+    <!-- CKSyncEngine learns that another device wrote through a silent push,
+         so without this the only sync is the one somebody asks for. -->
+    <key>com.apple.developer.aps-environment</key>
+    <string>production</string>
+
+    <!-- The pairing key lives in the iCloud Keychain so a second Mac needs
+         nothing typed. Both apps have to name the same group to see the same
+         item, and they have different bundle identifiers, so the group is
+         named after the team rather than after either app. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>BUZ45YDWYN.eu.jacarandalabs.listen.shared</string>
+    </array>
 </dict>
 </plist>

@@ -92,7 +92,14 @@ enum SyncCLI {
     private static func status() -> Never {
         let store = SyncCLI.keyStore
         print("library:     \(library.root.path)")
-        print("key:         \(store.load() == nil ? "none yet" : "present")")
+        // Both stores, because during the migration the key can be in either
+        // and "none yet" while it sits in a file is a lie that sends somebody
+        // hunting for a pairing problem they do not have.
+        let inFile = store.load() != nil
+        let inCloud = KeyStore.shared.load() != nil
+        print("key:         " + (inFile && inCloud ? "beside the library, and in iCloud Keychain"
+                                 : inFile ? "beside the library only, not yet in iCloud Keychain"
+                                 : inCloud ? "from iCloud Keychain" : "none yet"))
         print("environment: \(CloudAccount.environment)")
         print("container:   \(CloudAccount.containerID)")
         let semaphore = DispatchSemaphore(value: 0)

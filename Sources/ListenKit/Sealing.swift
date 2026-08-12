@@ -121,7 +121,16 @@ public struct KeyStore: Sendable {
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
         ]
-        if synchronizable { query[kSecAttrSynchronizable as String] = true }
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = true
+            // **macOS defaults to the legacy file-based keychain**, which has
+            // no iCloud Keychain and no access groups. Without this the item is
+            // written to a keychain that cannot sync, `SecItemAdd` reports
+            // success, and the key simply never arrives on the second Mac: a
+            // failure with no error anywhere, on the one path whose whole
+            // purpose is that nothing has to be typed.
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
@@ -137,7 +146,10 @@ public struct KeyStore: Sendable {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if synchronizable { base[kSecAttrSynchronizable as String] = true }
+        if synchronizable {
+            base[kSecAttrSynchronizable as String] = true
+            base[kSecUseDataProtectionKeychain as String] = true
+        }
         SecItemDelete(base as CFDictionary)
         var add = base
         add[kSecValueData as String] = data
@@ -155,7 +167,10 @@ public struct KeyStore: Sendable {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if synchronizable { query[kSecAttrSynchronizable as String] = true }
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = true
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
         SecItemDelete(query as CFDictionary)
     }
 }

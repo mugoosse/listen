@@ -74,6 +74,37 @@ final class DetailView: NSView {
     private let playerNote = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let scroll = NSScrollView()
+
+    /// The transcript's margins, which belong to the document and not to the
+    /// scroll view around it.
+    ///
+    /// **An overlay scroller rides its own scroll view's edge, so a scroll view
+    /// inset from the pane hangs its scroller in mid air.** This one was inset
+    /// 20 on both sides and its scroller came out 23 points short of the
+    /// window, floating over the transcript rather than sitting at the edge of
+    /// it, which is where every Mac app that scrolls a document puts one. The
+    /// scroll view is flush with the pane now, and the margin it was holding is
+    /// here instead, along with the 20 points the document was narrower than
+    /// the scroll view by and the stack's own padding. The text does not move:
+    /// 20 + 4 on the left and 20 + 20 + 16 on the right are what these two
+    /// numbers add up to.
+    ///
+    /// Left is 24, which is where every heading on this page starts. Right is
+    /// 56: the same 24 of margin plus a 32 point gutter, so a line of dialogue
+    /// never runs under the scroller. Top is 6 rather than 16 because the player
+    /// card is directly above and the scroll view's own gap already separates
+    /// them, so 16 was a third margin stacked on two others.
+    private static let transcriptInsets = NSEdgeInsets(top: 6, left: 24,
+                                                       bottom: 40, right: 56)
+    /// What every row in the stack gives back to `transcriptInsets`.
+    ///
+    /// `NSStackView` lays its arranged views out inside `edgeInsets` but does
+    /// not size them, so each row states its own width and the two have to
+    /// agree. Derived rather than written out, because they came apart once
+    /// already: the insets moved and three constants elsewhere did not.
+    private static var transcriptSides: CGFloat {
+        transcriptInsets.left + transcriptInsets.right
+    }
     private let empty = NSTextField(labelWithString: "")
 
     /// The meeting being read, drawn while it happens. Replaces the sentence
@@ -173,15 +204,33 @@ final class DetailView: NSView {
     /// The drawer overlays rather than pushes, which is what keeps the page's
     /// layout and scroll position intact. The cost is that the last lines of a
     /// transcript sit underneath it: not clipped, but unreachable, because the
-    /// scroll had nothing telling it there is furniture over its floor. A
-    /// content inset is the difference between covering a view and stealing
-    /// part of it.
+    /// scroll had nothing telling it there is furniture over its floor.
+    ///
+    /// **Room at the end of the document, not a content inset.** Both leave the
+    /// last turn clear of the composer, and they differ in where the scroller
+    /// ends: the scroller is laid out inside the content area, so any bottom
+    /// content inset shortens its track by the same amount. With the composer up
+    /// that stopped the transcript's track 140 points above the window's floor,
+    /// with nothing under it, which reads as a scroller that has run out of
+    /// window rather than one that has run out of document. A spacer at the end
+    /// of the stack moves only the end of the document: the track runs the whole
+    /// height of the pane and the knob reaches the floor.
+    ///
+    /// Nothing else changes. Content passed behind the drawer while scrolling
+    /// either way, because a content inset limits how far a document may go, not
+    /// what may be drawn over it, and the last turn ends up in the same place:
+    /// `RecordButton.clearance` plus this, under the stack's own bottom inset.
+    ///
+    /// Kept in a field because the transcript is rebuilt from its turns and the
+    /// tail is built with it, so the spacer has to be told again each time.
+    private var drawerCover: CGFloat = 0
+    /// The spacer at the end of the transcript, which is the room above.
+    private var tailHeight: NSLayoutConstraint?
+
     func setBottomInset(_ points: CGFloat) {
-        guard abs(scroll.contentInsets.bottom - points) > 0.5 else { return }
-        scroll.automaticallyAdjustsContentInsets = false
-        scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: points, right: 0)
-        // So the scroller itself is not drawn under the drawer either.
-        scroll.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: points, right: 0)
+        guard abs(drawerCover - points) > 0.5 else { return }
+        drawerCover = points
+        tailHeight?.constant = RecordButton.clearance + points
     }
 
     /// Told by the window, because only the window knows how tall the drawer is.
@@ -400,10 +449,7 @@ final class DetailView: NSView {
         // came down with it: what separates two turns is the sum of three
         // numbers, so trimming only this one never moved much.
         stack.spacing = 10
-        // 6 at the top rather than 16. The player card is directly above and is
-        // already separated from the first turn by the scroll view's own gap, so
-        // this was a third margin stacked on two others.
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 40, right: 16)
+        stack.edgeInsets = Self.transcriptInsets
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // The clip view has to be flipped, and it has to be replaced before the
@@ -418,6 +464,12 @@ final class DetailView: NSView {
         scroll.documentView = stack
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
+        // No insets on any edge, so the scroller's track is the whole pane. The
+        // room the drawer needs is at the end of the document instead, and this
+        // says so once rather than leaving it to whether `setBottomInset` has
+        // been called yet: automatic adjustment was on until the composer first
+        // reported a height, and off afterwards.
+        scroll.automaticallyAdjustsContentInsets = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
@@ -636,9 +688,13 @@ final class DetailView: NSView {
             recordingHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                         constant: -24),
 
+            // Flush with the pane on both sides, so its scroller is at the
+            // window's edge and not 23 points inside it. The margins the two
+            // constants here used to hold are in `transcriptInsets`, where the
+            // scroller cannot inherit them.
             scroll.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             // Flush to the pane's edges rather than inset like the transcript,
@@ -689,7 +745,10 @@ final class DetailView: NSView {
             notesPlaceholder.leadingAnchor.constraint(equalTo: notesScroll.leadingAnchor),
             notesPlaceholder.trailingAnchor.constraint(equalTo: notesScroll.trailingAnchor),
 
-            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -20),
+            // The document is as wide as the scroll view, and the gutter the
+            // scroller needs is `transcriptInsets.right`. It used to be this
+            // constant, which the rows below then had to know about as well.
+            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             greeting.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -2192,24 +2251,31 @@ final class DetailView: NSView {
             }
             stack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                        constant: -20).isActive = true
+                                        constant: -Self.transcriptSides).isActive = true
             turnViews.append(view)
         }
 
-        // Room at the end for the floating Record button, which is in the
-        // window's content host and therefore over this. A spacer in the stack
-        // and not `scroll.contentInsets`, which is what the note beside this
-        // has to use: setting `contentInsets` turns
-        // `automaticallyAdjustsContentInsets` off, taking the *top* inset with
-        // it, and this scroll view's top is measured against nothing that would
-        // report the change. A view at the end of the document moves only the
-        // end of the document.
+        // Room at the end: the plain reading margin `RecordButton.clearance` is,
+        // plus whatever the composer drawer is covering, which is `drawerCover`.
+        //
+        // A spacer in the stack and not `scroll.contentInsets`, which is what
+        // the note beside this has to use, for two reasons. Setting
+        // `contentInsets` turns `automaticallyAdjustsContentInsets` off, taking
+        // the *top* inset with it, and this scroll view's top is measured
+        // against nothing that would report the change. And a bottom content
+        // inset shortens the scroller by the same amount, because the scroller
+        // is laid out inside the content area: see `setBottomInset`. A view at
+        // the end of the document moves only the end of the document.
         let tail = NSView()
         tail.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(tail)
+        let height = tail.heightAnchor.constraint(
+            equalToConstant: RecordButton.clearance + drawerCover)
+        tailHeight = height
         NSLayoutConstraint.activate([
-            tail.heightAnchor.constraint(equalToConstant: RecordButton.clearance),
-            tail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            height,
+            tail.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                        constant: -Self.transcriptSides),
         ])
 
         // Not after an edit. A reload that jumps to the top of an hour-long
@@ -2224,22 +2290,30 @@ final class DetailView: NSView {
     /// meeting with half a paragraph cut off above it, which reads as a
     /// rendering fault rather than as a scroll position.
     ///
-    /// The top is `bounds.maxY`, not zero. `TopAlignedClipView` flips the *clip
-    /// view*, which decides where a short transcript sits and which way the
-    /// scrollers run, and changes nothing about the stack view's own
-    /// coordinates: its arranged subviews are still laid out with the first turn
-    /// at the highest y. Measured both ways round on an 80 minute recording,
-    /// because the two flags read as if they should agree and do not: y = 0
-    /// opens on the last turn, y = maxY - 1 on the first.
+    /// **The clip view's origin, not a point in the stack.** The clip view is
+    /// flipped, so the top of the document is `y = 0` and stays `y = 0` however
+    /// tall the document turns out to be. It used to scroll the stack's own
+    /// `bounds.maxY - 1` into view, which is the top only while the stack's
+    /// height is final: an unflipped view's top edge *is* its height, so every
+    /// point in it moves when that height changes, and this runs one pass after
+    /// the turns are added, with their heights still to be solved against their
+    /// width.
     ///
-    /// Deferred, because the turns are added to the stack in the pass that calls
-    /// this and it has not grown to hold them until the next one.
+    /// It was right for as long as the first layout pass happened to be the last
+    /// one. Adding a spacer at the end of the transcript for the composer to
+    /// cover gave it a second reason to grow, and a 2 hour meeting opened 66%
+    /// and 82% down on two runs out of three, at the point the stale height put
+    /// under the caret. The shipped build opened at the top on three runs out of
+    /// three, which is what a race looks like from the outside: right until
+    /// something else on the same pass takes slightly longer.
+    ///
+    /// Still deferred, because the turns are added to the stack in the pass that
+    /// calls this, and a scroll before they exist has nothing to scroll.
     private func scrollTranscriptToTop() {
         DispatchQueue.main.async { [self] in
-            layoutSubtreeIfNeeded()
             scrollingProgrammatically = true
-            stack.scrollToVisible(NSRect(x: 0, y: stack.bounds.maxY - 1,
-                                         width: 1, height: 1))
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
             DispatchQueue.main.async { self.scrollingProgrammatically = false }
         }
     }

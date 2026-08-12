@@ -542,3 +542,46 @@ title, `" Chats"`, which is the same one-character shape as the trailing space
 `DetailWithComposer.titleButton` puts before its chevron, and for the same
 reason: the control lays itself out and the only thing left to say is what the
 string is.
+
+## Scroller insets are added to content insets, not instead of them
+
+`NSScrollView.contentInsets` already moves the scroller: the scroller is laid
+out inside the content area, so a bottom inset that keeps the document clear of
+a floating bar keeps the scroller clear of it too. `scrollerInsets` is then
+*added* to that, and setting both to the same number spends it twice. Measured
+on a bare 400 point scroll view with a 4000 point document:
+
+| `contentInsets.bottom` | `scrollerInsets.bottom` | scroller height |
+| --- | --- | --- |
+| 0 | 0 | 392 |
+| 140 | 0 | 260 |
+| 0 | 140 | 252 |
+| 140 | 140 | 120 |
+
+`DetailView.setBottomInset` set both to the drawer's height, which is what the
+transcript's scroller was reporting when a reader scrolled to the last word of a
+meeting and the knob stopped a third of the way up the window. Measured in the
+shipped 0.12.0 build, window floor at y 982 and a 140 point drawer:
+
+- content area `y 406..842`, so 140 above the floor, which is right
+- scroll bar `y 405..703`, another 139 above that, which is not
+- the knob has 4 points of padding at each end of the bar, so at `value 1.0` it
+  ended at 699, and the screenshot that started this measured it at 698.5
+
+The reading is the damaging part rather than the geometry: a knob resting a
+long way above the end of its track says there is more to come, which is the one
+question a scroller exists to answer. Nothing else on the page contradicted it,
+so the transcript looked truncated.
+
+The rule that generalises: `contentInsets` is the whole of what a scroll view
+needs to be told about furniture floating over it. Reach for `scrollerInsets`
+only to move the scroller *differently* from the content, and never to repeat
+what the content inset has already said.
+
+And if the scroller should run the whole height of the pane, the room belongs to
+the document rather than to the scroll view: any bottom content inset takes the
+scroller's track with it, because the scroller is laid out inside the content
+area. Listen ends up with neither inset on the transcript and a spacer at the end
+of the stack instead, which is `.agents/notes/window.md`. A content inset limits
+how far a document may travel; it does not decide what may be drawn over it, so
+either way the text passes behind the drawer while scrolling.

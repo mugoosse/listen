@@ -1369,3 +1369,88 @@ list, the file is gone from `notes/`, and the toolbar is back to the home page's
 (Settings, Sidebar, Chats, Record, Actions). The same pass on a person picked out
 of the one list reads Close, Edit, Merge…, Delete where it used to read "No
 recording selected".
+
+## The transcript's scroller is at the window's edge, and its margin is the document's
+
+An overlay scroller rides the edge of its own scroll view, so where the scroll
+view stops is where the scroller floats. The transcript's was inset 20 points on
+both sides, which put its knob at `x 1483..1489` against a window edge at 1512:
+23 points of air to the right of it, sitting over the dialogue rather than
+beside it. Every Mac app that scrolls a document puts the scroller at the edge
+of the window and the margin inside the text.
+
+So the scroll view is flush with the pane now and the margins moved into the
+document, as `DetailView.transcriptInsets`. They add up to exactly what was
+there before, which is why no text moved:
+
+- left: 20 (the scroll view's inset) + 4 (the stack's) = **24**, which is where
+  every heading on this page already starts
+- right: 20 (the scroll view's) + 20 (the document being narrower than the
+  scroll view) + 16 (the stack's) = **56**, which is the same 24 of margin plus
+  a 32 point gutter so a line of dialogue never runs under the scroller
+
+Measured before and after, window 1512 wide, floor at y 982, a 140 point drawer:
+
+| | before | after |
+| --- | --- | --- |
+| scroll area x | 318..1492 | 298..1512 |
+| knob x | 1483..1489 | 1503..1509 |
+| scroll bar y | 405..703 | 377..966 |
+| knob at `value 1.0` ends at | 699 | 962, 20 above the window's floor |
+| last paragraph at `value 1.0` ends at | 764 | 765 |
+| first inked pixel of a paragraph | 330.5 | 330.5 |
+
+The 16 points between the bar's end and the floor are AppKit's, not this app's:
+an overlay scroller leaves the window's bottom edge alone.
+
+## The room the composer needs is the transcript's, not the scroll view's
+
+The drawer overlays the pane, so the last turn of a meeting sits under it unless
+something says otherwise, and `contentInsets.bottom` was what said it. That
+works and costs the scroller: it is laid out inside the content area, so a 140
+point bottom inset ends the track 140 points above the window's floor, and a
+knob resting there with empty window under it reads as scrolling that has not
+finished. The room is now a spacer at the end of the stack, sized
+`RecordButton.clearance + drawerCover`, which is the shape the record button's
+clearance already used and for the reason written there: a view at the end of
+the document moves only the end of the document.
+
+Nothing about the reading moves. Measured on the same 2 hour meeting, the last
+paragraph ends 218 points above the floor with the content inset and 217 with
+the spacer, and text passed behind the drawer while scrolling either way,
+because a content inset limits how far a document may travel rather than what
+may be drawn over it.
+
+`drawerCover` is a field because the transcript is rebuilt from its turns
+whenever one is edited, and the tail is built with it, so the number has to
+survive the rebuild. `automaticallyAdjustsContentInsets` is turned off in `init`
+rather than left to the first call: it was on until the composer first reported
+a height and off afterwards, which is a difference nothing should depend on.
+
+## Open at the top is the clip view's origin, not a point in the stack
+
+`scrollTranscriptToTop` scrolled the stack's own `bounds.maxY - 1` into view.
+For an unflipped view the top edge *is* its height, so that point is only the top
+while the height is final, and this runs one pass after the turns are added with
+their heights still to be solved against their width.
+
+It was right for as long as the first layout pass happened to be the last one.
+The spacer above gave the stack a second reason to grow, and a 2 hour meeting
+opened 66% and 82% down on two runs out of three; the shipped build opened at the
+top on three out of three. That is what a race looks like from the outside, and
+the reason to check a regression against the build that does not have it rather
+than against the reading of the code.
+
+The clip view is flipped, so the top of the document is `y = 0` whatever the
+document's height is, which is what `TopAlignedClipView` is for and what its own
+note already said. `scroll.contentView.scroll(to: .zero)` with a
+`reflectScrolledClipView` after it opens at the top on four runs out of four, and
+does not depend on layout having settled at all.
+
+**Three constants had to agree and only one of them said so.** The stack was
+`scroll.width - 20`, every turn row was `stack.width - 20`, and the stack's own
+`edgeInsets` were a fourth number. The row width is the stack's width less its
+insets and nothing else, so it is `transcriptSides` now and derived from the one
+place the insets are written. Adding a margin to a stack view does not narrow
+what it arranges: `NSStackView` lays its arranged views out inside `edgeInsets`
+but does not size them.

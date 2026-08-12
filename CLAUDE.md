@@ -249,6 +249,9 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A meeting being transcribed is a loading state, and three things were still on it
 - The note box reserved room for a button that left, and lost the last line of every note
 - The ellipsis said "No recording selected" over a note, because the menu was the recording's
+- The transcript's scroller is at the window's edge, and its margin is the document's
+- The room the composer needs is the transcript's, not the scroll view's
+- Open at the top is the clip view's origin, not a point in the stack
 
 ### `.agents/notes/appkit.md` (29k)
 
@@ -276,6 +279,7 @@ this app, so read them before building any new window, menu or popover.
 - A leading image is laid out at the button's edge, not beside its title
 - An `NSToolbarItem` lays out its own image and title, and has no gap to give
 - A content inset is a scroll offset, and it will not hold a view in place
+- Scroller insets are added to content insets, not instead of them
 
 ### `.agents/notes/dictation.md` (18k)
 

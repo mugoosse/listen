@@ -43,7 +43,26 @@ public actor MemoryStore: RecordStore {
 
     public init(file: URL? = nil) {
         self.file = file
-        if let file { load(from: file) }
+        // Parsed here rather than by calling a method, because an actor's
+        // initialiser is not isolated and cannot call one that is. Swift 5
+        // let this through and Swift 6 does not, and the iPhone app compiles
+        // these files in Swift 6 mode while the Mac does not, so it is the
+        // stricter of the two consumers that decides what is allowed here.
+        guard let file, let data = try? Data(contentsOf: file),
+              let snapshot = try? JSONDecoder().decode(OnDisk.self, from: data) else { return }
+        clock = snapshot.clock
+        for row in snapshot.rows {
+            guard let zone = CloudNaming.Zone(rawValue: row.zone),
+                  let type = CloudNaming.RecordType(rawValue: row.type) else { continue }
+            zones[zone, default: [:]][row.name] = StoredRecord(
+                name: row.name, type: type, payload: row.payload, assets: row.assets,
+                claimedBy: row.claimedBy, claimExpires: row.claimExpires,
+                audioOn: row.audioOn, changeTag: row.changeTag)
+        }
+        for event in snapshot.events {
+            guard let zone = CloudNaming.Zone(rawValue: event.zone) else { continue }
+            history[zone, default: []].append((event.tick, event.name, event.deleted))
+        }
     }
 
     public func setExpireNextToken(_ value: Bool) { expireNextToken = value }
@@ -153,21 +172,4 @@ public actor MemoryStore: RecordStore {
         try? JSONEncoder().encode(snapshot).write(to: file, options: .atomic)
     }
 
-    private func load(from file: URL) {
-        guard let data = try? Data(contentsOf: file),
-              let snapshot = try? JSONDecoder().decode(OnDisk.self, from: data) else { return }
-        clock = snapshot.clock
-        for row in snapshot.rows {
-            guard let zone = CloudNaming.Zone(rawValue: row.zone),
-                  let type = CloudNaming.RecordType(rawValue: row.type) else { continue }
-            zones[zone, default: [:]][row.name] = StoredRecord(
-                name: row.name, type: type, payload: row.payload, assets: row.assets,
-                claimedBy: row.claimedBy, claimExpires: row.claimExpires,
-                audioOn: row.audioOn, changeTag: row.changeTag)
-        }
-        for event in snapshot.events {
-            guard let zone = CloudNaming.Zone(rawValue: event.zone) else { continue }
-            history[zone, default: []].append((event.tick, event.name, event.deleted))
-        }
-    }
 }

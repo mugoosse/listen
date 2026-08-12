@@ -16,6 +16,22 @@ APP="$ROOT/Listen.app"
 
 [ -x "$BUILT/listen" ] || { echo "build first: ./build.sh" >&2; exit 1; }
 
+# The binary has to be newer than the code, or it is not this code.
+#
+# A failed `build.sh` leaves the previous binary exactly where this script
+# expects to find one, so bundling carried on and produced an app that looked
+# built and did not contain the change. It happened twice, once from a build
+# lock held by a shared worktree and once from the transient scheme error a
+# fresh clone hits, and both times a "fix" was shipped and tested that had
+# never been compiled.
+STALE=$(find "$ROOT/Sources" -name '*.swift' -newer "$BUILT/listen" -print -quit 2>/dev/null)
+if [ -n "$STALE" ]; then
+    echo "error: the built binary is older than $(basename "$STALE")." >&2
+    echo "       ./build.sh did not produce it. Run it again and read the" >&2
+    echo "       output: bundling now ships code that was never compiled." >&2
+    exit 1
+fi
+
 # Marketing version lives in one place; the build number is derived from commit
 # count so it always increases, which macOS requires. Sparkle compares
 # CFBundleVersion, so anything that makes it go backwards strands every
@@ -171,11 +187,38 @@ fi
 COMMON="--force --timestamp --options runtime \
         --entitlements $ROOT/Listen.entitlements --identifier com.mgo.listen"
 
+# codesign, with its one routine line hidden and every other failure fatal.
+#
+# Each of these calls used to end `2>&1 | grep -v "replacing existing
+# signature" || true`, which discards the outcome twice over: the exit status
+# of a pipeline is the last command's, so it belonged to grep rather than to
+# codesign, and `|| true` then threw that away too. A refusal printed nothing
+# and the script went on to announce a build it had not signed. That is about
+# to matter a great deal more than it did: a restricted entitlement without a
+# matching provisioning profile fails precisely here.
+sign() {
+    for target; do :; done          # what is being signed is the last argument
+    if out=$(codesign "$@" 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out" | grep -v "replacing existing signature" || true
+    fi
+    if [ "$status" -ne 0 ]; then
+        echo "error: codesign refused $target" >&2
+        exit "$status"
+    fi
+}
+
 if [ -n "$SIGN_ID" ]; then
     # Sign nested bundles before the outer one; --deep is deprecated and does
     # not apply entitlements correctly.
-    find "$APP/Contents" -name "*.bundle" -maxdepth 2 -print0 2>/dev/null \
-        | xargs -0 -I{} codesign $COMMON --sign "$SIGN_ID" {} 2>/dev/null || true
+    for b in "$APP/Contents/MacOS"/*.bundle "$APP/Contents/Resources"/*.bundle; do
+        [ -e "$b" ] || continue
+        sign $COMMON --sign "$SIGN_ID" "$b"
+    done
 
     # Sparkle contains its own nested code: two XPC services, a helper binary
     # and an updater app. Every one needs its own signature with the hardened
@@ -196,22 +239,18 @@ if [ -n "$SIGN_ID" ]; then
             "$SPARKLE_FW/Versions/B/Updater.app"
         do
             [ -e "$inner" ] || continue
-            codesign $NESTED --sign "$SIGN_ID" "$inner" 2>&1 \
-                | grep -v "replacing existing signature" || true
+            sign $NESTED --sign "$SIGN_ID" "$inner"
         done
-        codesign $NESTED --sign "$SIGN_ID" "$SPARKLE_FW" 2>&1 \
-            | grep -v "replacing existing signature" || true
+        sign $NESTED --sign "$SIGN_ID" "$SPARKLE_FW"
     fi
 
-    codesign $COMMON --sign "$SIGN_ID" "$APP" 2>&1 \
-        | grep -v "replacing existing signature" || true
+    sign $COMMON --sign "$SIGN_ID" "$APP"
 else
     echo "warning: no signing certificate found, falling back to ad-hoc." >&2
     echo "         Microphone and audio capture must be re-granted after every" >&2
     echo "         rebuild, and other Macs will refuse to run this build." >&2
     echo "         Fix: Xcode > Settings > Accounts, add an Apple ID." >&2
-    codesign --force --deep --sign - --identifier com.mgo.listen "$APP" 2>&1 \
-        | grep -v "replacing existing signature" || true
+    sign --force --deep --sign - --identifier com.mgo.listen "$APP"
 fi
 
 echo "version:     $VERSION (build $BUILD)"

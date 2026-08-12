@@ -92,9 +92,17 @@ public actor CloudKitStore: RecordStore {
                 .appendingPathComponent(UUID().uuidString)
             try data.write(to: url)
             temporaries.append(url)
-            subject["asset_" + name] = CKAsset(fileURL: url)
+            subject[CloudKitStore.field(for: name)] = CKAsset(fileURL: url)
         }
-        subject["assetNames"] = Array(record.assets.keys).sorted() as CKRecordValue
+        // Only when there are some. **CloudKit cannot infer a field's type
+        // from an empty list**, so writing `[]` into a record type that has
+        // never carried assets fails with "should be more precise" rather
+        // than creating an empty string list. A note has no assets, so every
+        // note failed and every recording succeeded, which is the shape of
+        // bug a fake store cannot have: a dictionary has no schema to infer.
+        if !record.assets.isEmpty {
+            subject["assetNames"] = Array(record.assets.keys).sorted() as CKRecordValue
+        }
 
         do {
             let (saved, _) = try await database.modifyRecords(
@@ -183,6 +191,20 @@ public actor CloudKitStore: RecordStore {
         return try translate(record)
     }
 
+    /// A CloudKit field name for one asset.
+    ///
+    /// **Field keys may not contain a dot**, and every sidecar this app moves
+    /// is called something like `transcript.json`, so the obvious
+    /// `"asset_" + name` throws `NSInvalidArgumentException` at save time
+    /// rather than returning an error. Only a real container says so: the fake
+    /// store is a dictionary and a dictionary will happily key on anything.
+    ///
+    /// The real names still travel, in `assetNames`, because that is a value
+    /// rather than a key and values have no such rule.
+    static func field(for asset: String) -> String {
+        "asset_" + asset.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+    }
+
     // MARK: - Translation
 
     private func translate(_ record: CKRecord) throws -> StoredRecord {
@@ -191,7 +213,7 @@ public actor CloudKitStore: RecordStore {
         }
         var assets: [String: Data] = [:]
         for name in (record["assetNames"] as? [String]) ?? [] {
-            guard let asset = record["asset_" + name] as? CKAsset,
+            guard let asset = record[CloudKitStore.field(for: name)] as? CKAsset,
                   let url = asset.fileURL,
                   let data = try? Data(contentsOf: url) else { continue }
             assets[name] = data

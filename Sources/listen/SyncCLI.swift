@@ -31,6 +31,7 @@ enum SyncCLI {
         case "note":     note(&rest)
         case "devices":  devices(&rest)
         case "--fake":   await fake(&rest)
+        case "cloud":    await cloud(&rest)
         default:         help()
         }
     }
@@ -248,6 +249,43 @@ enum SyncCLI {
         }
     }
 
+    /// One pass against the real container, for a scratch library.
+    ///
+    /// The slower half of the two-layer testing story. `--fake` proves the
+    /// logic in a second with no network; this proves that CloudKit behaves
+    /// the way the fake assumes, which is the one thing a fake can never say.
+    ///
+    /// It refuses to run against the real library. Everything here is
+    /// deliberate practice for an operation that will later touch four years
+    /// of recordings, and practising on the real thing is how you find out
+    /// that you should not have.
+    private static func cloud(_ args: inout [String]) async -> Never {
+        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        guard let root = option("--library", &args) else {
+            die("--library <dir> is required, and must not be the real one")
+        }
+        let scratch = ListenKit.Library(root: URL(fileURLWithPath: root))
+        if scratch.root.standardizedFileURL == ListenKit.Library.mac().root.standardizedFileURL {
+            die("that is the real library. Point --library somewhere else.")
+        }
+        let isPhone = flag("--as-phone", &args)
+        let name = option("--device", &args) ?? (isPhone ? "phone" : "mac")
+        let state = EngineState(library: scratch)
+        let core = CloudSyncCore(
+            library: scratch, state: state,
+            store: CloudKitStore(containerID: CloudAccount.containerID),
+            key: key, policy: isPhone ? .phone : .mac,
+            device: name, ingests: !isPhone)
+
+        var report = CloudReport()
+        if !flag("--pull-only", &args) { await core.push(into: &report) }
+        if !flag("--push-only", &args) { await core.pull(into: &report) }
+        print(report.summary)
+        for conflict in report.conflicts { print("conflict: \(conflict)") }
+        for error in report.errors { print("error: \(error)") }
+        exit(report.errors.isEmpty ? 0 : 1)
+    }
+
     private static func help() -> Never {
         print("""
         listen sync: keeping your devices in step.
@@ -260,6 +298,7 @@ enum SyncCLI {
           run --library D [--to H]        run a device's engine from here
           note --library D --slug S       write a note the way an app does
           --fake                          every seam of the CloudKit sync, offline
+          cloud --library D               one pass against the real container
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

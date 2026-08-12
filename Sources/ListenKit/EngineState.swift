@@ -25,8 +25,8 @@ import CryptoKit
 public struct EngineState: Sendable {
     public let root: URL
 
-    /// `~/Library/Application Support/Listen/Sync/<digest>/`, and on iOS the
-    /// same path inside the app container.
+    /// `~/Library/Application Support/ListenSync/<digest>/`, and on iOS the
+    /// same path inside the app container. **Beside the library, not in it.**
     ///
     /// A digest of the library path rather than the path itself, because a
     /// library root can contain anything a directory name can and this has to
@@ -36,9 +36,16 @@ public struct EngineState: Sendable {
                                                in: .userDomainMask)[0]
         let digest = SHA256.hash(data: Data(library.root.standardizedFileURL.path.utf8))
             .map { String(format: "%02x", $0) }.joined()
+        // **A sibling of the library, never a child of it.** This started as
+        // `Listen/Sync/…`, which put change tokens, device identity and the
+        // ids-ever-seen set *inside* the very tree being replicated. Found by
+        // cloning the real library and diffing it against one hydrated from
+        // the container: `Sync` showed up as a directory that existed on one
+        // side and not the other, which is what this whole type exists to
+        // prevent and is the failure that hides itself, because two devices
+        // sharing one device's change tokens looks exactly like sync working.
         root = support
-            .appendingPathComponent("Listen")
-            .appendingPathComponent("Sync")
+            .appendingPathComponent("ListenSync")
             .appendingPathComponent(String(digest.prefix(16)))
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }

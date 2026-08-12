@@ -30,6 +30,7 @@ enum SyncCLI {
         case "run":      await runEngine(&rest)
         case "note":     note(&rest)
         case "devices":  devices(&rest)
+        case "--fake":   await fake(&rest)
         default:         help()
         }
     }
@@ -228,6 +229,25 @@ enum SyncCLI {
         done()
     }
 
+    /// Every seam of the CloudKit sync, offline, in about a second.
+    ///
+    /// No network, no container, no second process and no socket, which makes
+    /// it faster than the loopback harness it replaces rather than slower. It
+    /// runs from an unsigned `swift build` binary on purpose: nothing here
+    /// touches CloudKit, so nothing here needs an entitlement.
+    private static func fake(_ args: inout [String]) async -> Never {
+        let root = URL(fileURLWithPath: option("--at", &args)
+                       ?? NSTemporaryDirectory() + "listen-fake-sync")
+        do {
+            for line in try await FakeSync.run(root: root) { print(line) }
+            print("\nEvery seam passed.")
+            done()
+        } catch {
+            FileHandle.standardError.write(Data("  FAIL: \(error)\n".utf8))
+            exit(1)
+        }
+    }
+
     private static func help() -> Never {
         print("""
         listen sync: keeping your devices in step.
@@ -239,6 +259,7 @@ enum SyncCLI {
           manifest                        what a device would be offered
           run --library D [--to H]        run a device's engine from here
           note --library D --slug S       write a note the way an app does
+          --fake                          every seam of the CloudKit sync, offline
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

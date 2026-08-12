@@ -95,6 +95,25 @@ final class CloudSyncHost {
         var report = CloudReport()
         devices = await core.heartbeat(name: identity.name, kind: identity.kind,
                                        appVersion: AppInfo.version ?? "unknown")
+
+        // **A device that has never synced pulls before it pushes.**
+        //
+        // It cannot know whether its copy is ahead or behind, and pushing first
+        // means a Mac that has been shut for a week overwrites a week of work
+        // with what it remembers. Measured on a real second Mac: its library
+        // was four days stale, 57 recordings against 63, and a push-first pass
+        // would have written its older transcripts over the current ones.
+        //
+        // Notes were never at risk, because `decideNote` reports a conflict
+        // when neither side is the agreed base and touches neither. Recordings
+        // have no such three-way guard: there is normally one writer, and this
+        // is the case where that assumption does not hold yet.
+        let firstEver = state.base[file: "token"] == nil
+        if firstEver {
+            await core.pull(into: &report)
+            await core.pullVoiceprints(into: &report)
+        }
+
         await core.push(into: &report)
         await core.pushVoiceprints(into: &report)
         // Claim before downloading, and prefer whichever Mac was chosen to keep
@@ -102,8 +121,10 @@ final class CloudSyncHost {
         // takes it.
         let preferred = Settings.preferredTranscriber
         await core.ingest(preferred: preferred.isEmpty ? nil : preferred, into: &report)
-        await core.pull(into: &report)
-        await core.pullVoiceprints(into: &report)
+        if !firstEver {
+            await core.pull(into: &report)
+            await core.pullVoiceprints(into: &report)
+        }
 
         // Anything that arrived may be a recording with audio and no
         // transcript, which is the definition of a pending job.

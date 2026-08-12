@@ -40,6 +40,22 @@ enum SyncCLI {
     /// the rest of Listen does, so a scratch library works here too.
     private static var library: ListenKit.Library { .mac() }
 
+    /// The pairing key, still read from `.pairing-key` beside the library.
+    ///
+    /// `FileKeyStore` existed because `listen-sync` was a bare binary and
+    /// Listen is a signed app, and a keychain item made by the first prompts
+    /// for authorisation when the second reads it. That constraint died with
+    /// this file, so the key is free to move into the iCloud Keychain, which
+    /// is what makes a second Mac need nothing typed.
+    ///
+    /// It has not moved yet, and moving it silently would be the wrong way to
+    /// do it. Every phone already paired is paired against **this** key: read
+    /// a different store and the Mac answers with a key nobody holds, which
+    /// presents as a phone that can see the Mac and is refused by it. Measured
+    /// here, by doing exactly that. The move happens with a migration that
+    /// adopts this file, at the point the rest of the key handling changes.
+    static var keyStore: FileKeyStore { FileKeyStore(library: library) }
+
     private static func option(_ name: String, _ args: inout [String]) -> String? {
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
         let value = args[i + 1]
@@ -70,7 +86,7 @@ enum SyncCLI {
     /// nothing about the one that ships, and this is the command that has to
     /// make that distinction visible rather than reassuring.
     private static func status() -> Never {
-        let store = KeyStore()
+        let store = SyncCLI.keyStore
         print("library:     \(library.root.path)")
         print("key:         \(store.load() == nil ? "none yet" : "present")")
         print("environment: \(CloudAccount.environment)")
@@ -84,7 +100,7 @@ enum SyncCLI {
     }
 
     private static func pair(_ args: inout [String]) -> Never {
-        let store = KeyStore()
+        let store = SyncCLI.keyStore
         // Replacing a key that already exists unpairs every device holding it,
         // and this command is called by the test harnesses. One of them ran
         // without LISTEN_LIBRARY set, rotated the real key, and the only
@@ -121,7 +137,7 @@ enum SyncCLI {
     }
 
     private static func serve(_ args: inout [String]) async -> Never {
-        guard let key = KeyStore().load() else {
+        guard let key = SyncCLI.keyStore.load() else {
             die("not paired yet. Run:  listen sync pair --new")
         }
         let port = UInt16(option("--port", &args) ?? "8787") ?? 8787
@@ -141,7 +157,7 @@ enum SyncCLI {
     /// real library, because the whole point is to prove sync logic without
     /// risking the thing it operates on.
     private static func runEngine(_ args: inout [String]) async -> Never {
-        guard let key = KeyStore().load() else { die("not paired") }
+        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
         guard let root = option("--library", &args) else {
             die("--library <dir> is required, and must not be the real one")
         }

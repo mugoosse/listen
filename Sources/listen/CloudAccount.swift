@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import ListenKit
 
 /// Whether this build can reach a CloudKit container, and which one.
 ///
@@ -14,7 +15,7 @@ import CloudKit
 /// that thinks it is talking to Production while signed for Development fails
 /// in a way nothing local reproduces.
 enum CloudAccount {
-    static let containerID = "iCloud.eu.jacarandalabs.listen"
+    static let containerID = CloudNaming.containerID
 
     /// `Production`, `Development`, or what went wrong finding out.
     ///

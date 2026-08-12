@@ -22,6 +22,27 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reason to stop a recording they asked for.
     private var startedByDetection = false
 
+    /// Another device wrote something.
+    ///
+    /// The payload is deliberately ignored. It says which zone changed and we
+    /// would fetch all of them anyway, and treating a push as a hint rather
+    /// than as data means a push that never arrives costs a delay rather than
+    /// a divergence: the poll is still there underneath.
+    func application(_ application: NSApplication,
+                     didReceiveRemoteNotification userInfo: [String: Any]) {
+        guard Settings.cloudSync else { return }
+        trace("cloud sync: woken by another device")
+        Task { @MainActor in await CloudSyncHost.shared.syncNow() }
+    }
+
+    func application(_ application: NSApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        // Said once and not surfaced. Sync still works on the poll, so this is
+        // the difference between arriving in seconds and arriving in minutes,
+        // not between working and not.
+        trace("cloud sync: no push registration (\(error.localizedDescription))")
+    }
+
     func applicationDidFinishLaunching(_ note: Notification) {
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
 
@@ -122,6 +143,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // neither knows about the other, which is exactly why the plan says to
         // run one per device rather than both, and why this is off by default.
         CloudSyncHost.shared.startIfEnabled()
+
+        // And ask to be woken when another device writes, rather than only
+        // finding out on the next poll.
+        //
+        // `CloudKitStore.subscribe` creates the subscriptions; this is the
+        // other half, and without it they fire into nothing. A silent push
+        // carries no content of its own, only the fact that there is something
+        // to fetch, which is what makes it safe to let Apple deliver for a
+        // product whose claim is that Apple cannot read what it stores.
+        if Settings.cloudSync { NSApplication.shared.registerForRemoteNotifications() }
 
         // Open at login, on by default, for new installations only.
         //

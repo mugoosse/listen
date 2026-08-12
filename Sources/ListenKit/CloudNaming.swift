@@ -29,6 +29,11 @@ import CryptoKit
 /// **Rotating the key changes every derived name**, so a re-key is a full
 /// re-upload. That is already true for other reasons, so it adds nothing new.
 public enum CloudNaming {
+    /// The container both apps read. Shared here rather than declared twice,
+    /// because two copies of a permanent identifier is one copy that can be
+    /// wrong.
+    public static let containerID = "iCloud.eu.jacarandalabs.listen"
+
     /// Zones, named for what they are rather than what they hold.
     ///
     /// A zone name is metadata too, and `Voiceprints` would tell a reader that

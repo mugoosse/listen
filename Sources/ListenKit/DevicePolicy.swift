@@ -27,12 +27,36 @@ public struct DevicePolicy: Sendable, Equatable {
     /// first because everything else is written before it.
     public let sidecars: [String]
 
+    /// Whether this device also keeps the pre-edit copy of a transcript.
+    ///
+    /// **A file named after the recording, so it cannot be a constant.**
+    /// `<id>.raw.json.bak` is written once, the first time somebody corrects a
+    /// sentence, and it holds what the machine said before they did.
+    ///
+    /// It matters because its *presence* is how `hasHumanEdits` knows a
+    /// transcript has been corrected, and that is what makes transcribing
+    /// again ask before it throws the corrections away. A device that has the
+    /// corrected transcript and not this file answers "no human edits here"
+    /// and destroys somebody's work without the warning that exists to stop
+    /// exactly that. A guard that only fires on the machine where the editing
+    /// happened is not a guard.
+    public let keepsRawBackup: Bool
+
+    /// The pre-edit backup for one recording, which is named after it.
+    public static func rawBackup(for id: String) -> String { "\(id).raw.json.bak" }
+
     /// Library-level files, one copy for the whole library rather than one per
     /// recording.
     public let blobs: [String]
 
-    public init(sidecars: [String], blobs: [String]) {
+    public init(sidecars: [String], blobs: [String], keepsRawBackup: Bool = true) {
         self.sidecars = sidecars; self.blobs = blobs
+        self.keepsRawBackup = keepsRawBackup
+    }
+
+    /// Every per-recording file this device keeps for one id, backup included.
+    public func files(for id: String) -> [String] {
+        keepsRawBackup ? librarySidecars + [DevicePolicy.rawBackup(for: id)] : librarySidecars
     }
 
     /// Whether this device stores a given per-recording file.

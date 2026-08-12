@@ -58,7 +58,7 @@ public enum CloudRecords {
 
         var digests: [String: String] = [:]
         var assets: [String: Data] = [:]
-        for file in policy.librarySidecars where file != "metadata.json" {
+        for file in policy.files(for: recording.id) where file != "metadata.json" {
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
             digests[file] = sha256Hex(data)

@@ -133,7 +133,7 @@ public struct CloudSyncCore: Sendable {
         let isNew = Recording.load(folder) == nil
 
         // Sidecars first, metadata last, and only what this device keeps.
-        for file in policy.librarySidecars where file != "metadata.json" {
+        for file in policy.files(for: blob.id) where file != "metadata.json" {
             guard let want = blob.digests[file] else { continue }
             let local = folder.appendingPathComponent(file)
             if let have = try? Data(contentsOf: local), sha256Hex(have) == want { continue }

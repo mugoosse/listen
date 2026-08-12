@@ -133,6 +133,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A sentence is edited, and a segment is what gets written
 - The right-click never reaches the text field
 - Discard is a delete, and the undo it was mistaken for did not exist
+- Merge stopped being a button and became the first section of the list
 - Who said it is corrected at three sizes, and the middle two are new
 - Both buttons on a pill open the same menu, and the popover is its first item
 - The skipping belongs to the button that names it, and there is no bar
@@ -229,6 +230,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The About pane is Speak's, and the app name is one size down
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
+- Turns overlap, so the first one spanning the playhead is the wrong one
 - Sentence highlighting is search, not arithmetic
 - The sentence field wraps, and still opened one line high
 - Building the mixdown on the main thread froze the first press of play

@@ -2475,8 +2475,10 @@ final class DetailView: NSView {
         // The turn being spoken, then the sentence inside it. Only the two
         // views whose state changed are touched, which is what keeps this cheap
         // enough to run twenty times a second on an hour-long transcript.
-        let index = turns.firstIndex { position >= $0.start && position < $0.end }
+        let index = speakingTurn(at: position)
         if index != currentTurn {
+            trace("playhead \(TranscriptFormat.stamp(position)) -> "
+                  + (index.map { "turn \($0) \(turns[$0].speaker)" } ?? "nobody"))
             if let old = currentTurn, old < turnViews.count {
                 turnViews[old].isCurrent = false
                 turnViews[old].highlight(nil)
@@ -2490,6 +2492,47 @@ final class DetailView: NSView {
         if let currentTurn, currentTurn < turnViews.count {
             turnViews[currentTurn].highlight(position)
         }
+    }
+
+    /// Which paragraph is being spoken at `time`.
+    ///
+    /// **Not the first one that spans it**, which is what this replaced and what
+    /// made clicking a line highlight the line above it. Turns overlap, because
+    /// people talk over each other and the two tracks are clustered separately:
+    /// on the call this was reported from, 55 of 105 turns start before the
+    /// previous one ends. `turns` is ordered by start, so the first turn spanning
+    /// an instant is the *earliest* one still running, and clicking the first
+    /// sentence of a turn highlighted a different paragraph in **59 of its 105
+    /// turns**. Measured on that transcript, both numbers.
+    ///
+    /// Two rules, in order:
+    ///
+    /// 1. **A sentence beats a span.** A turn runs from its first sentence's
+    ///    start to its last one's end and includes the silences between them; a
+    ///    sentence is somebody actually talking. So a turn with a sentence over
+    ///    this instant wins against one that merely surrounds it.
+    /// 2. **The most recently begun wins.** Where two turns are genuinely
+    ///    sounding at once, which is real in a meeting, the one that started
+    ///    talking last is the one a listener hears as current.
+    ///
+    /// Linear over `turns` rather than short-circuiting, and that is affordable:
+    /// the inner sentence scan runs only for the handful of turns that span the
+    /// instant, and the rest is a pair of comparisons per turn.
+    private func speakingTurn(at time: TimeInterval) -> Int? {
+        var best: Int?
+        var rank = (0, -Double.greatestFiniteMagnitude)
+        for (index, turn) in turns.enumerated() {
+            guard time >= turn.start, time < turn.end else { continue }
+            let covering = index < sentences.count
+                ? sentences[index].first { time >= $0.start && time < $0.end }?.start
+                : nil
+            let candidate = (covering != nil ? 1 : 0, covering ?? turn.start)
+            if best == nil || candidate > rank {
+                rank = candidate
+                best = index
+            }
+        }
+        return best
     }
 
     /// Scroll the turn being spoken into view, if the reader has not gone

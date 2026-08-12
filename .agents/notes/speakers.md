@@ -122,8 +122,8 @@ can only ever be a mistake. The picker's footer is now built from the label:
 
 | speaker | footer |
 |---|---|
-| placeholder | Merge · Discard |
-| named | Leave Unnamed · Merge |
+| placeholder | Discard |
+| named | Leave Unnamed |
 
 It stays one click away, because Leave Unnamed turns a named speaker back into a
 placeholder and the footer then offers it.
@@ -134,6 +134,52 @@ picker, which asks "Who is this really?" over the ranked candidates, the
 invitation and the roster, and carries Leave Unnamed. The sheet is still the
 fallback when there is no anchor to point a popover at, because a menu must not
 depend on a popover appearing.
+
+### Merge stopped being a button and became the first section of the list
+
+The same complaint, one step further along, and worth stating as a rule: **a
+list of who somebody might be that leaves out the people in the room is not a
+list of who somebody might be.**
+
+`gather` used to drop everybody already in the recording, from all three
+sections, and the reasoning was about the data rather than about the question:
+they are "accounted for, and naming two speakers the same thing is a merge,
+which is the button at the bottom that says so". So a speaker who is really the
+person two paragraphs above them could be answered only by knowing that the word
+for it is Merge, pressing a button of that name, and choosing from a popup in a
+modal. Reported on a call where a 1% speaker was plainly the 69% one.
+
+They are now the first section, above the voice bank's ranking, because it is the
+shortest list, the most concrete one, and the answer to the diarizer's commonest
+mistake. Picking one is still a merge and writes exactly what the button wrote:
+`.rename(speaker, to: label)` onto a label the transcript already has, which
+`VoiceBank.rename` documents as the merging case and resolves by keeping
+whichever voiceprint was built from more speech.
+
+Three details that make it work:
+
+1. **The row carries the bank's opinion when it has one.** A speaker this voice
+   resembles who is *also in the room* is the split-in-two case saying so, and
+   that suggestion used to be dropped for being "taken". The detail line is
+   "Likely them · spoke for 4:33".
+2. **`check` returns nil for any label already in the recording**, which is the
+   one case that has to escape both refusals: `looksLikePlaceholder` would block
+   folding into `Speaker B`, and `recordingHasYou` would block folding into `Me`,
+   which is the far end coming back in through the microphone. Both were things
+   the Merge button did without asking.
+3. **Only when naming.** The reassignment picker is opened from a menu item
+   reading "Someone Else…", under a submenu already listing everybody in the
+   recording, so repeating them there would be the one list that contradicts the
+   words that opened it.
+
+A placeholder in that list wears its letter rather than its initials.
+`InitialsDisc` ran "Speaker B" through the initials rule and got "SB", which
+reads as a monogram and is the same two characters for every unnamed speaker in
+the room. It only started mattering when placeholders began appearing in a list
+built for people.
+
+Merge survives in `SpeakerSheet` and in `listen label --merge-into`, which are
+the routes that do not depend on a popover appearing.
 
 ### The confirmation counts what it is about to delete
 

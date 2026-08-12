@@ -159,6 +159,13 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
     private static let width: CGFloat = 320
 
+    /// Whether this popover is putting a name on the speaker itself, rather than
+    /// answering the narrower question about one sentence or one turn.
+    private var isNaming: Bool {
+        if case .name = purpose { return true }
+        return false
+    }
+
     init(recording: Recording, speaker: String, preview: SpeakerPreview?,
          purpose: Purpose, done: @escaping () -> Void) {
         self.recording = recording
@@ -300,25 +307,32 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         render()
     }
 
-    /// The repairs, at the bottom and small, and **which ones depends on whether
-    /// this speaker has a name.**
+    /// The one repair that is not a name, and **which one depends on whether
+    /// this speaker has one.**
+    ///
+    /// **Merge used to be here and is now a row in the list.** It was the only
+    /// way to say "this speaker is that person over there", and it said it in a
+    /// vocabulary nobody was looking for: the list of people deliberately left
+    /// out everybody in the recording, so the answer somebody could see two
+    /// paragraphs above them was the one answer the list refused to offer, and
+    /// the way to it was a button called Merge and a modal with a popup in it.
+    /// The list now opens with them. Picking one does exactly what the button
+    /// did.
     ///
     /// Discard is for a phantom: a stretch of silence the diarizer split off and
     /// Parakeet wrote filler over. A phantom is unnamed by definition, so on a
     /// speaker somebody has named it is never the right answer, and it was the
-    /// wrong answer somebody reached for. They had named a placeholder to see
-    /// what would happen, wanted that undone, found Merge and Discard, and
-    /// pressed the destructive one. Discard is therefore not on the named side
-    /// at all, and what stands in its place is the undo they were looking for.
+    /// wrong answer somebody reached for: they had named a placeholder to see
+    /// what would happen, wanted that undone, and pressed the destructive one.
+    /// So the named side offers the undo they were looking for instead, and
+    /// Discard is one click behind it, since Leave Unnamed puts them back to a
+    /// letter.
     ///
-    /// It stays reachable in one click: Leave Unnamed puts the speaker back to a
-    /// letter, and this popover then offers Discard.
-    ///
-    /// No trailing ellipsis on any of them. The convention says one when a
-    /// control opens something that asks for more, and in a popover that is
-    /// *already* the thing asking, dotted verbs at the foot of a list read as
-    /// unfinished rather than as considerate. The tooltips say what each one
-    /// means, which the dots never did.
+    /// No trailing ellipsis on either. The convention says one when a control
+    /// opens something that asks for more, and in a popover that is *already*
+    /// the thing asking, a dotted verb at the foot of a list reads as unfinished
+    /// rather than as considerate. The tooltip says what it means, which the
+    /// dots never did.
     private func addRepairs(to stack: NSStackView) {
         let separator = NSBox()
         separator.boxType = .separator
@@ -326,20 +340,16 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         separator.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
 
         var buttons: [NSButton] = []
-        if !VoiceBank.isPlaceholder(speaker) {
-            let unname = small("Leave Unnamed", #selector(unnameSpeaker))
-            unname.toolTip = "Take the name off this speaker in this recording. "
-                + "Everything they said stays, and you can name them again."
-            buttons.append(unname)
-        }
-        let merge = small("Merge", #selector(mergeSpeaker))
-        merge.toolTip = "This speaker is really one of the others in this recording"
-        buttons.append(merge)
         if VoiceBank.isPlaceholder(speaker) {
             let discard = small("Discard", #selector(discardSpeaker))
             discard.toolTip = "There is no person here, only noise the diarizer "
                 + "split off. Their lines are deleted."
             buttons.append(discard)
+        } else {
+            let unname = small("Leave Unnamed", #selector(unnameSpeaker))
+            unname.toolTip = "Take the name off this speaker in this recording. "
+                + "Everything they said stays, and you can name them again."
+            buttons.append(unname)
         }
 
         let footer = NSStackView(views: buttons)
@@ -402,18 +412,51 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     // MARK: - Candidates
 
     /// Everybody this app could mean, in descending order of confidence.
+    ///
+    /// **The people already in this recording are the first section**, and until
+    /// they were, this list was missing the answer most often wanted. The rule it
+    /// replaced said they were "accounted for, and naming two speakers the same
+    /// thing is a merge, which is the button at the bottom that says so". True
+    /// about the data and wrong about the question: somebody looking at a speaker
+    /// who is really the person two paragraphs up asks *who is this*, gets a list
+    /// of the whole roster with the two people actually in the room missing from
+    /// it, and has to know that the answer is spelled M-e-r-g-e and lives behind
+    /// a modal with a popup button in it.
+    ///
+    /// Picking one of them is still a merge; it is just no longer a different
+    /// gesture. See `apply(label:email:)`.
     private func gather() -> [Candidate] {
         var out: [Candidate] = []
-        // Never offered: anybody already in this recording. They are accounted
-        // for, and naming two speakers the same thing is a merge, which is the
-        // button at the bottom that says so.
         let taken = Set(recording.speakers)
+        let ranked = VoiceBank.suggestions(for: speaker, in: recording)
+
+        // First, and above the voice bank's ranking: a shorter list, a more
+        // concrete one, and the one that answers the diarizer's commonest
+        // mistake, which is one person arriving as two speakers in one meeting.
+        //
+        // Only when naming a speaker. The other purpose is reached from a menu
+        // item that reads "Someone Else…", under a submenu already listing
+        // everybody in the recording, so repeating them here would be the one
+        // list that contradicts the words that opened it.
+        for other in People.speakers(in: recording)
+        where other.label != speaker && isNaming {
+            let spoken = Recording.length(other.seconds)
+            // The bank's opinion belongs on the row when it has one. A speaker
+            // this voice resembles who is *also in the room* is the split-in-two
+            // case saying so out loud, and it used to be dropped for being
+            // "taken".
+            let detail = [ranked.first { $0.name == other.label }?.confidence.label,
+                          spoken.isEmpty ? nil : "spoke for " + spoken]
+                .compactMap { $0 }.joined(separator: " · ")
+            out.append(Candidate(label: other.label,
+                                 name: SpeakerName.display(other.label), email: nil,
+                                 detail: detail, section: "In this recording"))
+        }
 
         // A word rather than a percentage, and how much was heard rather than a
         // score. See `VoiceConfidence`: the number it replaced ran on a scale
         // where the whole answer lives between 0.37 and 0.91, so "60%" read as a
         // coin flip on a match that was not close.
-        let ranked = VoiceBank.suggestions(for: speaker, in: recording)
         for match in ranked where !taken.contains(match.name) {
             var detail = match.confidence.label
             detail += " · heard in \(match.recordings) "
@@ -596,6 +639,15 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     /// Whether this name can be written, which depends on what it is being
     /// written onto.
     ///
+    /// **A label already in this recording is a merge and is always allowed.**
+    /// It is the one case that has to escape both of the refusals below, and for
+    /// the same reason each time: they exist to stop a *new* name being a letter
+    /// or being `Me`, and a name that is already on a speaker in this transcript
+    /// is neither new nor a claim about anybody. Folding a stray speaker into
+    /// `Speaker B` is two placeholders turning out to be one voice, and folding
+    /// one into `Me` is the far end coming back in through the microphone. Both
+    /// were what the Merge button did, and it is the list that does them now.
+    ///
     /// `People.checkSpeaker` and not `People.check` for naming: that writes one
     /// label onto one speaker in one transcript, where `Me` is a legitimate
     /// answer and the library-wide rename's refusal of it is not. See the
@@ -608,6 +660,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     /// where the far end came back in through the microphone and the diarizer
     /// split it off as a stranger.
     private func check(_ label: String) -> People.RenameProblem? {
+        if recording.speakers.contains(label) { return nil }
         switch purpose {
         case .name:
             return People.checkSpeaker(label, in: recording)
@@ -626,30 +679,6 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     func controlTextDidChange(_ note: Notification) { render() }
 
     // MARK: - The two repairs
-
-    @objc private func mergeSpeaker() {
-        let others = recording.speakers.filter { $0 != speaker }
-        guard !others.isEmpty else {
-            let alert = NSAlert()
-            alert.messageText = "There is nobody else in this recording to merge into."
-            alert.runModal()
-            return
-        }
-        let alert = NSAlert()
-        alert.messageText = "Merge \(SpeakerName.display(speaker)) into which speaker?"
-        alert.informativeText = "Every segment attributed to them is reassigned. "
-            + "This is for a person diarization split in two."
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
-        popup.addItems(withTitles: others.map(SpeakerName.display))
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Merge")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn,
-              popup.indexOfSelectedItem >= 0 else { return }
-        TranscriptEditor.apply(.merge(speaker, into: others[popup.indexOfSelectedItem]),
-                               to: recording)
-        done()
-    }
 
     /// Put a named speaker back to a letter, here and nowhere else.
     ///

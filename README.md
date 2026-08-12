@@ -129,23 +129,25 @@ Clicking any turn plays from there.
 
 Click a speaker's name in the transcript and choose **Who Is This?** from the
 menu, or click their chip under the title, which opens the same thing directly.
-Type a name, take one of the suggestions ranked by voice, or take somebody off
-the invitation if this meeting was in your calendar. Two repairs are there
-because diarization gets these two things wrong often enough to need them:
+The list starts with the other people in this recording, then whoever the voice
+bank ranks this voice against, then anybody on the invitation, then the rest of
+your people. Type to filter it, or type a name nobody has yet.
 
-- **Merge** reassigns one label onto another, for when one real person got split
-  in two by changing seat or microphone.
-- **Discard** deletes a phantom speaker, the one that appears over a stretch of
-  silence with a line of invented filler attached. It is only offered on a
-  speaker nobody has named, and it says how many turns and how much time it is
-  about to remove.
+Picking somebody already in the recording folds the two together, which is the
+repair for one person arriving as two speakers because they changed seat or
+microphone, or because their voice came back in through your own microphone.
+
+**Discard**, at the foot of the list, deletes a phantom speaker: the one that
+appears over a stretch of silence with a line of invented filler attached. It is
+only offered on a speaker nobody has named, and it says how many turns and how
+much time it is about to remove.
 
 Named the wrong person? Click their name, choose **Not <name>…**, and either pick
 who it really is or press **Leave Unnamed**, which puts them back to `Speaker A`
 in this recording with everything they said intact, ready to be named again.
 
-Both write a one-time backup of the pipeline's own output before the first
-edit. Renaming never re-transcribes.
+All of these write a one-time backup of the pipeline's own output before the
+first edit. Renaming never re-transcribes.
 
 **Play** in that popover runs through their turns in order and skips everybody
 else, which is usually enough to recognise a voice, and the waveform greys the

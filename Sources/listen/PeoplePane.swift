@@ -320,7 +320,14 @@ final class InitialsDisc: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func show(_ person: Person) {
-        label.stringValue = Self.initials(person.display)
+        // A placeholder wears its letter, not its initials. "Speaker B" through
+        // the initials rule comes out "SB", which reads as somebody's monogram
+        // and is the same two characters for every unnamed speaker in the room.
+        // It only started mattering when the speaker picker began listing the
+        // people already in a recording, placeholders included.
+        label.stringValue = VoiceBank.isPlaceholder(person.label)
+            ? person.label
+            : Self.initials(person.display)
         layer?.backgroundColor = Self.colour(for: person.label).cgColor
     }
 

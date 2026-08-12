@@ -678,6 +678,53 @@ deliberately so: playback volume has to stay true to the recording, but a
 scrubber drawn at true amplitude is a flat line for anyone who recorded
 quietly.
 
+## Turns overlap, so the first one spanning the playhead is the wrong one
+
+Reported as "I clicked a line, it played the right audio and highlighted the line
+above it, and then played that line too". Half of it was the highlight and the
+other half was the reader believing what the highlight said.
+
+`refresh` used to take `turns.firstIndex { position >= $0.start && position <
+$0.end }`. That reads as obviously correct and is not, because **turns overlap**:
+people talk over each other, the two tracks are clustered separately, and
+`turns.json` is ordered by start. So the first turn spanning an instant is the
+*earliest one still running*, and a short interjection nested inside a longer
+turn can never win. Measured on the call it was reported from:
+
+| | |
+|---|---|
+| turns | 105 |
+| starting before the previous one ends | 55 (53%) |
+| clicking a turn's first sentence highlighted a different paragraph | **59 of 105** |
+| the same, with the rule below | 0 |
+
+The example: `Me` runs 218.22 to 226.46 and `Daniel` runs 220.74 to 223.22,
+wholly inside it. Clicking Daniel's line seeks correctly to 220.74, the first
+spanning turn is `Me`, so the paragraph above lights up, and the audio then plays
+on into the rest of `Me`, which is the highlighted paragraph. Everything the
+reader could see agreed with the wrong answer.
+
+`DetailView.speakingTurn(at:)` ranks instead of taking the first:
+
+1. **A sentence beats a span.** A turn runs from its first sentence's start to
+   its last one's end and includes the silences between; a sentence is somebody
+   actually talking. A turn with a sentence over the instant beats one that
+   merely surrounds it.
+2. **The most recently begun wins.** Where two turns are genuinely sounding at
+   once, which is real in a meeting, the one that started talking last is what a
+   listener hears as current.
+
+Verified at runtime with `LISTEN_DEBUG=1`, playing through a turn nested inside
+another: `playhead 00:19 -> turn 1 Céline Goossens` then `00:21 -> turn 0 Me`,
+where the old rule never left turn 0. And seeking straight into an overlap lands
+on the right paragraph on the first tick: `playhead 00:19 -> turn 1 A`. The trace
+line is kept, since "which paragraph does the app think is playing" is otherwise
+invisible.
+
+`WaveformView.speakers(for:)` still walks its spans with a cursor and so tints an
+overlapped bar with whoever started earlier. Left alone deliberately: a bar is
+three points wide and two people talking at once is one bar either way.
+
 ## Sentence highlighting is search, not arithmetic
 
 The playhead highlights the sentence inside the turn, which needs to know where

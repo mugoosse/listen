@@ -8,6 +8,48 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.13.0 (2026-08-12)
+
+### Clicking a speaker no longer hides the meeting
+
+It used to filter the transcript down to only their turns, which read as the
+app having mislaid the rest of the conversation. Clicking a name is a
+question, not a filter: the transcript now stays whole, and what changes is
+where the waveform and the popover's own Play button point. Play there still
+skips straight to that person, but the pane's play button always plays the
+meeting.
+
+### Correcting who said something, at three sizes
+
+- **One sentence or one paragraph wrong**: reassign it to whoever actually
+  said it, from the pill's menu, without touching the rest of the turn.
+- **A whole speaker is really someone else already in the recording**:
+  the speaker picker now lists everybody already in the meeting first, above
+  the voice bank's own suggestions, so folding a stray speaker into an
+  existing one is picking a name rather than knowing the word for it is
+  "Merge" and finding the button.
+- **A speaker was named by mistake**: Leave Unnamed puts them back to a
+  letter, no confirmation needed, because it costs nothing to undo. Discard
+  is now offered only for a speaker nobody has named, and its confirmation
+  states exactly what it removes ("This removes 8 turns · 0:39 from the
+  transcript"), because the alternative was somebody reaching for Discard
+  meaning undo and deleting half a transcript with no way back.
+
+### The paragraph that lights up while playing is the one actually sounding
+
+Turns overlap in real recordings, and the highlight used to pick whichever
+overlapping turn started earliest, which is usually the wrong one: measured
+on one call, 59 of 105 clicks lit up a different paragraph than the one
+playing. It is ranked differently now and gets all 105 right on the same
+transcript.
+
+### The transcript's scrollbar reaches the floor of the window
+
+With the composer open, it used to stop well short of the bottom, a knob
+resting a third of the way up with nothing under it. Fixed layout math that
+was making room for the composer twice; the scrollbar now runs the full pane
+and sits flush against the window's edge.
+
 ## 0.12.0 (2026-08-11)
 
 ### Listen dictates now, and Speak is retired

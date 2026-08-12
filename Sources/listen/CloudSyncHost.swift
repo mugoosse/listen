@@ -17,6 +17,7 @@ final class CloudSyncHost {
 
     private var timer: Timer?
     private var running = false
+    private var subscribed = false
 
     /// What the last pass did, for the Devices pane to show. A sync that
     /// reports nothing is indistinguishable from one that silently failed.
@@ -57,7 +58,14 @@ final class CloudSyncHost {
         defer { running = false; lastRun = Date() }
 
         let library = ListenKit.Library.mac()
-        guard let key = SyncCLI.keyStore.load() else {
+
+        // The key moves to the iCloud Keychain the first time CloudKit runs,
+        // which is the point at which a second Mac becomes possible. Copied
+        // rather than moved: the LAN transport still reads the file and every
+        // device already paired is paired against it.
+        KeyMigration.adoptFileKey(from: library)
+
+        guard let key = KeyStore.shared.load() ?? SyncCLI.keyStore.load() else {
             var report = CloudReport()
             report.errors.append("No pairing key yet.")
             lastReport = report
@@ -71,10 +79,18 @@ final class CloudSyncHost {
         state.adoptLegacyBase(from: library)
 
         let identity = state.identity(name: Host.current().localizedName ?? "Mac", kind: "Mac")
+        let store = CloudKitStore(containerID: CloudAccount.containerID)
         let core = CloudSyncCore(
-            library: library, state: state,
-            store: CloudKitStore(containerID: CloudAccount.containerID),
+            library: library, state: state, store: store,
             key: key, policy: .mac, device: identity.id, ingests: true)
+
+        // Ask to be told rather than asking repeatedly. A Mac keeps
+        // voiceprints, so it subscribes to all four zones; a phone does not,
+        // and is not woken by another Mac teaching itself a voice.
+        if !subscribed {
+            await store.subscribe(to: CloudNaming.Zone.allCases)
+            subscribed = true
+        }
 
         var report = CloudReport()
         devices = await core.heartbeat(name: identity.name, kind: identity.kind,

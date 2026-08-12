@@ -84,10 +84,35 @@ public enum SealingError: Error, Sendable {
 public struct KeyStore: Sendable {
     let service: String
     let account: String
+    /// Whether this item rides iCloud Keychain to the user's other devices.
+    ///
+    /// **This is what makes setting up a second Mac "sign in and open
+    /// Listen".** The key arrives by itself, Apple cannot read it, and there is
+    /// nothing to scan and nothing to type.
+    ///
+    /// One fallback survives and it is the smallest possible one: iCloud
+    /// Keychain is a separate toggle from iCloud Drive, so somebody can have
+    /// CloudKit working and key sync switched off. For them the key has nowhere
+    /// to arrive from, and without a path they would watch sync connect and
+    /// then fail to decrypt anything, which is the worst way to fail. Hence the
+    /// typed code, and nothing more than that.
+    let synchronizable: Bool
 
-    public init(service: String = "com.mgo.listen-sync", account: String = "pairing-key") {
+    public init(service: String = "com.mgo.listen-sync", account: String = "pairing-key",
+                synchronizable: Bool = false) {
         self.service = service; self.account = account
+        self.synchronizable = synchronizable
     }
+
+    /// The shared item both apps read.
+    ///
+    /// Named after the team rather than after either app, because
+    /// `com.mgo.listen` and `eu.jacarandalabs.listen` have different bundle
+    /// identifiers and only the team prefix is common to both. The access group
+    /// in the entitlements is what permits it; this is what finds it.
+    public static let shared = KeyStore(service: "eu.jacarandalabs.listen",
+                                        account: "pairing-key",
+                                        synchronizable: true)
 
     public func load() -> PairingKey? {
         var query: [String: Any] = [
@@ -96,6 +121,7 @@ public struct KeyStore: Sendable {
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
         ]
+        if synchronizable { query[kSecAttrSynchronizable as String] = true }
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
@@ -106,24 +132,31 @@ public struct KeyStore: Sendable {
     @discardableResult
     public func save(_ key: PairingKey) -> Bool {
         let data = key.raw.withUnsafeBytes { Data($0) }
-        let base: [String: Any] = [
+        var base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        if synchronizable { base[kSecAttrSynchronizable as String] = true }
         SecItemDelete(base as CFDictionary)
         var add = base
         add[kSecValueData as String] = data
+        // `AfterFirstUnlock` rather than `WhenUnlocked`, because sync has to
+        // work while the Mac is closed and the phone is in a pocket. A
+        // synchronizable item cannot use a `ThisDeviceOnly` class at all,
+        // which is the point of it.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     public func clear() {
-        SecItemDelete([
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-        ] as CFDictionary)
+        ]
+        if synchronizable { query[kSecAttrSynchronizable as String] = true }
+        SecItemDelete(query as CFDictionary)
     }
 }
 
@@ -171,3 +204,37 @@ public struct FileKeyStore: Sendable {
     public func clear() { try? FileManager.default.removeItem(at: url) }
 }
 #endif
+
+/// Getting the pairing key from where it is to where it should be.
+///
+/// It lives in a file beside the library, because `listen-sync` was a bare
+/// binary and a keychain item made by one process prompts for authorisation
+/// when a differently-signed one reads it. That constraint died when sync moved
+/// inside the app, so the key is free to go to the iCloud Keychain, which is
+/// what makes a second Mac need nothing typed.
+///
+/// **It moves by being copied, not by being moved.** The LAN transport is still
+/// running and still reads the file, and every device already paired is paired
+/// against it. Deleting it would take a working setup away to tidy something
+/// up, which is a bad trade at any time and a worse one mid-migration. The file
+/// goes at Phase 6, with the transport that needs it.
+public enum KeyMigration {
+    /// Copy the file key into the shared iCloud Keychain item, once, if the
+    /// keychain has none. Returns true if it did something.
+    ///
+    /// Never the other way round, and never overwriting: a key already in the
+    /// keychain came either from this Mac or from another of the user's devices
+    /// through iCloud, and in both cases it is at least as authoritative as a
+    /// file on one disk. Overwriting it with a local file is how a second Mac
+    /// would silently unpair the first.
+    @discardableResult
+    public static func adoptFileKey(from library: Library) -> Bool {
+        #if os(macOS)
+        guard KeyStore.shared.load() == nil else { return false }
+        guard let existing = FileKeyStore(library: library).load() else { return false }
+        return KeyStore.shared.save(existing)
+        #else
+        return false
+        #endif
+    }
+}

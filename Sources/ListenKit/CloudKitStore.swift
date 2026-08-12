@@ -49,6 +49,37 @@ public actor CloudKitStore: RecordStore {
         CKRecordZone.ID(zoneName: zone.rawValue, ownerName: CKCurrentUserDefaultName)
     }
 
+    // MARK: - Subscriptions
+
+    /// Ask to be told when a zone changes, rather than asking every two
+    /// minutes whether it has.
+    ///
+    /// A silent push: no alert, no badge, no sound, and nothing a person ever
+    /// sees. It carries no content of its own, only the fact that there is
+    /// something to fetch, which is why it is safe to let Apple deliver it for
+    /// a product whose whole claim is that Apple cannot read the contents.
+    ///
+    /// **Per zone, which is how a device subscribes to some and not others.**
+    /// A phone that does not keep voiceprints does not subscribe to that zone,
+    /// so it is not woken by another Mac teaching itself a voice, and a Mac is
+    /// not woken by a phone's heartbeat.
+    ///
+    /// Idempotent: a subscription that already exists comes back as
+    /// `serverRecordChanged`, which is the ordinary case on every launch but
+    /// the first.
+    public func subscribe(to zones: [CloudNaming.Zone]) async {
+        for zone in zones {
+            guard (try? await prepare(zone)) != nil else { continue }
+            let id = "sub-" + zone.rawValue
+            let subscription = CKRecordZoneSubscription(zoneID: zoneID(zone),
+                                                        subscriptionID: id)
+            let info = CKSubscription.NotificationInfo()
+            info.shouldSendContentAvailable = true      // silent, and the point
+            subscription.notificationInfo = info
+            _ = try? await database.modifySubscriptions(saving: [subscription], deleting: [])
+        }
+    }
+
     // MARK: - Save
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {

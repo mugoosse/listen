@@ -41,6 +41,7 @@ final class DevicesPane: Pane {
     }
 
     override func build() {
+        cloudSection()
         heading("Add a device")
 
         guard let code = DeviceSync.pairingCode() else {
@@ -196,6 +197,52 @@ final class DevicesPane: Pane {
     override func refresh() { drawn = ""; fillList() }
 
     /// A QR, drawn at whole-pixel scale.
+    /// What iCloud sync is doing, above the wifi pairing it replaces.
+    ///
+    /// Deliberately says which of the two transports is carrying the library
+    /// rather than implying there is one. During the migration both exist, and
+    /// a pane that showed only the old one would describe a Mac that is no
+    /// longer using it.
+    private func cloudSection() {
+        heading("iCloud")
+
+        let host = CloudSyncHost.shared
+        if Settings.cloudSync {
+            var lines = ["Syncing through your own iCloud account."]
+            if let report = host.lastReport {
+                lines.append("Last pass: " + report.summary)
+            }
+            if !host.devices.isEmpty {
+                lines.append("")
+                for device in host.devices {
+                    lines.append("  \(device.name) (\(device.kind)), last seen \(device.lastSeen)")
+                }
+            }
+            note(lines.joined(separator: "\n"))
+        } else {
+            note("Off. Your devices keep each other in step over wifi instead, "
+                 + "which needs them awake at the same time and on the same "
+                 + "network.\n\nWith iCloud on, a meeting recorded anywhere "
+                 + "shows up everywhere, and nothing has to be awake at once. "
+                 + "Everything Listen puts there is sealed with a key that "
+                 + "never leaves your devices, so Apple stores it and cannot "
+                 + "read it. Your recordings stay on the Mac that made them.")
+        }
+
+        let toggle = NSButton(checkboxWithTitle: "Sync this library through iCloud",
+                              target: self, action: #selector(toggleCloud(_:)))
+        toggle.state = Settings.cloudSync ? .on : .off
+        stack.addArrangedSubview(toggle)
+        separator()
+    }
+
+    @objc private func toggleCloud(_ sender: NSButton) {
+        Settings.cloudSync = sender.state == .on
+        if Settings.cloudSync { CloudSyncHost.shared.startIfEnabled() }
+        else { CloudSyncHost.shared.stop() }
+        rebuild()
+    }
+
     static func qr(_ text: String, side: CGFloat) -> NSImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(text.utf8), forKey: "inputMessage")

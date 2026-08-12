@@ -585,6 +585,36 @@ extension Settings {
 
     static var isFirstRun: Bool { defaults.object(forKey: onboardedKey) == nil }
 
+    private static let cloudSyncKey = "cloudSync"
+
+    /// Whether this Mac syncs its library through iCloud.
+    ///
+    /// **Off until somebody turns it on, and deliberately so.** Everything
+    /// else in this app works on a Mac that has never signed into anything,
+    /// and the first write to a container is the first moment any of a
+    /// person's meetings leave the machine, sealed or not. That is a decision
+    /// to be taken rather than inherited from a default.
+    static var cloudSync: Bool {
+        get { defaults.bool(forKey: cloudSyncKey) }
+        set { defaults.set(newValue, forKey: cloudSyncKey) }
+    }
+
+    private static let preferredTranscriberKey = "preferredTranscriber"
+
+    /// Which Mac keeps a phone recording, and therefore transcribes it.
+    ///
+    /// Not a plumbing detail. Audio never moves again once it lands, so the
+    /// Mac that claims a phone recording is the Mac you have to be sitting at
+    /// to play that memo back for ever afterwards. First-come-first-served
+    /// would hand a fifty-minute session to whichever machine happened to wake
+    /// first, which on a desk with a laptop and a desktop is close to random.
+    ///
+    /// Empty means no preference, and then the first Mac awake takes it.
+    static var preferredTranscriber: String {
+        get { defaults.string(forKey: preferredTranscriberKey) ?? "" }
+        set { defaults.set(newValue, forKey: preferredTranscriberKey) }
+    }
+
     private static let userNameKey = "userName"
 
     /// What the microphone track is called on screen.

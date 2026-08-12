@@ -117,6 +117,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // then there is nothing to keep alive on either side.
         SyncHost.shared.startIfPaired()
 
+        // And the transport that replaces it, when it has been turned on.
+        // Both can be on during the migration; they write the same library and
+        // neither knows about the other, which is exactly why the plan says to
+        // run one per device rather than both, and why this is off by default.
+        CloudSyncHost.shared.startIfEnabled()
+
         // Open at login, on by default, for new installations only.
         //
         // Straight from Speak, and the argument is stronger here. Speak is a

@@ -33,6 +33,7 @@ enum SyncCLI {
         case "--fake":   await fake(&rest)
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
+        case "enable":   enable(&rest)
         default:         help()
         }
     }
@@ -341,6 +342,37 @@ enum SyncCLI {
         done()
     }
 
+    /// Turn CloudKit sync on or off for this Mac's real library.
+    ///
+    /// Deliberately a separate verb from everything else here, and deliberately
+    /// verbose about what it is about to do. Every other command in this file
+    /// operates on a scratch library; this one is the first thing that points
+    /// the container at four years of recordings.
+    private static func enable(_ args: inout [String]) -> Never {
+        if flag("--off", &args) {
+            Settings.cloudSync = false
+            print("CloudKit sync is off. Nothing was removed from the container.")
+            done()
+        }
+        guard flag("--on", &args) else {
+            print("""
+                CloudKit sync is \(Settings.cloudSync ? "on" : "off") for
+                \(library.root.path)
+
+                  listen sync enable --on     start syncing this library
+                  listen sync enable --off    stop, leaving the container as it is
+
+                Turning it on uploads every transcript, note and speaker name in
+                this library, sealed with the key beside it. Audio stays here.
+                """)
+            done()
+        }
+        Settings.cloudSync = true
+        print("CloudKit sync is on for \(library.root.path).")
+        print("It runs while Listen is open. `listen sync inspect` says what is up there.")
+        done()
+    }
+
     private static func help() -> Never {
         print("""
         listen sync: keeping your devices in step.
@@ -353,7 +385,7 @@ enum SyncCLI {
           run --library D [--to H]        run a device's engine from here
           note --library D --slug S       write a note the way an app does
           --fake                          every seam of the CloudKit sync, offline
-          cloud --library D               one pass against the real container\n          inspect                         what is in the container, by zone
+          cloud --library D               one pass against the real container\n          inspect                         what is in the container, by zone\n          enable [--on|--off]             sync this Mac's real library
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

@@ -1,0 +1,100 @@
+import Foundation
+import ListenKit
+
+/// The CloudKit sync, running by itself while the app is open.
+///
+/// The counterpart to `SyncHost`, which answers a phone over the LAN. That one
+/// exists until Phase 6 and this one replaces it: there is no socket here, no
+/// address to find, no permission that fails by never completing, and nothing
+/// that needs both devices awake at once.
+///
+/// **Off unless `Settings.cloudSync` says otherwise.** The first write to a
+/// container is the first moment somebody's meetings leave their machine, and
+/// that is a decision to be taken rather than a default to be inherited.
+@MainActor
+final class CloudSyncHost {
+    static let shared = CloudSyncHost()
+
+    private var timer: Timer?
+    private var running = false
+
+    /// What the last pass did, for the Devices pane to show. A sync that
+    /// reports nothing is indistinguishable from one that silently failed.
+    private(set) var lastReport: CloudReport?
+    private(set) var lastRun: Date?
+    private(set) var devices: [CloudRecords.DeviceBlob] = []
+
+    /// Every two minutes while the app is open.
+    ///
+    /// A poll rather than a push subscription, for now. `CKSyncEngine`'s silent
+    /// pushes are what make this arrive within seconds rather than within
+    /// minutes, and they are worth adding, but a poll is what makes the feature
+    /// correct and a push only makes it prompt.
+    private let interval: TimeInterval = 120
+
+    func startIfEnabled() {
+        guard Settings.cloudSync, timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in await CloudSyncHost.shared.syncNow() }
+        }
+        Task { await syncNow() }
+        trace("cloud sync: on, every \(Int(interval))s")
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        trace("cloud sync: off")
+    }
+
+    /// One pass. Reentrant-safe, because a slow pass and a timer that fires
+    /// again would otherwise have two engines writing the same records and
+    /// each refusing the other's compare-and-swap.
+    @discardableResult
+    func syncNow() async -> CloudReport {
+        guard !running else { return lastReport ?? CloudReport() }
+        running = true
+        defer { running = false; lastRun = Date() }
+
+        let library = ListenKit.Library.mac()
+        guard let key = SyncCLI.keyStore.load() else {
+            var report = CloudReport()
+            report.errors.append("No pairing key yet.")
+            lastReport = report
+            return report
+        }
+
+        let state = EngineState(library: library)
+        // Adopt whatever the LAN transport agreed last, once, so the first
+        // CloudKit pass does not report a conflict on every note this Mac has
+        // ever edited.
+        state.adoptLegacyBase(from: library)
+
+        let identity = state.identity(name: Host.current().localizedName ?? "Mac", kind: "Mac")
+        let core = CloudSyncCore(
+            library: library, state: state,
+            store: CloudKitStore(containerID: CloudAccount.containerID),
+            key: key, policy: .mac, device: identity.id, ingests: true)
+
+        var report = CloudReport()
+        devices = await core.heartbeat(name: identity.name, kind: identity.kind,
+                                       appVersion: AppInfo.version ?? "unknown")
+        await core.push(into: &report)
+        await core.pushVoiceprints(into: &report)
+        // Claim before downloading, and prefer whichever Mac was chosen to keep
+        // phone recordings. Empty means no preference and the first Mac awake
+        // takes it.
+        let preferred = Settings.preferredTranscriber
+        await core.ingest(preferred: preferred.isEmpty ? nil : preferred, into: &report)
+        await core.pull(into: &report)
+        await core.pullVoiceprints(into: &report)
+
+        // Anything that arrived may be a recording with audio and no
+        // transcript, which is the definition of a pending job.
+        if report.pulledRecordings > 0 || report.claimed > 0 { Queue.shared.resume() }
+
+        lastReport = report
+        trace("cloud sync: \(report.summary)")
+        return report
+    }
+}

@@ -208,17 +208,54 @@ final class DevicesPane: Pane {
 
         let host = CloudSyncHost.shared
         if Settings.cloudSync {
-            var lines = ["Syncing through your own iCloud account."]
-            if let report = host.lastReport {
-                lines.append("Last pass: " + report.summary)
+            var lines: [String] = []
+
+            // When, in words, because "2026-08-12T17:51:04Z" answers a question
+            // nobody asked. A sync that reports nothing is indistinguishable
+            // from one that silently failed, and the second is the one that
+            // loses a session.
+            if let run = host.lastRun {
+                let ago = Date().timeIntervalSince(run)
+                let when: String
+                if ago < 60 { when = "just now" }
+                else if ago < 3600 { when = "\(Int(ago / 60)) minutes ago" }
+                else if ago < 86_400 { when = "\(Int(ago / 3600)) hours ago" }
+                else { when = "\(Int(ago / 86_400)) days ago" }
+                let what = host.lastReport?.summary ?? "nothing to do"
+                lines.append("Last synced \(when): \(what)")
+            } else {
+                lines.append("Waiting for the first sync.")
             }
-            if !host.devices.isEmpty {
+
+            if let errors = host.lastReport?.errors, !errors.isEmpty {
                 lines.append("")
-                for device in host.devices {
-                    lines.append("  \(device.name) (\(device.kind)), last seen \(device.lastSeen)")
-                }
+                lines.append("Last error: " + errors[0])
             }
+            if let conflicts = host.lastReport?.conflicts, !conflicts.isEmpty {
+                lines.append("")
+                lines.append("Both sides edited, so neither was touched: "
+                             + conflicts.joined(separator: ", "))
+            }
+
+            lines.append("")
+            lines.append("Your recordings stay on the Mac that made them. "
+                         + "Everything else is sealed with a key that never "
+                         + "leaves your devices, so Apple stores it and cannot "
+                         + "read it.")
             note(lines.joined(separator: "\n"))
+
+            if !host.devices.isEmpty {
+                var rows = ["On this account:"]
+                for device in host.devices {
+                    rows.append("  \(device.name) (\(device.kind))")
+                }
+                note(rows.joined(separator: "\n"))
+            }
+
+            let syncNow = NSButton(title: "Sync now", target: self,
+                                   action: #selector(syncNowPressed(_:)))
+            syncNow.bezelStyle = .rounded
+            stack.addArrangedSubview(row([syncNow]))
         } else {
             note("Off. Your devices keep each other in step over wifi instead, "
                  + "which needs them awake at the same time and on the same "
@@ -234,6 +271,15 @@ final class DevicesPane: Pane {
         toggle.state = Settings.cloudSync ? .on : .off
         stack.addArrangedSubview(toggle)
         separator()
+    }
+
+    @objc private func syncNowPressed(_ sender: NSButton) {
+        sender.isEnabled = false
+        sender.title = "Syncing…"
+        Task { @MainActor in
+            await CloudSyncHost.shared.syncNow()
+            self.rebuild()
+        }
     }
 
     @objc private func toggleCloud(_ sender: NSButton) {

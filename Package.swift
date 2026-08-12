@@ -20,9 +20,21 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.9.0"),
     ],
     targets: [
+        // The half both apps share: the folder contract, the sealing and the
+        // sync. MIT rather than AGPL, and `Sources/ListenKit/LICENSE` says why.
+        // Listen for iPhone compiles these same files, so this is one copy with
+        // two consumers rather than two copies that have to be kept agreeing.
+        //
+        // It deliberately depends on nothing. Every dependency here would have
+        // to build for iOS too, and the point of this target is that it is
+        // plain logic over files, testable from a command line on either
+        // platform without a simulator.
+        .target(name: "ListenKit", path: "Sources/ListenKit",
+                exclude: ["LICENSE"]),
         .executableTarget(
             name: "listen",
             dependencies: [
+                "ListenKit",
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),

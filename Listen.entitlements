@@ -26,6 +26,19 @@
          Hardened Runtime plus notarization with no profile, which is how this
          app was built until now, is exactly the configuration that cannot
          carry them. -->
+    <!-- Who is asking. Without these two, `CKContainer(identifier:)` fails at
+         the first call with "Trying to initialize a container without an
+         application ID", which reads like a container problem and is not: the
+         container is fine, and the process cannot say who it is.
+
+         The provisioning profile carries both, but a profile only states what
+         a signature is *allowed* to claim. The signature has to actually claim
+         it, and a signature claims exactly what is in this file. -->
+    <key>com.apple.application-identifier</key>
+    <string>BUZ45YDWYN.com.mgo.listen</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>BUZ45YDWYN</string>
+
     <key>com.apple.developer.icloud-services</key>
     <array>
         <string>CloudKit</string>

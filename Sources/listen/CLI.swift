@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts", "notes", "tags", "ask",
+        "calendar", "contacts", "notes", "tags", "ask", "sync",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -162,6 +162,8 @@ enum CLI {
             ask(rest)
         case "provider":
             provider(rest)
+        case "sync":
+            await SyncCLI.run(rest)
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }

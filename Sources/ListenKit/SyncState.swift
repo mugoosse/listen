@@ -1,0 +1,120 @@
+import Foundation
+
+/// What this device believed the other one had, at the end of the last sync.
+///
+/// Without it a note sync can compare only two things, local and remote, and
+/// two values cannot distinguish "I am behind" from "we both changed". The
+/// first pass at this compared timestamps alone and **silently destroyed an
+/// edit made on the phone** when the Mac had also been edited: the phone's
+/// copy was older, so it looked like a stale copy and was overwritten. It
+/// reported success. That is the failure this file exists to make impossible.
+///
+/// Three values, so every case is nameable:
+///
+/// | base | local | remote | meaning |
+/// |---|---|---|---|
+/// | b | b | b | nothing to do |
+/// | b | b | r | pull |
+/// | b | l | b | push |
+/// | b | l | r | **conflict**, touch neither |
+///
+/// A recording's sidecars need none of this. A transcript has exactly one
+/// writer, the Mac that made it, and audio is written once and never again.
+/// What needs it is anything two devices can edit independently: notes today,
+/// and the library-level files in `DevicePolicy.blobs` as soon as there is a
+/// second Mac, because `contacts.json` and `dictionary.json` are both edited on
+/// whichever machine you happen to be sitting at.
+///
+/// So the map is keyed by kind rather than by slug. It was `noteBase[slug]`,
+/// which could only ever answer for one of them.
+public struct SyncState: Codable, Sendable {
+    /// Key to the content digest both sides agreed on last time. Keys are
+    /// `note:<slug>` and `file:<name>`; see `noteKey` and `fileKey`.
+    public var base: [String: String] = [:]
+
+    public init() {}
+
+    public static func noteKey(_ slug: String) -> String { "note:" + slug }
+    public static func fileKey(_ name: String) -> String { "file:" + name }
+
+    public subscript(note slug: String) -> String? {
+        get { base[SyncState.noteKey(slug)] }
+        set { base[SyncState.noteKey(slug)] = newValue }
+    }
+
+    public subscript(file name: String) -> String? {
+        get { base[SyncState.fileKey(name)] }
+        set { base[SyncState.fileKey(name)] = newValue }
+    }
+
+    // MARK: - Coding
+
+    private enum CodingKeys: String, CodingKey { case base, noteBase }
+
+    /// Reads the old `noteBase` shape as well as the current one.
+    ///
+    /// Cheap, and worth it: dropping a state file loses every agreed version at
+    /// once, and a note whose base is unknown while the two copies differ is
+    /// reported as a conflict rather than resolved. The migration turns that
+    /// from "a conflict on every note this device has ever edited" into
+    /// nothing happening at all.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let current = try? c.decodeIfPresent([String: String].self, forKey: .base) {
+            base = current
+            return
+        }
+        let old = (try? c.decodeIfPresent([String: String].self, forKey: .noteBase)) ?? [:]
+        base = Dictionary(uniqueKeysWithValues: old.map { (SyncState.noteKey($0.key), $0.value) })
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(base, forKey: .base)
+    }
+
+    static func url(in library: Library) -> URL {
+        library.root.appendingPathComponent(".sync-state.json")
+    }
+
+    public static func load(_ library: Library) -> SyncState {
+        guard let data = try? Data(contentsOf: url(in: library)),
+              let state = try? JSONDecoder().decode(SyncState.self, from: data)
+        else { return SyncState() }
+        return state
+    }
+
+    public func save(_ library: Library) {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? enc.encode(self).write(to: SyncState.url(in: library), options: .atomic)
+    }
+}
+
+/// What to do with one note this pass.
+public enum NoteAction: Equatable, Sendable {
+    case nothing
+    case pull
+    case push
+    case conflict
+}
+
+/// The whole decision, as a function of three strings, so it can be reasoned
+/// about and tested without a network.
+public func decideNote(base: String?, local: String?, remote: String?) -> NoteAction {
+    switch (local, remote) {
+    case (nil, nil): return .nothing
+    case (nil, .some): return .pull            // never seen here
+    case (.some, nil):
+        // Absent there. If we had agreed on a version it has been deleted on
+        // the Mac, and deleting a note is not something this sync does, so
+        // pushing it back is the safe reading rather than deleting it here.
+        return .push
+    case (.some(let l), .some(let r)):
+        if l == r { return .nothing }
+        guard let base else { return .conflict }   // both new, same slug
+        if l == base { return .pull }
+        if r == base { return .push }
+        return .conflict
+    }
+}

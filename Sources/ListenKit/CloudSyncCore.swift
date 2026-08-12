@@ -133,7 +133,7 @@ public struct CloudSyncCore: Sendable {
         let isNew = Recording.load(folder) == nil
 
         // Sidecars first, metadata last, and only what this device keeps.
-        for file in policy.sidecars where file != "metadata.json" {
+        for file in policy.librarySidecars where file != "metadata.json" {
             guard let want = blob.digests[file] else { continue }
             let local = folder.appendingPathComponent(file)
             if let have = try? Data(contentsOf: local), sha256Hex(have) == want { continue }
@@ -322,6 +322,174 @@ public struct CloudSyncCore: Sendable {
         let a = try CloudRecords.openRecording(existing, key: key)
         let b = try CloudRecords.openRecording(ours, key: key)
         return a.digests == b.digests && existing.audioOn == ours.audioOn
+    }
+
+    // MARK: - Devices
+
+    /// Say this device is here, and read who else is.
+    ///
+    /// Its own zone so a heartbeat does not wake every device for the library's
+    /// change feed, and **each device writes only its own record**, so there is
+    /// no merge to get wrong and no row two machines can fight over.
+    @discardableResult
+    public func heartbeat(name: String, kind: String, appVersion: String,
+                          now: Date = Date()) async -> [CloudRecords.DeviceBlob] {
+        let recordName = CloudNaming.recordName(.device, device, key: key)
+        do {
+            let existing = try await store.fetch(recordName, in: .devices)
+            var record = try CloudRecords.device(
+                CloudRecords.DeviceBlob(id: device, name: name, kind: kind,
+                                        lastSeen: Metadata.stamp(now),
+                                        appVersion: appVersion), key: key)
+            record.changeTag = existing?.changeTag
+            _ = try await store.save(record)
+        } catch {
+            // A heartbeat that fails is not worth reporting: the device list is
+            // a convenience and nothing downstream depends on it being current.
+        }
+        var everyone: [CloudRecords.DeviceBlob] = []
+        if let changes = try? await store.changes(in: .devices, since: nil) {
+            for record in changes.changed {
+                if let blob = try? CloudRecords.openDevice(record, key: key) {
+                    everyone.append(blob)
+                }
+            }
+        }
+        return everyone.sorted { $0.lastSeen > $1.lastSeen }
+    }
+
+    // MARK: - Voiceprints
+
+    /// Put this device's voiceprints up, for the other Macs.
+    ///
+    /// A separate zone rather than a filter, because a device subscribes per
+    /// zone: this is what makes "the phone never receives one" true rather than
+    /// "the phone declines to save one".
+    public func pushVoiceprints(into report: inout CloudReport) async {
+        guard policy.keepsVoiceprints else { return }
+        for recording in library.all() {
+            for file in DevicePolicy.voiceprintFiles {
+                let url = recording.folder.appendingPathComponent(file)
+                guard let contents = try? Data(contentsOf: url) else { continue }
+                let name = CloudNaming.recordName(.voiceprint, recording.id, key: key)
+                do {
+                    let existing = try await store.fetch(name, in: .voiceprints)
+                    if let existing,
+                       try CloudRecords.openBlob(existing, key: key).version
+                           == sha256Hex(contents) { continue }
+                    var record = try CloudRecords.voiceprint(id: recording.id,
+                                                             contents: contents, key: key)
+                    record.changeTag = existing?.changeTag
+                    _ = try await store.save(record)
+                } catch {
+                    report.errors.append("voiceprint \(recording.id): "
+                                         + error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Take other Macs' voiceprints down. The voice bank has no database and
+    /// the set of these files **is** the bank, so a Mac without them cannot
+    /// recognise a voice it has already been taught.
+    public func pullVoiceprints(into report: inout CloudReport) async {
+        guard policy.keepsVoiceprints else { return }
+        guard let changes = try? await store.changes(in: .voiceprints, since: nil) else { return }
+        for record in changes.changed {
+            guard let blob = try? CloudRecords.openBlob(record, key: key),
+                  Metadata.isValidID(blob.name) else { continue }
+            let folder = library.folder(for: blob.name)
+            guard FileManager.default.fileExists(atPath: folder.path) else { continue }
+            let url = folder.appendingPathComponent("embeddings.json")
+            if let have = try? Data(contentsOf: url), sha256Hex(have) == blob.version { continue }
+            try? blob.contents.write(to: url, options: .atomic)
+            report.pulledSidecars += 1
+        }
+    }
+
+    // MARK: - Audio in flight
+
+    /// Send a recording this device made, so a Mac can ingest it.
+    ///
+    /// Its own zone, and deleted after ingest, because it is a pipe and never a
+    /// store: a 25 MB asset sitting in the library zone would churn every
+    /// device's change feed and eat the user's iCloud quota for something that
+    /// exists to be thrown away.
+    ///
+    /// **This does not free the local audio.** Nothing here does. See
+    /// `reclaimIfAcknowledged`, and the reason it keys on a Mac saying it holds
+    /// the bytes rather than on this upload finishing.
+    public func upload(_ recording: Recording, into report: inout CloudReport) async {
+        guard !ingests else { return }
+        guard recording.hasAudio, let audio = try? Data(contentsOf: recording.micURL) else { return }
+        let metadataURL = recording.folder.appendingPathComponent("metadata.json")
+        guard let metadata = try? Data(contentsOf: metadataURL) else { return }
+        let name = CloudNaming.recordName(.audioTransfer, recording.id, key: key)
+        do {
+            if try await store.fetch(name, in: .transfer) != nil { return }
+            _ = try await store.save(try CloudRecords.transfer(
+                id: recording.id, from: device, metadata: metadata,
+                audio: audio, key: key))
+            report.pushedRecordings += 1
+        } catch {
+            report.errors.append("upload \(recording.id): \(error.localizedDescription)")
+        }
+    }
+
+    /// Ingest whatever is waiting, claiming each before spending anything on it.
+    ///
+    /// The order is the whole design: claim, then download, then publish, then
+    /// say so. A device that downloads first spends the transfer twice when two
+    /// Macs are awake; one that says so before the bytes are on disk invites the
+    /// phone to delete its only copy.
+    public func ingest(preferred: String?, window: TimeInterval = 300,
+                       into report: inout CloudReport, now: Date = Date()) async {
+        guard ingests else { return }
+        guard let changes = try? await store.changes(in: .transfer, since: nil) else { return }
+
+        for record in changes.changed {
+            guard let claimed = try? await claim(record, preferred: preferred,
+                                                 window: window, now: now), claimed
+            else { continue }
+            do {
+                let blob = try CloudRecords.openTransfer(record, key: key)
+                guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
+                guard let sealed = record.assets["mic.wav"] else {
+                    throw StoreError.unavailable("no audio on the transfer")
+                }
+                // Sealed exactly once, by `CloudRecords.transfer`. Sealing it
+                // again on the way in produced a blob that opened to
+                // ciphertext, which a WAV reader accepts as a file it cannot
+                // parse rather than reporting as an encryption mistake.
+                let audio = try key.open(sealed)
+
+                // Written the way `RecordingWriter` requires: everything else
+                // first, `metadata.json` last, so the folder is invisible until
+                // it is whole.
+                let folder = library.folder(for: blob.id)
+                try FileManager.default.createDirectory(at: folder,
+                                                        withIntermediateDirectories: true)
+                try audio.write(to: folder.appendingPathComponent("mic.wav"), options: .atomic)
+                try blob.metadata.write(to: folder.appendingPathComponent("metadata.json"),
+                                        options: .atomic)
+                report.claimed += 1
+
+                // Only now. This is what lets the phone let go, and the whole
+                // reason it is written after the bytes rather than before.
+                let recordName = CloudNaming.recordName(.recording, blob.id, key: key)
+                if let recording = library.find(blob.id) {
+                    var published = try CloudRecords.recording(recording, policy: policy, key: key)
+                    published.changeTag = try await store.fetch(recordName, in: .library)?.changeTag
+                    published.audioOn = device
+                    _ = try await store.save(published)
+                }
+
+                // The pipe is emptied only once the library holds it.
+                try await store.delete(record.name, in: .transfer)
+            } catch {
+                report.errors.append("ingest: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Claiming an ingest

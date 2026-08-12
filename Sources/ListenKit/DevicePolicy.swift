@@ -38,6 +38,29 @@ public struct DevicePolicy: Sendable, Equatable {
     /// Whether this device stores a given per-recording file.
     public func wants(_ file: String) -> Bool { sidecars.contains(file) }
 
+    /// Voiceprint material, which lives in its own zone rather than beside the
+    /// transcript.
+    ///
+    /// **The zone is the mechanism, not the policy.** A device subscribes per
+    /// zone, so a file placed in the library zone is delivered to every device
+    /// that syncs the library, whether or not that device then writes it to
+    /// disk. Keeping these out of the library record is the difference between
+    /// a phone declining to save a voiceprint and a phone never receiving one,
+    /// and only the second is worth claiming.
+    public static let voiceprintFiles = ["embeddings.json"]
+
+    /// The per-recording files that belong in the library zone: everything
+    /// this device keeps, minus anything with a zone of its own.
+    public var librarySidecars: [String] {
+        sidecars.filter { !DevicePolicy.voiceprintFiles.contains($0) }
+    }
+
+    /// Whether this device keeps voiceprints at all, which decides whether it
+    /// subscribes to that zone.
+    public var keepsVoiceprints: Bool {
+        sidecars.contains(where: DevicePolicy.voiceprintFiles.contains)
+    }
+
     /// The sidecars in the order they are written on arrival: `metadata.json`
     /// last, always. `Recording.load` returns nil without it and `Library.all`
     /// is a compactMap over `load`, so a folder mid-transfer is invisible

@@ -45,6 +45,12 @@ public enum CloudRecords {
     /// Assets rather than fields for the sidecars, because a record's non-asset
     /// fields have a size ceiling and `transcript.json` already reaches 314 KB
     /// on a real library with no upper bound on a long meeting.
+    ///
+    /// **`librarySidecars`, not `sidecars`.** Voiceprints have their own zone,
+    /// and a device subscribes per zone, so putting `embeddings.json` in here
+    /// would deliver it to every device that syncs the library even if that
+    /// device then declined to write it to disk. The zone is what makes the
+    /// split real; a client-side filter only makes it polite.
     public static func recording(_ recording: Recording, policy: DevicePolicy,
                                  key: PairingKey) throws -> StoredRecord {
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
@@ -52,7 +58,7 @@ public enum CloudRecords {
 
         var digests: [String: String] = [:]
         var assets: [String: Data] = [:]
-        for file in policy.sidecars where file != "metadata.json" {
+        for file in policy.librarySidecars where file != "metadata.json" {
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
             digests[file] = sha256Hex(data)

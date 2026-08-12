@@ -32,6 +32,7 @@ enum SyncCLI {
         case "devices":  devices(&rest)
         case "--fake":   await fake(&rest)
         case "cloud":    await cloud(&rest)
+        case "inspect":  await inspect(&rest)
         default:         help()
         }
     }
@@ -278,12 +279,66 @@ enum SyncCLI {
             device: name, ingests: !isPhone)
 
         var report = CloudReport()
-        if !flag("--pull-only", &args) { await core.push(into: &report) }
-        if !flag("--push-only", &args) { await core.pull(into: &report) }
+        let pullOnly = flag("--pull-only", &args)
+        let pushOnly = flag("--push-only", &args)
+        let preferred = option("--preferred", &args)
+
+        // A device says it is here before anything else, so the settings pane
+        // on every other device can say when it last was.
+        await core.heartbeat(name: name, kind: isPhone ? "iPhone" : "Mac",
+                             appVersion: AppInfo.version ?? "unknown")
+
+        if !pullOnly {
+            await core.push(into: &report)
+            await core.pushVoiceprints(into: &report)
+            if isPhone { for r in scratch.all() { await core.upload(r, into: &report) } }
+        }
+        if !pushOnly {
+            await core.ingest(preferred: preferred, into: &report)
+            await core.pull(into: &report)
+            await core.pullVoiceprints(into: &report)
+        }
         print(report.summary)
         for conflict in report.conflicts { print("conflict: \(conflict)") }
         for error in report.errors { print("error: \(error)") }
         exit(report.errors.isEmpty ? 0 : 1)
+    }
+
+    /// What is actually in the container, by zone and type.
+    ///
+    /// The check to run before deploying the schema to Production, because
+    /// after that moment no record type can be removed and no field retyped,
+    /// ever. It reports names and shapes and never opens a payload: if this
+    /// prints something readable, that is the bug.
+    private static func inspect(_ args: inout [String]) async -> Never {
+        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        let store = CloudKitStore(containerID: CloudAccount.containerID)
+        print("container:   \(CloudAccount.containerID)")
+        print("environment: \(CloudAccount.environment)\n")
+        var total = 0
+        for zone in CloudNaming.Zone.allCases {
+            guard let changes = try? await store.changes(in: zone, since: nil) else {
+                print("  \(zone.rawValue): unreachable"); continue
+            }
+            var byType: [String: Int] = [:]
+            var opaque = true
+            for record in changes.changed {
+                byType[record.type.rawValue, default: 0] += 1
+                // A record name that is not 64 hex characters is a record name
+                // that says something, which is the whole thing this design is
+                // trying not to do.
+                if record.name.count != 64 || !record.name.allSatisfy(\.isHexDigit) {
+                    opaque = false
+                }
+            }
+            total += changes.changed.count
+            let shape = byType.isEmpty ? "empty"
+                : byType.sorted { $0.key < $1.key }
+                        .map { "\($0.key)×\($0.value)" }.joined(separator: " ")
+            print("  \(zone.rawValue): \(shape)\(opaque ? "" : "   NAMES ARE NOT OPAQUE")")
+        }
+        print("\n\(total) record(s). Nothing above was decrypted to print it.")
+        done()
     }
 
     private static func help() -> Never {
@@ -298,7 +353,7 @@ enum SyncCLI {
           run --library D [--to H]        run a device's engine from here
           note --library D --slug S       write a note the way an app does
           --fake                          every seam of the CloudKit sync, offline
-          cloud --library D               one pass against the real container
+          cloud --library D               one pass against the real container\n          inspect                         what is in the container, by zone
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

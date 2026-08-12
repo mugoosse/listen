@@ -127,18 +127,48 @@ Clicking any turn plays from there.
 
 ### Naming speakers
 
-Click a speaker's name in the transcript. Type a name, take one of the
-suggestions ranked by voice, or take somebody off the invitation if this meeting
-was in your calendar. Two repairs are there because diarization gets these two
-things wrong often enough to need them:
+Click a speaker's name in the transcript and choose **Who Is This?** from the
+menu, or click their chip under the title, which opens the same thing directly.
+Type a name, take one of the suggestions ranked by voice, or take somebody off
+the invitation if this meeting was in your calendar. Two repairs are there
+because diarization gets these two things wrong often enough to need them:
 
-- **Discard** drops a phantom speaker, the one that appears over a stretch of
-  silence with a line of invented filler attached.
-- **Merge into** reassigns one label onto another, for when one real person got
-  split in two by changing seat or microphone.
+- **Merge** reassigns one label onto another, for when one real person got split
+  in two by changing seat or microphone.
+- **Discard** deletes a phantom speaker, the one that appears over a stretch of
+  silence with a line of invented filler attached. It is only offered on a
+  speaker nobody has named, and it says how many turns and how much time it is
+  about to remove.
+
+Named the wrong person? Click their name, choose **Not <name>…**, and either pick
+who it really is or press **Leave Unnamed**, which puts them back to `Speaker A`
+in this recording with everything they said intact, ready to be named again.
 
 Both write a one-time backup of the pipeline's own output before the first
 edit. Renaming never re-transcribes.
+
+**Play** in that popover runs through their turns in order and skips everybody
+else, which is usually enough to recognise a voice, and the waveform greys the
+other speakers so you can see where they talk. The player's own play button is
+unaffected and still plays the meeting. Nothing on the page moves either way.
+
+### Correcting who said something
+
+Diarization sometimes hands one paragraph, or one sentence inside a paragraph,
+to the wrong person while getting the rest of that speaker right. Renaming
+cannot fix that, so there are two smaller edits:
+
+- **Click the speaker's name above a paragraph** and choose *Speaker for This
+  Turn*. Either mouse button opens that menu, and everything else about the
+  speaker is in it too.
+- **Right-click a sentence** and choose *Speaker for This Sentence*, next to
+  Edit Sentence.
+
+Both list everybody already in the recording, so the usual fix is one click, and
+*Someone Else…* opens the same chooser that names a speaker if the right person
+is not in this meeting yet. Only the attribution changes: the words, the timings
+and the audio are untouched, and the way back is the same menu on the paragraph
+it moved to.
 
 ### What you are called
 
@@ -356,7 +386,7 @@ listen record [--seconds N]       capture until stopped, or for N seconds
 listen list [--limit N] [--tag T]  recordings as a table
 listen show <id>                  metadata and transcript
 listen export <id> [--format]     write a transcript out
-listen label <id> <speaker> ...   name, merge or discard a speaker
+listen label <id> <speaker> ...   name, merge, discard or move a speaker
 listen dictionary <sub>           your own terms and corrections
 listen notes <sub>                the notes, one or many recordings each
 listen tags <sub>                 what the recordings are about, in your words

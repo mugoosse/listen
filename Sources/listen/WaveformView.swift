@@ -62,9 +62,9 @@ final class WaveformView: NSView {
     /// whole point: the question is asked before anything has been listened to,
     /// so a highlight that only reached as far as the playhead would answer it
     /// nowhere.
-    var soloed: String? {
+    var focused: String? {
         didSet {
-            guard soloed != oldValue else { return }
+            guard focused != oldValue else { return }
             needsDisplay = true
         }
     }
@@ -143,17 +143,17 @@ final class WaveformView: NSView {
         // Who is talking in each bar, walked once and used by both passes below.
         let who = speakers(for: rects)
 
-        if let soloed, !who.isEmpty {
+        if let focused, !who.isEmpty {
             // Two shapes rather than one: where that person talks, and
             // everywhere else. The rest goes dimmer than the ordinary unplayed
             // grey, because the contrast is the whole message and leaving it at
             // `tertiaryLabelColor` puts their bars in a crowd.
             let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let ink = SpeakerColour.ink(for: soloed, on: .window, dark: dark)
+            let ink = SpeakerColour.ink(for: focused, on: .window, dark: dark)
             let theirs = NSBezierPath()
             let rest = NSBezierPath()
             for (i, rect) in rects.enumerated() {
-                let path = i < who.count && who[i] == soloed ? theirs : rest
+                let path = i < who.count && who[i] == focused ? theirs : rest
                 path.appendRoundedRect(rect, xRadius: 1, yRadius: 1)
             }
             NSColor.quaternaryLabelColor.setFill()
@@ -199,7 +199,7 @@ final class WaveformView: NSView {
     ///
     /// The spans are in order and so are the bars, so this walks both once
     /// rather than searching the turns for every bar. Computed for every bar and
-    /// not only the played ones, because the solo pass draws the whole width.
+    /// not only the played ones, because the focus pass draws the whole width.
     /// Empty rather than a row of blanks when there is nothing to say, which is
     /// what both callers test to fall back to the single accent fill: a
     /// recording with no transcript, and one whose length has not arrived yet.
@@ -247,13 +247,13 @@ final class WaveformView: NSView {
 
         for (i, rect) in rects.enumerated() where rect.minX < played {
             let speaker = i < who.count ? who[i] : ""
-            // While one speaker is soloed everybody else keeps the played grey
+            // While one speaker is focused everybody else keeps the played grey
             // rather than their own colour. Five colours next to each other is
             // the picture that made a quiet speaker hard to find in the first
             // place, and repeating it inside the played part would undo above
             // what the pass above just did.
             let colour: NSColor
-            if let soloed, speaker != soloed {
+            if let focused, speaker != focused {
                 colour = .tertiaryLabelColor
             } else {
                 colour = inks[speaker] ?? {

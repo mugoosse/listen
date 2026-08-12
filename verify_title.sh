@@ -31,6 +31,32 @@ reset() {
       [ -f "$SRC/$id/$f" ] && cp "$SRC/$id/$f" "$LISTEN_LIBRARY/recordings/$id/"
     done
   done
+  # The two "untitled" fixtures are made untitled again in the copy.
+  #
+  # They are real recordings in a library somebody uses, and the app titles a
+  # recording the moment its last speaker is named, so both had grown a "Call
+  # with ..." since this script was written. Six assertions failed for that and
+  # not for anything in the code, which is the worst kind of failing test: it
+  # points at the change in front of you. What the tests need is the *shape*
+  # (untitled, no source), so the copy is put into that shape rather than the
+  # fixture being replaced every few weeks with one that will do the same.
+  #
+  # `title` is set to the placeholder rather than deleted. It is a **required**
+  # key: `Metadata.title` is a non-optional `String`, so a file without it fails
+  # to decode and the app reports no such recording, which looks from here like
+  # the library being empty. Measured by deleting it: `listen list` printed "no
+  # recordings yet" over a folder with four sidecars in it. See "The placeholder
+  # is a key on disk and a word on screen" in `.agents/notes/titles.md`.
+  for id in "$CELINE" "$FRANCESCO"; do
+    python3 - "$LISTEN_LIBRARY/recordings/$id/metadata.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["title"] = "Untitled"
+data.pop("title_source", None)
+json.dump(data, open(path, "w"), indent=2, sort_keys=True)
+PY
+  done
   cp "$HOME/Library/Application Support/Listen/contacts.json" "$LISTEN_LIBRARY/" 2>/dev/null
 }
 field() {  # <id> <key>

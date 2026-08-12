@@ -74,6 +74,44 @@ enum SpeakerSheet {
         TranscriptEditor.apply(.rename(speaker, to: name), to: recording)
     }
 
+    /// Ask before deleting a speaker's lines, counting what goes.
+    ///
+    /// **One implementation, shared with `SpeakerPicker`**, which offers the
+    /// same repair from a popover. Two warnings about one destructive edit is
+    /// how one of them ends up milder than the other, and the mild one is the
+    /// one somebody reads.
+    ///
+    /// It counts because the word "segments" hid the size: somebody discarded a
+    /// speaker holding half a call, expecting it to undo a name they had just
+    /// applied, and got a transcript with half its paragraphs deleted. Turns and
+    /// minutes are what is on screen, so those are the units it asks in.
+    static func confirmDiscard(_ speaker: String, in recording: Recording) -> Bool {
+        let mine = recording.storedTurns.filter { $0.speaker == speaker }
+        let spoken = Recording.length(mine.reduce(0) { $0 + max(0, $1.end - $1.start) })
+        let size = [mine.count == 1 ? "1 turn" : "\(mine.count) turns", spoken]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
+
+        let alert = NSAlert()
+        alert.messageText = "Delete everything attributed to "
+            + "\(SpeakerName.display(speaker))?"
+        alert.informativeText = "This removes \(size) from the transcript, and "
+            + "the paragraphs on either side join up. It is for a speaker who is "
+            + "not a person: silence the diarizer split off with filler written "
+            + "over it.\n\nTo take a name off a real speaker instead, cancel and "
+            + "use Leave Unnamed, which keeps everything they said.\n\nThe audio "
+            + "is untouched, so transcribing again brings it back."
+        alert.alertStyle = .warning
+        // "Delete" rather than "Discard" on the button that does it. Discard is
+        // the mild word for closing a document without saving; this takes words
+        // out of a transcript.
+        alert.addButton(withTitle: "Delete \(size)")
+        alert.addButton(withTitle: "Cancel")
+        // Return lands on Cancel, so the destructive one has to be aimed at.
+        alert.buttons.first?.keyEquivalent = ""
+        alert.buttons.last?.keyEquivalent = "\r"
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     /// Drop a speaker's segments entirely.
     ///
     /// For a phantom speaker: diarization finds "someone" in a stretch of
@@ -81,15 +119,7 @@ enum SpeakerSheet {
     /// for it. There is no real person to name and the rows are noise.
     private static func discard(_ speaker: String, in recording: Recording,
                                 parent: NSWindow?, done: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = "Discard everything attributed to \(SpeakerName.display(speaker))?"
-        alert.informativeText = "Their segments are removed from the transcript. "
-            + "The audio is untouched, so transcribing again brings them back."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Discard")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { done(); return }
-
+        guard confirmDiscard(speaker, in: recording) else { done(); return }
         TranscriptEditor.apply(.discard(speaker), to: recording)
         done()
     }

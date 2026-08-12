@@ -308,6 +308,46 @@ system track was never asked, because a recording with a silent system track was
 assumed not to happen. An in-person meeting is exactly that recording, and it
 could grow a participant who was never in the room.
 
+## A paragraph ends at a ten second silence, and discarding a speaker is why
+
+`Merge.turns` folds consecutive segments by one speaker into a paragraph. It used
+to fold **all** of them, however far apart, and a turn claims the whole span from
+its first segment's start to its last one's end, so the result could be a
+paragraph asserting it covers time nobody spoke in, under a single timestamp.
+
+Where that stopped being theoretical is `.discard`. On a two person call,
+removing one speaker makes the other's segments adjacent, so on a 4 minute call
+sixteen turns became **one**, running 1.9 to 240.7. Every word was still there.
+It read exactly like the transcript having been destroyed, and was reported as
+"it removed the paragraphs from other speakers too".
+
+`Merge.paragraphGap` is 10 seconds. Measured over the 61 transcripts in the
+development library, on the 14037 pairs of consecutive segments by one speaker:
+
+| p50 | p75 | p90 | p95 | p98 | p99 | p99.9 | max |
+|---|---|---|---|---|---|---|---|
+| 0.00s | 0.60s | 1.54s | 2.60s | 5.52s | 11.84s | 79.52s | 188.08s |
+
+Ten sits above the 98th percentile and below the 99th: ordinary speech with its
+breaths and thinking pauses stays in one paragraph, and the 1.18% of pairs
+further apart than that are somebody who has been away for a while. The same
+discard now leaves three paragraphs at 1.9, 142.2 and 222.3, which is what
+happened.
+
+**It does not cost the playhead.** The highlight depends on `Merge.sentences`
+locating every segment's text inside its turn, so the rule was checked against
+the whole library before it shipped: 17876 sentences placed and 0 unplaced under
+both rules, with 3839 turns becoming 4004. The 165 new breaks are exactly the
+pairs measured over 10 seconds apart.
+
+Overlaps come out negative from `segment.start - last.end`, which is smaller than
+the gap and joins, as it should: two segments that overlap are one stretch of
+speech the diarizer cut in the middle.
+
+Existing `turns.json` files keep their old shape until something edits the
+transcript, since that is when they are rebuilt. Nothing reads them expecting
+maximal turns.
+
 ## The Whisper-era cleanup has not fired on Parakeet yet
 
 `Merge.clean` is ported from `transcribe_call.py`, where it exists because

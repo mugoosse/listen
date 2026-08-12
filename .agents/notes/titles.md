@@ -49,6 +49,15 @@ old string stops reading as unnamed, becomes indistinguishable from a title
 somebody typed, and is never named automatically again. Silent, and only
 findable by wondering why one recording refuses to get a title.
 
+**It is also a required key**, which is worth knowing before writing a
+`metadata.json` by hand. `Metadata.title` is a non-optional `String`, so a file
+that simply omits it fails to decode and the recording disappears: measured by
+deleting the key from a copy, `listen list` printed "no recordings yet" over a
+folder holding four good sidecars, with nothing anywhere saying why. An untitled
+recording is `"title": "Untitled"`, never a missing title. `verify_title.sh`
+learned this the hard way when its fixtures were being reset to the untitled
+shape.
+
 What is shown is `Metadata.untitledDisplay`, currently `"New recording"`, and
 every drawing of a title goes through `Recording.displayTitle`. That property
 lives in `RecordingDisplay.swift`, whose header already states the rule this

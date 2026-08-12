@@ -28,6 +28,41 @@ enum TranscriptEditor {
         /// was looking at, the edit is refused rather than applied to whatever
         /// moved into its place.
         case retext(segment: Int, was: String, to: String)
+
+        /// Move some of one speaker's segments onto another speaker, leaving the
+        /// rest of what they said alone.
+        ///
+        /// The three edits above are all about a *speaker*: everything they said
+        /// is renamed, folded into somebody else, or thrown away. This one is
+        /// about some *words*, and it is the correction the diarizer's own
+        /// mistakes need. A cluster boundary in the wrong place gives one
+        /// paragraph, or one sentence inside a paragraph, to somebody who did
+        /// not say it, and neither renaming nor merging can fix that without
+        /// also moving the parts that were right.
+        case reassign(Scope, from: String, to: String)
+    }
+
+    /// Which segments a reassignment moves.
+    ///
+    /// Two shapes, because the two callers name a segment differently and both
+    /// have to be safe against a pane that was drawn before something else
+    /// edited the transcript.
+    ///
+    /// `.sentence` is a position and the text that position must still hold: the
+    /// same compare-and-swap `.retext` uses, for the same reason, since
+    /// `.discard` removes segments and an index taken from an older render then
+    /// points at a different sentence.
+    ///
+    /// `.turn` is a time window rather than a list of indices, because a
+    /// paragraph on screen is a fold over however many segments happen to lie
+    /// inside it. A window is stated in the transcript's own units, so it names
+    /// the same stretch of the meeting whatever has happened to the numbering
+    /// since, and it also catches the segments `Merge.sentences` could not place
+    /// in the paragraph, which an index list built from the screen would leave
+    /// behind under the old speaker with nothing saying so.
+    enum Scope {
+        case sentence(index: Int, text: String)
+        case turn(start: Double, end: Double)
     }
 
     /// `backup` exists for exactly one caller, `VoiceBank.autoAssign`.
@@ -93,6 +128,60 @@ enum TranscriptEditor {
                 segments[index].text = new
                 return true
             }
+
+        case .reassign(let scope, let speaker, let target):
+            let to = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !to.isEmpty, to != speaker else { return false }
+            guard change(recording, { segments in
+                switch scope {
+                case .sentence(let index, let text):
+                    guard index >= 0, index < segments.count,
+                          segments[index].speaker == speaker else { return false }
+                    // Trimmed on both sides, for the reason `.retext` gives: an
+                    // imported transcript carries whitespace around a segment
+                    // that the window never shows, so an untrimmed comparison
+                    // refuses every edit on those recordings and nothing on
+                    // screen could explain why.
+                    let current = segments[index].text
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard current == text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    else { return false }
+                    segments[index].speaker = to
+                    return true
+
+                case .turn(let start, let end):
+                    var moved = 0
+                    // A segment belongs to the paragraph when it *starts* inside
+                    // it, which is the same test `Merge.turns` folded it in on.
+                    // Testing the end as well would drop the last segment of any
+                    // turn whose final sentence overruns the turn's own end,
+                    // which happens whenever the timings disagree by a
+                    // rounding's worth.
+                    for i in segments.indices
+                    where segments[i].speaker == speaker
+                        && segments[i].start >= start - 0.001
+                        && segments[i].start <= end + 0.001 {
+                        segments[i].speaker = to
+                        moved += 1
+                    }
+                    return moved > 0
+                }
+            }) else { return false }
+
+            // Only when nothing of theirs is left. A voiceprint is built from
+            // everything one speaker said, so it still describes the segments
+            // that stayed behind; what it stops describing is a label that has
+            // gone from the transcript entirely, and a bank entry for somebody
+            // who is no longer in the recording goes on being offered as a
+            // suggestion in the next one, on evidence that was reassigned away.
+            //
+            // Re-read rather than reasoned about: `change` has just rewritten
+            // the file, and whether the label survived is a question about what
+            // is on disk now.
+            if Recording.find(recording.id)?.speakers.contains(speaker) != true {
+                VoiceBank.remove(speaker, in: recording)
+            }
+            return true
         }
     }
 

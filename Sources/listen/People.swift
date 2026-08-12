@@ -281,14 +281,8 @@ enum People {
         guard label != SpeakerName.you else { return [] }
         var changed: [String] = []
         for recording in library where recording.speakers.contains(label) {
-            let taken = Set(recording.speakers)
-            var index = 0
-            var letter = Merge.letter(index)
-            while taken.contains(letter) {
-                index += 1
-                letter = Merge.letter(index)
-            }
-            if TranscriptEditor.apply(.rename(label, to: letter), to: recording) {
+            if TranscriptEditor.apply(.rename(label, to: freeLabel(in: recording)),
+                                      to: recording) {
                 changed.append(recording.id)
             }
         }
@@ -296,6 +290,36 @@ enum People {
         // any more, and `set` drops an entry with neither an address nor a note.
         ContactBook.set(Contact(name: label, emails: [], notes: nil))
         return changed
+    }
+
+    /// Take one speaker's name off in **one** recording, leaving them in it.
+    ///
+    /// The undo for having named the wrong person, and it had no route at all
+    /// until somebody went looking for one and pressed Discard instead. That is
+    /// the difference this exists to make: the transcript is untouched, the
+    /// speaker is still there as `Speaker A`, the voiceprint moves to the letter
+    /// with them, and naming them again is one click. Discard deletes what they
+    /// said and is not undoable from the window.
+    ///
+    /// Not `unname`, which does the same thing to every recording the name
+    /// appears in and closes their contact card. Getting one meeting's
+    /// attribution wrong says nothing about the others.
+    @discardableResult
+    static func unname(_ label: String, in recording: Recording) -> Bool {
+        guard label != SpeakerName.you, !VoiceBank.isPlaceholder(label) else { return false }
+        return TranscriptEditor.apply(.rename(label, to: freeLabel(in: recording)),
+                                      to: recording)
+    }
+
+    /// A placeholder this recording is not already using.
+    ///
+    /// Reusing one that is in the room would silently merge two speakers, which
+    /// is the one thing unnaming must not do.
+    static func freeLabel(in recording: Recording) -> String {
+        let taken = Set(recording.speakers)
+        var index = 0
+        while taken.contains(Merge.letter(index)) { index += 1 }
+        return Merge.letter(index)
     }
 
     /// Rewrite one label as another across the library.

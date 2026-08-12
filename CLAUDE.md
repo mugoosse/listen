@@ -111,6 +111,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - One voice on the microphone is the user, whatever the flag says
 - Both tracks are clustered, so the letters are handed out once
 - The far end comes back in through the microphone
+- A paragraph ends at a ten second silence, and discarding a speaker is why
 - The Whisper-era cleanup has not fired on Parakeet yet
 - The transcription queue has no database
 - A job that saves the copy it started with erases the hour it ran for
@@ -131,6 +132,10 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 
 - A sentence is edited, and a segment is what gets written
 - The right-click never reaches the text field
+- Discard is a delete, and the undo it was mistaken for did not exist
+- Who said it is corrected at three sizes, and the middle two are new
+- Both buttons on a pill open the same menu, and the popover is its first item
+- The skipping belongs to the button that names it, and there is no bar
 - A person is a name string, and that is the whole identity model
 - Renaming somebody everywhere is the first edit that touches many recordings
 - `Me` stays `Me` on disk, whatever you call yourself
@@ -141,7 +146,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A suggestion is scored against the worst print, not the best evidence
 - A person is a centroid, the number is a word, and the sure ones name themselves
 - Naming a voice nobody has heard was the whole difficulty
-- Asking about a speaker narrows the page to them, for exactly as long as the asking lasts
+- Asking about a speaker points the player at them, and never takes the transcript away
 - Play starts at their first turn, not their longest
 - `metadata.state` cannot say who is waiting, and `effectiveState` inherits that
 - The legacy voiceprints are a different space with the same dimension
@@ -227,7 +232,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Sentence highlighting is search, not arithmetic
 - The sentence field wraps, and still opened one line high
 - Building the mixdown on the main thread froze the first press of play
-- The narrowed transcript is a view state, never a filtered array
+- The transcript is never filtered, and the arrays are why it could not be
 - The waveform dims everybody but one, and that is where a quiet speaker is
 - The to-do list is a lens, and deliberately not a status on every row
 - A hidden view held the divider, and the sidebar would not drag at all
@@ -463,6 +468,15 @@ earns its place: the `calendar backfill` preview disagreeing with `--apply` was
 found by writing it, not by reading the code that had just been changed. Run
 `./build.sh && ./make_app.sh` first, or it tests the last build.
 
+**A fixture copied from a live library goes stale, so `reset` reshapes it.** Two
+of the five are there to be *untitled*, and the app titles a recording the moment
+its last speaker is named, so both had grown a "Call with ..." and six assertions
+failed for that rather than for anything in the code. That is the worst kind of
+failing test, because it points at the change in front of you: expect this and
+check the fixture before believing a failure. `reset` now writes the placeholder
+back into those two copies, which is a `"title": "Untitled"` and never a deleted
+key, for the reason `.agents/notes/titles.md` gives.
+
 ### Driving the built app against a scratch library, without wrecking the real one
 
 `LISTEN_LIBRARY` points the app somewhere else, and a scratch library needs only
@@ -518,6 +532,14 @@ minutes: a claim about a released binary is not something to make from a diff.
 Do not press "Allow microphone" in that copy. A new bundle identifier is a new
 TCC subject, so it raises a real system prompt; "Skip" reaches the model step
 just as well.
+
+Context menus are reachable and worth using: `AXUIElementPerformAction(el,
+"AXShowMenu")` on an `NSButton` opens its menu, the whole tree including submenus
+is then readable, and `kAXPressAction` on an item runs it. That is how the
+transcript pill's "Speaker for This Turn" was verified end to end. A synthetic
+right-click over a **selectable `NSTextField`** opens nothing at all, so the Edit
+Sentence menu cannot be reached this way; `/Applications/Listen.app` behaves the
+same, which is the control that says it is the harness and not the build.
 
 One gap to know about: `HoverRow` is a plain `NSView` with a target and action,
 so every popover list row in this app is invisible to accessibility. A row

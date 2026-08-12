@@ -1459,8 +1459,16 @@ enum CLI {
 
     label options:
       <name>                     name the speaker
+      --unname                   take the name off, leaving the speaker in this
+                                 recording as a letter to be named again
       --merge-into <speaker>     reassign them onto another speaker
-      --discard                  drop their segments
+      --discard                  delete their segments. Not an undo for naming:
+                                 use --unname for that
+      --move <n> <name>          hand segment n to somebody else, leaving the
+                                 rest of this speaker alone
+      --move-turn <from> <to> <name>
+                                 hand every segment of theirs that starts
+                                 between those two seconds to somebody else
 
     transcribe options:
       --format md|json|txt       default md. json carries the timings.
@@ -1971,11 +1979,16 @@ enum CLI {
         exit(0)
     }
 
-    /// `listen label <id> <speaker> [<name> | --merge-into X | --discard]`.
+    /// `listen label <id> <speaker> [<name> | --unname | --merge-into X |
+    /// --discard | --move <n> <name> | --move-turn <from> <to> <name>]`.
     ///
     /// The same `TranscriptEditor` calls the window makes, so this is a real
     /// exercise of that path rather than a parallel implementation. It is also
     /// how speaker edits get verified, there being no test target.
+    ///
+    /// The two `--move` forms are the transcript menu's reassignment, and they
+    /// are here for that reason: a correction that can only be made by
+    /// right-clicking a paragraph is a correction nothing can check.
     private static func label(_ args: [String]) -> Never {
         guard args.count >= 2 else {
             fail("label needs a recording and a speaker. Try `listen help`.")
@@ -1998,14 +2011,52 @@ enum CLI {
                 fail("no speaker `\(rest[1])` to merge into.")
             }
             edit = .merge(speaker, into: rest[1])
+        case "--unname":
+            // Not `.rename` written out here: `People.unname(_:in:)` picks a
+            // letter this recording is not already using, and reusing one would
+            // silently merge two speakers.
+            guard People.unname(speaker, in: recording) else {
+                fail("\(speaker) cannot be unnamed. It is a placeholder already, "
+                     + "or the microphone track.")
+            }
+            guard let updated = Recording.find(recording.id) else { exit(0) }
+            log("speakers now: \(updated.speakers.joined(separator: ", "))")
+            log("state: \(updated.metadata.state)")
+            exit(0)
+        case "--move":
+            guard rest.count >= 3, let index = Int(rest[1]) else {
+                fail("--move needs a segment number and a name.")
+            }
+            guard let segments = recording.storedTranscript?.segments,
+                  index >= 0, index < segments.count else {
+                fail("no segment \(rest[1]) in \(recording.id).")
+            }
+            // The text this segment holds right now. `.sentence` is a
+            // compare-and-swap against a pane that was drawn before somebody
+            // else edited the transcript, and there is no such pane here: what
+            // was read a line ago is what the window would have been looking at.
+            edit = .reassign(.sentence(index: index, text: segments[index].text),
+                             from: speaker, to: rest[2])
+        case "--move-turn":
+            guard rest.count >= 4, let start = Double(rest[1]),
+                  let end = Double(rest[2]) else {
+                fail("--move-turn needs a start, an end and a name.")
+            }
+            edit = .reassign(.turn(start: start, end: end), from: speaker, to: rest[3])
         case .some(let name) where !name.hasPrefix("-"):
             edit = .rename(speaker, to: name)
         default:
-            fail("label needs a name, --merge-into <speaker>, or --discard.")
+            fail("label needs a name, --unname, --merge-into <speaker>, "
+                 + "--discard, --move <n> <name>, or "
+                 + "--move-turn <from> <to> <name>.")
         }
 
         guard TranscriptEditor.apply(edit, to: recording) else {
-            fail("\(recording.id) has no transcript to edit yet.")
+            // Three ways to get here and the edit says which: no transcript at
+            // all, a segment that is not this speaker's, or a window with none
+            // of their segments in it. Nothing was written in any of them.
+            fail("nothing was written. \(recording.id) has no transcript to edit, "
+                 + "or nothing matched.")
         }
         guard let updated = Recording.find(recording.id) else { exit(0) }
         log("speakers now: \(updated.speakers.joined(separator: ", "))")

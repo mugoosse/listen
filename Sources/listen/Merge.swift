@@ -341,16 +341,45 @@ enum Merge {
         return out
     }
 
+    /// How long a silence ends a paragraph, even when the same person carries on.
+    ///
+    /// **Measured over the 61 transcripts in the development library**, on the
+    /// 14037 pairs of consecutive segments by one speaker:
+    ///
+    ///     p50 0.00s   p75 0.60s   p90 1.54s   p95 2.60s
+    ///     p98 5.52s   p99 11.84s  p99.9 79.52s  max 188.08s
+    ///
+    /// Ten sits above the 98th percentile and below the 99th, so ordinary speech
+    /// with its breaths and its thinking pauses stays in one paragraph, and the
+    /// 1.18% of pairs that are further apart than this are somebody having been
+    /// away for a while. Lower and a normal answer breaks in half; higher and the
+    /// case below stops being caught at all.
+    static let paragraphGap: Double = 10
+
     /// Condense consecutive segments by the same speaker into one turn.
     ///
     /// This is the LLM-friendly view and what the MCP server serves: a
     /// paragraph per speaker rather than a row per sentence.
+    ///
+    /// **A long silence ends the paragraph too, and that is not cosmetic.** A
+    /// turn claims the whole span from its first segment's start to its last
+    /// one's end, so joining across a gap produces a paragraph that says it
+    /// covers time nobody was speaking in, with one timestamp for all of it.
+    /// Discarding a speaker is where this showed: on a two-person call, removing
+    /// one of them made the other's segments adjacent, and sixteen turns became
+    /// **one** running the length of the recording. Nothing was lost, every word
+    /// was still there, and it read exactly like the transcript having been
+    /// destroyed. See `paragraphGap` for the number.
     static func turns(from segments: [LabelledSegment]) -> [Turn] {
         var out: [Turn] = []
         for segment in segments {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            if var last = out.last, last.speaker == segment.speaker {
+            // Overlaps come out negative here, which is smaller than the gap and
+            // joins, as it should: two segments that overlap are one stretch of
+            // speech the diarizer cut in the middle.
+            if var last = out.last, last.speaker == segment.speaker,
+               segment.start - last.end <= paragraphGap {
                 last.text = (last.text + " " + text).trimmingCharacters(in: .whitespaces)
                 last.end = max(last.end, segment.end)
                 out[out.count - 1] = last

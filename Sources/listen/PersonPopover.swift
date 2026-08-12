@@ -24,9 +24,9 @@ enum PersonPopover {
     /// its positioning view leaves the window, and anything that reloads the
     /// pane replaces every chip in the row.
     /// `closed` fires however this goes away, dismissed or committed. It is what
-    /// puts the transcript back after a chip narrowed it: see `SpeakerPreview`,
-    /// which carries the same hook for the unnamed side, so both kinds of chip
-    /// follow one rule.
+    /// puts playback back after a chip pointed it at one speaker: see
+    /// `SpeakerPreview`, which carries the same hook for the unnamed side, so
+    /// both kinds of chip follow one rule.
     static func show(_ label: String, from view: NSView, rect: NSRect,
                      editing: Bool = false, closed: (() -> Void)? = nil,
                      done: @escaping () -> Void) {
@@ -77,8 +77,21 @@ enum PersonPopover {
     /// contextual menu is not. Every entry point this feature has is therefore
     /// also here, on the right button, which is where a Mac user looks for the
     /// verbs that apply to a thing.
+    ///
+    /// `open` replaces what the **first** item does, and exists because for one
+    /// caller this menu is no longer only the right button. The pill in a
+    /// transcript opens it on an ordinary click, so its first item has to be
+    /// exactly what that click used to do: `DetailView.editSpeaker`, which
+    /// routes an unnamed speaker to the picker rather than to `SpeakerSheet` and
+    /// points playback at them for as long as the popover is up. Without it, the
+    /// gesture people use most would reach the alert the picker replaced.
+    ///
+    /// The default is unchanged and is not an oversight. A chip's menu is a
+    /// second route to a popover the chip itself already offers, so it
+    /// deliberately does not depend on a popover appearing.
     static func menu(for label: String, in recording: Recording,
                      anchor: @escaping () -> (NSView, NSRect)?,
+                     open: ((NSView, NSRect) -> Void)? = nil,
                      done: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         let named = !VoiceBank.isPlaceholder(label)
@@ -89,7 +102,11 @@ enum PersonPopover {
         if named {
             menu.addItem(Action("Contact Card", "person.crop.circle") {
                 guard let (view, rect) = anchor() else { return }
-                show(label, from: view, rect: rect, done: done)
+                guard let open else {
+                    show(label, from: view, rect: rect, done: done)
+                    return
+                }
+                open(view, rect)
             })
             menu.addItem(Action("Open in People", "person.2") {
                 LibraryWindow.shared.showPerson(label)
@@ -102,14 +119,31 @@ enum PersonPopover {
                 guard let (view, rect) = anchor() else { return }
                 show(label, from: view, rect: rect, editing: true, done: done)
             })
+            // The picker, not `SpeakerSheet`. This is the item somebody takes
+            // when a name is wrong, so it has to lead somewhere that can say
+            // "leave them unnamed" as well as "they are somebody else". The
+            // sheet led to Merge and Discard, and Discard is how the last person
+            // to walk this path deleted half a transcript.
+            //
+            // The sheet is still the answer when there is no anchor to point a
+            // popover at, because a menu must not depend on a popover appearing.
             menu.addItem(Action("Not \(shown)…", "person.crop.circle.badge.questionmark") {
-                SpeakerSheet.present(for: recording, speaker: label,
-                                     in: NSApp.keyWindow, done: done)
+                guard let (view, rect) = anchor() else {
+                    SpeakerSheet.present(for: recording, speaker: label,
+                                         in: NSApp.keyWindow, done: done)
+                    return
+                }
+                SpeakerPicker.show(for: recording, speaker: label,
+                                   from: view, rect: rect, done: done)
             })
         } else {
             menu.addItem(Action("Who Is This?…", "person.crop.circle.badge.questionmark") {
-                SpeakerSheet.present(for: recording, speaker: label,
-                                     in: NSApp.keyWindow, done: done)
+                guard let open, let (view, rect) = anchor() else {
+                    SpeakerSheet.present(for: recording, speaker: label,
+                                         in: NSApp.keyWindow, done: done)
+                    return
+                }
+                open(view, rect)
             })
         }
         return menu

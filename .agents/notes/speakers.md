@@ -90,6 +90,173 @@ rather than guesses when two sentences read the same. The window can edit those
 two separately: `Merge.sentences` carries a cursor forward, so the first
 occurrence in the turn maps to the first segment.
 
+## Discard is a delete, and the undo it was mistaken for did not exist
+
+Reported, in full, because the shape of it is the lesson. Somebody named a
+placeholder after their sister to see what the flow did. They then wanted that
+undone, opened the speaker's menu, took "Not Céline Goossens…" because that is
+what they meant, landed in `SpeakerSheet`, found the person they wanted was not
+in the list, and pressed **Discard speaker**. They expected to be back at a
+speaker they could name again. What they got was half the transcript deleted.
+
+Three separate faults, and all three are fixed:
+
+**1. The undo did not exist anywhere.** `People.unname` had done this
+library-wide since the roster was built, and there was no way to do it to one
+recording, which is the only scope anybody wants it at: getting one meeting's
+attribution wrong says nothing about the others. `People.unname(_:in:)` is that
+operation, and `freeLabel(in:)` is shared with the library-wide version so both
+pick a letter the recording is not already using. Reusing one that is in the room
+would silently merge two speakers, which is the one thing unnaming must not do.
+
+It is on screen as **Leave Unnamed**, in the footer of the picker, where Discard
+used to be for a named speaker. No confirmation: every word stays, the voiceprint
+moves to the letter, and naming them again is the list the popover is already
+showing. Confirming a reversible edit only teaches people to click through the
+dialogs that matter.
+
+**2. Discard was offered where it is never the right answer.** It exists for a
+phantom: a stretch of silence the diarizer split off with filler written over it.
+A phantom is unnamed by definition, so on a speaker somebody has named, Discard
+can only ever be a mistake. The picker's footer is now built from the label:
+
+| speaker | footer |
+|---|---|
+| placeholder | Merge · Discard |
+| named | Leave Unnamed · Merge |
+
+It stays one click away, because Leave Unnamed turns a named speaker back into a
+placeholder and the footer then offers it.
+
+**3. "Not X…" led to the wrong place.** It opened `SpeakerSheet`, the alert whose
+whole list of answers is a name field, Merge and Discard. It now opens the
+picker, which asks "Who is this really?" over the ranked candidates, the
+invitation and the roster, and carries Leave Unnamed. The sheet is still the
+fallback when there is no anchor to point a popover at, because a menu must not
+depend on a popover appearing.
+
+### The confirmation counts what it is about to delete
+
+"Their segments are removed from the transcript" is true and says nothing about
+size. It now reads "This removes 8 turns · 0:39 from the transcript, and the
+paragraphs on either side join up", the button says **Delete 8 turns · 0:39**
+rather than "Discard", Return lands on Cancel so the destructive one has to be
+aimed at, and the text names Leave Unnamed as the thing to do instead.
+
+One implementation, `SpeakerSheet.confirmDiscard`, shared with the picker. Two
+warnings about one destructive edit is how one of them ends up milder than the
+other, and the mild one is the one somebody reads.
+
+## Who said it is corrected at three sizes, and the middle two are new
+
+Until this existed, every speaker edit was about a **speaker**: rename them,
+merge them into somebody, discard them. All three act on everything that person
+said in the recording, and none of them can fix the mistake the diarizer actually
+makes. A cluster boundary in the wrong place gives one paragraph, or one sentence
+inside a paragraph, to somebody who did not say it, while the rest of that
+speaker's turns are right. Renaming to fix a paragraph destroys the rest.
+
+So there are three sizes now, and each is where the thing it acts on is:
+
+| size | where | writes |
+|---|---|---|
+| one sentence | right-click the sentence → Speaker for This Sentence | `.reassign(.sentence(index:text:))` |
+| one turn | click the pill → Speaker for This Turn | `.reassign(.turn(start:end:))` |
+| every turn they have | the pill or chip's Not X…, Merge, or a rename | `.rename` / `.merge` |
+
+**The submenu offers the recording's own speakers first, and they are one
+click.** The mistake is nearly always one person's words landing on another
+person who is *also in the room*, so the answer is usually two names away and
+should not cost a dialog. The speaker it is attributed to now is in the list,
+ticked and disabled, because a menu of names with the current one missing makes
+the reader work out which one is absent. Anybody else is one click further,
+through `SpeakerPicker.choose`, which is the same controller that names a
+speaker: same ranked candidates, same invitation rows, same roster, same "New
+person" row. A second, smaller chooser built for this menu would be the first
+place somebody stopped being suggested.
+
+### Both buttons on a pill open the same menu, and the popover is its first item
+
+A left click on a speaker's name in a transcript used to go straight to the
+popover about them. That put the two questions a reader has about a name on
+different buttons: *who is this*, on the left, and *who really said this*, on the
+right. Nobody finds the second one that way, and the name over a paragraph is
+exactly where the doubt about it appears. So the pill's ordinary click pops the
+same menu the right button does, positioned the way `SpeakerChips.showOverflow`
+positions its own.
+
+**Nothing is lost, because the first item is what the click used to do.** That
+took a parameter rather than an accident: `PersonPopover.menu(open:)` replaces
+what the first item does, and `DetailView.turnMenu` passes `editSpeaker`. Without
+it the menu's own first item would have run `SpeakerSheet`, so the shortest path
+from a transcript to naming a voice would have been the alert the picker was
+built to replace, and a named speaker's card would have opened with no playback
+pointed at them.
+
+The default is deliberately unchanged for `SpeakerChips`. A chip's menu is a
+second route to a popover the chip itself already offers on a click, and it is a
+route that deliberately does not depend on a popover appearing.
+
+Verified in the window: pressing the pill opens the menu (the AX press reports
+failure, which is the menu's own tracking loop, not the press), choosing Contact
+Card raises the card with the transcript unmoved under it, and on a speaker
+renamed to a letter, Who Is This? gives the picker popover with its Play row
+rather than a separate alert window.
+
+### A sentence is named by its index, a turn by a time window
+
+Both have to survive a pane that was drawn before something else edited the
+transcript, and they survive it differently.
+
+`.sentence` is the index plus the text that index must still hold, which is
+exactly `retext`'s compare-and-swap and refused the same way. `.turn` is a time
+window, and **not** a list of the indices on screen, for two reasons. A paragraph
+is a fold over however many segments happen to lie inside it, and those numbers
+do not survive a `.discard` anywhere earlier in the file; and `Merge.sentences`
+skips any segment whose text it cannot locate in the turn, so an index list built
+from the screen would silently leave those behind under the old speaker. A window
+is stated in the transcript's own units and catches them.
+
+The window tests `start` only. The last segment of a turn can end after the turn
+does when the timings disagree by a rounding, and testing both ends would drop
+exactly the sentence a reader is most likely to be complaining about.
+
+### The voiceprint is left alone unless the label goes
+
+A print is built from everything one speaker said, so after a partial
+reassignment it still describes the segments that stayed behind. What it stops
+describing is a label that has gone from the transcript entirely, which happens
+when somebody reassigns the last of it, and a bank entry for a speaker who is not
+in the recording goes on being offered as a suggestion in the next one, on
+evidence that was reassigned away. So `.reassign` re-reads the recording after
+the write and calls `VoiceBank.remove` only when nothing of theirs is left. Same
+rule `.merge` follows, arrived at from the other end.
+
+### Everything else this decides
+
+- **No confirmation, and that is not an oversight.** The words and the audio are
+  untouched, both speakers are still in the transcript, and the way back is the
+  same menu on the paragraph it just moved to. Compare `.discard`, which asks.
+- **`Me` is allowed where the whole-speaker rename refuses it.**
+  `People.checkSpeaker` refuses `Me` when the recording already has a microphone
+  track, because at speaker scope that is a merge. At sentence scope it *is* the
+  merge, and it is the exact repair for the far end coming back in through the
+  microphone: see "The far end comes back in through the microphone" in `asr.md`.
+  `SpeakerPicker`'s `Purpose.pick` therefore checks less than `.name` does. A
+  bare letter is still refused, since every placeholder in the recording is
+  already an item in the menu this popover was opened from.
+- **The pill's menu is built when it opens.** `NSMenu` with a delegate and
+  `menuNeedsUpdate`. An hour of meeting is hundreds of turns, and eagerly
+  building a menu apiece, each holding a popover's worth of closures, for the one
+  paragraph somebody right-clicks, is work paid on every render.
+- **`listen label --move` and `--move-turn` drive the same edit**, for the reason
+  `listen label` exists at all. Verified on a copy of two real recordings: moving
+  segment 2 out of a `Me` turn split the paragraph and folded the sentence into
+  the neighbouring speaker's; moving every `Edgar` segment to Joshua Daniels left
+  `edgar left: 0` and dropped Edgar from `embeddings.json`; a window with none of
+  the speaker's segments in it, and an index whose text no longer matches, both
+  refused with nothing written.
+
 ## A person is a name string, and that is the whole identity model
 
 `People` groups the library by the label written in the transcripts. Nothing
@@ -550,47 +717,94 @@ not laziness. Playback stops **on its own** at the end of that speaker's last
 turn and nothing reports it back here, so a button drawn once would sit there
 offering to pause something already stopped.
 
-### Asking about a speaker narrows the page to them, for exactly as long as the asking lasts
+### Asking about a speaker points the player at them, and never takes the transcript away
 
-Clicking a chip shows only that speaker's turns and makes play run through them
-in order. Closing the popover, by dismissing it or by applying a name, puts the
-whole meeting back.
+Opening the popover about somebody makes play run through their turns in order
+and picks their bars out of the waveform. Closing it, by dismissing it or by
+applying a name, puts playback back. The transcript is untouched throughout.
 
-**One lifetime, and therefore no control of its own.** The first version left the
-filter on after the popover closed, with a bar over the transcript carrying a
-"Show everybody" button, on the theory that dismissing by accident is common and
-throwing the narrowed view away would cost more than it saves. Wrong, and
-reported as wrong the first time it was used: the ordinary way out of a popover
-is to click away from it, so the ordinary outcome was a transcript with most of
-its paragraphs missing and nothing on screen still asking anything. The undo
-button did not rescue that, it just proved the state should not exist.
+Two ways in, and they differ by one click: a chip under the title opens the
+popover directly, and a pill in the transcript opens a menu whose first item is
+that popover. See "Both buttons on a pill open the same menu" above.
 
-So the popover in front of you **is** the off switch, and the bar states what is
-happening without offering to change it.
+**It used to hide every paragraph but theirs, and that was the complaint it
+earned.** Two versions of the same mistake, in order:
 
-Three things this decides:
+1. The filter outlived the popover, with a bar carrying a "Show everybody"
+   button. The ordinary way out of a popover is to click away from it, so the
+   ordinary outcome was a transcript with most of its paragraphs missing and
+   nothing on screen still asking anything.
+2. The filter was tied to the popover's lifetime, which fixed the orphan and not
+   the filter. Clicking a name to find out who somebody is is a **question**, and
+   answering it by deleting the meeting from the screen reads as the app having
+   mislaid the transcript. Reported by the user as "don't do that", which is the
+   right length of review for it.
+
+What is left is the part that could not be had any other way, and it is about
+audio rather than about reading: play runs through their turns, and the waveform
+greys everybody else so a speaker with four words in an hour is findable. See
+"The waveform dims everybody but one" in `window.md`, which was always the better
+half of this feature.
+
+`DetailView.focused` is what the state is called now. It may not filter `turns`,
+`sentences` or `turnViews`, and that constraint has outlived the filter: `refresh`
+indexes all three against each other twenty times a second and the sentence
+editor writes back through the same indices.
+
+Two things survive from the old design:
 
 1. **Both kinds of chip go through it.** A named speaker's card gets the same
-   treatment as the unnamed picker, through `PersonPopover.show(closed:)`. "Click
-   a speaker to read only them" is one rule and two implementations of it would
-   be two rules by the next change. The named side gets no Play button of its
-   own, because the pane's own play already runs through their turns.
+   treatment as the unnamed picker, through `PersonPopover.show(closed:)`, so
+   there is one rule rather than two that agree today.
 2. **The undo hangs off `viewWillDisappear`, not off a delegate.** It is the one
    hook both ways out go through: a `.transient` popover is dismissed by clicking
    anywhere and tells nobody, and applying a name closes it from the inside.
-3. **There is no solo in any menu.** The chip's contextual menu had an "Only X in
-   This Transcript" item for one revision. It had to go with the button: it
-   soloed with no popover attached, which is exactly the orphaned filter this
-   design exists to make impossible.
 
 **The close is guarded by a token.** A transient popover reports its close
 whenever it gets round to it, and clicking a second chip opens one popover while
-closing another, so a late close from the one being replaced would clear the
-filter the new one had just set. `DetailView.soloWhile` takes the next token and
-hands back an undo that only fires for its own. Verified by driving the real
-window: chip B then chip A leaves 60 paragraphs of A on screen with "Who is
-Speaker A?" open, and the trace shows `setSolo(B)` then `setSolo(A)` with no
-`setSolo(nil)` between them.
+closing another, so a late close from the one being replaced would clear what the
+new one had just set. `DetailView.focusWhile` takes the next token and hands back
+an undo that only fires for its own.
+
+Verified by driving the real window over a scratch library: a 3 speaker, 48
+paragraph meeting reports 48 paragraphs before opening a speaker's popover and 48
+with it open, where the old build left 16.
+
+### The skipping belongs to the button that names it, and there is no bar
+
+There was one for a while, under the player: "Play runs through Edgar, skipping
+everybody else · 16 turns · 1:32". It was honest, and it was **a line of layout
+that appeared and vanished on a click**, so asking who somebody was pushed the
+whole transcript down a row and let it back up again. That is a worse thing to do
+to a reader than the sentence was a good thing to tell them, and it was reported
+as such within a day.
+
+So the bar is gone, and with it the case it existed to excuse. Skipping is now
+gated on `DetailView.playingFocused`, which is true only while the **popover's
+own Play** is what is running, and that button says "Play what they said,
+skipping everybody else" in the tooltip and stands next to "Spoke for 0:11 of
+this recording". Every other way to start playback means the meeting and clears
+the flag: the pane's play button (`playPressed`, which exists only to do that
+before calling `togglePlay`), a scrub, a click on a sentence, and closing the
+popover.
+
+The named side therefore no longer skips at all, because a contact card has no
+Play button and never explained it. What a card still does is colour that
+person's bars in the waveform, which moves nothing.
+
+Measured on a 4:10 recording whose speaker A has turns at 18.9-20.8 and
+42.3-67.9, sampling the transport clock twice a second:
+
+    picker's Play    00:19 00:20 00:42 00:43 ...   jumps the gap
+    pane's play      00:00 00:01 ... 00:06         plays it all, popover open
+
+The second line is the whole point of the flag: before it, that press jumped
+straight to 00:18 with only the bar to say why.
+
+What is deliberately **not** here: no way to filter the transcript to one
+speaker, from a menu or anywhere else. If reading one person ever becomes a real
+need it is a mode with its own control and its own way out, not something a click
+on a name does on the way past.
 
 ### Play starts at their first turn, not their longest
 
@@ -598,7 +812,7 @@ The first version started at the longest thing they said, on the reasoning that
 identifying a voice wants continuous speech rather than important speech, and
 that ranking turns by length picks the most rambling one, which is useless as a
 summary and ideal as a voice sample. That reasoning is fine and the rule is still
-wrong, for a mechanical reason: `soloStep` only ever moves **forward**, so
+wrong, for a mechanical reason: `focusStep` only ever moves **forward**, so
 starting in the middle means the turns before it can never be reached, and two
 presses of Play give two different halves of the same person.
 

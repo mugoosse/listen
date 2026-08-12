@@ -31,10 +31,10 @@ struct SpeakerPreview {
     var isPlaying: () -> Bool
     /// This popover has gone: dismissed, or closed because a name was applied.
     ///
-    /// **The narrowed transcript belongs to the popover and ends with it.** The
-    /// filter exists to answer the question this popover is asking, so a filter
-    /// that outlived it would be a transcript with most of its paragraphs
-    /// missing and nothing on screen still asking anything.
+    /// **Playing one speaker belongs to the popover and ends with it.** The rule
+    /// exists to answer the question this popover is asking, so one that outlived
+    /// it would be a player that skips most of the meeting with nothing on screen
+    /// still asking anything.
     var end: () -> Void
 }
 
@@ -46,14 +46,41 @@ enum SpeakerPicker {
                      from view: NSView, rect: NSRect,
                      preview: SpeakerPreview? = nil,
                      done: @escaping () -> Void) {
+        present(PickerController(recording: recording, speaker: speaker,
+                                 preview: preview, purpose: .name) {
+                                     current?.performClose(nil)
+                                     done()
+                                 },
+                from: view, rect: rect)
+    }
+
+    /// Choose somebody for one sentence or one turn, rather than for a speaker.
+    ///
+    /// The same list and deliberately the same controller. "Which of the people
+    /// I know is this" is a question this app already answers well, with the
+    /// voice bank's ranking, the invitation and the roster in one place, and a
+    /// second smaller list built for the transcript's menu would be the first
+    /// place somebody stopped being suggested.
+    ///
+    /// What it does not carry is Merge and Discard. Those are repairs to a whole
+    /// speaker, and this popover is open about a paragraph.
+    static func choose(for recording: Recording, speaker: String, asking: String,
+                       from view: NSView, rect: NSRect,
+                       pick: @escaping (String) -> Void) {
+        present(PickerController(recording: recording, speaker: speaker,
+                                 preview: nil,
+                                 purpose: .pick(asking: asking, apply: pick)) {
+                                     current?.performClose(nil)
+                                 },
+                from: view, rect: rect)
+    }
+
+    private static func present(_ controller: NSViewController,
+                                from view: NSView, rect: NSRect) {
         current?.performClose(nil)
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = PickerController(
-            recording: recording, speaker: speaker, preview: preview) {
-                current?.performClose(nil)
-                done()
-            }
+        popover.contentViewController = controller
         // Downward, like every other popover in this window: these sit near the
         // top of the pane, and one that does not fit above is not moved, it is
         // closed.
@@ -97,10 +124,25 @@ private struct Candidate {
     var section: String
 }
 
+/// What the popover is being opened to settle.
+///
+/// The list of candidates is the same in both, and everything else differs: the
+/// question at the top, whether the two whole-speaker repairs are at the bottom,
+/// and where the answer is written.
+@MainActor
+private enum Purpose {
+    /// Name this speaker, everywhere they appear in this recording.
+    case name
+    /// Name whoever said one sentence or one turn, leaving the speaker
+    /// otherwise as it was. The closure is handed the label to write.
+    case pick(asking: String, apply: (String) -> Void)
+}
+
 @MainActor
 private final class PickerController: NSViewController, NSTextFieldDelegate {
     private let recording: Recording
     private let speaker: String
+    private let purpose: Purpose
     private let done: () -> Void
 
     private let field = NSTextField(string: "")
@@ -118,10 +160,11 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     private static let width: CGFloat = 320
 
     init(recording: Recording, speaker: String, preview: SpeakerPreview?,
-         done: @escaping () -> Void) {
+         purpose: Purpose, done: @escaping () -> Void) {
         self.recording = recording
         self.speaker = speaker
         self.preview = preview
+        self.purpose = purpose
         self.done = done
         super.init(nibName: nil, bundle: nil)
     }
@@ -135,7 +178,19 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
 
-        let title = NSTextField(labelWithString: "Who is \(SpeakerName.display(speaker))?")
+        let asked: String
+        switch purpose {
+        // A named speaker is a different question with the same answers. "Who is
+        // Céline Goossens?" reads as the app having forgotten, when what is
+        // being said is that the name on this voice is wrong.
+        case .name where !VoiceBank.isPlaceholder(speaker):
+            asked = "Who is this really?"
+        case .name:
+            asked = "Who is \(SpeakerName.display(speaker))?"
+        case .pick(let asking, _):
+            asked = asking
+        }
+        let title = NSTextField(labelWithString: asked)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         stack.addArrangedSubview(title)
 
@@ -178,6 +233,17 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             row.alignment = .centerY
             row.spacing = 8
             stack.addArrangedSubview(row)
+        } else if case .pick = purpose {
+            // What changes, and what does not. Handing a paragraph to somebody
+            // else reads as an edit to the transcript until it says otherwise,
+            // and the words being untouched is the reason this is safe to try.
+            let detail = NSTextField(wrappingLabelWithString:
+                "Only who it is attributed to changes. The words and the audio "
+                + "stay as they are.")
+            detail.font = .systemFont(ofSize: 11)
+            detail.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(detail)
+            detail.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
         } else if !howLong.isEmpty {
             let detail = NSTextField(labelWithString:
                 "Spoke for " + howLong + " of this recording")
@@ -213,28 +279,10 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             rows.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        stack.addArrangedSubview(separator)
-        separator.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
-
-        // The two repairs, at the bottom and small. Diarization invents a
-        // speaker over silence and splits one person into two, so both are
-        // needed often enough to stay; neither is what this popover is for.
-        //
-        // No trailing ellipsis on either. The convention says one when a
-        // control opens something that asks for more, and both of these do, but
-        // in a popover that is *already* the thing asking, two dotted verbs at
-        // the foot of a list read as unfinished rather than as considerate. The
-        // tooltips say what each one means, which the dots never did.
-        let merge = small("Merge", #selector(mergeSpeaker))
-        merge.toolTip = "This speaker is really one of the others in this recording"
-        let discard = small("Discard", #selector(discardSpeaker))
-        discard.toolTip = "There is no person here, only noise the diarizer split off"
-        let footer = NSStackView(views: [merge, discard])
-        footer.orientation = .horizontal
-        footer.spacing = 8
-        stack.addArrangedSubview(footer)
+        // Both belong to naming a speaker. Choosing who said one paragraph is a
+        // narrower question, and Merge and Discard would answer a wider one than
+        // was asked: they act on everything that speaker ever said.
+        if case .name = purpose { addRepairs(to: stack) }
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView()
@@ -250,6 +298,54 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
         candidates = gather()
         render()
+    }
+
+    /// The repairs, at the bottom and small, and **which ones depends on whether
+    /// this speaker has a name.**
+    ///
+    /// Discard is for a phantom: a stretch of silence the diarizer split off and
+    /// Parakeet wrote filler over. A phantom is unnamed by definition, so on a
+    /// speaker somebody has named it is never the right answer, and it was the
+    /// wrong answer somebody reached for. They had named a placeholder to see
+    /// what would happen, wanted that undone, found Merge and Discard, and
+    /// pressed the destructive one. Discard is therefore not on the named side
+    /// at all, and what stands in its place is the undo they were looking for.
+    ///
+    /// It stays reachable in one click: Leave Unnamed puts the speaker back to a
+    /// letter, and this popover then offers Discard.
+    ///
+    /// No trailing ellipsis on any of them. The convention says one when a
+    /// control opens something that asks for more, and in a popover that is
+    /// *already* the thing asking, dotted verbs at the foot of a list read as
+    /// unfinished rather than as considerate. The tooltips say what each one
+    /// means, which the dots never did.
+    private func addRepairs(to stack: NSStackView) {
+        let separator = NSBox()
+        separator.boxType = .separator
+        stack.addArrangedSubview(separator)
+        separator.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
+
+        var buttons: [NSButton] = []
+        if !VoiceBank.isPlaceholder(speaker) {
+            let unname = small("Leave Unnamed", #selector(unnameSpeaker))
+            unname.toolTip = "Take the name off this speaker in this recording. "
+                + "Everything they said stays, and you can name them again."
+            buttons.append(unname)
+        }
+        let merge = small("Merge", #selector(mergeSpeaker))
+        merge.toolTip = "This speaker is really one of the others in this recording"
+        buttons.append(merge)
+        if VoiceBank.isPlaceholder(speaker) {
+            let discard = small("Discard", #selector(discardSpeaker))
+            discard.toolTip = "There is no person here, only noise the diarizer "
+                + "split off. Their lines are deleted."
+            buttons.append(discard)
+        }
+
+        let footer = NSStackView(views: buttons)
+        footer.orientation = .horizontal
+        footer.spacing = 8
+        stack.addArrangedSubview(footer)
     }
 
     override func viewDidAppear() {
@@ -477,23 +573,54 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     }
 
     private func apply(label: String, email: String?) {
-        // `People.checkSpeaker` and not `People.check`: this writes one label
-        // onto one speaker in one transcript, where `Me` is a legitimate answer
-        // and the library-wide rename's refusal of it is not. See the comment
-        // on `checkSpeaker`.
-        guard let problem = People.checkSpeaker(label, in: recording) else {
-            TranscriptEditor.apply(.rename(speaker, to: label), to: recording)
-            // The address, only when a row carrying one was picked. Typing a
-            // name freehand asserts nothing about who was on the invitation,
-            // which is the standard the book already holds.
-            if let email { ContactBook.link(email, to: label) }
-            done()
+        if let problem = check(label) {
+            let alert = NSAlert()
+            alert.messageText = problem.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
             return
         }
-        let alert = NSAlert()
-        alert.messageText = problem.localizedDescription
-        alert.alertStyle = .warning
-        alert.runModal()
+        switch purpose {
+        case .name:
+            TranscriptEditor.apply(.rename(speaker, to: label), to: recording)
+        case .pick(_, let write):
+            write(label)
+        }
+        // The address, only when a row carrying one was picked. Typing a name
+        // freehand asserts nothing about who was on the invitation, which is the
+        // standard the book already holds.
+        if let email { ContactBook.link(email, to: label) }
+        done()
+    }
+
+    /// Whether this name can be written, which depends on what it is being
+    /// written onto.
+    ///
+    /// `People.checkSpeaker` and not `People.check` for naming: that writes one
+    /// label onto one speaker in one transcript, where `Me` is a legitimate
+    /// answer and the library-wide rename's refusal of it is not. See the
+    /// comment on `checkSpeaker`.
+    ///
+    /// **Picking refuses less still, and `recordingHasYou` is the difference.**
+    /// Saying "that sentence was me" in a recording that already has a
+    /// microphone track is not a collision to be sent to Merge: it is the merge,
+    /// at the size of one sentence, and it is the exact repair for the case
+    /// where the far end came back in through the microphone and the diarizer
+    /// split it off as a stranger.
+    private func check(_ label: String) -> People.RenameProblem? {
+        switch purpose {
+        case .name:
+            return People.checkSpeaker(label, in: recording)
+        case .pick:
+            let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return .empty }
+            // A letter is still refused. Every placeholder in this recording is
+            // already an item in the menu this popover was opened from, so
+            // typing one here can only mean a person called "B", which is the
+            // name that reads as a speaker nobody has labelled yet.
+            if VoiceBank.isPlaceholder(trimmed) { return .looksLikePlaceholder(trimmed) }
+            return nil
+        }
     }
 
     func controlTextDidChange(_ note: Notification) { render() }
@@ -524,16 +651,24 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         done()
     }
 
+    /// Put a named speaker back to a letter, here and nowhere else.
+    ///
+    /// No confirmation, because there is nothing to lose: every word stays where
+    /// it is, the voiceprint moves to the letter, and naming them again is the
+    /// list this popover is already showing. Confirming a reversible edit only
+    /// teaches people to click through the dialogs that matter.
+    @objc private func unnameSpeaker() {
+        People.unname(speaker, in: recording)
+        done()
+    }
+
+    /// Delete everything a phantom speaker "said".
+    ///
+    /// The warning is `SpeakerSheet.confirmDiscard`, shared with the sheet that
+    /// offers the same repair, so there is one account of what this costs rather
+    /// than two that can disagree about how alarming it is.
     @objc private func discardSpeaker() {
-        let alert = NSAlert()
-        alert.messageText = "Discard everything attributed to "
-            + "\(SpeakerName.display(speaker))?"
-        alert.informativeText = "Their segments are removed from the transcript. "
-            + "The audio is untouched, so transcribing again brings them back."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Discard")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard SpeakerSheet.confirmDiscard(speaker, in: recording) else { return }
         TranscriptEditor.apply(.discard(speaker), to: recording)
         done()
     }

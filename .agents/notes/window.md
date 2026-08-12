@@ -751,44 +751,48 @@ actor. The view keeps its own `position` rather than reading the player's, so
 scrubbing moves the playhead immediately and the player is told where to start
 when it finally exists.
 
-## The narrowed transcript is a view state, never a filtered array
+## The transcript is never filtered, and the arrays are why it could not be
 
-`DetailView.soloed` hides the turn views that are not that speaker's and leaves
-`turns`, `sentences` and `turnViews` whole and the same length.
+`DetailView.focused` names the speaker the pane is asking about. It changes what
+the **waveform** draws and what the popover's own Play does, and nothing at all
+about the page: no paragraph is hidden, nothing is inserted, nothing moves. The
+filter it used to apply is gone, and so is the bar that explained the filter's
+last surviving side effect; see "Asking about a speaker points the player at
+them" and "The skipping belongs to the button that names it" in `speakers.md`.
 
-This is not tidiness, it is the bug the obvious implementation ships with.
-`refresh` finds the turn being spoken with `turns.firstIndex { ... }` and uses
-that index into `turnViews`, twenty times a second, and `TurnView` writes an
-edited sentence back by the segment index `Merge.sentences` gave it. Rebuild the
-stack from a filtered list and both of those are addressing different objects:
-the playhead highlights somebody else's paragraph, and a correction lands on the
-wrong segment. `NSStackView` collapses a hidden arranged subview for free, so
-there is nothing to gain by filtering the data.
+The constraint that made the filter a view state rather than a filtered array has
+outlived it, and is the reason nothing here may start filtering again. `refresh`
+finds the turn being spoken with `turns.firstIndex { ... }` and uses that index
+into `turnViews`, twenty times a second; `TurnView` writes an edited sentence
+back by the segment index `Merge.sentences` gave it; `reassign` writes a
+paragraph back by the time window `turns` gave it. Rebuild the stack from a
+filtered list and all three are addressing different objects: the playhead
+highlights somebody else's paragraph, and a correction lands on the wrong
+segment.
 
-Two consequences that were nearly bugs:
+Three things that went with the filter and the bar:
 
-1. **`reveal` skips a hidden turn.** It runs from `refresh` to keep the playing
-   paragraph on screen, and while somebody is soloed most turns are hidden, so
-   without the guard the moment before a skip scrolls the reader to a collapsed
-   view somewhere else in the meeting.
-2. **`renderTurns` re-applies the solo at the end.** Correcting a sentence
-   re-renders, and a re-render that quietly put everybody back would undo a
-   filter nobody had asked to leave.
+1. **`reveal` no longer skips hidden turns.** The guard existed because most of
+   them were hidden while a popover asked about somebody, so a skip could scroll
+   to a collapsed view somewhere else in the meeting. Nothing is hidden now.
+2. **`setFocus` no longer scrolls.** Jumping to the speaker's first turn made
+   sense while the rest of the page was being taken away. With the page intact it
+   is a click on a name throwing away the reader's place.
+3. **`applyFocus` is gone entirely**, along with `focusBar`, its label and its
+   two constraints. The transcript, the live view and Ask now hang off
+   `playerCard.bottomAnchor` directly, at the constants they had while the bar
+   was collapsed, so the pane is laid out identically to how it looked with
+   nobody being asked about.
 
-`scrollTranscriptToTop` came out of `renderTurns` for this, and has to stay
-deferred: soloing hides most of the arranged subviews, and the stack has not
-shrunk to fit what is left until the next layout pass.
-
-Playback while soloed runs through that speaker's turns and skips what is between
-them, which is the only place in this app where pressing play does not play what
-comes next. It is therefore **stated on the bar over the transcript** rather than
-left in a tooltip: a player that silently jumps is one you stop trusting. The bar
-carries no button, because the filter lasts exactly as long as the popover that
-set it. See `.agents/notes/speakers.md` for why that is the whole design.
+The lesson worth keeping is about **where a status line may live**. A sentence
+under the player is a row of layout that every view below it inherits, so a
+state that turns on and off with a click makes the whole page breathe. If
+something like this is needed again it belongs inside the popover that caused it,
+which is drawn over the page rather than in it.
 
 ## The waveform dims everybody but one, and that is where a quiet speaker is
 
-`WaveformView.soloed` draws that speaker's bars in their ink and everybody else's
+`WaveformView.focused` draws that speaker's bars in their ink and everybody else's
 in `quaternaryLabelColor`.
 
 The bars have been coloured by speaker since `spans` arrived, which means a quiet

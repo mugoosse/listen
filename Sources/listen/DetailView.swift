@@ -26,35 +26,45 @@ final class DetailView: NSView {
     private let waveform = WaveformView()
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
 
-    /// Which speaker the transcript is narrowed to, or nil for everybody.
+    /// Which speaker the pane is asking about, or nil for none.
     ///
-    /// **A view state, never a change to `turns`.** `refresh` finds the turn
-    /// being spoken by indexing into `turns` and uses that index into
-    /// `turnViews`, twenty times a second, so filtering either array would put
-    /// the playhead's highlight on somebody else's paragraph. Both stay whole
-    /// and the views that do not match are hidden, which `NSStackView` collapses
-    /// for free.
-    private var soloed: String?
-
-    /// What says the transcript is not all of the meeting.
+    /// **It changes the playing, never the reading.** This used to hide every
+    /// paragraph but theirs, and that was wrong twice over: clicking a name to
+    /// find out who somebody is should not take the transcript away, and a page
+    /// that empties on a click reads as a fault rather than as a filter. What is
+    /// left is the part that could not be had any other way: play runs through
+    /// their turns in order, and the waveform picks their bars out of everybody
+    /// else's, which is how you find a speaker who says four words in an hour.
     ///
-    /// Stated rather than left to be inferred from a shorter page. There is no
-    /// button on it and it needs none: the filter lasts exactly as long as the
-    /// popover that opened it, so the way back is to finish with the popover,
-    /// which is where the pointer already is.
-    private let soloBar = NSView()
-    private let soloLabel = NSTextField(labelWithString: "")
-    private var soloTop: NSLayoutConstraint!
-    private var soloHeight: NSLayoutConstraint!
+    /// The transcript stays whole, so nothing here may filter `turns`,
+    /// `sentences` or `turnViews`. `refresh` indexes all three against each
+    /// other twenty times a second and the sentence editor writes back through
+    /// the same indices.
+    private var focused: String?
 
-    /// Which popover owns the current solo.
+    /// True while the **popover's own Play** is what is running.
+    ///
+    /// Skipping everybody else is what that button offers in so many words, so
+    /// it is the one press that may do it. Anything that means "play the
+    /// meeting", the pane's play button or a scrub, clears this, and the
+    /// playhead stops jumping at once.
+    ///
+    /// **This is what a bar over the transcript used to say instead.** It read
+    /// "Play runs through Edgar, skipping everybody else · 16 turns · 1:32",
+    /// which was honest and cost a line of layout under the player that appeared
+    /// and vanished on a click, moving the transcript under the reader's eyes
+    /// every time they asked who somebody was. Removing the bar and leaving the
+    /// skipping to the button that names it costs one `Bool` and no layout.
+    private var playingFocused = false
+
+    /// Which popover owns the current focus.
     ///
     /// A `.transient` popover reports its close whenever it gets round to it,
     /// and clicking a second chip opens one popover while closing another, so a
-    /// late close from the one being replaced would clear the filter the new one
+    /// late close from the one being replaced would clear the focus the new one
     /// just set. Each opening takes the next token and a close only undoes its
     /// own, which makes the order the two callbacks arrive in stop mattering.
-    private var soloToken = 0
+    private var focusToken = 0
 
     /// What stands in for the transport when the audio is on another Mac.
     ///
@@ -337,7 +347,7 @@ final class DetailView: NSView {
             systemSymbolName: "play.fill", accessibilityDescription: "Play")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         playButton.target = self
-        playButton.action = #selector(togglePlay)
+        playButton.action = #selector(playPressed)
         playButton.toolTip = "Play"
 
         waveform.onScrub = { [weak self] fraction in self?.scrub(to: fraction) }
@@ -349,12 +359,7 @@ final class DetailView: NSView {
         chips.onName = { [weak self] speaker, anchor, rect in
             self?.editSpeaker(speaker, from: anchor, rect: rect)
         }
-        chips.onChanged = { [weak self] in
-            guard let self, let id = self.recording?.id,
-                  let updated = Recording.find(id) else { return }
-            self.show(updated)
-            LibraryWindow.shared.reload()
-        }
+        chips.onChanged = { [weak self] in self?.reloadAfterSpeakerChange() }
         // Named or unnamed, the same funnel. `editSpeaker` routes on the label,
         // and a chip that reports a name is a chip whose label is not a
         // placeholder, so the two agree by construction.
@@ -438,13 +443,6 @@ final class DetailView: NSView {
         playerNote.lineBreakMode = .byTruncatingTail
         playerNote.isHidden = true
 
-        soloLabel.font = .systemFont(ofSize: 12)
-        soloLabel.textColor = .secondaryLabelColor
-        soloLabel.lineBreakMode = .byTruncatingTail
-        soloBar.isHidden = true
-        soloLabel.translatesAutoresizingMaskIntoConstraints = false
-        soloBar.addSubview(soloLabel)
-
         for v in [playButton, timeLabel, waveform, playerNote] {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
@@ -459,7 +457,7 @@ final class DetailView: NSView {
         }
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
-                  soloBar, scroll, noteInfo, notesScroll, notesPlaceholder, askView,
+                  scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, notesHeading, recordingHeading, greeting,
                   recentChats, empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -505,11 +503,8 @@ final class DetailView: NSView {
         // never been saved. A label with an empty string still occupies a line,
         // so the caret sat forty points below the toggle with nothing between
         // them, which reads as a field that has come loose from its heading.
-        soloTop = soloBar.topAnchor.constraint(equalTo: playerCard.bottomAnchor,
-                                               constant: 0)
-        soloHeight = soloBar.heightAnchor.constraint(equalToConstant: 0)
-        // The note starts the page, under the solo bar, and the transcript
-        // follows it rather than sharing its box.
+        // The note starts the page and the transcript follows it rather than
+        // sharing its box.
         // 16 from the chips, which is the gap every section heading on this page
         // now gets: "Notes" and "Recording" are the same kind of thing and were
         // 50 and 14 points below what came before them.
@@ -536,7 +531,7 @@ final class DetailView: NSView {
         // 168 points and left a hand's width of nothing above the transcript.
         notesHeight = notesScroll.heightAnchor.constraint(equalToConstant: Self.notesFloorHeight)
         // Collapsing to nothing when no conversation has named this recording,
-        // spacing included, for the reason the chips row and the solo bar both
+        // spacing included, for the reason the chips row and the focus bar both
         // record: a hidden view keeps its frame, so leaving it would open a gap
         // above the transcript of every meeting nobody has asked about.
         chatLinksTop = chatLinks.topAnchor.constraint(equalTo: notesScroll.bottomAnchor,
@@ -624,18 +619,6 @@ final class DetailView: NSView {
             notePicker.leadingAnchor.constraint(
                 greaterThanOrEqualTo: modePicker.trailingAnchor, constant: 12),
 
-            // Between the player and the transcript, and collapsing to nothing
-            // when nobody is soloed, for the reason the chips row collapses: a
-            // hidden view keeps its frame, so leaving it would open a gap under
-            // the player of every recording in the library.
-            soloTop,
-            soloHeight,
-            soloBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            soloBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            soloLabel.leadingAnchor.constraint(equalTo: soloBar.leadingAnchor),
-            soloLabel.centerYAnchor.constraint(equalTo: soloBar.centerYAnchor),
-            soloLabel.trailingAnchor.constraint(lessThanOrEqualTo: soloBar.trailingAnchor),
-
             // **Its own scroller, under the notes rather than sharing them.**
             //
             // Playback scrolls this to the sentence being spoken. In one
@@ -653,7 +636,7 @@ final class DetailView: NSView {
             recordingHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                         constant: -24),
 
-            scroll.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -665,7 +648,7 @@ final class DetailView: NSView {
             //
             // Level with the transcript it stands in for, so the note above
             // stays put when a running recording finishes.
-            live.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 12),
+            live.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 12),
             live.leadingAnchor.constraint(equalTo: leadingAnchor),
             live.trailingAnchor.constraint(equalTo: trailingAnchor),
             live.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -692,7 +675,7 @@ final class DetailView: NSView {
             // both are documents about the meeting whose title is above them.
             // Its own composer is pinned inside it, so this one reaches the
             // bottom of the window rather than stopping short of it.
-            askView.topAnchor.constraint(equalTo: soloBar.bottomAnchor, constant: 8),
+            askView.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 8),
             askView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             askView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             askView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
@@ -1583,11 +1566,11 @@ final class DetailView: NSView {
         recordingHeadingHeight.constant = recordingHeading.isHidden ? 0 : 16
         recordingHeadingTop.constant = recordingHeading.isHidden ? 0 : 14
         askView.isHidden = page
-        // A solo is a lens on the transcript, so it goes with the transcript.
-        // Leaving the bar up over Ask would be a sentence about paragraphs that
-        // are not on screen, and the player it narrows is collapsed there
-        // anyway: switching to Ask already stops playback.
-        if !page { setSolo(nil) }
+        // The focus is about playing this transcript, so it goes with the
+        // transcript. Leaving the bar up over Ask would be a sentence about a
+        // player that is collapsed there anyway: switching to Ask already stops
+        // playback.
+        if !page { setFocus(nil) }
         showProvenance()
         showRelated()
         updatePlaceholder()
@@ -1863,11 +1846,12 @@ final class DetailView: NSView {
         // actually being edited, and it commits against `self.recording`, which
         // is still the recording the name was typed for.
         if recording?.id != previous { endEditingTitle() }
-        // A lens on one transcript, so it does not travel to the next one. The
-        // sidebar's lenses are the opposite and deliberately survive a selection
-        // change: those narrow the library, and this narrows one meeting.
-        soloed = nil
-        waveform.soloed = nil
+        // A question about one transcript, so it does not travel to the next
+        // one. The sidebar's lenses are the opposite and deliberately survive a
+        // selection change: those narrow the library, and this is about the
+        // meeting on screen.
+        focused = nil
+        waveform.focused = nil
         self.recording = recording
 
         guard let recording else {
@@ -2093,10 +2077,6 @@ final class DetailView: NSView {
             tagChips.clear()
             setChipsCollapsed(true)
             setModeBarCollapsed(true)
-            // `show` clears `soloed` before it gets here, so this closes the bar
-            // rather than leaving the last recording's solo announced over an
-            // empty pane.
-            applySolo()
             // The two pieces of the notes pane that are not inside it. Both are
             // siblings of `notesScroll` rather than subviews, so hiding the
             // scroll view leaves them drawn: they have to be asked again, and
@@ -2168,13 +2148,31 @@ final class DetailView: NSView {
                                 sentences: index < sentences.count ? sentences[index] : [])
             view.onSeek = { [weak self] sentence in
                 self?.endEditing()
+                // Playing from a sentence is playing the meeting from there, so
+                // it takes the playhead off one speaker's turns.
+                self?.playingFocused = false
                 // The sentence that was clicked, falling back to the turn for a
                 // click that landed between sentences or on an imported
                 // transcript whose segments could not be located in their turn.
                 self?.seek(to: sentence?.start ?? turn.start, playing: true)
             }
-            view.onSpeaker = { [weak self] anchor, rect in
-                self?.editSpeaker(turn.speaker, from: anchor, rect: rect)
+            view.onSpeakerMenu = { [weak self] anchor, rect in
+                self?.turnMenu(turn, anchor: anchor, rect: rect)
+            }
+            // The words and who said them, corrected from one menu. They are the
+            // same repair at two depths, and having one on the paragraph and the
+            // other only on the pill above it makes the reader hunt for the half
+            // they want.
+            view.onSentenceSpeaker = { [weak self] anchor, rect, sentence in
+                guard let self, sentence.range.location != NSNotFound,
+                      NSMaxRange(sentence.range) <= (turn.text as NSString).length
+                else { return nil }
+                let text = (turn.text as NSString).substring(with: sentence.range)
+                return self.reassignItem(
+                    "Speaker for This Sentence",
+                    scope: .sentence(index: sentence.index, text: text),
+                    from: turn.speaker, asking: "Who said this sentence?",
+                    anchor: anchor, rect: rect)
             }
             view.onEdit = { [weak self] sentence, was, text in
                 self?.applyEdit(sentence, was: was, to: text)
@@ -2214,11 +2212,6 @@ final class DetailView: NSView {
             tail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
         ])
 
-        // Whoever was soloed stays soloed across a re-render, so correcting a
-        // sentence while reading one person does not silently put everybody
-        // else back on the page.
-        applySolo()
-
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
         guard scrollToTop else { return }
@@ -2239,8 +2232,8 @@ final class DetailView: NSView {
     /// because the two flags read as if they should agree and do not: y = 0
     /// opens on the last turn, y = maxY - 1 on the first.
     ///
-    /// Deferred, because soloing hides most of the arranged subviews and the
-    /// stack has not shrunk to fit what is left until the next layout pass.
+    /// Deferred, because the turns are added to the stack in the pass that calls
+    /// this and it has not grown to hold them until the next one.
     private func scrollTranscriptToTop() {
         DispatchQueue.main.async { [self] in
             layoutSubtreeIfNeeded()
@@ -2337,7 +2330,17 @@ final class DetailView: NSView {
         }
     }
 
-    @objc private func togglePlay() {
+    /// The pane's own play button, which always means the meeting.
+    ///
+    /// Separate from `togglePlay` because that is also how everything else in
+    /// here starts playback, `playFocused` included, and this press is the one
+    /// that has to say "not one person".
+    @objc private func playPressed() {
+        playingFocused = false
+        togglePlay()
+    }
+
+    private func togglePlay() {
         // A button click never reaches `mouseDown` below, so the controls that
         // do claim their click each have to let the fields go themselves.
         endEditing()
@@ -2350,20 +2353,20 @@ final class DetailView: NSView {
             // Pressing play on a finished recording plays it, rather than
             // sitting silently at the end wondering what the button did.
             if player.currentTime >= player.duration - 0.05 { player.currentTime = 0 }
-            // While somebody is soloed, start inside one of their turns rather
+            // While somebody is focused, start inside one of their turns rather
             // than wherever the playhead was left. `updatePlayhead` would jump
             // there on its first tick anyway, and a press that plays a twentieth
             // of a second of the wrong person first is a press that sounds
             // broken.
-            switch self.soloStep(at: player.currentTime) {
+            switch self.focusStep(at: player.currentTime) {
             case .carryOn:
                 break
             case .jump(let time):
                 player.currentTime = time
             case .finished:
                 // Past their last turn, so start again at their first, which is
-                // the soloed reading of the finished-recording rule above.
-                if let first = self.soloTurns.first { player.currentTime = first.start }
+                // the focused reading of the finished-recording rule above.
+                if let first = self.focusTurns.first { player.currentTime = first.start }
             }
             self.position = player.currentTime
             player.play()
@@ -2403,6 +2406,9 @@ final class DetailView: NSView {
     private func scrub(to fraction: Double) {
         endEditing()
         guard length > 0 else { return }
+        // Dragging through the meeting is a way of reading the meeting, so the
+        // playhead stops skipping to one person's turns from here on.
+        playingFocused = false
         follows = true
         seek(to: fraction * length, playing: player?.isPlaying ?? false)
     }
@@ -2429,12 +2435,12 @@ final class DetailView: NSView {
         position = player.currentTime
         if player.duration > 0 { length = player.duration }
 
-        // While somebody is soloed, playback runs through their turns and skips
+        // While somebody is focused, playback runs through their turns and skips
         // what is between them. Announced on the bar above the transcript rather
         // than left to be discovered, because this is the only place in the app
         // where play does not play what comes next.
         if player.isPlaying {
-            switch soloStep(at: position) {
+            switch focusStep(at: position) {
             case .carryOn:
                 break
             case .jump(let time):
@@ -2444,8 +2450,8 @@ final class DetailView: NSView {
                 return
             case .finished:
                 // Stop at the end of the last thing they said rather than
-                // playing the rest of the meeting behind a page that says it is
-                // showing one person.
+                // playing the rest of the meeting under a bar that says play is
+                // running through one person.
                 pausePlayback()
             }
         }
@@ -2490,10 +2496,6 @@ final class DetailView: NSView {
     /// somewhere else.
     private func reveal(_ index: Int) {
         guard follows, index < turnViews.count else { return }
-        // A hidden turn has no frame worth scrolling to, and while somebody is
-        // soloed most of them are hidden. Without this, the moment before a skip
-        // scrolls the reader to a collapsed view somewhere else in the meeting.
-        guard !turnViews[index].isHidden else { return }
         let frame = turnViews[index].frame
         guard !scroll.documentVisibleRect.contains(frame) else { return }
         scrollingProgrammatically = true
@@ -2511,94 +2513,61 @@ final class DetailView: NSView {
         tick = nil
         player?.stop()
         player = nil
+        playingFocused = false
         position = 0
         currentTurn = nil
         waveform.progress = 0
         setPlaying(false)
     }
 
-    // MARK: - Soloing one speaker
+    // MARK: - Asking about one speaker
 
     /// This speaker's turns, in order.
-    private var soloTurns: [Turn] {
-        guard let soloed else { return [] }
-        return turns.filter { $0.speaker == soloed }
+    private var focusTurns: [Turn] {
+        guard let focused else { return [] }
+        return turns.filter { $0.speaker == focused }
     }
 
-    /// Show one speaker's turns and nothing else, or everybody again.
+    /// Mark one speaker as the one being asked about, or nobody.
+    ///
+    /// **All this changes on screen is the waveform**, which draws their bars in
+    /// their own colour and greys the rest. Nothing moves, nothing is hidden,
+    /// and no paragraph changes place: a click on a name must not shift the page
+    /// it was asked from.
     ///
     /// The argument is checked against the transcript rather than trusted: a
     /// stale menu or a picker left open across a rename can name somebody who is
-    /// no longer in it, and soloing them would empty the pane with nothing on
-    /// screen to explain it.
-    func setSolo(_ label: String?) {
+    /// no longer in it, and the popover's Play would then run to the end of the
+    /// meeting finding nothing of theirs.
+    func setFocus(_ label: String?) {
         let next = label.flatMap { wanted in
             turns.contains { $0.speaker == wanted } ? wanted : nil
         }
-        guard next != soloed else { return }
-        soloed = next
-        waveform.soloed = next
-        applySolo()
-        // Their first turn, rather than wherever the reader happened to be.
-        // Soloing changes the whole page, and a page that has changed without
-        // appearing to is the failure "Also about" already has a rule for.
-        if next != nil { scrollTranscriptToTop() }
+        guard next != focused else { return }
+        focused = next
+        waveform.focused = next
+        // Their turns are no longer what is playing, whoever is focused now.
+        playingFocused = false
     }
 
-    /// Narrow the transcript to one speaker for as long as a popover is asking
-    /// about them, and hand back the closure that puts it right.
+    /// Mark a speaker for as long as a popover is asking about them, and hand
+    /// back the closure that puts it right.
     ///
     /// Both chip kinds go through here so there is one rule rather than two that
-    /// agree today. See `soloToken` for why the undo is guarded.
-    private func soloWhile(_ speaker: String) -> () -> Void {
-        soloToken += 1
-        let token = soloToken
-        setSolo(speaker)
+    /// agree today. See `focusToken` for why the undo is guarded.
+    private func focusWhile(_ speaker: String) -> () -> Void {
+        focusToken += 1
+        let token = focusToken
+        setFocus(speaker)
         return { [weak self] in
-            guard let self, self.soloToken == token else { return }
-            self.setSolo(nil)
+            guard let self, self.focusToken == token else { return }
+            self.setFocus(nil)
         }
     }
 
-    /// Hide the paragraphs that are not this speaker's, and say so above them.
-    ///
-    /// Hiding views rather than rebuilding the stack from a filtered list, which
-    /// keeps `turns`, `sentences` and `turnViews` the same length and the same
-    /// order. `refresh` indexes all three against each other twenty times a
-    /// second; a filtered array would put the playing highlight on somebody
-    /// else's paragraph, and the sentence editor would write to the wrong
-    /// segment.
-    private func applySolo() {
-        for (index, view) in turnViews.enumerated() where index < turns.count {
-            view.isHidden = soloed != nil && turns[index].speaker != soloed
-        }
-
-        // Narrowing to the only speaker there is hides nothing and explains
-        // nothing. A memo has exactly one speaker, so this bar was appearing on
-        // every one of them to announce that all of the transcript was visible.
-        let distinct = Set(turns.map(\.speaker)).count
-        let showing = soloed != nil && distinct > 1
-        soloBar.isHidden = !showing
-        soloHeight.constant = showing ? 22 : 0
-        soloTop.constant = showing ? 10 : 0
-
-        guard showing, let soloed else { return }
-        let mine = soloTurns
-        let spoken = Recording.length(mine.reduce(0) { $0 + max(0, $1.end - $1.start) })
-        let counted = mine.count == 1 ? "1 turn" : "\(mine.count) turns"
-        // What play does is stated rather than left in a tooltip. A player that
-        // silently jumps is one you stop trusting, and this is the only place in
-        // the app where pressing play does not play what comes next.
-        soloLabel.stringValue = ["Showing only " + SpeakerName.display(soloed),
-                                 counted, spoken]
-            .filter { !$0.isEmpty }
-            .joined(separator: " · ")
-            + ". Play runs through them in order."
-    }
-
-    /// What playback should do next while somebody is soloed.
-    private enum SoloStep {
-        /// Inside one of their turns, or nobody is soloed.
+    /// What playback should do next while the popover's Play is running.
+    private enum FocusStep {
+        /// Inside one of their turns, or nobody is focused.
         case carryOn
         /// Between two of them: go here.
         case jump(TimeInterval)
@@ -2606,24 +2575,29 @@ final class DetailView: NSView {
         case finished
     }
 
-    private func soloStep(at time: TimeInterval) -> SoloStep {
-        guard let soloed else { return .carryOn }
+    /// **`playingFocused` is the whole gate.** Skipping the rest of the meeting
+    /// is what the popover's Play button says it does, so that press is the only
+    /// one allowed to do it. Every other way to start playback is the meeting,
+    /// and a player that jumped for those would be jumping with nothing on
+    /// screen saying why, which is how you stop trusting one.
+    private func focusStep(at time: TimeInterval) -> FocusStep {
+        guard playingFocused, let focused else { return .carryOn }
         if turns.contains(where: {
-            $0.speaker == soloed && time >= $0.start && time < $0.end
+            $0.speaker == focused && time >= $0.start && time < $0.end
         }) { return .carryOn }
-        if let next = turns.first(where: { $0.speaker == soloed && $0.start > time }) {
+        if let next = turns.first(where: { $0.speaker == focused && $0.start > time }) {
             return .jump(next.start)
         }
         return .finished
     }
 
-    /// Play everything the soloed speaker said, in order, one turn after the
+    /// Play everything the focused speaker said, in order, one turn after the
     /// next.
     ///
     /// **From their first turn, not their longest.** Starting at the longest
     /// gives the best single voice sample soonest, which is what identifying
     /// somebody wants, and it was the first thing this did. It is still the
-    /// wrong rule: `soloStep` only ever moves forward, so starting in the middle
+    /// wrong rule: `focusStep` only ever moves forward, so starting in the middle
     /// means the turns before it can never be reached and pressing play twice
     /// gives two different halves of the same person. One press plays all of
     /// them, from the beginning, which is the only behaviour that needs no
@@ -2632,9 +2606,13 @@ final class DetailView: NSView {
     /// No offset into the turn either, for the same reason: the jumps between
     /// turns land on `start`, so an offset here would make the first snippet the
     /// one clipped differently from the rest.
-    func playSolo() {
-        guard let first = soloTurns.first else { return }
+    func playFocused() {
+        guard let first = focusTurns.first else { return }
         follows = true
+        // Before the seek, not after: `seek` starts playback through
+        // `togglePlay`, which asks `focusStep` where to begin, and a flag set
+        // afterwards would let the first tick run as ordinary playback.
+        playingFocused = true
         seek(to: first.start, playing: true)
     }
 
@@ -2678,29 +2656,32 @@ final class DetailView: NSView {
         guard let recording else { return }
         let anchor = convert(rect, from: view)
         endEditing()
-        let refresh = { [weak self] in
-            guard let self, let updated = Recording.find(recording.id) else { return }
-            self.show(updated)
-            LibraryWindow.shared.reload()
-        }
-        // **Asking about somebody narrows the page to them, for as long as the
-        // asking lasts.** Opening the popover shows only what that speaker said
-        // and makes play run through their turns in order; closing it, by
-        // dismissing or by applying a name, puts the whole meeting back. So the
-        // filter has exactly one lifetime and it is one the user is already
-        // holding in their hand, which is why there is no control anywhere for
-        // turning it off: the popover in front of them is the off switch.
+        let refresh: () -> Void = { [weak self] in self?.reloadAfterSpeakerChange() }
+        // **Asking about somebody points the player at them, and leaves the
+        // transcript alone.** Opening the popover makes play run through their
+        // turns in order and picks their bars out of the waveform; closing it,
+        // by dismissing or by applying a name, puts playback back. So the rule
+        // has exactly one lifetime and it is one the user is already holding in
+        // their hand, which is why there is no control anywhere for turning it
+        // off: the popover in front of them is the off switch.
         //
-        // Both kinds of chip, because "click a speaker to read only them" is one
-        // rule and two implementations of it would be two rules by the next
-        // change. The named side gets no play button of its own: the pane's own
-        // play already runs through their turns while they are soloed.
-        let restore = soloWhile(speaker)
+        // What this used to do as well was hide every paragraph that was not
+        // theirs, and that is the complaint it earned. Clicking a name to find
+        // out who somebody is is a question, not a filter, and answering it by
+        // taking the meeting off the screen reads as the app having mislaid the
+        // transcript. Nothing was gained by it that the waveform does not show
+        // without moving a word.
+        //
+        // Both kinds of chip, because this is one rule and two implementations
+        // of it would be two rules by the next change. The named side gets no
+        // play button of its own: the pane's own play already runs through their
+        // turns while the card is up, which is what the bar says.
+        let restore = focusWhile(speaker)
         if VoiceBank.isPlaceholder(speaker) {
             SpeakerPicker.show(
                 for: recording, speaker: speaker, from: self, rect: anchor,
                 preview: SpeakerPreview(
-                    play: { [weak self] in self?.playSolo() },
+                    play: { [weak self] in self?.playFocused() },
                     pause: { [weak self] in self?.pausePlayback() },
                     isPlaying: { [weak self] in self?.isPlaying ?? false },
                     end: restore),
@@ -2709,6 +2690,157 @@ final class DetailView: NSView {
             PersonPopover.show(speaker, from: self, rect: anchor,
                                closed: restore, done: refresh)
         }
+    }
+
+    /// Somebody's identity changed, which changes the whole page.
+    ///
+    /// `show` rather than the targeted reload below, because a rename, a merge
+    /// or a discard changes who is in this recording: the chips, the title
+    /// derived from the people in it, and the sidebar row all have to be asked
+    /// again. It costs the playhead, which is the trade the chips row has always
+    /// made here.
+    private func reloadAfterSpeakerChange() {
+        guard let id = recording?.id, let updated = Recording.find(id) else { return }
+        show(updated)
+        LibraryWindow.shared.reload()
+    }
+
+    // MARK: - Who said this
+
+    /// Everything that applies to a speaker, from the pill above their
+    /// paragraph.
+    ///
+    /// The pill had no menu at all until the transcript could correct who said
+    /// something, which left the chip under the title carrying verbs the pill
+    /// standing for the same person did not. `PersonPopover.menu` is called
+    /// rather than copied so the two can never come apart, and the one thing
+    /// only a transcript can ask is added underneath: *this paragraph* is
+    /// somebody else.
+    ///
+    /// Built when the menu opens rather than when the turn is drawn. An hour of
+    /// meeting is hundreds of turns, and a menu apiece, held for the life of the
+    /// pane, to be opened on perhaps one of them.
+    private func turnMenu(_ turn: Turn, anchor: NSView, rect: NSRect) -> NSMenu? {
+        guard let recording else { return nil }
+        let menu = PersonPopover.menu(
+            for: turn.speaker, in: recording,
+            // The pane, not the pill, and the rect converted when the popover
+            // asks for it rather than now: opening one of these can rebuild the
+            // transcript first, and a positioning view that has left the window
+            // aborts the app. Same rule as `editSpeaker`, for the same reason.
+            anchor: { [weak self, weak anchor] in
+                guard let self, let anchor, anchor.window != nil else { return nil }
+                return (self, self.convert(rect, from: anchor))
+            },
+            // The first item does what clicking the pill used to do, because
+            // clicking the pill is now how this menu is opened. See
+            // `PersonPopover.menu(open:)`: without it, the shortest path from a
+            // transcript to naming a voice would be the alert the picker was
+            // built to replace.
+            open: { [weak self] view, rect in
+                self?.editSpeaker(turn.speaker, from: view, rect: rect)
+            },
+            done: { [weak self] in self?.reloadAfterSpeakerChange() })
+        menu.addItem(.separator())
+        menu.addItem(reassignItem(
+            "Speaker for This Turn",
+            scope: .turn(start: turn.start, end: turn.end), from: turn.speaker,
+            asking: "Who said this turn?", anchor: anchor, rect: rect))
+        return menu
+    }
+
+    /// The submenu that hands some words to somebody else.
+    ///
+    /// **Everybody already in this recording is one click.** The mistake this
+    /// fixes is nearly always the diarizer giving one person's sentence to
+    /// another person who is also in the room, so the answer is almost always
+    /// two names away and should not cost a dialog. Anybody else is one click
+    /// further, through the same picker that names a speaker, because "which of
+    /// the people I know is this" is a question this app already answers with
+    /// the voice bank, the invitation and the roster, and answering it twice is
+    /// how one of the two stops being kept up.
+    ///
+    /// The speaker it is attributed to now is in the list, ticked and doing
+    /// nothing. A menu of names with the current one missing makes the reader
+    /// work out which one is absent to find out where they are.
+    private func reassignItem(_ title: String, scope: TranscriptEditor.Scope,
+                              from speaker: String, asking: String,
+                              anchor: NSView, rect: NSRect) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        // Stated rather than left to AppKit: with `autoenablesItems` on, an item
+        // is enabled by whether its target answers, and the ticked one has no
+        // action precisely because it is not a choice.
+        submenu.autoenablesItems = false
+        for label in recording?.speakers ?? [] {
+            guard label != speaker else {
+                let current = NSMenuItem(title: SpeakerName.display(label),
+                                         action: nil, keyEquivalent: "")
+                current.state = .on
+                current.isEnabled = false
+                submenu.addItem(current)
+                continue
+            }
+            let entry = Action(SpeakerName.display(label), nil) { [weak self] in
+                self?.reassign(scope, from: speaker, to: label)
+            }
+            entry.image = Self.dot(for: label)
+            submenu.addItem(entry)
+        }
+        submenu.addItem(.separator())
+        submenu.addItem(Action("Someone Else…", "person.crop.circle.badge.plus") {
+            [weak self, weak anchor] in
+            guard let self, let recording = self.recording else { return }
+            // The pill's rect while it is still in the window, or the pane's own
+            // top corner once it is not. A menu item can be chosen after
+            // something else has rebuilt the transcript, and a popover pointed
+            // at a view that has left the window aborts rather than failing.
+            let at = anchor.map { self.convert(rect, from: $0) }
+                ?? NSRect(x: 24, y: self.bounds.midY, width: 1, height: 1)
+            SpeakerPicker.choose(for: recording, speaker: speaker, asking: asking,
+                                 from: self, rect: at) { [weak self] label in
+                self?.reassign(scope, from: speaker, to: label)
+            }
+        })
+        item.submenu = submenu
+        return item
+    }
+
+    /// A speaker's colour, as something a menu item can carry.
+    ///
+    /// A menu cannot hold a view, so the disc the rest of the app uses is a
+    /// filled circle here. Nil for a placeholder, which is colourless
+    /// everywhere: see `SpeakerColour.tint`.
+    private static func dot(for label: String) -> NSImage? {
+        guard let colour = SpeakerColour.tint(for: label) else { return nil }
+        return NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
+            colour.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            return true
+        }
+    }
+
+    /// Hand one sentence, or one paragraph, to the person who actually said it.
+    ///
+    /// Not a destructive edit and deliberately not confirmed: the words and the
+    /// audio are untouched, both speakers are still in the transcript, and the
+    /// way back is the same menu on the paragraph it just moved to. What would
+    /// need a confirmation is a question this cannot ask usefully, since the
+    /// only way to see whether it was right is to look at the result.
+    private func reassign(_ scope: TranscriptEditor.Scope, from speaker: String,
+                          to target: String) {
+        guard let recording else { return }
+        endEditing()
+        guard TranscriptEditor.apply(.reassign(scope, from: speaker, to: target),
+                                     to: recording) else {
+            // Refused: the transcript moved under the pane between the menu
+            // being built and an item in it being chosen. Said out loud rather
+            // than dropped, for the reason `applyEdit` gives.
+            NSSound.beep()
+            log("that has changed since the pane was drawn; nothing was written.")
+            return
+        }
+        reloadTranscript()
     }
 
     // MARK: - Correcting the transcript
@@ -2736,16 +2868,28 @@ final class DetailView: NSView {
                 : "that sentence has changed since the pane was drawn; nothing was written.")
             return
         }
+        reloadTranscript()
+    }
 
-        // A targeted reload, not `show`. `show` stops playback and puts the
-        // playhead back to zero, and correcting a word is something people do
-        // while listening to it.
-        guard let updated = Recording.find(recording.id) else { return }
+    /// Re-read the transcript and redraw it, keeping the playhead.
+    ///
+    /// **A targeted reload, not `show`.** `show` stops playback and puts the
+    /// playhead back to zero, and both edits that come through here, correcting
+    /// a word and correcting who said it, are things people do while listening.
+    ///
+    /// The chips are asked again as well as the turns, because a reassignment
+    /// can be the last thing a speaker said: the row under the title is a view
+    /// over who is in the transcript, and one that kept a name the transcript no
+    /// longer has would offer a card for somebody who is not in the meeting.
+    private func reloadTranscript() {
+        guard let recording, let updated = Recording.find(recording.id) else { return }
         self.recording = updated
         turns = updated.storedTurns
         sentences = Merge.sentences(in: turns,
                                     from: updated.storedTranscript?.segments ?? [])
         currentTurn = nil
+        chips.configure(updated)
+        setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
         renderTurns(scrollToTop: false)
         refresh()
         onChanged?()
@@ -2768,6 +2912,9 @@ final class TranscriptBody: NSTextField {
     var onEdit: ((Merge.Sentence) -> Void)?
     /// Clicked, on the sentence under the pointer, or nil if it landed on none.
     var onClick: ((Merge.Sentence?) -> Void)?
+    /// The submenu that changes who said one sentence, built when the menu
+    /// opens so it lists the speakers the recording has now.
+    var speakerItem: ((Merge.Sentence) -> NSMenuItem?)?
 
     func sentence(at index: Int) -> Merge.Sentence? {
         if let hit = sentences.first(where: { NSLocationInRange(index, $0.range) }) {
@@ -2908,7 +3055,15 @@ final class TranscriptFieldEditor: NSTextView {
                               action: #selector(editSentence), keyEquivalent: "")
         item.target = self
         menu.insertItem(item, at: 0)
-        menu.insertItem(.separator(), at: 1)
+        var next = 1
+        // Under Edit Sentence, because they are the same repair: the model got
+        // the words wrong, or the diarizer got the person wrong, and a reader
+        // who has just noticed one is looking in this menu for the other.
+        if let speaker = body.speakerItem?(sentence) {
+            menu.insertItem(speaker, at: next)
+            next += 1
+        }
+        menu.insertItem(.separator(), at: next)
         pending = (body, sentence)
         return menu
     }
@@ -3009,8 +3164,13 @@ final class TurnView: NSView {
 
     /// Clicked, carrying the sentence under the pointer when there was one.
     var onSeek: ((Merge.Sentence?) -> Void)?
-    /// The pill was clicked, with itself and its frame to point at.
-    var onSpeaker: ((NSView, NSRect) -> Void)?
+    /// The pill was clicked, either button: everything that applies to this
+    /// speaker, and to this paragraph. Asked for when the menu opens, never
+    /// before: a meeting is hundreds of turns and this is a menu apiece.
+    var onSpeakerMenu: ((NSView, NSRect) -> NSMenu?)?
+    /// A sentence in this turn was right-clicked, and this is the item that
+    /// changes who said it.
+    var onSentenceSpeaker: ((NSView, NSRect, Merge.Sentence) -> NSMenuItem?)?
     /// A sentence was committed: which one, what it used to say, what it says
     /// now. The old text travels with it so the write can refuse if the
     /// transcript moved underneath.
@@ -3088,7 +3248,18 @@ final class TurnView: NSView {
         speakerButton.show(turn.speaker)
         speakerButton.target = self
         speakerButton.action = #selector(speakerTapped)
-        speakerButton.toolTip = "Name this speaker"
+        // What the first item of the menu will say, since that is what a click
+        // is for; the rest of it is the same either way.
+        speakerButton.toolTip = (VoiceBank.isPlaceholder(turn.speaker)
+            ? "Name this speaker" : "Open their card")
+            + ", or hand this turn to somebody else."
+        // Empty, and filled by `menuNeedsUpdate` the moment it opens. An
+        // `NSMenu` with a delegate is how AppKit builds a menu late; assigning a
+        // built one here would build hundreds of them for a meeting, on a pane
+        // that is rebuilt on every correction.
+        let menu = NSMenu()
+        menu.delegate = self
+        speakerButton.menu = menu
 
         timeLabel.stringValue = TranscriptFormat.stamp(turn.start)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -3113,6 +3284,10 @@ final class TurnView: NSView {
         bodyLabel.allowsEditingTextAttributes = true
         bodyLabel.sentences = sentences
         bodyLabel.onEdit = { [weak self] in self?.beginEditing($0) }
+        bodyLabel.speakerItem = { [weak self] sentence in
+            guard let self else { return nil }
+            return self.onSentenceSpeaker?(self, self.speakerButton.frame, sentence)
+        }
 
         body.orientation = .vertical
         body.alignment = .leading
@@ -3149,8 +3324,22 @@ final class TurnView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// **Both buttons open the same menu.** A left click used to go straight to
+    /// the popover about that speaker, which put the two questions a reader has
+    /// about a name on different buttons: who is this, on the left, and who
+    /// really said this, on the right. Nobody finds the second one that way, and
+    /// a name in a transcript is exactly where the doubt about it appears.
+    ///
+    /// Nothing is lost by the extra click. The first item of the menu is the
+    /// popover the click used to open, so the old gesture is now click, click.
+    ///
+    /// Positioned like `SpeakerChips.showOverflow`, so the two places a speaker
+    /// menu drops from behave the same.
     @objc private func speakerTapped() {
-        onSpeaker?(self, speakerButton.frame)
+        guard let menu = speakerButton.menu else { return }
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: speakerButton.bounds.height + 4),
+                   in: speakerButton)
     }
 
     // MARK: - Editing a sentence
@@ -3250,6 +3439,22 @@ final class TurnView: NSView {
         // playhead tick reapply it rather than leaving a stale one.
         highlighted = nil
         onEditingChanged?(self, false)
+    }
+}
+
+extension TurnView: NSMenuDelegate {
+    /// Filled as it opens, and emptied by being filled again.
+    ///
+    /// The items are moved out of the menu the pane just built rather than
+    /// copied: an `NSMenuItem` belongs to one menu, and adding one that already
+    /// has a `menu` raises.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let built = onSpeakerMenu?(self, speakerButton.frame) else { return }
+        for item in built.items {
+            built.removeItem(item)
+            menu.addItem(item)
+        }
     }
 }
 

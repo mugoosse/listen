@@ -76,6 +76,28 @@ public enum CloudRecords {
     /// would deliver it to every device that syncs the library even if that
     /// device then declined to write it to disk. The zone is what makes the
     /// split real; a client-side filter only makes it polite.
+    /// What a file is called *inside a record*, which is not always what it is
+    /// called on disk.
+    ///
+    /// Every sidecar has a fixed name except the raw backup, which is
+    /// `<id>.raw.json.bak`. That is a problem twice over. A record's asset
+    /// fields are named after the file, so a per-recording filename means a
+    /// per-recording field, and **Production schema is append-only and
+    /// locked**: the server refuses a field it has not seen, so every recording
+    /// carrying a backup failed to push, for ever, with its edits stranded on
+    /// the Mac that made them. Found by watching one recording fail the same
+    /// way on every pass.
+    ///
+    /// It also put the id in the clear. `assetNames` is a plain list on the
+    /// record, so `2026-08-13-155636-E172.raw.json.bak` handed Apple the exact
+    /// minute of a meeting, which is the one thing `CloudNaming` exists to
+    /// prevent.
+    ///
+    /// One recording has at most one backup, so a fixed name cannot collide.
+    public static func assetKey(_ file: String, id: String) -> String {
+        file == DevicePolicy.rawBackup(for: id) ? "raw.json.bak" : file
+    }
+
     public static func recording(_ recording: Recording, policy: DevicePolicy,
                                  key: PairingKey) throws -> StoredRecord {
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
@@ -84,10 +106,30 @@ public enum CloudRecords {
         var digests: [String: String] = [:]
         var assets: [String: Data] = [:]
         for file in policy.files(for: recording.id) where file != "metadata.json" {
+            // The raw backup is held back until the schema says otherwise.
+            //
+            // Its asset field has never existed in Production, and Production
+            // only accepts fields deployed to it from Development. So a record
+            // carrying one is refused outright, and **every edit to that
+            // recording was stranded**: a corrected speaker or a new title
+            // failed with the rest of the record, on every pass, silently
+            // except in the log.
+            //
+            // Held back rather than renamed, because renaming is what proved
+            // the field itself is the problem rather than its per-recording
+            // name. Syncing it needs a one-time schema deploy, and until then
+            // one recording's safety copy is not worth every recording's edits.
+            //
+            // What is given up is real and is stated on `keepsRawBackup`: a
+            // second Mac that pulls a corrected transcript without this file
+            // answers "no human edits here", so transcribing again there does
+            // not warn before discarding the corrections.
+            if file == DevicePolicy.rawBackup(for: recording.id) { continue }
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
-            digests[file] = sha256Hex(data)
-            assets[file] = try key.seal(data)
+            let stored = assetKey(file, id: recording.id)
+            digests[stored] = sha256Hex(data)
+            assets[stored] = try key.seal(data)
         }
         digests["metadata.json"] = sha256Hex(metadata)
 

@@ -160,10 +160,13 @@ public struct CloudSyncCore: Sendable {
 
         // Sidecars first, metadata last, and only what this device keeps.
         for file in policy.files(for: blob.id) where file != "metadata.json" {
-            guard let want = blob.digests[file] else { continue }
+            // On disk it keeps its real name; in the record it may not. See
+            // `CloudRecords.assetKey`.
+            let stored = CloudRecords.assetKey(file, id: blob.id)
+            guard let want = blob.digests[stored] else { continue }
             let local = folder.appendingPathComponent(file)
             if let have = try? Data(contentsOf: local), sha256Hex(have) == want { continue }
-            guard let data = try CloudRecords.openAsset(record, file, key: key) else { continue }
+            guard let data = try CloudRecords.openAsset(record, stored, key: key) else { continue }
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try data.write(to: local, options: .atomic)
             report.pulledSidecars += 1

@@ -38,16 +38,10 @@ final class CloudSyncHost {
     func startIfEnabled() {
         guard Settings.cloudSync, timer == nil else { return }
 
-        // Anything that rewrites a recording's metadata is worth sending.
-        //
-        // A meeting recorded here, transcribed, and then titled reached the
-        // phone still called "Untitled", because the title was written after
-        // the last thing that asked for a sync and nothing before the two
-        // minute poll had any reason to ask again. Coalesced by `syncSoon`, so
-        // a capture rewriting its metadata repeatedly still costs one pass.
-        RecordingEvents.changed = {
-            Task { @MainActor in CloudSyncHost.shared.syncSoon() }
-        }
+        // Anything that changes the library is worth sending, and the file
+        // system is what knows. See `LibraryWatch` for why this is not a hook
+        // called from each writer any more.
+        LibraryWatch.shared.start(root: ListenKit.Library.mac().root)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in await CloudSyncHost.shared.syncNow() }
         }
@@ -60,6 +54,7 @@ final class CloudSyncHost {
         timer = nil
         soon?.invalidate()
         soon = nil
+        LibraryWatch.shared.stop()
         trace("cloud sync: off")
     }
 

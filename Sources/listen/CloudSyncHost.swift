@@ -94,13 +94,7 @@ final class CloudSyncHost {
 
         let library = ListenKit.Library.mac()
 
-        // Keep adopting rather than deleting the old file in this pass.
-        // `KeyMigration` is the recovery path if the shared item is missing,
-        // and removing its source before removing the migration would turn a
-        // recoverable keychain problem into a Mac that silently stops syncing.
-        KeyMigration.adoptFileKey(from: library)
-
-        guard let key = KeyStore.shared.load() ?? FileKeyStore(library: library).load() else {
+        guard let key = KeyStore.shared.load() else {
             var report = CloudReport()
             report.errors.append("No sync key yet.")
             lastReport = report

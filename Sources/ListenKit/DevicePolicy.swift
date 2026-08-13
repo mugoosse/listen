@@ -158,7 +158,7 @@ public struct DevicePolicy: Sendable, Equatable {
     ///   rather than a thing with no home, but nothing on the phone can open
     ///   one and a note's `chat` key is a dangling reference there until
     ///   something can.
-    /// - `.pairing-key` is the temporary source for `KeyMigration` and must
+    /// - `.pairing-key` is a leftover of the retired file key store and must
     ///   never replicate. The legacy `devices.json` and `.sync-state.json` are
     ///   removed after CloudKit has adopted what it needs from them.
     /// - `.sync/` is Resilio's own metadata and is not Listen data.

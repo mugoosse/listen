@@ -37,16 +37,14 @@ enum SyncCLI {
     /// scratch CloudKit run remains isolated from the real library.
     private static var library: ListenKit.Library { .mac() }
 
-    /// The file remains a fallback for the migration pass that copies the key
-    /// into iCloud Keychain. Both Macs have the shared item now, but deleting
-    /// the fallback while `KeyMigration` still reads it would turn a safety net
-    /// into uncompilable code and make recovery from a missing key impossible.
-    private static var fileKeyStore: FileKeyStore { FileKeyStore(library: library) }
-
-    private static var pairingKey: PairingKey? {
-        KeyMigration.adoptFileKey(from: library)
-        return KeyStore.shared.load() ?? fileKeyStore.load()
-    }
+    /// iCloud Keychain, and nothing else.
+    ///
+    /// There was a file beside the library and a migration that copied it into
+    /// the keychain, kept through Phase 6 so that removing the source before
+    /// the migration could not strand a Mac. Both Macs were then checked:
+    /// `sync status` reported "from iCloud Keychain" on the second one, which
+    /// has no file at all, so the net was holding nothing up.
+    private static var pairingKey: PairingKey? { KeyStore.shared.load() }
 
     private static func option(_ name: String, _ args: inout [String]) -> String? {
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
@@ -78,16 +76,13 @@ enum SyncCLI {
     /// nothing about the one that ships, and this is the command that has to
     /// make that distinction visible rather than reassuring.
     private static func status() -> Never {
-        let store = fileKeyStore
         print("library:     \(library.root.path)")
-        // Both stores while the fallback survives. "None yet" while the only
-        // copy sits in a file is a lie that sends somebody hunting for a
-        // keychain problem they do not have.
-        let inFile = store.load() != nil
-        let inCloud = KeyStore.shared.load() != nil
-        print("key:         " + (inFile && inCloud ? "beside the library, and in iCloud Keychain"
-                                 : inFile ? "beside the library only, not yet in iCloud Keychain"
-                                 : inCloud ? "from iCloud Keychain" : "none yet"))
+        // One store now, so one sentence. It used to name both while the file
+        // was still a fallback, because saying "none yet" when the only copy
+        // sat in a file sent somebody hunting a keychain problem they did not
+        // have. There is nowhere else to look any more.
+        print("key:         " + (KeyStore.shared.load() != nil
+                                 ? "from iCloud Keychain" : "none yet"))
         print("environment: \(CloudAccount.environment)")
         print("container:   \(CloudAccount.containerID)")
         let semaphore = DispatchSemaphore(value: 0)

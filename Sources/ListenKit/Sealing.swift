@@ -3,7 +3,7 @@ import CryptoKit
 
 /// The shared key, and everything sealed under it.
 ///
-/// The Mac generated 32 random bytes once and `KeyMigration` copied them into
+/// The Mac generated 32 random bytes once and copied them into
 /// iCloud Keychain. Every payload is sealed on the device that sends it and
 /// opened on the device that receives it, so CloudKit stores ciphertext. The
 /// transport is allowed to be untrusted infrastructure, which is what lets the
@@ -153,79 +153,5 @@ public struct KeyStore: Sendable {
             query[kSecUseDataProtectionKeychain as String] = true
         }
         SecItemDelete(query as CFDictionary)
-    }
-}
-
-#if os(macOS)
-/// Where the pairing key lives on the Mac.
-///
-/// A file beside the library rather than the keychain, retained only as the
-/// source for `KeyMigration`. The former LAN helper could not share the signed
-/// app's keychain access group, which is why the file existed in the first
-/// place.
-///
-/// What is given up is small. The key protects the network, not the disk: it
-/// sits in the same directory as every transcript it could ever decrypt, so
-/// anyone who can read the key can already read the library without it. On iOS
-/// the keychain is still used, because there the threat is a backup rather than
-/// a second local process.
-public struct FileKeyStore: Sendable {
-    public let library: Library
-    public init(library: Library) { self.library = library }
-
-    public var url: URL { library.root.appendingPathComponent(".pairing-key") }
-
-    public func load() -> PairingKey? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return PairingKey(code: text.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    @discardableResult
-    public func save(_ key: PairingKey) -> Bool {
-        do {
-            try FileManager.default.createDirectory(at: library.root,
-                                                    withIntermediateDirectories: true)
-            try key.code.write(to: url, atomically: true, encoding: .utf8)
-            // 0600 before anything else can open it.
-            try FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                  ofItemAtPath: url.path)
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    public func clear() { try? FileManager.default.removeItem(at: url) }
-}
-#endif
-
-/// Getting the pairing key from where it is to where it should be.
-///
-/// It lives in a file beside the library because the former LAN helper was not
-/// signed into the app's keychain access group. That constraint died when sync
-/// moved inside the app, so the key is free to go to iCloud Keychain, which is
-/// what makes a second Mac need nothing typed.
-///
-/// **It moves by being copied, not by being moved.** This migration and its
-/// source survive together for one pass. Deleting the source while the fallback
-/// still exists would make a missing shared item unrecoverable.
-public enum KeyMigration {
-    /// Copy the file key into the shared iCloud Keychain item, once, if the
-    /// keychain has none. Returns true if it did something.
-    ///
-    /// Never the other way round, and never overwriting: a key already in the
-    /// keychain came either from this Mac or from another of the user's devices
-    /// through iCloud, and in both cases it is at least as authoritative as a
-    /// file on one disk. Overwriting it with a local file is how a second Mac
-    /// would silently unpair the first.
-    @discardableResult
-    public static func adoptFileKey(from library: Library) -> Bool {
-        #if os(macOS)
-        guard KeyStore.shared.load() == nil else { return false }
-        guard let existing = FileKeyStore(library: library).load() else { return false }
-        return KeyStore.shared.save(existing)
-        #else
-        return false
-        #endif
     }
 }

@@ -27,6 +27,7 @@ enum SyncCLI {
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
         case "trash":    trash()
+        case "key":      key(&rest)
         case "enable":   enable(&rest)
         default:         help()
         }
@@ -185,6 +186,37 @@ enum SyncCLI {
     /// Printing the path rather than offering a restore verb, because putting
     /// a recording back is `mv`, and a person doing it by hand is a person who
     /// has looked at what they are restoring.
+    /// The key that seals everything in the container.
+    ///
+    /// Not printed unless asked for explicitly, because it is the one secret
+    /// in this product: anybody holding it can read every transcript the
+    /// container has, and it is short enough to fit in a screenshot.
+    ///
+    /// It exists to be written down. The key lives only in iCloud Keychain, so
+    /// it is on every device signed into that account and nowhere else. That is
+    /// real redundancy against losing one device and none at all against losing
+    /// the account: without it the records are ciphertext nobody can open, Apple
+    /// included, which is the point of the design and also the failure it makes
+    /// possible.
+    private static func key(_ args: inout [String]) -> Never {
+        guard let key = pairingKey else {
+            print("no key on this Mac yet.")
+            done()
+        }
+        guard flag("--show", &args) else {
+            print("A key is present, from iCloud Keychain.\n")
+            print("It is on every device signed into this iCloud account, which")
+            print("covers losing one of them. It does not cover losing the account:")
+            print("what iCloud holds is sealed with this and nothing else opens it,")
+            print("so it is worth keeping in a password manager.\n")
+            print("Print it with `listen sync key --show`, and treat what appears")
+            print("the way you would treat the transcripts it opens.")
+            done()
+        }
+        print(key.code)
+        done()
+    }
+
     private static func trash() -> Never {
         let library = SyncCLI.library
         let root = Trash.root(in: library)
@@ -312,6 +344,7 @@ enum SyncCLI {
           cloud --library D               one pass against the real container
           inspect [--forget ID]           what is in the container, by zone
           trash                           deletions received in the last fortnight
+          key [--show]                    the key that seals what iCloud holds
           enable [--on|--off]             sync this Mac's real library
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.

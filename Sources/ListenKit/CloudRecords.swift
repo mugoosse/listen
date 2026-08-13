@@ -124,7 +124,15 @@ public enum CloudRecords {
             // second Mac that pulls a corrected transcript without this file
             // answers "no human edits here", so transcribing again there does
             // not warn before discarding the corrections.
-            if file == DevicePolicy.rawBackup(for: recording.id) { continue }
+            //
+            // `LISTEN_SYNC_RAW_BACKUP=1` is how the field gets into a schema in
+            // the first place: a Development run with it set writes the field,
+            // the Console deploys Development to Production, and then this
+            // whole guard goes rather than the flag becoming a setting.
+            if file == DevicePolicy.rawBackup(for: recording.id),
+               ProcessInfo.processInfo.environment["LISTEN_SYNC_RAW_BACKUP"] == nil {
+                continue
+            }
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
             let stored = assetKey(file, id: recording.id)

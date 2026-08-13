@@ -8,6 +8,52 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.14.0 (2026-08-12)
+
+### Your library reaches every device through iCloud
+
+Listen now keeps transcripts, notes, people, tags and its custom dictionary in
+step through your private iCloud database. A meeting recorded on either Mac can
+appear on the other Mac and the iPhone without both devices being awake or on
+the same network. The existing wifi path remains available during the migration
+and is still running until the final cutover is tested.
+
+The contents are sealed before upload with a key held by your devices. Record
+names, zone names and record types are opaque too, so titles and meeting times
+are not left outside the sealed content. Audio recorded on a Mac stays on that
+Mac. Audio from the phone is a temporary transfer and the phone keeps its copy
+until a Mac has written the bytes to disk and named itself as their holder.
+
+Measured on the live library, the Production container holds 147 records: 71
+recordings, 14 notes, 2 library files, 57 voiceprints and 3 devices. The audio
+transfer zone is empty after completed ingests.
+
+### A sync starts with what you are waiting for
+
+On cellular, the phone could spend minutes saying "Sending 71 of 71" before it
+asked iCloud for a transcript the Mac had already finished. A pass now fetches
+incremental changes first. It also remembers a local stamp for each recording,
+so unchanged files are no longer sealed and checked against the server on every
+pass, and phone audio that has already been handed to a Mac is not uploaded
+again when **Keep audio on this iPhone** is on.
+
+Finished transcripts are sent a few seconds after the Mac writes them rather
+than waiting for the two-minute fallback poll. Push notifications wake both
+apps for changes, and pull to refresh on the phone uses iCloud whenever iCloud
+is the selected transport.
+
+### Sync says what it is doing
+
+The Mac's Devices pane now shows live work such as "Fetching 15 of 71" and
+"Sending 6 of 12", followed by when the last pass ran, what it changed and the
+first error or note conflict. The same pane lists the devices on the iCloud
+account. A new Mac fetches before it sends, so opening an older library cannot
+overwrite newer recordings before it has learned what changed.
+
+Hand-written markdown notes remain part of the library format. Notes with no
+frontmatter, and notes whose `recordings` use a YAML block sequence, now run
+through the same offline end-to-end suite as generated notes.
+
 ## 0.13.0 (2026-08-12)
 
 ### Clicking a speaker no longer hides the meeting

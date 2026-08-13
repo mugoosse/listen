@@ -94,6 +94,8 @@ public enum CloudRecords {
     /// prevent.
     ///
     /// One recording has at most one backup, so a fixed name cannot collide.
+    /// The field was deployed to Production on 13 Aug 2026; before that the
+    /// backup could not be sent at all.
     public static func assetKey(_ file: String, id: String) -> String {
         file == DevicePolicy.rawBackup(for: id) ? "raw.json.bak" : file
     }
@@ -106,33 +108,6 @@ public enum CloudRecords {
         var digests: [String: String] = [:]
         var assets: [String: Data] = [:]
         for file in policy.files(for: recording.id) where file != "metadata.json" {
-            // The raw backup is held back until the schema says otherwise.
-            //
-            // Its asset field has never existed in Production, and Production
-            // only accepts fields deployed to it from Development. So a record
-            // carrying one is refused outright, and **every edit to that
-            // recording was stranded**: a corrected speaker or a new title
-            // failed with the rest of the record, on every pass, silently
-            // except in the log.
-            //
-            // Held back rather than renamed, because renaming is what proved
-            // the field itself is the problem rather than its per-recording
-            // name. Syncing it needs a one-time schema deploy, and until then
-            // one recording's safety copy is not worth every recording's edits.
-            //
-            // What is given up is real and is stated on `keepsRawBackup`: a
-            // second Mac that pulls a corrected transcript without this file
-            // answers "no human edits here", so transcribing again there does
-            // not warn before discarding the corrections.
-            //
-            // `LISTEN_SYNC_RAW_BACKUP=1` is how the field gets into a schema in
-            // the first place: a Development run with it set writes the field,
-            // the Console deploys Development to Production, and then this
-            // whole guard goes rather than the flag becoming a setting.
-            if file == DevicePolicy.rawBackup(for: recording.id),
-               ProcessInfo.processInfo.environment["LISTEN_SYNC_RAW_BACKUP"] == nil {
-                continue
-            }
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
             let stored = assetKey(file, id: recording.id)

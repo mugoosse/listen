@@ -8,6 +8,36 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.14.1 (2026-08-13)
+
+### Deleting is undoable for a fortnight
+
+A recording or note removed by a sync from another device is now kept in your
+library for fourteen days before it is really gone. Whatever removed it, the
+files are still there afterwards. `listen sync trash` lists what is being held
+and where, and putting something back is a matter of moving the folder into
+`recordings/` or `notes/`.
+
+Listen also refuses to tell iCloud that everything has gone. A library that is
+suddenly empty is far more likely to be a disk that did not mount, a folder
+moved by hand, or a restore in progress than a decision to delete every
+recording at once, so it says so and changes nothing.
+
+### Corrections travel again
+
+Renaming a speaker or correcting a sentence rewrites the transcript rather than
+the recording's details, and only the details were being watched, so those edits
+waited for the next scheduled sync instead of going immediately. Listen now
+notices any change to the library, whatever made it, including edits from the
+command line and from the MCP server.
+
+One recording in the library had never reached iCloud at all: the copy of a
+transcript kept from before your first correction is stored under a name derived
+from the recording, and iCloud refuses names it has not seen before. Every edit
+to that recording was refused along with it. Those backups now sync, and their
+presence is what stops transcribing again from discarding your corrections
+without asking.
+
 ## 0.14.0 (2026-08-12)
 
 ### Your library reaches every device through iCloud

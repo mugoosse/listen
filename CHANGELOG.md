@@ -8,6 +8,24 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.14.2 (2026-08-13)
+
+### Listen keeps copies of your library
+
+A copy of your library is made once a day and kept for a week, and anything a
+sync deletes is kept for a fortnight, so a mistake is not final. The copies
+share their contents with the library, so they take almost no extra space.
+Settings, Storage says when the last one was made and where they are.
+
+They live on this Mac, so they protect you from mistakes rather than from the
+disk itself failing. Time Machine is still the answer to that.
+
+### Somewhere to save the key that opens iCloud
+
+Everything Listen keeps in iCloud is sealed with a key only your devices have.
+Settings, Sync can now show it, so you can keep a copy in a password manager
+and still open what iCloud holds if you ever lose every device.
+
 ## 0.14.1 (2026-08-13)
 
 ### Deleting is undoable for a fortnight

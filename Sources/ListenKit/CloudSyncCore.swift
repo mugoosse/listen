@@ -57,12 +57,22 @@ public struct CloudSyncCore: Sendable {
     /// Mac says. Turns `reclaim` off entirely.
     let keepAudio: Bool
 
+    /// Said out loud as the pass runs, so a screen can show something moving.
+    ///
+    /// A first sync fetches every recording a library has, which on a real
+    /// library is a minute of a spinner saying "Syncing…" and nothing else.
+    /// That is indistinguishable from stuck, and a person watching it has no
+    /// way to tell whether to wait or to give up.
+    let progress: (@Sendable (String) -> Void)?
+
     public init(library: Library, state: EngineState, store: any RecordStore,
                 key: PairingKey, policy: DevicePolicy, device: String,
-                ingests: Bool, keepAudio: Bool = false) {
+                ingests: Bool, keepAudio: Bool = false,
+                progress: (@Sendable (String) -> Void)? = nil) {
         self.library = library; self.state = state; self.store = store
         self.key = key; self.policy = policy; self.device = device
         self.ingests = ingests; self.keepAudio = keepAudio
+        self.progress = progress
     }
 
     // MARK: - Down
@@ -82,7 +92,12 @@ public struct CloudSyncCore: Sendable {
         do {
             let changes = try await store.changes(in: .library, since: base[file: "token"])
 
-            for record in changes.changed {
+            let total = changes.changed.count
+            if total > 4 { progress?("Fetching \(total) items") }
+            for (index, record) in changes.changed.enumerated() {
+                if total > 4, index % 5 == 0 {
+                    progress?("Fetching \(index + 1) of \(total)")
+                }
                 seen.insert(record.name)
                 do {
                     switch record.type {
@@ -247,7 +262,12 @@ public struct CloudSyncCore: Sendable {
         var base = state.base
         defer { state.base = base }
 
-        for recording in library.all() {
+        let mine = library.all()
+        if mine.count > 4 { progress?("Checking \(mine.count) recordings") }
+        for (index, recording) in mine.enumerated() {
+            if mine.count > 4, index % 5 == 0 {
+                progress?("Sending \(index + 1) of \(mine.count)")
+            }
             let name = CloudNaming.recordName(.recording, recording.id, key: key)
             do {
                 let existing = try await store.fetch(name, in: .library)

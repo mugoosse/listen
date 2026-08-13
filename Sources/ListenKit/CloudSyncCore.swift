@@ -422,6 +422,65 @@ public struct CloudSyncCore: Sendable {
         let manager = FileManager.default
         var drop: [String] = []
 
+        // A library that has lost everything is not a library that deleted
+        // everything.
+        //
+        // This is the failure it exists to stop, and it happened: a scratch
+        // library was removed and recreated at the same path, its state
+        // directory survived because that is keyed on the path, and the next
+        // pass saw a stamp for every recording and a folder for none. It
+        // deleted seventy-three recordings and fourteen notes from the
+        // container, both Macs followed, and the recovery was a backup.
+        //
+        // Nothing about that required a scratch library. A disk that fails to
+        // mount, a library restored underneath a running app, a folder moved
+        // in the Finder: each of them presents as "everything is gone" and each
+        // would have propagated. One person deleting one meeting looks nothing
+        // like this, so the two are worth telling apart even though the check
+        // is crude.
+        //
+        // Refuse rather than ask, and report it, because a sync engine that is
+        // this unsure of itself should not be the thing that decides.
+        var missingRecordings = 0, missingNotes = 0
+        for key in base.base.keys {
+            if key.hasPrefix(SyncState.sentKey("")) {
+                let id = String(key.dropFirst(SyncState.sentKey("").count))
+                guard !id.hasPrefix("audio:") else { continue }
+                if !manager.fileExists(atPath: library.folder(for: id).path) {
+                    missingRecordings += 1
+                }
+            } else if key.hasPrefix(SyncState.noteKey("")) {
+                let slug = String(key.dropFirst(SyncState.noteKey("").count))
+                if !manager.fileExists(
+                    atPath: library.notes.appendingPathComponent(slug + ".md").path) {
+                    missingNotes += 1
+                }
+            }
+        }
+        let heldRecordings = library.all().count
+        let heldNotes = library.allNotes().count
+
+        // Per kind, not in total. The first attempt compared everything to
+        // everything, and the notes that survived kept the total above zero
+        // while every recording had gone, which is the exact shape of the
+        // event this is here to stop.
+        //
+        // Vanishing entirely is the signal. More than one, because deleting
+        // your last remaining recording is a thing somebody may genuinely do
+        // and is indistinguishable from it otherwise.
+        let gone = (heldRecordings == 0 && missingRecordings > 1)
+            || (heldNotes == 0 && missingNotes > 1)
+            || (missingRecordings + missingNotes > 5
+                && missingRecordings + missingNotes > heldRecordings + heldNotes)
+        if gone {
+            report.errors.append(
+                "\(missingRecordings + missingNotes) items are missing from this "
+                + "device and only \(heldRecordings + heldNotes) remain, so nothing "
+                + "was deleted from iCloud. If you meant to empty this library, "
+                + "remove its sync state.")
+            return
+        }
+
         for key in base.base.keys where key.hasPrefix(SyncState.sentKey("")) {
             let id = String(key.dropFirst(SyncState.sentKey("").count))
             // `sent:audio:<id>` marks an upload, not a recording this device

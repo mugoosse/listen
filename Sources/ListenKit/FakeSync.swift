@@ -275,6 +275,41 @@ public enum FakeSync {
         try goodMetadata.write(to: corruptFolder.appendingPathComponent("metadata.json"))
         ok("a deletion made here reaches the other device, and corruption does not")
 
+        // The library disappearing is not the library being emptied.
+        //
+        // A scratch library removed and recreated at the same path kept its
+        // state directory, which is keyed on the path, so the next pass held a
+        // stamp for every recording and a folder for none. Seventy-three
+        // recordings and fourteen notes went from the container and from both
+        // Macs. This is that, in one second, against a fake store.
+        // More than one, because "held none, missing one" is somebody deleting
+        // the last recording they had, which is ordinary and must still work.
+        // What must not work is every recording going at once.
+        for suffix in ["CAFE", "BEAD"] {
+            let extra = "2026-08-13-101010-\(suffix)"
+            try seed(macLib, id: extra,
+                     metadata: #"{"id":"\#(extra)","title":"Kept","source":"mac","state":"done"}"#,
+                     transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+        }
+        var stamping = CloudReport()
+        await mac.push(into: &stamping)
+
+        let before = (try? await store.changes(in: .library, since: nil))?.changed.count ?? 0
+        try check(before > 2, "the vanishing test needs a library to lose")
+        for entry in (try? FileManager.default.contentsOfDirectory(
+            at: macLib.recordings, includingPropertiesForKeys: nil)) ?? [] {
+            try FileManager.default.removeItem(at: entry)
+        }
+        var vanished = CloudReport()
+        await mac.push(into: &vanished)
+
+        let after = (try? await store.changes(in: .library, since: nil))?.changed.count ?? 0
+        try check(after == before,
+                  "a library that lost everything deleted \(before - after) records")
+        try check(!vanished.errors.isEmpty,
+                  "it deleted nothing and also said nothing")
+        ok("a library that has lost everything does not empty the container")
+
         // The case a real container will not stage on demand, and the one that
         // silently resurrects deleted meetings.
         await store.setExpireNextToken(true)

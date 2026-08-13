@@ -1,3 +1,4 @@
+import ListenKit
 import Foundation
 
 /// Edits to a stored transcript: rename, discard, merge.
@@ -221,6 +222,8 @@ enum TranscriptEditor {
         try? enc.encode(transcript).write(to: recording.transcriptURL, options: .atomic)
         try? enc.encode(Merge.turns(from: transcript.segments))
             .write(to: recording.turnsURL, options: .atomic)
+        // See `Pipeline`: a speaker named here is a change to send.
+        RecordingEvents.changed?()
 
         // Once nobody is left with a bare letter, the recording is done rather
         // than waiting for someone.

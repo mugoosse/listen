@@ -1,3 +1,4 @@
+import ListenKit
 import Foundation
 
 /// The stored transcript: segments with speakers, plus what produced them.
@@ -575,6 +576,12 @@ actor Pipeline {
         // never be picked up again.
         try enc.encode(transcript).write(to: recording.transcriptURL, options: .atomic)
         try enc.encode(turns).write(to: recording.turnsURL, options: .atomic)
+        // Worth sending, like any other change to this recording. The hook was
+        // on `metadata.json` alone, so naming a speaker rewrote the transcript
+        // and the turns and told sync nothing: the phone kept the old names
+        // until the two minute poll came round, and pressing its sync button
+        // pulled a container the Mac had not written to yet.
+        RecordingEvents.changed?()
 
         if !embeddings.isEmpty {
             // One embedding per speaker per recording, stored next to the audio.

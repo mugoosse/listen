@@ -230,6 +230,51 @@ public enum FakeSync {
         try check(phoneLib.note(noteSlug) == nil, "a deletion did not propagate")
         ok("a deletion propagates rather than coming back")
 
+        // The other half of that round trip, which nothing covered.
+        //
+        // The seam above deletes the record itself and then checks the
+        // receiving device, so it proves a device obeys a deletion and says
+        // nothing about whether a device ever reports one. It did not: deleting
+        // a recording in the Mac app removed it from that Mac and left it in
+        // the container and on every other device. Found on the real library by
+        // counting, 71 against 72, not by this suite.
+        // Its own recording, seeded here rather than reusing one above, so
+        // deleting it cannot disturb what the later seams still assert about.
+        let doomedID = "2026-08-12-121212-DEAD"
+        try seed(macLib, id: doomedID,
+                 metadata: #"{"id":"\#(doomedID)","title":"Delete me","source":"mac","state":"done"}"#,
+                 transcript: #"{"segments":[],"duration":5,"model":"parakeet-v3"}"#)
+        var sendDoomed = CloudReport()
+        await mac.push(into: &sendDoomed)
+        var getDoomed = CloudReport()
+        await phone.pull(into: &getDoomed)
+        try check(phoneLib.find(doomedID) != nil,
+                  "the recording to delete never reached the other device")
+
+        try FileManager.default.removeItem(at: macLib.folder(for: doomedID))
+        var outgoing = CloudReport()
+        await mac.push(into: &outgoing)
+        try check(outgoing.deletedRemotely == 1,
+                  "deleting a recording here did not reach the container")
+        var arrives = CloudReport()
+        await phone.pull(into: &arrives)
+        try check(phoneLib.find(doomedID) == nil,
+                  "a recording deleted on the Mac survived on the phone")
+
+        // A recording that merely fails to load must not look like one that was
+        // deleted, or a single corrupt sidecar takes the last copy of a meeting
+        // off every device at once.
+        let corruptFolder = macLib.folder(for: id)
+        let goodMetadata = try Data(contentsOf: corruptFolder.appendingPathComponent("metadata.json"))
+        try Data("{ not json".utf8).write(to: corruptFolder.appendingPathComponent("metadata.json"))
+        try check(macLib.find(id) == nil, "the corrupt recording still loaded")
+        var corrupt = CloudReport()
+        await mac.push(into: &corrupt)
+        try check(corrupt.deletedRemotely == 0,
+                  "an unreadable metadata.json deleted a recording everywhere")
+        try goodMetadata.write(to: corruptFolder.appendingPathComponent("metadata.json"))
+        ok("a deletion made here reaches the other device, and corruption does not")
+
         // The case a real container will not stage on demand, and the one that
         // silently resurrects deleted meetings.
         await store.setExpireNextToken(true)

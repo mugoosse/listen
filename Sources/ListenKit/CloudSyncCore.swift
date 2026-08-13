@@ -10,6 +10,8 @@ public struct CloudReport: Sendable, Equatable {
     public var pushedNotes = 0
     public var pulledNotes = 0
     public var deletedLocally = 0
+    /// Records taken out of the container because this device deleted them.
+    public var deletedRemotely = 0
     public var claimed = 0
     public var freedBytes = 0
     public var conflicts: [String] = []
@@ -17,7 +19,7 @@ public struct CloudReport: Sendable, Equatable {
 
     public var didSomething: Bool {
         pushedRecordings + pulledRecordings + pulledSidecars + pushedNotes
-            + pulledNotes + deletedLocally + claimed > 0 || freedBytes > 0
+            + pulledNotes + deletedLocally + deletedRemotely + claimed > 0 || freedBytes > 0
     }
 
     public var summary: String {
@@ -29,6 +31,7 @@ public struct CloudReport: Sendable, Equatable {
         if pulledSidecars > 0 { parts.append("\(pulledSidecars) updated") }
         if pulledNotes + pushedNotes > 0 { parts.append("\(pulledNotes + pushedNotes) notes") }
         if deletedLocally > 0 { parts.append("removed \(deletedLocally)") }
+        if deletedRemotely > 0 { parts.append("deleted \(deletedRemotely) everywhere") }
         if freedBytes > 0 { parts.append("freed \(freedBytes / 1_048_576) MB") }
         return parts.joined(separator: ", ")
     }
@@ -137,7 +140,7 @@ public struct CloudSyncCore: Sendable {
                 gone = changes.deleted
             }
             for name in gone {
-                if deleteLocally(named: name) { report.deletedLocally += 1 }
+                if deleteLocally(named: name, base: &base) { report.deletedLocally += 1 }
                 seen.remove(name)
             }
 
@@ -221,15 +224,23 @@ public struct CloudSyncCore: Sendable {
     }
 
     /// Remove a local thing whose record has gone from the container.
-    private func deleteLocally(named recordName: String) -> Bool {
+    /// Apply a deletion the container reported.
+    ///
+    /// Clears this device's own record of having sent the thing, which is what
+    /// stops `pushDeletions` from turning an obeyed deletion into an outgoing
+    /// one: without it the next push would ask the container to delete a record
+    /// that is already gone, on every device, every pass, for ever.
+    private func deleteLocally(named recordName: String, base: inout SyncState) -> Bool {
         for recording in library.all()
         where CloudNaming.recordName(.recording, recording.id, key: key) == recordName {
             try? FileManager.default.removeItem(at: recording.folder)
+            base[sent: recording.id] = nil
             return true
         }
         for note in library.allNotes()
         where CloudNaming.recordName(.note, note.slug, key: key) == recordName {
             library.deleteNote(note.slug)
+            base[note: note.slug] = nil
             return true
         }
         return false
@@ -323,6 +334,27 @@ public struct CloudSyncCore: Sendable {
             let name = CloudNaming.recordName(.note, note.slug, key: key)
             do {
                 let existing = try await store.fetch(name, in: .library)
+
+                // Gone from the container, and we agreed on what was there.
+                //
+                // That is somebody else's deletion, not a note this device has
+                // yet to send, and the two are only distinguishable by the
+                // base: a note never pushed has none. Without this the deleting
+                // device removes the record and the next device to push puts it
+                // straight back, so a deleted note returns and nothing reports
+                // anything. Recordings are safe from this by their stamps,
+                // which match without a fetch; notes have no stamp.
+                //
+                // Ordinarily the pull earlier in the same pass has already
+                // applied the deletion. This is for the pass whose pull failed
+                // on the network and whose push ran anyway.
+                if existing == nil, let agreed = base[note: note.slug], agreed == note.version {
+                    library.deleteNote(note.slug)
+                    base[note: note.slug] = nil
+                    report.deletedLocally += 1
+                    continue
+                }
+
                 let theirs = try existing.map { try CloudRecords.openNote($0, key: key) }
                 guard decideNote(base: base[note: note.slug], local: note.version,
                                  remote: theirs?.version) == .push else { continue }
@@ -356,6 +388,68 @@ public struct CloudSyncCore: Sendable {
                 report.errors.append("\(name): \(error.localizedDescription)")
             }
         }
+
+        await pushDeletions(&base, into: &report)
+    }
+
+    /// Take out of the container what this device has deleted.
+    ///
+    /// Deletion was receive-only until now: `deleteLocally` applied what the
+    /// container reported, and nothing reported the other way. So a recording
+    /// deleted in the Mac app went from that Mac and stayed in the container
+    /// and on every other device for ever, and the change token being
+    /// incremental was the only reason it did not immediately come back. Found
+    /// by deleting one recording and counting: 71 on this Mac, 72 in the
+    /// container. The offline suite passed throughout, because the seam it
+    /// covered called `store.delete` itself and then checked the receiving
+    /// device, which tests half a round trip.
+    ///
+    /// **A local absence is only a deletion if the folder is gone.** Not if it
+    /// merely fails to load: `Library.all` is a compactMap over `Recording
+    /// .load`, so one unreadable `metadata.json` looks exactly like a deleted
+    /// recording, and treating it as one would delete the last good copy of a
+    /// meeting from every device at once. Checking the directory is what makes
+    /// a corrupt sidecar cost nothing.
+    ///
+    /// The stamps are what make this answerable at all. An id this device has
+    /// pushed and no longer holds was deleted here; an id it has never pushed
+    /// is not this device's to speak about, which is also why nothing is
+    /// deleted on the first pass after the stamps arrive.
+    private func pushDeletions(_ base: inout SyncState, into report: inout CloudReport) async {
+        let manager = FileManager.default
+        var drop: [String] = []
+
+        for key in base.base.keys where key.hasPrefix(SyncState.sentKey("")) {
+            let id = String(key.dropFirst(SyncState.sentKey("").count))
+            // `sent:audio:<id>` marks an upload, not a recording this device
+            // claims to hold, and an upload is deleted by whoever ingests it.
+            if id.hasPrefix("audio:") { continue }
+            guard !manager.fileExists(atPath: library.folder(for: id).path) else { continue }
+            do {
+                try await store.delete(CloudNaming.recordName(.recording, id, key: self.key),
+                                       in: .library)
+                report.deletedRemotely += 1
+                drop.append(key)
+            } catch {
+                report.errors.append("delete \(id): \(error.localizedDescription)")
+            }
+        }
+
+        for key in base.base.keys where key.hasPrefix(SyncState.noteKey("")) {
+            let slug = String(key.dropFirst(SyncState.noteKey("").count))
+            let file = library.notes.appendingPathComponent(slug + ".md")
+            guard !manager.fileExists(atPath: file.path) else { continue }
+            do {
+                try await store.delete(CloudNaming.recordName(.note, slug, key: self.key),
+                                       in: .library)
+                report.deletedRemotely += 1
+                drop.append(key)
+            } catch {
+                report.errors.append("delete note \(slug): \(error.localizedDescription)")
+            }
+        }
+
+        for key in drop { base.base[key] = nil }
     }
 
     /// Whether the container's copy already says what ours does.

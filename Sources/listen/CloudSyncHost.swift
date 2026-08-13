@@ -46,6 +46,11 @@ final class CloudSyncHost {
         // Old enough to be safe to forget. Deletions received in the last
         // fortnight are still on disk: see `Trash`.
         Trash.purge(in: ListenKit.Library.mac())
+
+        // A copy on this disk, daily. iCloud is a replica and propagates a
+        // deletion in seconds, so it is not the thing that gets a library back.
+        // See `Backups`.
+        Backups.runIfDue()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in await CloudSyncHost.shared.syncNow() }
         }

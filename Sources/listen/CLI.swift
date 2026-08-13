@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts", "notes", "tags", "ask", "sync",
+        "calendar", "contacts", "notes", "tags", "ask", "sync", "backup",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -162,6 +162,15 @@ enum CLI {
             ask(rest)
         case "provider":
             provider(rest)
+        case "backup":
+            // Prints rather than takes one, unless asked. Somebody running this
+            // is usually checking whether the net is there, not asking for it
+            // to be re-made.
+            await MainActor.run {
+                if rest.contains("--now") { Backups.runNow() }
+                print(Backups.describe())
+            }
+            exit(0)
         case "sync":
             await SyncCLI.run(rest)
         default:

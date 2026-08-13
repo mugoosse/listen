@@ -45,7 +45,26 @@ final class CloudSyncHost {
     func stop() {
         timer?.invalidate()
         timer = nil
+        soon?.invalidate()
+        soon = nil
         trace("cloud sync: off")
+    }
+
+    private var soon: Timer?
+
+    /// Push in a few seconds, because something worth sending just happened.
+    ///
+    /// Coalesced rather than immediate: transcribing a backlog finishes several
+    /// jobs in a row, and each one calling straight through would start a pass
+    /// that the next one has to wait behind. The delay is short enough that the
+    /// phone still sees the transcript while it is looking at the recording it
+    /// is waiting for.
+    func syncSoon() {
+        guard Settings.cloudSync else { return }
+        soon?.invalidate()
+        soon = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
+            Task { @MainActor in await CloudSyncHost.shared.syncNow() }
+        }
     }
 
     /// One pass. Reentrant-safe, because a slow pass and a timer that fires

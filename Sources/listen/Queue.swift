@@ -111,6 +111,12 @@ final class Queue {
 
         waiting.append(id)
         onChange?(id)
+        // The row before the transcript. A meeting recorded here is worth
+        // sending as soon as it exists, so the phone shows it as waiting to be
+        // transcribed rather than showing nothing until the transcript lands
+        // minutes later. Coalesced, so the launch sweep that enqueues a backlog
+        // still costs one pass.
+        CloudSyncHost.shared.syncSoon()
         advance()
         return true
     }
@@ -159,6 +165,14 @@ final class Queue {
                 self.running = nil
                 self.progress = nil
                 self.onChange?(id)
+                // Send it now rather than at the next tick of the two minute
+                // poll. A phone that recorded a memo has one thing it is
+                // waiting for and it is this, and waiting out the poll is the
+                // difference between a transcript that appears and one that
+                // has to be waited for without knowing how long. The phone's
+                // upload already works this way, which is why the trip felt
+                // fast in one direction and slow in the other.
+                CloudSyncHost.shared.syncSoon()
                 self.advance()
             }
         }

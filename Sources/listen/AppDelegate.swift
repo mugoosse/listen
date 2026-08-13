@@ -144,6 +144,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // run one per device rather than both, and why this is off by default.
         CloudSyncHost.shared.startIfEnabled()
 
+
         // And ask to be woken when another device writes, rather than only
         // finding out on the next poll.
         //

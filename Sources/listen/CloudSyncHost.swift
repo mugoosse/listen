@@ -39,6 +39,17 @@ final class CloudSyncHost {
 
     func startIfEnabled() {
         guard Settings.cloudSync, timer == nil else { return }
+
+        // Anything that rewrites a recording's metadata is worth sending.
+        //
+        // A meeting recorded here, transcribed, and then titled reached the
+        // phone still called "Untitled", because the title was written after
+        // the last thing that asked for a sync and nothing before the two
+        // minute poll had any reason to ask again. Coalesced by `syncSoon`, so
+        // a capture rewriting its metadata repeatedly still costs one pass.
+        RecordingEvents.changed = {
+            Task { @MainActor in CloudSyncHost.shared.syncSoon() }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in await CloudSyncHost.shared.syncNow() }
         }

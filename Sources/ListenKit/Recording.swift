@@ -79,6 +79,7 @@ public struct Recording: Sendable, Identifiable {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(metadata).write(to: metadataURL, options: .atomic)
+        RecordingEvents.changed?()
     }
 
     /// Change a field or two in `metadata.json` without rewriting the rest.
@@ -108,6 +109,7 @@ public struct Recording: Sendable, Identifiable {
         let out = try JSONSerialization.data(withJSONObject: object,
                                              options: [.prettyPrinted, .sortedKeys])
         try out.write(to: metadataURL, options: .atomic)
+        RecordingEvents.changed?()
     }
 
     /// Load, or nil. Nil is the signal that a folder is not a recording yet,
@@ -119,6 +121,25 @@ public struct Recording: Sendable, Identifiable {
         else { return nil }
         return Recording(folder: folder, metadata: meta)
     }
+}
+
+/// Told whenever a recording's `metadata.json` is rewritten.
+///
+/// One hook rather than a call at every mutation site, because there are
+/// fourteen of them in the Mac app alone: renaming, auto-titling, tagging,
+/// naming a speaker, matching a calendar event, finishing a capture, importing.
+/// Sprinkling a sync call across all of those means the next one added quietly
+/// does not sync, which is exactly what happened here: a recording titled after
+/// its transcript arrived on the phone still called "Untitled", because nothing
+/// between the rename and the two minute poll had any reason to speak.
+///
+/// Deliberately not called by the pull path, which writes `metadata.json`
+/// straight to disk rather than through `save`. A hook that fired on arrival
+/// would have every device answering every other device's sync for ever.
+public enum RecordingEvents {
+    /// Set once, by an app that syncs. `nonisolated(unsafe)` because it is
+    /// written at launch and only read afterwards.
+    public nonisolated(unsafe) static var changed: (@Sendable () -> Void)?
 }
 
 /// Writes a recording folder so that it becomes visible atomically.

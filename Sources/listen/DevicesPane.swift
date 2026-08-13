@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 
 /// Settings, Devices: the CloudKit account and the devices seen in its zone.
 ///
@@ -36,7 +37,18 @@ final class DevicesPane: Pane {
             let syncNow = NSButton(title: "Sync now", target: self,
                                    action: #selector(syncNowPressed(_:)))
             syncNow.bezelStyle = .rounded
-            stack.addArrangedSubview(row([syncNow]))
+            let saveKey = NSButton(title: "Save your key\u{2026}", target: self,
+                                   action: #selector(showKey(_:)))
+            saveKey.bezelStyle = .rounded
+            stack.addArrangedSubview(row([syncNow, saveKey]))
+
+            // Here rather than beside the copies in Storage, although it is a
+            // thing to write down. What the key opens is what iCloud holds, so
+            // it belongs with iCloud: the copies on this Mac need no key at all
+            // and never will.
+            note("What iCloud holds is sealed with a key that only your devices "
+                 + "have. Keep a copy somewhere safe, like a password manager, "
+                 + "so you can still open it if you ever lose them all.")
         }
 
         let toggle = NSButton(checkboxWithTitle: "Sync this library through iCloud",
@@ -103,6 +115,30 @@ final class DevicesPane: Pane {
         rows.append("")
         rows.append("A device that has said nothing for 30 days is dropped from this list by itself.")
         return rows.joined(separator: "\n")
+    }
+
+
+    /// Show the key, once, behind a press.
+    ///
+    /// Never drawn on the pane itself. It is short enough to fit in any
+    /// screenshot of this window, and anybody holding it can read every
+    /// transcript the container has, so a settings screen that displays it
+    /// by default is a settings screen nobody can safely photograph.
+    @objc private func showKey(_ sender: NSButton) {
+        guard let key = KeyStore.shared.load() else {
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Your key"
+        alert.informativeText = key.code + "\n\nThis opens everything Listen "
+            + "keeps in iCloud. Treat it the way you would treat the "
+            + "recordings it opens."
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "Done")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(key.code, forType: .string)
+        }
     }
 
     @objc private func syncNowPressed(_ sender: NSButton) {

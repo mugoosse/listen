@@ -13,6 +13,7 @@ import CoreImage
 /// installed, rather than to an empty list that looks like a bug.
 final class DevicesPane: Pane {
     private var listStack: NSStackView?
+    private var cloudStatus: NSTextField?
     private var poll: Timer?
     /// What the list last drew, so a redraw only happens when something moved.
     /// Rebuilding the rows every tick would take the mouse out from under a
@@ -121,6 +122,7 @@ final class DevicesPane: Pane {
     }
 
     private func fillList() {
+        refreshCloudStatus()
         guard let listStack else { return }
         let devices = DeviceSync.devices()
         let signature = devices.map { "\($0.id)\($0.revoked)\($0.lastSeen)" }.joined()
@@ -208,41 +210,7 @@ final class DevicesPane: Pane {
 
         let host = CloudSyncHost.shared
         if Settings.cloudSync {
-            var lines: [String] = []
-
-            // When, in words, because "2026-08-12T17:51:04Z" answers a question
-            // nobody asked. A sync that reports nothing is indistinguishable
-            // from one that silently failed, and the second is the one that
-            // loses a session.
-            if let run = host.lastRun {
-                let ago = Date().timeIntervalSince(run)
-                let when: String
-                if ago < 60 { when = "just now" }
-                else if ago < 3600 { when = "\(Int(ago / 60)) minutes ago" }
-                else if ago < 86_400 { when = "\(Int(ago / 3600)) hours ago" }
-                else { when = "\(Int(ago / 86_400)) days ago" }
-                let what = host.lastReport?.summary ?? "nothing to do"
-                lines.append("Last synced \(when): \(what)")
-            } else {
-                lines.append("Waiting for the first sync.")
-            }
-
-            if let errors = host.lastReport?.errors, !errors.isEmpty {
-                lines.append("")
-                lines.append("Last error: " + errors[0])
-            }
-            if let conflicts = host.lastReport?.conflicts, !conflicts.isEmpty {
-                lines.append("")
-                lines.append("Both sides edited, so neither was touched: "
-                             + conflicts.joined(separator: ", "))
-            }
-
-            lines.append("")
-            lines.append("Your recordings stay on the Mac that made them. "
-                         + "Everything else is sealed with a key that never "
-                         + "leaves your devices, so Apple stores it and cannot "
-                         + "read it.")
-            note(lines.joined(separator: "\n"))
+            cloudStatus = note(cloudStatusText(host))
 
             if !host.devices.isEmpty {
                 var rows = ["On this account:"]
@@ -271,6 +239,52 @@ final class DevicesPane: Pane {
         toggle.state = Settings.cloudSync ? .on : .off
         stack.addArrangedSubview(toggle)
         separator()
+    }
+
+    private func refreshCloudStatus() {
+        guard Settings.cloudSync, let cloudStatus else { return }
+        let text = cloudStatusText(CloudSyncHost.shared)
+        if cloudStatus.stringValue != text { cloudStatus.stringValue = text }
+    }
+
+    private func cloudStatusText(_ host: CloudSyncHost) -> String {
+        var lines: [String] = []
+
+        if let progress = host.progress {
+            lines.append("Syncing now: \(progress)")
+        } else if let run = host.lastRun {
+            // When, in words, because "2026-08-12T17:51:04Z" answers a question
+            // nobody asked. A sync that reports nothing is indistinguishable
+            // from one that silently failed, and the second is the one that
+            // loses a session.
+            let ago = Date().timeIntervalSince(run)
+            let when: String
+            if ago < 60 { when = "just now" }
+            else if ago < 3600 { when = "\(Int(ago / 60)) minutes ago" }
+            else if ago < 86_400 { when = "\(Int(ago / 3600)) hours ago" }
+            else { when = "\(Int(ago / 86_400)) days ago" }
+            let what = host.lastReport?.summary ?? "nothing to do"
+            lines.append("Last synced \(when): \(what)")
+        } else {
+            lines.append("Waiting for the first sync.")
+        }
+
+        if let errors = host.lastReport?.errors, !errors.isEmpty {
+            lines.append("")
+            lines.append("Last error: " + errors[0])
+        }
+        if let conflicts = host.lastReport?.conflicts, !conflicts.isEmpty {
+            lines.append("")
+            lines.append("Both sides edited, so neither was touched: "
+                         + conflicts.joined(separator: ", "))
+        }
+
+        lines.append("")
+        lines.append("Your recordings stay on the Mac that made them. "
+                     + "Everything else is sealed with a key that never "
+                     + "leaves your devices, so Apple stores it and cannot "
+                     + "read it.")
+        return lines.joined(separator: "\n")
     }
 
     @objc private func syncNowPressed(_ sender: NSButton) {

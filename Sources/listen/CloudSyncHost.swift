@@ -18,12 +18,16 @@ final class CloudSyncHost {
     private var timer: Timer?
     private var running = false
     private var subscribed = false
+    private var passID: UUID?
 
     /// What the last pass did, for the Devices pane to show. A sync that
     /// reports nothing is indistinguishable from one that silently failed.
     private(set) var lastReport: CloudReport?
     private(set) var lastRun: Date?
     private(set) var devices: [CloudRecords.DeviceBlob] = []
+    /// The part of the current pass somebody is waiting on. Cleared when the
+    /// pass ends so the Devices pane cannot mistake an old count for live work.
+    private(set) var progress: String?
 
     /// Every two minutes while the app is open.
     ///
@@ -74,7 +78,10 @@ final class CloudSyncHost {
     func syncNow() async -> CloudReport {
         guard !running else { return lastReport ?? CloudReport() }
         running = true
-        defer { running = false; lastRun = Date() }
+        let pass = UUID()
+        passID = pass
+        progress = "Starting"
+        defer { running = false; passID = nil; progress = nil; lastRun = Date() }
 
         let library = ListenKit.Library.mac()
 
@@ -101,7 +108,13 @@ final class CloudSyncHost {
         let store = CloudKitStore(containerID: CloudAccount.containerID)
         let core = CloudSyncCore(
             library: library, state: state, store: store,
-            key: key, policy: .mac, device: identity.id, ingests: true)
+            key: key, policy: .mac, device: identity.id, ingests: true,
+            progress: { message in
+                Task { @MainActor in
+                    guard CloudSyncHost.shared.passID == pass else { return }
+                    CloudSyncHost.shared.progress = message
+                }
+            })
 
         // Ask to be told rather than asking repeatedly. A Mac keeps
         // voiceprints, so it subscribes to all four zones; a phone does not,

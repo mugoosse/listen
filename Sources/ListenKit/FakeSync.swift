@@ -187,6 +187,43 @@ public enum FakeSync {
         try check(phoneLib.note(noteSlug) != nil, "the note did not arrive")
         ok("a note reaches the other device")
 
+        // Hand-written markdown is part of the on-disk format, not an import
+        // accident. Prove both liberal forms through the whole sync rather than
+        // only through `Note.parse`, because a note that parses locally but is
+        // skipped by the record path is still a note that does not sync.
+        let plainSlug = "plain-markdown"
+        let plain = "# A note made in Finder\n\nNo frontmatter here.\n"
+        try plain.write(to: macLib.notes.appendingPathComponent(plainSlug + ".md"),
+                        atomically: true, encoding: .utf8)
+        let blockSlug = "block-recordings"
+        let block = """
+        ---
+        title: "Two meetings"
+        created: 2026-08-12T12:00:00Z
+        updated: 2026-08-12T12:00:00Z
+        source: you
+        recordings:
+          - "\(id)"
+          - "\(memoID)"
+        ---
+
+        Kept as a YAML block sequence.
+        """
+        try block.write(to: macLib.notes.appendingPathComponent(blockSlug + ".md"),
+                        atomically: true, encoding: .utf8)
+        var handwrittenPush = CloudReport()
+        await mac.push(into: &handwrittenPush)
+        var handwrittenPull = CloudReport()
+        await phone.pull(into: &handwrittenPull)
+        let landedPlain = try checkNote(phoneLib.note(plainSlug), named: plainSlug)
+        try check(landedPlain.title == "A note made in Finder"
+                  && landedPlain.recordings.isEmpty,
+                  "a note without frontmatter changed shape")
+        let landedBlock = try checkNote(phoneLib.note(blockSlug), named: blockSlug)
+        try check(landedBlock.recordings == [id, memoID],
+                  "a YAML block sequence lost its recordings")
+        ok("hand-written notes sync with no frontmatter or a YAML block sequence")
+
         try await store.delete(CloudNaming.recordName(.note, noteSlug, key: key), in: .library)
         var deletion = CloudReport()
         await phone.pull(into: &deletion)
@@ -205,6 +242,11 @@ public enum FakeSync {
         ok("a refetch after an expired token neither resurrects nor destroys")
 
         return out
+    }
+
+    private static func checkNote(_ note: Note?, named slug: String) throws -> Note {
+        guard let note else { throw Failure(description: "the \(slug) note did not arrive") }
+        return note
     }
 
     // MARK: - Scratch

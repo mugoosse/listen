@@ -162,7 +162,7 @@ public struct Metadata: Codable, Sendable, Equatable {
         return f.string(from: date)
     }
 
-    static let parser: DateFormatter = {
+    public static let parser: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
         f.locale = Locale(identifier: "en_US_POSIX")

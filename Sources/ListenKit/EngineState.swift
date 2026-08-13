@@ -80,12 +80,20 @@ public struct EngineState: Sendable {
     /// once and kept: a value that changed per launch would fill the devices
     /// list with ghosts of the same machine.
     public func identity(name: @autoclosure () -> String,
-                         kind: @autoclosure () -> String) -> Identity {
+                         kind: @autoclosure () -> String,
+                         stableID: (() -> String)? = nil) -> Identity {
         if let data = try? Data(contentsOf: identityFile),
            let existing = try? JSONDecoder().decode(Identity.self, from: data) {
             return existing
         }
-        let fresh = Identity(id: UUID().uuidString, name: name(), kind: kind())
+        // `stableID` is how a device that cannot rely on this file surviving
+        // says so. On iOS the state directory is keyed on the library path, and
+        // the library lives inside the app container, whose name changes when
+        // the app is reinstalled: every install therefore arrived in the
+        // devices list as a new phone. Three rows called "iPhone" for one
+        // phone, and nothing ever removed the dead ones.
+        let fresh = Identity(id: stableID?() ?? UUID().uuidString,
+                             name: name(), kind: kind())
         if let data = try? JSONEncoder().encode(fresh) {
             try? data.write(to: identityFile, options: .atomic)
         }

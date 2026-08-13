@@ -473,6 +473,15 @@ public struct CloudSyncCore: Sendable {
     /// change feed, and **each device writes only its own record**, so there is
     /// no merge to get wrong and no row two machines can fight over.
     @discardableResult
+    /// Take one device off the list now, rather than waiting a month.
+    ///
+    /// It comes back if that device is still running: a device record is a
+    /// heartbeat, not a permission, and nothing about sync consults this list.
+    /// So this is a tidy-up, and cannot lock anybody out by being wrong.
+    public func forgetDevice(_ id: String) async throws {
+        try await store.delete(CloudNaming.recordName(.device, id, key: key), in: .devices)
+    }
+
     public func heartbeat(name: String, kind: String, appVersion: String,
                           now: Date = Date()) async -> [CloudRecords.DeviceBlob] {
         let recordName = CloudNaming.recordName(.device, device, key: key)
@@ -491,9 +500,27 @@ public struct CloudSyncCore: Sendable {
         var everyone: [CloudRecords.DeviceBlob] = []
         if let changes = try? await store.changes(in: .devices, since: nil) {
             for record in changes.changed {
-                if let blob = try? CloudRecords.openDevice(record, key: key) {
-                    everyone.append(blob)
+                guard let blob = try? CloudRecords.openDevice(record, key: key) else { continue }
+
+                // Devices that have said nothing for a month are dropped.
+                //
+                // Nothing ever removed one, so the list only grew: six rows for
+                // three machines, three of them called "iPhone", because a
+                // device's identity is generated per install and every phone
+                // install after the first arrived as somebody new. A list that
+                // cannot be trusted to describe your devices is worse than no
+                // list, since the only thing it is for is answering "did that
+                // reach my other Mac".
+                //
+                // A month rather than a week: a laptop left shut over a holiday
+                // is not a laptop you have thrown away, and the cost of being
+                // wrong is that it reappears when it is next opened.
+                if let when = Metadata.parser.date(from: blob.lastSeen),
+                   now.timeIntervalSince(when) > 30 * 86_400, blob.id != device {
+                    try? await store.delete(record.name, in: .devices)
+                    continue
                 }
+                everyone.append(blob)
             }
         }
         return everyone.sorted { $0.lastSeen > $1.lastSeen }

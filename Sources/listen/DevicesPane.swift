@@ -213,10 +213,17 @@ final class DevicesPane: Pane {
             cloudStatus = note(cloudStatusText(host))
 
             if !host.devices.isEmpty {
+                // With when, not just what. Six rows for three machines is what
+                // this looked like without it, and the only thing that
+                // distinguishes a phone you still own from one install of it
+                // that has been replaced is when it last said anything.
                 var rows = ["On this account:"]
                 for device in host.devices {
-                    rows.append("  \(device.name) (\(device.kind))")
+                    rows.append("  \(device.name) (\(device.kind)), \(device.seenAgo)")
                 }
+                rows.append("")
+                rows.append("A device that has said nothing for 30 days is "
+                            + "dropped from this list by itself.")
                 note(rows.joined(separator: "\n"))
             }
 

@@ -46,11 +46,6 @@ public enum CloudRecords {
     /// fields have a size ceiling and `transcript.json` already reaches 314 KB
     /// on a real library with no upper bound on a long meeting.
     ///
-    /// **`librarySidecars`, not `sidecars`.** Voiceprints have their own zone,
-    /// and a device subscribes per zone, so putting `embeddings.json` in here
-    /// would deliver it to every device that syncs the library even if that
-    /// device then declined to write it to disk. The zone is what makes the
-    /// split real; a client-side filter only makes it polite.
     /// What this recording looks like locally, cheaply enough to ask on every
     /// pass about every recording.
     ///
@@ -76,6 +71,11 @@ public enum CloudRecords {
         return sha256Hex(Data(parts.joined(separator: "\n").utf8))
     }
 
+    /// **`librarySidecars`, not `sidecars`.** Voiceprints have their own zone,
+    /// and a device subscribes per zone, so putting `embeddings.json` in here
+    /// would deliver it to every device that syncs the library even if that
+    /// device then declined to write it to disk. The zone is what makes the
+    /// split real; a client-side filter only makes it polite.
     public static func recording(_ recording: Recording, policy: DevicePolicy,
                                  key: PairingKey) throws -> StoredRecord {
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
@@ -191,6 +191,18 @@ public enum CloudRecords {
                     lastSeen: String, appVersion: String) {
             self.id = id; self.name = name; self.kind = kind
             self.lastSeen = lastSeen; self.appVersion = appVersion
+        }
+
+        /// When it last said anything, in words. A device list without this
+        /// cannot be read: an install that has been replaced looks exactly
+        /// like the phone in your pocket.
+        public var seenAgo: String {
+            guard let when = Metadata.parser.date(from: lastSeen) else { return "at an unknown time" }
+            let ago = Date().timeIntervalSince(when)
+            if ago < 120 { return "just now" }
+            if ago < 3600 { return "\(Int(ago / 60)) min ago" }
+            if ago < 86_400 { return "\(Int(ago / 3600)) h ago" }
+            return "\(Int(ago / 86_400)) days ago"
         }
     }
 

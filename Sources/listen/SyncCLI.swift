@@ -291,10 +291,17 @@ enum SyncCLI {
         let pushOnly = flag("--push-only", &args)
         let preferred = option("--preferred", &args)
 
-        // A device says it is here before anything else, so the settings pane
-        // on every other device can say when it last was.
-        await core.heartbeat(name: name, kind: isPhone ? "iPhone" : "Mac",
-                             appVersion: AppInfo.version ?? "unknown")
+        // Deliberately no heartbeat.
+        //
+        // A scratch run is a test, not a device, and this used to register one
+        // called "mac" on every invocation. It showed up in the settings pane
+        // beside the two real Macs and stayed there, because a device record is
+        // only ever added. Ask with `--announce` if a run genuinely needs to be
+        // seen by the others, which is the two-Mac rehearsal and nothing else.
+        if flag("--announce", &args) {
+            await core.heartbeat(name: name, kind: isPhone ? "iPhone" : "Mac",
+                                 appVersion: AppInfo.version ?? "unknown")
+        }
 
         if !pullOnly {
             await core.push(into: &report)
@@ -319,6 +326,9 @@ enum SyncCLI {
     /// ever. It reports names and shapes and never opens a payload: if this
     /// prints something readable, that is the bug.
     private static func inspect(_ args: inout [String]) async -> Never {
+        if let at = args.firstIndex(of: "--forget"), at + 1 < args.count {
+            await forget(args[at + 1])
+        }
         guard let key = SyncCLI.keyStore.load() else { die("not paired") }
         let store = CloudKitStore(containerID: CloudAccount.containerID)
         print("container:   \(CloudAccount.containerID)")
@@ -346,6 +356,39 @@ enum SyncCLI {
             print("  \(zone.rawValue): \(shape)\(opaque ? "" : "   NAMES ARE NOT OPAQUE")")
         }
         print("\n\(total) record(s). Nothing above was decrypted to print it.")
+
+        // The devices, by name, because this is the one list a person has to be
+        // able to read and act on. Opened rather than counted, unlike
+        // everything above it: a device record is this library's own bookkeeping
+        // and printing it locally reveals nothing that the settings pane does
+        // not already show.
+        if let changes = try? await store.changes(in: .devices, since: nil), !changes.changed.isEmpty {
+            print("\ndevices:")
+            for record in changes.changed {
+                guard let blob = try? CloudRecords.openDevice(record, key: key) else { continue }
+                print("  \(blob.id)  \(blob.name) (\(blob.kind)), \(blob.seenAgo)")
+            }
+            print("\n  drop one with: listen sync inspect --forget <id>")
+        }
+        done()
+    }
+
+    /// Take one device off the list.
+    ///
+    /// A tidy-up rather than a revocation: nothing about sync consults this
+    /// list, and a device still running puts itself back on its next pass. What
+    /// it is for is the strays, which on this library were two replaced phone
+    /// installs and a scratch run, none of which will ever check in again and
+    /// all of which the thirty day rule would take a month to notice.
+    private static func forget(_ id: String) async -> Never {
+        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        let store = CloudKitStore(containerID: CloudAccount.containerID)
+        do {
+            try await store.delete(CloudNaming.recordName(.device, id, key: key), in: .devices)
+            print("forgot \(id)")
+        } catch {
+            die("could not forget \(id): \(error.localizedDescription)")
+        }
         done()
     }
 
@@ -392,7 +435,7 @@ enum SyncCLI {
           run --library D [--to H]        run a device's engine from here
           note --library D --slug S       write a note the way an app does
           --fake                          every seam of the CloudKit sync, offline
-          cloud --library D               one pass against the real container\n          inspect                         what is in the container, by zone\n          enable [--on|--off]             sync this Mac's real library
+          cloud --library D               one pass against the real container\n          inspect [--forget ID]           what is in the container, by zone\n          enable [--on|--off]             sync this Mac's real library
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

@@ -32,7 +32,11 @@ enum SettingsTab: CaseIterable {
         // and OpenRouter are not agents, they are models Listen drives itself.
         // The settings sidebar was the last place using the word.
         case .agent:       return "Ask"
-        case .devices:     return "Devices"
+        // "Sync", not "Devices". The list of devices is one thing on this pane
+        // and no longer the point of it: what somebody comes here to find out
+        // is whether their library is in step, and only then which machines are
+        // on it. The old name is what the pairing screen was called.
+        case .devices:     return "Sync"
         case .developers:  return "Developers"
         case .about:       return "About"
         }
@@ -49,7 +53,9 @@ enum SettingsTab: CaseIterable {
         case .dictionary:  return "character.book.closed"
         case .dictation:   return "mic.badge.plus"
         case .agent:       return "bubble.left.and.text.bubble.right"
-        case .devices:     return "iphone.and.arrow.forward"
+        // An icon about being in step rather than about handing something to a
+        // phone, which is what the arrow meant when this was pairing.
+        case .devices:     return "arrow.triangle.2.circlepath"
         case .developers:  return "terminal"
         case .about:       return "info.circle"
         }
@@ -101,7 +107,13 @@ enum SettingsGroup: CaseIterable {
 
     var tabs: [SettingsTab] {
         switch self {
-        case .app:           return [.general, .storage, .permissions]
+        // Sync sits with the app's own settings, on Ask's argument above.
+        // It was in Advanced when it was a pairing screen: a QR code, a typed
+        // code, a list of things that had scanned it, all of it setup you did
+        // once. There is no pairing any more. What the pane says now is whether
+        // this library is reaching your other machines, which is the product's
+        // whole claim and the first thing to look at when it seems not to be.
+        case .app:           return [.general, .storage, .permissions, .devices]
         case .recording:     return [.meetings, .audio]
         case .transcription: return [.models, .dictionary]
         // A group of one, and worth the header. Dictation is a second thing the
@@ -122,7 +134,7 @@ enum SettingsGroup: CaseIterable {
         // It sits after Transcription and Dictation because that is the order
         // things happen in: record it, transcribe it, then ask about it.
         case .ask:           return [.agent]
-        case .advanced:      return [.devices, .developers, .about]
+        case .advanced:      return [.developers, .about]
         }
     }
 }

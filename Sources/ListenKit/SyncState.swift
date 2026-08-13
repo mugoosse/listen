@@ -36,6 +36,7 @@ public struct SyncState: Codable, Sendable {
 
     public static func noteKey(_ slug: String) -> String { "note:" + slug }
     public static func fileKey(_ name: String) -> String { "file:" + name }
+    public static func sentKey(_ id: String) -> String { "sent:" + id }
 
     public subscript(note slug: String) -> String? {
         get { base[SyncState.noteKey(slug)] }
@@ -45,6 +46,14 @@ public struct SyncState: Codable, Sendable {
     public subscript(file name: String) -> String? {
         get { base[SyncState.fileKey(name)] }
         set { base[SyncState.fileKey(name)] = newValue }
+    }
+
+    /// What this device last put in the container for a recording, as a stamp
+    /// over its own files. Not a three-way base and not part of any decision:
+    /// purely "there is no point asking the server about this one".
+    public subscript(sent id: String) -> String? {
+        get { base[SyncState.sentKey(id)] }
+        set { base[SyncState.sentKey(id)] = newValue }
     }
 
     // MARK: - Coding

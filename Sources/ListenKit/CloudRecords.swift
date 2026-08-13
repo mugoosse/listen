@@ -51,6 +51,31 @@ public enum CloudRecords {
     /// would deliver it to every device that syncs the library even if that
     /// device then declined to write it to disk. The zone is what makes the
     /// split real; a client-side filter only makes it polite.
+    /// What this recording looks like locally, cheaply enough to ask on every
+    /// pass about every recording.
+    ///
+    /// Reads the same files `recording(_:policy:key:)` would and digests them,
+    /// and stops there: no sealing, no record, no network. That difference is
+    /// the point. Sealing 71 recordings' sidecars and then asking the server
+    /// about each one took a phone on cellular minutes per pass, during which
+    /// the screen said "Sending 71 of 71" and the pull that the person was
+    /// actually waiting for had not started, because it runs after the push.
+    ///
+    /// `hasAudio` is in here because it is not in the digests and it decides
+    /// `audioOn`. Without it a Mac that had just ingested a recording would
+    /// match its own last stamp and never tell the container it now holds the
+    /// audio, which is the one flag the phone waits on before freeing its copy.
+    public static func recordingStamp(_ recording: Recording,
+                                      policy: DevicePolicy) -> String {
+        var parts: [String] = [recording.hasAudio ? "audio" : "none"]
+        for file in policy.files(for: recording.id).sorted() {
+            let url = recording.folder.appendingPathComponent(file)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            parts.append(file + ":" + sha256Hex(data))
+        }
+        return sha256Hex(Data(parts.joined(separator: "\n").utf8))
+    }
+
     public static func recording(_ recording: Recording, policy: DevicePolicy,
                                  key: PairingKey) throws -> StoredRecord {
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")

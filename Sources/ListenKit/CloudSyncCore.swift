@@ -101,7 +101,14 @@ public struct CloudSyncCore: Sendable {
                 seen.insert(record.name)
                 do {
                     switch record.type {
-                    case .recording: try await pullRecording(record, into: &report)
+                    case .recording:
+                        // Stamp what has just been written, so the push that
+                        // follows does not ask the container about a recording
+                        // it has this second handed us.
+                        let id = try await pullRecording(record, into: &report)
+                        if let fresh = Recording.load(library.folder(for: id)) {
+                            base[sent: id] = CloudRecords.recordingStamp(fresh, policy: policy)
+                        }
                     case .note: try pullNote(record, base: &base, into: &report)
                     case .blob: try pullBlob(record, into: &report)
                     default: break
@@ -140,8 +147,9 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
+    @discardableResult
     private func pullRecording(_ record: StoredRecord,
-                               into report: inout CloudReport) async throws {
+                               into report: inout CloudReport) async throws -> String {
         let blob = try CloudRecords.openRecording(record, key: key)
         guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
         let folder = library.folder(for: blob.id)
@@ -171,6 +179,7 @@ public struct CloudSyncCore: Sendable {
 
         // The phone stops holding audio only when a Mac says it holds it.
         await reclaimIfAcknowledged(record, id: blob.id, into: &report)
+        return blob.id
     }
 
     private func pullNote(_ record: StoredRecord, base: inout SyncState,
@@ -262,9 +271,20 @@ public struct CloudSyncCore: Sendable {
         var base = state.base
         defer { state.base = base }
 
-        let mine = library.all()
+        // Only the ones that have changed since this device last sent them.
+        //
+        // Every recording used to be sealed and then asked about, on every
+        // pass, for ever. On a phone with 71 recordings on cellular that was
+        // minutes of encrypting files that had not changed and a round trip
+        // each to be told so, while the screen said "Sending 71 of 71" and the
+        // pull the person was waiting for had not begun. The stamp is local and
+        // costs a read; see `CloudRecords.recordingStamp` for what is in it and
+        // why `hasAudio` had to be.
+        let stamps = library.all().map { ($0, CloudRecords.recordingStamp($0, policy: policy)) }
+        let mine = stamps.filter { base[sent: $0.0.id] != $0.1 }
         if mine.count > 4 { progress?("Checking \(mine.count) recordings") }
-        for (index, recording) in mine.enumerated() {
+        for (index, pair) in mine.enumerated() {
+            let (recording, stamp) = pair
             if mine.count > 4, index % 5 == 0 {
                 progress?("Sending \(index + 1) of \(mine.count)")
             }
@@ -281,8 +301,15 @@ public struct CloudSyncCore: Sendable {
                 // does not can stop holding it.
                 if recording.hasAudio, ingests { record.audioOn = device }
 
-                if let existing, try sameRecording(existing, as: record) { continue }
+                // Recorded only after the container agrees, either because it
+                // already held this or because the save landed. A failure
+                // leaves no stamp, so the next pass tries again.
+                if let existing, try sameRecording(existing, as: record) {
+                    base[sent: recording.id] = stamp
+                    continue
+                }
                 _ = try await store.save(record)
+                base[sent: recording.id] = stamp
                 report.pushedRecordings += 1
             } catch let error as StoreError {
                 if case .changedOnServer = error { report.conflicts.append(recording.id) }
@@ -442,6 +469,21 @@ public struct CloudSyncCore: Sendable {
     public func upload(_ recording: Recording, into report: inout CloudReport) async {
         guard !ingests else { return }
         guard recording.hasAudio, let audio = try? Data(contentsOf: recording.micURL) else { return }
+
+        // Once, and remembered, because the record this checked for is deleted
+        // on purpose the moment a Mac takes the audio.
+        //
+        // A transfer record is purged after ingest, so "is it still there" is
+        // false both before the first upload and for ever after a successful
+        // one. What made that survivable until now was the phone deleting its
+        // own copy at the same moment, which took `hasAudio` away and ended the
+        // loop. With **Keep audio on this iPhone** switched on it does not: the
+        // phone holds every recording's audio for good, so every pass re-sent
+        // every one of them in full. On cellular that is the whole library
+        // uploaded again every two minutes.
+        var base = state.base
+        if base[sent: "audio:" + recording.id] != nil { return }
+
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
         guard let metadata = try? Data(contentsOf: metadataURL) else { return }
         let name = CloudNaming.recordName(.audioTransfer, recording.id, key: key)
@@ -450,6 +492,8 @@ public struct CloudSyncCore: Sendable {
             _ = try await store.save(try CloudRecords.transfer(
                 id: recording.id, from: device, metadata: metadata,
                 audio: audio, key: key))
+            base[sent: "audio:" + recording.id] = "1"
+            state.base = base
             report.pushedRecordings += 1
         } catch {
             report.errors.append("upload \(recording.id): \(error.localizedDescription)")

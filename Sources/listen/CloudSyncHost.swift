@@ -140,11 +140,16 @@ final class CloudSyncHost {
         // when neither side is the agreed base and touches neither. Recordings
         // have no such three-way guard: there is normally one writer, and this
         // is the case where that assumption does not hold yet.
-        let firstEver = state.base[file: "token"] == nil
-        if firstEver {
-            await core.pull(into: &report)
-            await core.pullVoiceprints(into: &report)
-        }
+        // Down before up, always, rather than only on the first pass.
+        //
+        // The rule above is why it was written; the reason it is now
+        // unconditional is that a pull is incremental and a push is not. The
+        // pull asks for what has changed since a token, so it is one request
+        // and usually empty. The push walks the whole library. Doing it second
+        // means what somebody is waiting for arrives first, and nothing about
+        // the ordering was load bearing in the other direction.
+        await core.pull(into: &report)
+        await core.pullVoiceprints(into: &report)
 
         await core.push(into: &report)
         await core.pushVoiceprints(into: &report)
@@ -153,10 +158,6 @@ final class CloudSyncHost {
         // takes it.
         let preferred = Settings.preferredTranscriber
         await core.ingest(preferred: preferred.isEmpty ? nil : preferred, into: &report)
-        if !firstEver {
-            await core.pull(into: &report)
-            await core.pullVoiceprints(into: &report)
-        }
 
         // Anything that arrived may be a recording with audio and no
         // transcript, which is the definition of a pending job.

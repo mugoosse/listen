@@ -234,15 +234,19 @@ public struct CloudSyncCore: Sendable {
     /// one: without it the next push would ask the container to delete a record
     /// that is already gone, on every device, every pass, for ever.
     private func deleteLocally(named recordName: String, base: inout SyncState) -> Bool {
+        // Moved, not removed. A deletion arriving over sync was made on some
+        // other device, and this one cannot tell a deliberate one from a bug or
+        // from a library that briefly looked empty. See `Trash`.
         for recording in library.all()
         where CloudNaming.recordName(.recording, recording.id, key: key) == recordName {
-            try? FileManager.default.removeItem(at: recording.folder)
+            Trash.accept(recording.folder, in: library)
             base[sent: recording.id] = nil
             return true
         }
         for note in library.allNotes()
         where CloudNaming.recordName(.note, note.slug, key: key) == recordName {
-            library.deleteNote(note.slug)
+            Trash.accept(library.notes.appendingPathComponent(note.slug + ".md"),
+                         in: library)
             base[note: note.slug] = nil
             return true
         }

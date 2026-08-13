@@ -296,12 +296,25 @@ public enum FakeSync {
 
         let before = (try? await store.changes(in: .library, since: nil))?.changed.count ?? 0
         try check(before > 2, "the vanishing test needs a library to lose")
-        for entry in (try? FileManager.default.contentsOfDirectory(
-            at: macLib.recordings, includingPropertiesForKeys: nil)) ?? [] {
-            try FileManager.default.removeItem(at: entry)
+        // Moved aside rather than deleted, and put back afterwards. The first
+        // version removed them, which left the library wrecked for every seam
+        // that followed and made a later one fail for a reason that had nothing
+        // to do with what it tested.
+        let aside = macLib.root.appendingPathComponent("aside")
+        try FileManager.default.createDirectory(at: aside, withIntermediateDirectories: true)
+        let vanishing = (try? FileManager.default.contentsOfDirectory(
+            at: macLib.recordings, includingPropertiesForKeys: nil)) ?? []
+        for entry in vanishing {
+            try FileManager.default.moveItem(
+                at: entry, to: aside.appendingPathComponent(entry.lastPathComponent))
         }
         var vanished = CloudReport()
         await mac.push(into: &vanished)
+        for entry in vanishing {
+            try FileManager.default.moveItem(
+                at: aside.appendingPathComponent(entry.lastPathComponent), to: entry)
+        }
+        try FileManager.default.removeItem(at: aside)
 
         let after = (try? await store.changes(in: .library, since: nil))?.changed.count ?? 0
         try check(after == before,
@@ -309,6 +322,35 @@ public enum FakeSync {
         try check(!vanished.errors.isEmpty,
                   "it deleted nothing and also said nothing")
         ok("a library that has lost everything does not empty the container")
+
+        // A deletion obeyed is still a deletion recoverable.
+        let victim = "2026-08-13-111111-C0FE"
+        try seed(macLib, id: victim,
+                 metadata: #"{"id":"\#(victim)","title":"Recoverable","source":"mac","state":"done"}"#,
+                 transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+        var sendVictim = CloudReport()
+        await mac.push(into: &sendVictim)
+        var getVictim = CloudReport()
+        await phone.pull(into: &getVictim)
+        try check(phoneLib.find(victim) != nil, "the recording never reached the phone")
+
+        try FileManager.default.removeItem(at: macLib.folder(for: victim))
+        var send = CloudReport()
+        await mac.push(into: &send)
+        var receive = CloudReport()
+        await phone.pull(into: &receive)
+        try check(phoneLib.find(victim) == nil, "the phone kept a deleted recording")
+        let kept = Trash.root(in: phoneLib)
+        let found = (try? FileManager.default.subpathsOfDirectory(atPath: kept.path)) ?? []
+        try check(found.contains { $0.hasSuffix(victim) },
+                  "the phone deleted it outright instead of keeping it back")
+
+        // And a fortnight later it is gone for real.
+        Trash.purge(in: phoneLib, now: Date().addingTimeInterval(15 * 86_400))
+        let after15 = (try? FileManager.default.subpathsOfDirectory(atPath: kept.path)) ?? []
+        try check(!after15.contains { $0.hasSuffix(victim) },
+                  "the trash never empties")
+        ok("a deletion obeyed here is recoverable for a fortnight")
 
         // The case a real container will not stage on demand, and the one that
         // silently resurrects deleted meetings.

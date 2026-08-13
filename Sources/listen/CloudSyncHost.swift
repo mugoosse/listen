@@ -42,6 +42,10 @@ final class CloudSyncHost {
         // system is what knows. See `LibraryWatch` for why this is not a hook
         // called from each writer any more.
         LibraryWatch.shared.start(root: ListenKit.Library.mac().root)
+
+        // Old enough to be safe to forget. Deletions received in the last
+        // fortnight are still on disk: see `Trash`.
+        Trash.purge(in: ListenKit.Library.mac())
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in await CloudSyncHost.shared.syncNow() }
         }

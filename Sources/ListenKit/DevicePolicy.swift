@@ -162,6 +162,6 @@ public struct DevicePolicy: Sendable, Equatable {
     ///   never replicate. The legacy `devices.json` and `.sync-state.json` are
     ///   removed after CloudKit has adopted what it needs from them.
     /// - `.sync/` is Resilio's own metadata and is not Listen data.
-    public static let neverSynced = ["dictations.jsonl", "chats", "agent",
+    public static let neverSynced = [Trash.directory, "dictations.jsonl", "chats", "agent",
                                      ".pairing-key", ".sync"]
 }

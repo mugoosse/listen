@@ -26,6 +26,7 @@ enum SyncCLI {
         case "--fake":   await fake(&rest)
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
+        case "trash":    trash()
         case "enable":   enable(&rest)
         default:         help()
         }
@@ -179,6 +180,31 @@ enum SyncCLI {
     /// after that moment no record type can be removed and no field retyped,
     /// ever. It reports names and shapes and never opens a payload: if this
     /// prints something readable, that is the bug.
+    /// What a deletion took, while it can still be put back.
+    ///
+    /// Printing the path rather than offering a restore verb, because putting
+    /// a recording back is `mv`, and a person doing it by hand is a person who
+    /// has looked at what they are restoring.
+    private static func trash() -> Never {
+        let library = SyncCLI.library
+        let root = Trash.root(in: library)
+        let days = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil)) ?? []
+        guard !days.isEmpty else {
+            print("nothing has been deleted in the last fortnight.")
+            done()
+        }
+        print(root.path + "\n")
+        for day in days.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+            let items = (try? FileManager.default.contentsOfDirectory(
+                at: day, includingPropertiesForKeys: nil)) ?? []
+            print("  \(day.lastPathComponent): \(items.count) item(s)")
+            for item in items.prefix(20) { print("    \(item.lastPathComponent)") }
+        }
+        print("\nPut one back by moving it into recordings/ or notes/.")
+        done()
+    }
+
     private static func inspect(_ args: inout [String]) async -> Never {
         if let at = args.firstIndex(of: "--forget"), at + 1 < args.count {
             await forget(args[at + 1])
@@ -285,6 +311,7 @@ enum SyncCLI {
           --fake                          every seam of the CloudKit sync, offline
           cloud --library D               one pass against the real container
           inspect [--forget ID]           what is in the container, by zone
+          trash                           deletions received in the last fortnight
           enable [--on|--off]             sync this Mac's real library
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.

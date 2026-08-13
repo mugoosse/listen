@@ -54,6 +54,17 @@ Hand-written markdown notes remain part of the library format. Notes with no
 frontmatter, and notes whose `recordings` use a YAML block sequence, now run
 through the same offline end-to-end suite as generated notes.
 
+### Deleting something deletes it everywhere
+
+A recording or note you delete on one device now goes from the others as well.
+Until now a deletion was obeyed when iCloud reported one and never reported
+when you made one, so a meeting deleted here stayed in iCloud and on every
+other device. Deleted notes could also come back, because a device that still
+held its own copy put it back the next time it sent anything.
+
+A recording whose files cannot be read is never mistaken for one you deleted,
+so a damaged file on one device costs nothing on the others.
+
 ## 0.13.0 (2026-08-12)
 
 ### Clicking a speaker no longer hides the meeting

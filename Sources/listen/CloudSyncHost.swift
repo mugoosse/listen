@@ -3,10 +3,8 @@ import ListenKit
 
 /// The CloudKit sync, running by itself while the app is open.
 ///
-/// The counterpart to `SyncHost`, which answers a phone over the LAN. That one
-/// exists until Phase 6 and this one replaces it: there is no socket here, no
-/// address to find, no permission that fails by never completing, and nothing
-/// that needs both devices awake at once.
+/// There is no socket here, no address to find, no local-network permission and
+/// nothing that needs both devices awake at once.
 ///
 /// **Off unless `Settings.cloudSync` says otherwise.** The first write to a
 /// container is the first moment somebody's meetings leave their machine, and
@@ -96,24 +94,27 @@ final class CloudSyncHost {
 
         let library = ListenKit.Library.mac()
 
-        // The key moves to the iCloud Keychain the first time CloudKit runs,
-        // which is the point at which a second Mac becomes possible. Copied
-        // rather than moved: the LAN transport still reads the file and every
-        // device already paired is paired against it.
+        // Keep adopting rather than deleting the old file in this pass.
+        // `KeyMigration` is the recovery path if the shared item is missing,
+        // and removing its source before removing the migration would turn a
+        // recoverable keychain problem into a Mac that silently stops syncing.
         KeyMigration.adoptFileKey(from: library)
 
-        guard let key = KeyStore.shared.load() ?? SyncCLI.keyStore.load() else {
+        guard let key = KeyStore.shared.load() ?? FileKeyStore(library: library).load() else {
             var report = CloudReport()
-            report.errors.append("No pairing key yet.")
+            report.errors.append("No sync key yet.")
             lastReport = report
             return report
         }
 
         let state = EngineState(library: library)
-        // Adopt whatever the LAN transport agreed last, once, so the first
-        // CloudKit pass does not report a conflict on every note this Mac has
-        // ever edited.
+        // Adopt whatever the LAN transport agreed last, once, then remove the
+        // legacy merge base and device registry from the library. Neither is
+        // consulted after this point, and leaving per-device state inside the
+        // replicated tree would keep the retired transport alive on disk.
         state.adoptLegacyBase(from: library)
+        try? FileManager.default.removeItem(
+            at: library.root.appendingPathComponent("devices.json"))
 
         let identity = state.identity(name: Host.current().localizedName ?? "Mac", kind: "Mac")
         let store = CloudKitStore(containerID: CloudAccount.containerID)

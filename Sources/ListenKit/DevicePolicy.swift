@@ -132,9 +132,8 @@ public struct DevicePolicy: Sendable, Equatable {
     /// The same decision gives `dictionary.json` below a reader it did not have
     /// when this file was written.
     ///
-    /// The `blobs` are declared here and are **not** moved by the LAN
-    /// transport, which is not an oversight: wire ops for them would be code
-    /// written for a transport that is being deleted.
+    /// The retired LAN transport never moved `blobs`. CloudKit does, through
+    /// the same policy that carries recording sidecars.
     ///
     /// `dictionary.json` is the one to move first when there is a transport
     /// that can. It rewrites transcripts, so two devices with different
@@ -159,11 +158,10 @@ public struct DevicePolicy: Sendable, Equatable {
     ///   rather than a thing with no home, but nothing on the phone can open
     ///   one and a note's `chat` key is a dangling reference there until
     ///   something can.
-    /// - `.pairing-key`, `devices.json` and `.sync-state.json` are per-device
-    ///   state and must never replicate. `CLOUDKIT-PLAN.md` §2.7 is about
-    ///   exactly this, and `.sync/`, which is Resilio's own metadata, is still
-    ///   sitting there from before the library moved.
+    /// - `.pairing-key` is the temporary source for `KeyMigration` and must
+    ///   never replicate. The legacy `devices.json` and `.sync-state.json` are
+    ///   removed after CloudKit has adopted what it needs from them.
+    /// - `.sync/` is Resilio's own metadata and is not Listen data.
     public static let neverSynced = ["dictations.jsonl", "chats", "agent",
-                                     ".pairing-key", "devices.json",
-                                     ".sync-state.json", ".sync"]
+                                     ".pairing-key", ".sync"]
 }

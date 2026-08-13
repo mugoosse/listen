@@ -1,8 +1,7 @@
 import Foundation
-import Network
 import ListenKit
 
-/// `listen sync …`, which used to be a separate binary called `listen-sync`.
+/// `listen sync …`, which used to live in a separate LAN helper.
 ///
 /// The split was justified by two things: the recorder should not have to hold
 /// a socket open to be useful, and a sync daemon should be stoppable without
@@ -13,23 +12,17 @@ import ListenKit
 ///
 /// What forced it is smaller and harder: **a bare executable cannot hold an
 /// iCloud entitlement.** Restricted entitlements need a provisioning profile,
-/// a profile has to be embedded in a bundle, and `listen-sync` was a file in
+/// a profile has to be embedded in a bundle, and that helper was a file in
 /// `~/.local/bin`. It could never have reached a container from there.
 ///
-/// The verbs keep their names and their arguments, because
-/// `spec/05-testing.md`'s harnesses are the way every seam here is proved and
-/// they should not have to be rewritten to prove the same things.
+/// Only CloudKit-facing verbs remain. The LAN listener, manifest and device
+/// engine were one transport, so keeping their commands after deleting that
+/// transport would advertise paths that can no longer work.
 enum SyncCLI {
     static func run(_ args: [String]) async -> Never {
         var rest = Array(args.dropFirst())
         switch args.first ?? "help" {
         case "status":   status()
-        case "pair":     pair(&rest)
-        case "serve":    await serve(&rest)
-        case "manifest": manifest()
-        case "run":      await runEngine(&rest)
-        case "note":     note(&rest)
-        case "devices":  devices(&rest)
         case "--fake":   await fake(&rest)
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
@@ -40,25 +33,20 @@ enum SyncCLI {
 
     // MARK: - Shared
 
-    /// The library this Mac is serving, honouring `LISTEN_LIBRARY` exactly as
-    /// the rest of Listen does, so a scratch library works here too.
+    /// Honour `LISTEN_LIBRARY` exactly as the rest of Listen does, so a
+    /// scratch CloudKit run remains isolated from the real library.
     private static var library: ListenKit.Library { .mac() }
 
-    /// The pairing key, still read from `.pairing-key` beside the library.
-    ///
-    /// `FileKeyStore` existed because `listen-sync` was a bare binary and
-    /// Listen is a signed app, and a keychain item made by the first prompts
-    /// for authorisation when the second reads it. That constraint died with
-    /// this file, so the key is free to move into the iCloud Keychain, which
-    /// is what makes a second Mac need nothing typed.
-    ///
-    /// It has not moved yet, and moving it silently would be the wrong way to
-    /// do it. Every phone already paired is paired against **this** key: read
-    /// a different store and the Mac answers with a key nobody holds, which
-    /// presents as a phone that can see the Mac and is refused by it. Measured
-    /// here, by doing exactly that. The move happens with a migration that
-    /// adopts this file, at the point the rest of the key handling changes.
-    static var keyStore: FileKeyStore { FileKeyStore(library: library) }
+    /// The file remains a fallback for the migration pass that copies the key
+    /// into iCloud Keychain. Both Macs have the shared item now, but deleting
+    /// the fallback while `KeyMigration` still reads it would turn a safety net
+    /// into uncompilable code and make recovery from a missing key impossible.
+    private static var fileKeyStore: FileKeyStore { FileKeyStore(library: library) }
+
+    private static var pairingKey: PairingKey? {
+        KeyMigration.adoptFileKey(from: library)
+        return KeyStore.shared.load() ?? fileKeyStore.load()
+    }
 
     private static func option(_ name: String, _ args: inout [String]) -> String? {
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
@@ -90,11 +78,11 @@ enum SyncCLI {
     /// nothing about the one that ships, and this is the command that has to
     /// make that distinction visible rather than reassuring.
     private static func status() -> Never {
-        let store = SyncCLI.keyStore
+        let store = fileKeyStore
         print("library:     \(library.root.path)")
-        // Both stores, because during the migration the key can be in either
-        // and "none yet" while it sits in a file is a lie that sends somebody
-        // hunting for a pairing problem they do not have.
+        // Both stores while the fallback survives. "None yet" while the only
+        // copy sits in a file is a lie that sends somebody hunting for a
+        // keychain problem they do not have.
         let inFile = store.load() != nil
         let inCloud = KeyStore.shared.load() != nil
         print("key:         " + (inFile && inCloud ? "beside the library, and in iCloud Keychain"
@@ -107,135 +95,6 @@ enum SyncCLI {
         CloudAccount.status { line = $0; semaphore.signal() }
         _ = semaphore.wait(timeout: .now() + 20)
         print("account:     \(line)")
-        done()
-    }
-
-    private static func pair(_ args: inout [String]) -> Never {
-        let store = SyncCLI.keyStore
-        // Replacing a key that already exists unpairs every device holding it,
-        // and this command is called by the test harnesses. One of them ran
-        // without LISTEN_LIBRARY set, rotated the real key, and the only
-        // symptom was that the phone quietly stopped reaching a Mac it could
-        // still see. So a replacement has to be asked for twice.
-        let replacing = flag("--new", &args)
-        let force = flag("--force", &args)
-        if replacing, store.load() != nil, !force {
-            die("""
-                There is already a key for \(library.root.path).
-
-                Replacing it stops every paired device syncing until it is given
-                the new one. If that is what you want:
-
-                    listen sync pair --new --force
-
-                To make a key for a scratch library instead, set LISTEN_LIBRARY.
-                """)
-        }
-        if replacing || store.load() == nil {
-            guard store.save(PairingKey.generate()) else { die("could not save the key") }
-        }
-        guard let key = store.load() else { die("no key") }
-        print(key.code)
-        done()
-    }
-
-    private static func manifest() -> Never {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = (try? encoder.encode(SyncServer.manifest(of: library))) ?? Data()
-        print(String(decoding: data, as: UTF8.self))
-        done()
-    }
-
-    private static func serve(_ args: inout [String]) async -> Never {
-        guard let key = SyncCLI.keyStore.load() else {
-            die("not paired yet. Run:  listen sync pair --new")
-        }
-        let port = UInt16(option("--port", &args) ?? "8787") ?? 8787
-        let transcribes = !flag("--no-transcribe", &args)
-        do {
-            try await SyncServer(library: library, key: key,
-                                 transcribes: transcribes).serve(port: port)
-        } catch {
-            die("could not serve: \(error.localizedDescription)")
-        }
-        done()
-    }
-
-    /// Run the *phone's* engine from this terminal, against a scratch library.
-    ///
-    /// The seam that would otherwise need a simulator. It refuses to touch the
-    /// real library, because the whole point is to prove sync logic without
-    /// risking the thing it operates on.
-    private static func runEngine(_ args: inout [String]) async -> Never {
-        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
-        guard let root = option("--library", &args) else {
-            die("--library <dir> is required, and must not be the real one")
-        }
-        let host = option("--to", &args) ?? "127.0.0.1"
-        let port = UInt16(option("--port", &args) ?? "8787") ?? 8787
-        let keepAudio = flag("--keep-audio", &args)
-        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host),
-                                           port: NWEndpoint.Port(rawValue: port)!)
-        let engine = SyncEngine(library: ListenKit.Library(root: URL(fileURLWithPath: root)),
-                                client: SyncClient(endpoint: endpoint, key: key),
-                                keepAudioLocally: keepAudio)
-        let report = await engine.run()
-        print(report.summary)
-        for conflict in report.conflicts { print("conflict: \(conflict)") }
-        for error in report.errors { print("error: \(error)") }
-        exit(report.errors.isEmpty ? 0 : 1)
-    }
-
-    /// Edit a note the way an app does, through `writeNote`, so `updated` is
-    /// stamped by the one function allowed to stamp it. A test that edits the
-    /// markdown directly proves nothing, because nothing on either device does.
-    private static func note(_ args: inout [String]) -> Never {
-        guard let root = option("--library", &args) else { die("--library <dir> is required") }
-        guard let slug = option("--slug", &args) else { die("--slug <name> is required") }
-        let target = ListenKit.Library(root: URL(fileURLWithPath: root))
-        let body = option("--body", &args) ?? ""
-        let title = option("--title", &args)
-        let existing = target.note(slug)
-        let note = ListenKit.Note(
-            slug: slug,
-            title: title ?? existing?.title ?? slug,
-            created: existing?.created ?? ListenKit.Metadata.stamp(Date()),
-            updated: existing?.updated ?? "",
-            source: existing?.source ?? "you",
-            recordings: existing?.recordings ?? [],
-            body: body.isEmpty ? (existing?.body ?? "") : body,
-            // Provenance is carried through. Editing a note is not a reason to
-            // forget which conversation it came from.
-            prompt: existing?.prompt,
-            chat: existing?.chat,
-            extra: existing?.extra ?? [:])
-        do {
-            try target.writeNote(note, expecting: existing?.version)
-            print(target.note(slug)?.updated ?? "")
-        } catch let conflict as NoteConflict {
-            die("conflict: \(conflict.theirs.slug) was written by somebody else")
-        } catch {
-            die(error.localizedDescription)
-        }
-        done()
-    }
-
-    private static func devices(_ args: inout [String]) -> Never {
-        var registry = DeviceRegistry.load(library)
-        if let id = option("--revoke", &args) {
-            registry.revoke(id); registry.save(library); print("revoked \(id)")
-        } else if let id = option("--forget", &args) {
-            registry.forget(id); registry.save(library); print("forgot \(id)")
-        }
-        if registry.devices.isEmpty {
-            print("No devices have connected yet.")
-        } else {
-            for d in registry.devices {
-                print("\(d.revoked ? "revoked " : "        ")\(d.name)")
-                print("          last seen \(d.lastSeenPhrase)   \(d.id)")
-            }
-        }
         done()
     }
 
@@ -269,7 +128,7 @@ enum SyncCLI {
     /// of recordings, and practising on the real thing is how you find out
     /// that you should not have.
     private static func cloud(_ args: inout [String]) async -> Never {
-        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        guard let key = pairingKey else { die("no sync key") }
         guard let root = option("--library", &args) else {
             die("--library <dir> is required, and must not be the real one")
         }
@@ -329,7 +188,7 @@ enum SyncCLI {
         if let at = args.firstIndex(of: "--forget"), at + 1 < args.count {
             await forget(args[at + 1])
         }
-        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        guard let key = pairingKey else { die("no sync key") }
         let store = CloudKitStore(containerID: CloudAccount.containerID)
         print("container:   \(CloudAccount.containerID)")
         print("environment: \(CloudAccount.environment)\n")
@@ -381,7 +240,7 @@ enum SyncCLI {
     /// installs and a scratch run, none of which will ever check in again and
     /// all of which the thirty day rule would take a month to notice.
     private static func forget(_ id: String) async -> Never {
-        guard let key = SyncCLI.keyStore.load() else { die("not paired") }
+        guard let key = pairingKey else { die("no sync key") }
         let store = CloudKitStore(containerID: CloudAccount.containerID)
         do {
             try await store.delete(CloudNaming.recordName(.device, id, key: key), in: .devices)
@@ -428,14 +287,10 @@ enum SyncCLI {
         listen sync: keeping your devices in step.
 
           status                          what this build can reach, and as whom
-          pair [--new [--force]]          show the pairing code, or make one
-          serve [--port N]                serve this library over the network
-          devices [--revoke ID|--forget ID]
-          manifest                        what a device would be offered
-          run --library D [--to H]        run a device's engine from here
-          note --library D --slug S       write a note the way an app does
           --fake                          every seam of the CloudKit sync, offline
-          cloud --library D               one pass against the real container\n          inspect [--forget ID]           what is in the container, by zone\n          enable [--on|--off]             sync this Mac's real library
+          cloud --library D               one pass against the real container
+          inspect [--forget ID]           what is in the container, by zone
+          enable [--on|--off]             sync this Mac's real library
 
         LISTEN_LIBRARY moves the library, exactly as it does for Listen itself.
         """)

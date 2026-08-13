@@ -1,15 +1,13 @@
 import Foundation
 import CryptoKit
 
-/// The paired key, and everything sealed under it.
+/// The shared key, and everything sealed under it.
 ///
-/// Pairing happens once: the Mac generates 32 random bytes, shows them as a
-/// code, the phone reads it. After that every payload is sealed on the device
-/// that sends it and opened on the device that receives it, so the bytes on
-/// the wire are ciphertext even on a network nobody trusts, and they would
-/// still be ciphertext if the transport were later moved to CloudKit. That is
-/// the point: the transport is allowed to be untrusted infrastructure, which
-/// is what lets the claim in spec/01-product.md survive contact with one.
+/// The Mac generated 32 random bytes once and `KeyMigration` copied them into
+/// iCloud Keychain. Every payload is sealed on the device that sends it and
+/// opened on the device that receives it, so CloudKit stores ciphertext. The
+/// transport is allowed to be untrusted infrastructure, which is what lets the
+/// claim in spec/01-product.md survive contact with one.
 public struct PairingKey: Sendable, Equatable {
     public let raw: SymmetricKey
 
@@ -19,9 +17,8 @@ public struct PairingKey: Sendable, Equatable {
         PairingKey(raw: SymmetricKey(size: .bits256))
     }
 
-    /// The form a human retypes or a camera reads. Base32 without padding,
-    /// upper case, in groups of four: it survives being read aloud over a
-    /// phone call, which base64 does not because of case and `+/`.
+    /// The Base32 form retained by the legacy file fallback. Upper case and
+    /// groups of four keep the migration source readable and deterministic.
     public var code: String {
         let bytes = raw.withUnsafeBytes { Array($0) }
         let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
@@ -50,17 +47,6 @@ public struct PairingKey: Sendable, Equatable {
         self.raw = SymmetricKey(data: Data(bytes))
     }
 
-    /// A stable token proving the holder has the key, sent on every request.
-    ///
-    /// Not a challenge-response, deliberately. The payloads are already sealed,
-    /// so this token only decides whether the server will spend disk on a
-    /// stranger, and a replay of it by somebody on the same wifi buys them a
-    /// list of recording ids and nothing readable.
-    public var token: String {
-        let mac = HMAC<SHA256>.authenticationCode(for: Data("listen-sync-v1".utf8), using: raw)
-        return Data(mac).map { String(format: "%02x", $0) }.joined()
-    }
-
     public func seal(_ data: Data) throws -> Data {
         try ChaChaPoly.seal(data, using: raw).combined
     }
@@ -70,17 +56,12 @@ public struct PairingKey: Sendable, Equatable {
     }
 }
 
-public enum SealingError: Error, Sendable {
-    case notPaired
-    case badCode
-}
-
 /// Where the key lives on each device.
 ///
 /// The Keychain on both, rather than a file or `UserDefaults`, because a
 /// preferences plist is included in an unencrypted backup and readable by
 /// anything running as the user. It is one small secret and it protects every
-/// transcript the pair will ever exchange.
+/// transcript the devices will ever exchange.
 public struct KeyStore: Sendable {
     let service: String
     let account: String
@@ -98,7 +79,7 @@ public struct KeyStore: Sendable {
     /// typed code, and nothing more than that.
     let synchronizable: Bool
 
-    public init(service: String = "com.mgo.listen-sync", account: String = "pairing-key",
+    public init(service: String, account: String,
                 synchronizable: Bool = false) {
         self.service = service; self.account = account
         self.synchronizable = synchronizable
@@ -178,12 +159,10 @@ public struct KeyStore: Sendable {
 #if os(macOS)
 /// Where the pairing key lives on the Mac.
 ///
-/// A file beside the library rather than the keychain, and that is a deliberate
-/// step down in protection with a reason. Two processes need it: `listen-sync`,
-/// which is a bare binary with no team identity, and Listen itself, which is a
-/// signed app. A keychain item created by the first raises an authorisation
-/// prompt when the second reads it, so the Devices pane would ask for a
-/// password every time it drew.
+/// A file beside the library rather than the keychain, retained only as the
+/// source for `KeyMigration`. The former LAN helper could not share the signed
+/// app's keychain access group, which is why the file existed in the first
+/// place.
 ///
 /// What is given up is small. The key protects the network, not the disk: it
 /// sits in the same directory as every transcript it could ever decrypt, so
@@ -222,17 +201,14 @@ public struct FileKeyStore: Sendable {
 
 /// Getting the pairing key from where it is to where it should be.
 ///
-/// It lives in a file beside the library, because `listen-sync` was a bare
-/// binary and a keychain item made by one process prompts for authorisation
-/// when a differently-signed one reads it. That constraint died when sync moved
-/// inside the app, so the key is free to go to the iCloud Keychain, which is
+/// It lives in a file beside the library because the former LAN helper was not
+/// signed into the app's keychain access group. That constraint died when sync
+/// moved inside the app, so the key is free to go to iCloud Keychain, which is
 /// what makes a second Mac need nothing typed.
 ///
-/// **It moves by being copied, not by being moved.** The LAN transport is still
-/// running and still reads the file, and every device already paired is paired
-/// against it. Deleting it would take a working setup away to tidy something
-/// up, which is a bad trade at any time and a worse one mid-migration. The file
-/// goes at Phase 6, with the transport that needs it.
+/// **It moves by being copied, not by being moved.** This migration and its
+/// source survive together for one pass. Deleting the source while the fallback
+/// still exists would make a missing shared item unrecoverable.
 public enum KeyMigration {
     /// Copy the file key into the shared iCloud Keychain item, once, if the
     /// keychain has none. Returns true if it did something.

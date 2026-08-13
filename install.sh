@@ -19,11 +19,9 @@ echo "built"
 # Quit the running copy so we are not overwriting a live binary.
 #
 # Anchored, because `pkill -f` matches the whole command line and other
-# processes carry this path as an *argument*. The sync agent runs as
-# `listen-sync serve --listen /Applications/Listen.app/Contents/MacOS/Listen`,
-# so an unanchored pattern killed the sync server on every install. Measured on
-# 2026-08-08: it fired 200 ms after an iPhone upload's `finish` and cost the
-# two recordings queued behind it. `Listen mcp` was collateral in the same way.
+# processes carry this path as an argument. The former LAN helper exposed this
+# first, and `Listen mcp` is still a current example: an unanchored install kill
+# must not stop a process merely because it was handed the app's executable.
 pkill -f "^$DEST/Contents/MacOS/Listen$" 2>/dev/null || true
 sleep 1
 

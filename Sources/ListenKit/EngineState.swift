@@ -144,16 +144,21 @@ public struct EngineState: Sendable {
 
     /// Take over a `.sync-state.json` left at the library root by the LAN
     /// transport, once, so the first CloudKit sync does not report a conflict
-    /// on every note this device has ever edited.
+    /// on every note this device has ever edited. Remove it only after the
+    /// external base exists, so a failed decode never destroys the recovery
+    /// copy it would need.
     @discardableResult
     public func adoptLegacyBase(from library: Library) -> Bool {
         let legacy = library.root.appendingPathComponent(".sync-state.json")
-        guard FileManager.default.fileExists(atPath: legacy.path),
-              !FileManager.default.fileExists(atPath: baseFile.path),
-              let data = try? Data(contentsOf: legacy),
-              let state = try? JSONDecoder().decode(SyncState.self, from: data)
-        else { return false }
-        base = state
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return false }
+        if !FileManager.default.fileExists(atPath: baseFile.path) {
+            guard let data = try? Data(contentsOf: legacy),
+                  let state = try? JSONDecoder().decode(SyncState.self, from: data)
+            else { return false }
+            base = state
+        }
+        guard FileManager.default.fileExists(atPath: baseFile.path) else { return false }
+        try? FileManager.default.removeItem(at: legacy)
         return true
     }
 }

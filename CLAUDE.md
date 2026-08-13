@@ -453,6 +453,10 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - UI copy states the trade-off rather than hiding it in a tooltip.
 - Prefer measured numbers to remembered ones. Every threshold and size that came
   from a measurement says so.
+- A phone deletes audio only when `audioOn` names another device. Upload
+  completion, a claim and a transfer record are not durable-copy evidence.
+- Only the device that authored a recording serialises its `metadata.json`.
+  Every other device stores those bytes verbatim and parses them leniently.
 - A new trap goes in the `.agents/notes/` file for its area, and its headline
   goes in the index above. A note nobody is pointed at is a note nobody reads.
 

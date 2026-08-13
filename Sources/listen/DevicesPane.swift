@@ -1,37 +1,21 @@
 import AppKit
-import CoreImage
 
-/// Settings, Devices: what is paired with this Mac, and how to add one.
+/// Settings, Devices: the CloudKit account and the devices seen in its zone.
 ///
-/// Listen does not run the sync itself. `listen-sync` does, as a LaunchAgent,
-/// and this pane is a reader of the two files that agent keeps beside the
-/// library: `.pairing-key` and `devices.json`. That split is deliberate. The
-/// recorder should not have to hold a socket open to be useful, and a sync
-/// daemon should be stoppable without stopping the recorder.
-///
-/// So everything here degrades to an explanation when the agent is not
-/// installed, rather than to an empty list that looks like a bug.
+/// There is no pairing surface here. The shared key arrives through iCloud
+/// Keychain and every device exchanges sealed records through CloudKit, so a
+/// QR code, a network address and a second connected-device registry would all
+/// describe a transport that no longer exists.
 final class DevicesPane: Pane {
-    private var listStack: NSStackView?
     private var cloudStatus: NSTextField?
+    private var cloudDevices: NSTextField?
     private var poll: Timer?
-    /// What the list last drew, so a redraw only happens when something moved.
-    /// Rebuilding the rows every tick would take the mouse out from under a
-    /// button somebody was about to press.
-    private var drawn: String = ""
 
-    /// A device appears while this pane is open, not before it.
-    ///
-    /// The whole point of the screen is that you are looking at it while you
-    /// scan the code on your phone, so a list read once when the pane was built
-    /// is a list that is always one pairing out of date. `refresh` fires when
-    /// the pane is shown and nothing fires after that, so this polls the file
-    /// the agent writes.
     override func viewDidAppear() {
         super.viewDidAppear()
-        fillList()
+        refreshCloud()
         poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.fillList() }
+            Task { @MainActor in self?.refreshCloud() }
         }
     }
 
@@ -42,203 +26,17 @@ final class DevicesPane: Pane {
     }
 
     override func build() {
-        cloudSection()
-        heading("Add a device")
-
-        guard let code = DeviceSync.pairingCode() else {
-            note("The sync agent is not set up on this Mac yet.\n\n"
-                 + "Listen for iPhone talks to a small helper called `listen-sync`, "
-                 + "which serves this library on your local network. Until it is "
-                 + "installed there is nothing for a phone to pair with.")
-            separator()
-            unavailable()
-            return
-        }
-
-        let url = DeviceSync.pairingURL(code: code)
-        if let image = DevicesPane.qr(url, side: 200) {
-            let view = NSImageView(image: image)
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-            // Nearest-neighbour, because a QR resampled smoothly is a QR with
-            // grey edges, and a camera reading it off a screen has enough to
-            // contend with already.
-            view.imageScaling = .scaleNone
-            NSLayoutConstraint.activate([
-                view.widthAnchor.constraint(equalToConstant: 200),
-                view.heightAnchor.constraint(equalToConstant: 200),
-            ])
-            stack.addArrangedSubview(view)
-        }
-
-        note("In Listen on your iPhone, open Settings and scan this. It carries "
-             + "the key and this Mac's address, so there is nothing to type.\n\n"
-             + "Anyone who scans it can read every transcript in this library, so "
-             + "treat it the way you would treat the screen it is on.")
-
-        let reveal = button("Copy the code instead") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(code, forType: .string)
-        }
-        let rotate = button("Forget every device and start again") { [weak self] in
-            let alert = NSAlert()
-            alert.messageText = "Start again with a new key?"
-            alert.informativeText = "Every iPhone paired with this Mac stops "
-                + "syncing until it scans the new code. Nothing already on this "
-                + "Mac is deleted."
-            alert.addButton(withTitle: "New key")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            DeviceSync.rotate()
-            self?.redrawPane()
-        }
-        rotate.contentTintColor = .systemRed
-        stack.addArrangedSubview(row([reveal, rotate]))
-
-        separator()
-        heading("Connected")
-
-        let list = NSStackView()
-        list.orientation = .vertical
-        list.alignment = .leading
-        list.spacing = 12
-        stack.addArrangedSubview(list)
-        widthCapped(list)
-        listStack = list
-        drawn = ""
-        fillList()
-    }
-
-    /// Draw the whole pane again, for the two buttons that change what it says.
-    /// Named away from `rebuild`, which `Pane` already defines.
-    private func redrawPane() {
-        for view in stack.arrangedSubviews { view.removeFromSuperview() }
-        build()
-    }
-
-    private func unavailable() {
-        heading("Connected")
-        note("Nothing, because nothing is serving this library yet.")
-    }
-
-    private func fillList() {
-        refreshCloudStatus()
-        guard let listStack else { return }
-        let devices = DeviceSync.devices()
-        let signature = devices.map { "\($0.id)\($0.revoked)\($0.lastSeen)" }.joined()
-        guard signature != drawn else { return }
-        drawn = signature
-        for view in listStack.arrangedSubviews { view.removeFromSuperview() }
-        guard !devices.isEmpty else {
-            let empty = NSTextField(labelWithString:
-                "No iPhone has connected yet. Scan the code above.")
-            empty.textColor = .secondaryLabelColor
-            empty.font = .systemFont(ofSize: 11)
-            listStack.addArrangedSubview(empty)
-            return
-        }
-
-        for device in devices {
-            listStack.addArrangedSubview(rowFor(device))
-        }
-    }
-
-    private func rowFor(_ device: DeviceSync.Device) -> NSView {
-        let icon = NSImageView(image: NSImage(
-            systemSymbolName: device.revoked ? "iphone.slash" : "iphone",
-            accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = device.revoked ? .tertiaryLabelColor : .controlAccentColor
-
-        let name = NSTextField(labelWithString: device.name)
-        name.font = .systemFont(ofSize: 13, weight: .medium)
-        if device.revoked { name.textColor = .tertiaryLabelColor }
-
-        let detail = NSTextField(labelWithString: device.revoked
-            ? "Removed. It cannot sync until it pairs again."
-            : "Last synced \(device.lastSeenPhrase)")
-        detail.font = .systemFont(ofSize: 11)
-        detail.textColor = .secondaryLabelColor
-
-        let text = NSStackView(views: [name, detail])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 1
-
-        let action = button(device.revoked ? "Forget" : "Remove") { [weak self] in
-            if device.revoked {
-                DeviceSync.forget(device.id)
-            } else {
-                let alert = NSAlert()
-                alert.messageText = "Remove \(device.name)?"
-                // Say what removal can and cannot do. It stops the Mac
-                // answering; it does not reach into the phone.
-                alert.informativeText = "This Mac stops answering it. Anything "
-                    + "already synced stays on the phone, and this cannot delete "
-                    + "it from there.\n\nIf the phone was lost, also use "
-                    + "\"Forget every device and start again\", because a removed "
-                    + "device still holds the key."
-                alert.addButton(withTitle: "Remove")
-                alert.addButton(withTitle: "Cancel")
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
-                DeviceSync.revoke(device.id)
-            }
-            self?.fillList()
-        }
-        if !device.revoked { action.contentTintColor = .systemRed }
-
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let line = NSStackView(views: [icon, text, spacer, action])
-        line.orientation = .horizontal
-        line.alignment = .centerY
-        line.spacing = 10
-        return line
-    }
-
-    override func refresh() { drawn = ""; fillList() }
-
-    /// A QR, drawn at whole-pixel scale.
-    /// What iCloud sync is doing, above the wifi pairing it replaces.
-    ///
-    /// Deliberately says which of the two transports is carrying the library
-    /// rather than implying there is one. During the migration both exist, and
-    /// a pane that showed only the old one would describe a Mac that is no
-    /// longer using it.
-    private func cloudSection() {
         heading("iCloud")
 
         let host = CloudSyncHost.shared
+        cloudStatus = note(cloudStatusText(host))
+        cloudDevices = note(deviceListText(host))
+
         if Settings.cloudSync {
-            cloudStatus = note(cloudStatusText(host))
-
-            if !host.devices.isEmpty {
-                // With when, not just what. Six rows for three machines is what
-                // this looked like without it, and the only thing that
-                // distinguishes a phone you still own from one install of it
-                // that has been replaced is when it last said anything.
-                var rows = ["On this account:"]
-                for device in host.devices {
-                    rows.append("  \(device.name) (\(device.kind)), \(device.seenAgo)")
-                }
-                rows.append("")
-                rows.append("A device that has said nothing for 30 days is "
-                            + "dropped from this list by itself.")
-                note(rows.joined(separator: "\n"))
-            }
-
             let syncNow = NSButton(title: "Sync now", target: self,
                                    action: #selector(syncNowPressed(_:)))
             syncNow.bezelStyle = .rounded
             stack.addArrangedSubview(row([syncNow]))
-        } else {
-            note("Off. Your devices keep each other in step over wifi instead, "
-                 + "which needs them awake at the same time and on the same "
-                 + "network.\n\nWith iCloud on, a meeting recorded anywhere "
-                 + "shows up everywhere, and nothing has to be awake at once. "
-                 + "Everything Listen puts there is sealed with a key that "
-                 + "never leaves your devices, so Apple stores it and cannot "
-                 + "read it. Your recordings stay on the Mac that made them.")
         }
 
         let toggle = NSButton(checkboxWithTitle: "Sync this library through iCloud",
@@ -248,37 +46,40 @@ final class DevicesPane: Pane {
         separator()
     }
 
-    private func refreshCloudStatus() {
-        guard Settings.cloudSync, let cloudStatus else { return }
-        let text = cloudStatusText(CloudSyncHost.shared)
-        if cloudStatus.stringValue != text { cloudStatus.stringValue = text }
+    override func refresh() { refreshCloud() }
+
+    private func refreshCloud() {
+        let host = CloudSyncHost.shared
+        let status = cloudStatusText(host)
+        if cloudStatus?.stringValue != status { cloudStatus?.stringValue = status }
+        let devices = deviceListText(host)
+        if cloudDevices?.stringValue != devices { cloudDevices?.stringValue = devices }
     }
 
     private func cloudStatusText(_ host: CloudSyncHost) -> String {
-        var lines: [String] = []
+        guard Settings.cloudSync else {
+            return "Off. This Mac keeps its local library, but no other device can "
+                + "learn about changes until iCloud sync is turned on."
+        }
 
+        var lines: [String] = []
         if let progress = host.progress {
             lines.append("Syncing now: \(progress)")
         } else if let run = host.lastRun {
-            // When, in words, because "2026-08-12T17:51:04Z" answers a question
-            // nobody asked. A sync that reports nothing is indistinguishable
-            // from one that silently failed, and the second is the one that
-            // loses a session.
             let ago = Date().timeIntervalSince(run)
             let when: String
             if ago < 60 { when = "just now" }
             else if ago < 3600 { when = "\(Int(ago / 60)) minutes ago" }
             else if ago < 86_400 { when = "\(Int(ago / 3600)) hours ago" }
             else { when = "\(Int(ago / 86_400)) days ago" }
-            let what = host.lastReport?.summary ?? "nothing to do"
-            lines.append("Last synced \(when): \(what)")
+            lines.append("Last synced \(when): \(host.lastReport?.summary ?? "nothing to do")")
         } else {
             lines.append("Waiting for the first sync.")
         }
 
-        if let errors = host.lastReport?.errors, !errors.isEmpty {
+        if let error = host.lastReport?.errors.first {
             lines.append("")
-            lines.append("Last error: " + errors[0])
+            lines.append("Last error: \(error)")
         }
         if let conflicts = host.lastReport?.conflicts, !conflicts.isEmpty {
             lines.append("")
@@ -287,11 +88,21 @@ final class DevicesPane: Pane {
         }
 
         lines.append("")
-        lines.append("Your recordings stay on the Mac that made them. "
-                     + "Everything else is sealed with a key that never "
-                     + "leaves your devices, so Apple stores it and cannot "
-                     + "read it.")
+        lines.append("Your recordings stay on the Mac that made them. Everything "
+                     + "else is sealed with a key that never leaves your devices, "
+                     + "so Apple stores it and cannot read it.")
         return lines.joined(separator: "\n")
+    }
+
+    private func deviceListText(_ host: CloudSyncHost) -> String {
+        guard !host.devices.isEmpty else { return "No devices have checked in yet." }
+        var rows = ["On this account:"]
+        for device in host.devices {
+            rows.append("  \(device.name) (\(device.kind)), \(device.seenAgo)")
+        }
+        rows.append("")
+        rows.append("A device that has said nothing for 30 days is dropped from this list by itself.")
+        return rows.joined(separator: "\n")
     }
 
     @objc private func syncNowPressed(_ sender: NSButton) {
@@ -299,7 +110,9 @@ final class DevicesPane: Pane {
         sender.title = "Syncing…"
         Task { @MainActor in
             await CloudSyncHost.shared.syncNow()
-            self.rebuild()
+            sender.isEnabled = true
+            sender.title = "Sync now"
+            self.refreshCloud()
         }
     }
 
@@ -308,21 +121,5 @@ final class DevicesPane: Pane {
         if Settings.cloudSync { CloudSyncHost.shared.startIfEnabled() }
         else { CloudSyncHost.shared.stop() }
         rebuild()
-    }
-
-    static func qr(_ text: String, side: CGFloat) -> NSImage? {
-        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
-        filter.setValue(Data(text.utf8), forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let output = filter.outputImage else { return nil }
-        // Integer scale only. A fractional one resamples module edges into
-        // greys, which is the difference between a code that scans first time
-        // and one somebody waves a phone at.
-        let scale = max(1, floor(side / output.extent.width))
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let image = NSImage(size: rep.size)
-        image.addRepresentation(rep)
-        return image
     }
 }

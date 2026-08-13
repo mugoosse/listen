@@ -119,29 +119,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // interrupted by a quit costs one re-run, not a stuck row.
         Queue.shared.resume()
 
-        // Answer the phone, if there is a key to answer it with.
-        //
-        // This used to be a LaunchAgent, a separate always-alive binary in
-        // ~/.local/bin. That had to go, because a bare executable cannot hold
-        // an iCloud entitlement and the whole migration turns on holding one.
-        // Hosting it here is not a downgrade: Listen enables open-at-login on
-        // new installations and lives in the menu bar, so in practice it is
-        // running whenever the Mac is, and one fewer thing to install is one
-        // fewer thing that can be quietly not running.
-        //
-        // What changes honestly: quitting Listen now stops the phone syncing,
-        // where before a daemon carried on. Nothing is lost when it does. The
-        // recording waits on the phone, which keeps its copy until this Mac
-        // says it holds the audio, and it arrives when Listen next opens.
-        //
-        // All of this is deleted at Phase 6. CloudKit needs no listener, and
-        // then there is nothing to keep alive on either side.
-        SyncHost.shared.startIfPaired()
-
-        // And the transport that replaces it, when it has been turned on.
-        // Both can be on during the migration; they write the same library and
-        // neither knows about the other, which is exactly why the plan says to
-        // run one per device rather than both, and why this is off by default.
+        // CloudKit is the only transport. Nothing listens on the local network,
+        // and another device can catch up without this Mac being awake at the
+        // same time.
         CloudSyncHost.shared.startIfEnabled()
 
 

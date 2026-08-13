@@ -2,8 +2,7 @@ import AppKit
 
 /// Settings, Agent: which backends Listen can talk to, and proof that it can.
 ///
-/// The pane is a reader of `AgentCLI`, in the way `DevicesPane` is a reader of
-/// the two files `listen-sync` keeps: Listen installs nothing here and signs
+/// The pane is a reader of `AgentCLI`: Listen installs nothing here and signs
 /// nothing in. Everything on screen is a fact about the user's own machine, so
 /// the job is to state it accurately and to say what to do when it is not what
 /// they wanted.

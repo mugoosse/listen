@@ -119,6 +119,21 @@ enum Backups {
         for old in all.dropFirst(keeping) { try? manager.removeItem(at: old) }
     }
 
+    /// One line for the settings pane, in the words somebody would use.
+    ///
+    /// A date, not a count. "7 copies" invites "of what, and how big",
+    /// which is the question this is here to answer rather than raise.
+    static var summary: String {
+        let all = ((try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil)) ?? [])
+            .map(\.lastPathComponent)
+        let newest = all.filter { $0.hasPrefix("library-") }.max()
+        guard let newest else { return "No copy yet. The first is made today." }
+        let day = String(newest.dropFirst("library-".count))
+        let today = String(ListenKit.Metadata.stamp(Date()).prefix(10))
+        return day == today ? "Last copied today." : "Last copied \(day)."
+    }
+
     /// What is held, for somebody deciding whether to trust it.
     static func describe() -> String {
         let manager = FileManager.default

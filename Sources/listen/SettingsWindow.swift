@@ -837,6 +837,7 @@ final class ModelsPane: Pane {
 final class StoragePane: Pane {
     private var usage: NSTextField?
     private var staged: NSTextField?
+    private var kept: NSTextField?
 
     override func build() {
         heading("Library")
@@ -845,6 +846,22 @@ final class StoragePane: Pane {
         button("Reveal in Finder") {
             NSWorkspace.shared.selectFile(nil,
                 inFileViewerRootedAtPath: Library.recordings.path)
+        }
+
+        separator()
+        // In Storage rather than in a section of its own, and not only because
+        // this pane is about the disk. Deleting a recording stops freeing its
+        // space straight away once copies exist, so a number here that did not
+        // account for them would be quietly wrong.
+        heading("Copies")
+        kept = note("")
+        note("Listen keeps a copy of your library every day, and anything deleted "
+             + "for two weeks, so a mistake is not final. The copies share their "
+             + "contents with the library, so they take almost no extra space.")
+        note("These live on this Mac. They protect you from mistakes, not from "
+             + "the disk itself failing, which is what Time Machine is for.")
+        button("Reveal copies in Finder") {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: Backups.root.path)
         }
 
         separator()
@@ -864,6 +881,10 @@ final class StoragePane: Pane {
         usage?.stringValue = "\(recordings.count) recording"
             + (recordings.count == 1 ? "" : "s")
             + " · " + ModelChoice.humanBytes(Self.size(of: Library.recordings))
+
+        // Said as a date rather than a count, because "7 copies" invites the
+        // question this section exists to answer and a date answers it.
+        kept?.stringValue = Backups.summary
 
         let waiting = Recording.staged()
         staged?.stringValue = waiting.isEmpty

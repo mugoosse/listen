@@ -8,6 +8,33 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.15.0 (2026-08-14)
+
+### A phone recording comes back with its transcript
+
+A memo can reach the Mac, finish transcribing there and still leave the iPhone
+saying it is waiting. Two different races caused that. A sync requested while
+another pass was running could be forgotten, and a later phone pass could put
+its original metadata-only copy back after the Mac had published the finished
+transcript. Requests are now remembered, and a phone can add missing content
+without replacing the transcript, turns or details already published by a Mac.
+
+The affected recordings are checked again once after updating. Measured on the
+live 11:13 memo that exposed the problem, the transcript reached the physical
+iPhone and remained byte-identical after a second forced phone sync. The audio
+transfer zone was empty afterwards.
+
+### Source applications look like themselves on every device
+
+Listen now carries a small copy of the source application's icon with each
+recording, sealed inside the same private iCloud payload as its other display
+files. Rows on the Mac and iPhone can show Chrome, WhatsApp, QuickTime and other
+source applications instead of a generic window.
+
+Older recordings are filled in when a Mac that still has the source application
+installed syncs them. If no syncing Mac can resolve an application, the row keeps
+the generic fallback rather than inventing one.
+
 ## 0.14.2 (2026-08-13)
 
 ### Listen keeps copies of your library

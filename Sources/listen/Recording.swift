@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// What a recording folder knows about itself.
 ///
@@ -291,6 +292,7 @@ struct Recording {
     var turnsURL: URL { folder.appendingPathComponent("turns.json") }
     var embeddingsURL: URL { folder.appendingPathComponent("embeddings.json") }
     var metadataURL: URL { folder.appendingPathComponent("metadata.json") }
+    var sourceIconURL: URL { folder.appendingPathComponent(DevicePolicy.sourceIcon) }
     /// What the pipeline wrote, kept once before the first edit to it.
     var rawBackupURL: URL { folder.appendingPathComponent("\(id).raw.json.bak") }
 

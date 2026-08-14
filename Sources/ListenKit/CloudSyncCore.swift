@@ -72,6 +72,7 @@ public struct CloudSyncCore: Sendable {
                 key: PairingKey, policy: DevicePolicy, device: String,
                 ingests: Bool, keepAudio: Bool = false,
                 progress: (@Sendable (String) -> Void)? = nil) {
+        state.repairSuppressedRecordingPushesOnce()
         self.library = library; self.state = state; self.store = store
         self.key = key; self.policy = policy; self.device = device
         self.ingests = ingests; self.keepAudio = keepAudio
@@ -105,12 +106,18 @@ public struct CloudSyncCore: Sendable {
                 do {
                     switch record.type {
                     case .recording:
-                        // Stamp what has just been written, so the push that
-                        // follows does not ask the container about a recording
-                        // it has this second handed us.
+                        // Do not stamp the local folder as sent here. A pull
+                        // writes only the files named by the remote manifest
+                        // and deliberately leaves any other local sidecars in
+                        // place. The folder can therefore be richer than what
+                        // arrived. Marking that richer stamp as sent hides a
+                        // transcript written after the previous push, and the
+                        // following push never repairs the cloud record. Let
+                        // push fetch and compare once; an exact match is still
+                        // a no-op, while a richer folder is sent.
                         let id = try await pullRecording(record, into: &report)
-                        if let fresh = Recording.load(library.folder(for: id)) {
-                            base[sent: id] = CloudRecords.recordingStamp(fresh, policy: policy)
+                        if !ingests, let holder = record.audioOn, holder != device {
+                            base[sent: "audio:" + id] = "acknowledged"
                         }
                     case .note: try pullNote(record, base: &base, into: &report)
                     case .blob: try pullBlob(record, into: &report)
@@ -166,7 +173,13 @@ public struct CloudSyncCore: Sendable {
             guard let want = blob.digests[stored] else { continue }
             let local = folder.appendingPathComponent(file)
             if let have = try? Data(contentsOf: local), sha256Hex(have) == want { continue }
-            guard let data = try CloudRecords.openAsset(record, stored, key: key) else { continue }
+            let data: Data?
+            if file == DevicePolicy.sourceIcon {
+                data = blob.sourceIcon
+            } else {
+                data = try CloudRecords.openAsset(record, stored, key: key)
+            }
+            guard let data else { continue }
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try data.write(to: local, options: .atomic)
             report.pulledSidecars += 1
@@ -310,6 +323,9 @@ public struct CloudSyncCore: Sendable {
             do {
                 let existing = try await store.fetch(name, in: .library)
                 var record = try CloudRecords.recording(recording, policy: policy, key: key)
+                if let existing, !ingests {
+                    record = try CloudRecords.addingPhoneContent(record, to: existing, key: key)
+                }
                 record.changeTag = existing?.changeTag
                 record.audioOn = existing?.audioOn
                 record.claimedBy = existing?.claimedBy
@@ -657,19 +673,16 @@ public struct CloudSyncCore: Sendable {
         guard !ingests else { return }
         guard recording.hasAudio, let audio = try? Data(contentsOf: recording.micURL) else { return }
 
-        // Once, and remembered, because the record this checked for is deleted
-        // on purpose the moment a Mac takes the audio.
+        // Remember a Mac's acknowledgement permanently, because the transfer
+        // record is deleted on purpose the moment a Mac takes the audio.
         //
-        // A transfer record is purged after ingest, so "is it still there" is
-        // false both before the first upload and for ever after a successful
-        // one. What made that survivable until now was the phone deleting its
-        // own copy at the same moment, which took `hasAudio` away and ended the
-        // loop. With **Keep audio on this iPhone** switched on it does not: the
-        // phone holds every recording's audio for good, so every pass re-sent
-        // every one of them in full. On cellular that is the whole library
-        // uploaded again every two minutes.
+        // Until that acknowledgement arrives, a remembered upload is not
+        // durable proof. If the transfer has disappeared while this phone still
+        // owns the bytes, recreate it. Once acknowledged, keep-audio phones can
+        // retain their WAVs without re-sending the whole library every pass.
         var base = state.base
-        if base[sent: "audio:" + recording.id] != nil { return }
+        let sentKey = "audio:" + recording.id
+        if base[sent: sentKey] == "acknowledged" { return }
 
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
         guard let metadata = try? Data(contentsOf: metadataURL) else { return }
@@ -679,7 +692,7 @@ public struct CloudSyncCore: Sendable {
             _ = try await store.save(try CloudRecords.transfer(
                 id: recording.id, from: device, metadata: metadata,
                 audio: audio, key: key))
-            base[sent: "audio:" + recording.id] = "1"
+            base[sent: sentKey] = "1"
             state.base = base
             report.pushedRecordings += 1
         } catch {

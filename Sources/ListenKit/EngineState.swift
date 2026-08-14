@@ -142,6 +142,29 @@ public struct EngineState: Sendable {
         }
     }
 
+    /// Recheck recording records once after the pull-stamp repair.
+    ///
+    /// Older builds stamped the whole local folder after a pull, even though a
+    /// pull writes only the files present in the remote manifest. If the Mac
+    /// had just written a transcript, that richer local stamp was recorded as
+    /// already sent and no later pass repaired the sparse cloud record. Drop
+    /// only recording stamps so the next push fetches and compares them again.
+    /// Audio-transfer stamps are separate and must survive, or a phone uploads
+    /// every WAV it still holds a second time.
+    public func repairSuppressedRecordingPushesOnce() {
+        // V2 also repairs records a stale phone reduced after the first pull
+        // repair had already run.
+        let marker = "migration:recording-recheck-v2"
+        var snapshot = base
+        guard snapshot.base[marker] == nil else { return }
+        for key in Array(snapshot.base.keys) where key.hasPrefix("sent:") {
+            let id = String(key.dropFirst("sent:".count))
+            if Metadata.isValidID(id) { snapshot.base[key] = nil }
+        }
+        snapshot.base[marker] = "1"
+        base = snapshot
+    }
+
     /// Take over a `.sync-state.json` left at the library root by the LAN
     /// transport, once, so the first CloudKit sync does not report a conflict
     /// on every note this device has ever edited. Remove it only after the

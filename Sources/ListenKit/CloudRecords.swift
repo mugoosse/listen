@@ -34,9 +34,14 @@ public enum CloudRecords {
         /// Filename to SHA-256, so a receiver can tell what it is missing
         /// without downloading an asset to find out.
         public var digests: [String: String]
+        /// A row icon is small enough to keep inside the sealed payload. This
+        /// avoids adding a permanent CloudKit schema field for one tiny PNG.
+        public var sourceIcon: Data?
 
-        public init(id: String, metadata: Data, digests: [String: String]) {
+        public init(id: String, metadata: Data, digests: [String: String],
+                    sourceIcon: Data? = nil) {
             self.id = id; self.metadata = metadata; self.digests = digests
+            self.sourceIcon = sourceIcon
         }
     }
 
@@ -107,21 +112,62 @@ public enum CloudRecords {
 
         var digests: [String: String] = [:]
         var assets: [String: Data] = [:]
+        var sourceIcon: Data?
         for file in policy.files(for: recording.id) where file != "metadata.json" {
             let url = recording.folder.appendingPathComponent(file)
             guard let data = try? Data(contentsOf: url) else { continue }
             let stored = assetKey(file, id: recording.id)
             digests[stored] = sha256Hex(data)
-            assets[stored] = try key.seal(data)
+            if file == DevicePolicy.sourceIcon {
+                sourceIcon = data
+            } else {
+                assets[stored] = try key.seal(data)
+            }
         }
         digests["metadata.json"] = sha256Hex(metadata)
 
-        let blob = RecordingBlob(id: recording.id, metadata: metadata, digests: digests)
+        let blob = RecordingBlob(id: recording.id, metadata: metadata,
+                                 digests: digests, sourceIcon: sourceIcon)
         return StoredRecord(
             name: CloudNaming.recordName(.recording, recording.id, key: key),
             type: .recording,
             payload: try key.seal(try JSONEncoder().encode(blob)),
             assets: assets)
+    }
+
+    /// Add content from a non-ingesting device without replacing what a Mac
+    /// has already published.
+    ///
+    /// A phone creates the first record, but after that its full-record pushes
+    /// are retries and additions. It may still hold the metadata-only copy it
+    /// originally uploaded after the Mac has added a transcript. Replacing the
+    /// record at that point erases the transcript from the container while the
+    /// Mac's sent stamp says the richer copy is already there.
+    ///
+    /// Remote content wins for keys that already exist. That is the ownership
+    /// boundary today: phone transcript and metadata views are read-only, while
+    /// title and tag edits travel as patches. If the phone later authors
+    /// transcripts, that needs an explicit content-version rule rather than
+    /// silently changing this one.
+    public static func addingPhoneContent(_ local: StoredRecord,
+                                          to existing: StoredRecord,
+                                          key: PairingKey) throws -> StoredRecord {
+        let ours = try openRecording(local, key: key)
+        let theirs = try openRecording(existing, key: key)
+        guard ours.id == theirs.id else { return local }
+
+        var digests = ours.digests
+        for (name, digest) in theirs.digests { digests[name] = digest }
+        var assets = local.assets
+        for (name, data) in existing.assets { assets[name] = data }
+
+        let blob = RecordingBlob(id: ours.id, metadata: theirs.metadata,
+                                 digests: digests,
+                                 sourceIcon: theirs.sourceIcon ?? ours.sourceIcon)
+        var merged = local
+        merged.payload = try key.seal(try JSONEncoder().encode(blob))
+        merged.assets = assets
+        return merged
     }
 
     /// Open one, back into something a device can write to disk.

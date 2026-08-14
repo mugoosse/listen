@@ -173,6 +173,11 @@ final class CloudSyncHost {
         await core.pull(into: &report)
         await core.pullVoiceprints(into: &report)
 
+        // iOS cannot inspect applications installed on this Mac. Export a
+        // compact copy of each source app icon before the recording manifest is
+        // built, including for older recordings that predate the sidecar.
+        SourceIconExporter.prepare(Recording.all())
+
         await core.push(into: &report)
         await core.pushVoiceprints(into: &report)
         // Claim before downloading, and prefer whichever Mac was chosen to keep

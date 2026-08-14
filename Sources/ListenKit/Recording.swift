@@ -25,6 +25,7 @@ public struct Recording: Sendable, Identifiable {
     public var turnsURL: URL { folder.appendingPathComponent("turns.json") }
     public var waveformURL: URL { folder.appendingPathComponent("waveform.json") }
     public var embeddingsURL: URL { folder.appendingPathComponent("embeddings.json") }
+    public var sourceIconURL: URL { folder.appendingPathComponent(DevicePolicy.sourceIcon) }
 
     static func exists(_ url: URL) -> Bool {
         FileManager.default.fileExists(atPath: url.path)

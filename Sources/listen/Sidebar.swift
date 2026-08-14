@@ -1014,7 +1014,8 @@ final class RecordingCell: NSView {
         // sidebar in a quiet room was recorded by this app and by nothing else.
         // It also keeps the column full, so the list has one left edge instead
         // of a ragged one that changes as you scroll.
-        appIcon.image = recording.appBundleID.flatMap(AppNames.icon) ?? AppNames.own
+        appIcon.image = NSImage(contentsOf: recording.sourceIconURL)
+            ?? recording.appBundleID.flatMap(AppNames.icon) ?? AppNames.own
         // The name is not on the row, so the icon has to answer for itself.
         appIcon.toolTip = recording.appLabel ?? "Recorded in Listen"
         // An untitled recording says so in grey, so a list of them reads as a

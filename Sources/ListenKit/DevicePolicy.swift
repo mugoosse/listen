@@ -23,6 +23,10 @@ import Foundation
 /// fewer fields than the Mac's. `Recording.patch` exists so that an edit made
 /// on a device that is not the author does not have to break the rule.
 public struct DevicePolicy: Sendable, Equatable {
+    /// The small app icon a Mac exports for rows on devices that cannot inspect
+    /// the Mac's installed applications.
+    public static let sourceIcon = "source-icon.png"
+
     /// Per-recording files this device holds, digest-tracked, `metadata.json`
     /// first because everything else is written before it.
     public let sidecars: [String]
@@ -101,7 +105,7 @@ public struct DevicePolicy: Sendable, Equatable {
     /// recognise a voice it has already been taught.
     public static let mac = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json",
-                   "waveform.json", "embeddings.json"],
+                   "waveform.json", DevicePolicy.sourceIcon, "embeddings.json"],
         blobs: ["contacts.json", "dictionary.json"])
 
     /// Everything a phone keeps.
@@ -142,7 +146,8 @@ public struct DevicePolicy: Sendable, Equatable {
     /// two-Mac problem and becomes the difference between the phone's pass and
     /// the Mac's looking like a quality gap when it is a vocabulary one.
     public static let phone = DevicePolicy(
-        sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json"],
+        sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
+                   DevicePolicy.sourceIcon],
         blobs: ["contacts.json", "dictionary.json"])
 
     /// Things at the library root that are deliberately in no set, recorded

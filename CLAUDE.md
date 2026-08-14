@@ -324,6 +324,16 @@ that repo is being archived.**
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 
+### `.agents/notes/cloud-sync.md` (3k)
+
+How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
+`CloudRecords`, `MemoryStore`, `FakeSync`.
+
+- A pull cannot stamp a richer local folder as sent
+- A remembered audio upload is not an acknowledgement
+- A phone update cannot replace richer Mac content
+- Source icons travel inside the sealed recording payload
+
 ### `.agents/notes/agent.md` (144k)
 
 Asking questions about the library, through an agent CLI the user already has

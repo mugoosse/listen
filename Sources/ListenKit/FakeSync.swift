@@ -51,6 +51,33 @@ public enum FakeSync {
         try? FileManager.default.removeItem(at: EngineState(library: phoneLib).root)
 
         let store = MemoryStore()
+
+        // A shipped build can already hold the poisoned stamp. Constructing
+        // the repaired core must invalidate recording checks exactly once,
+        // without invalidating the separate proof that phone audio uploaded.
+        let repairLib = try scratchLibrary(root.appendingPathComponent("stamp-repair"))
+        try? FileManager.default.removeItem(at: EngineState(library: repairLib).root)
+        let repairState = EngineState(library: repairLib)
+        var poisoned = SyncState()
+        let repairID = "2026-08-12-090000-F1F1"
+        poisoned[sent: repairID] = "poisoned"
+        poisoned[sent: "audio:\(repairID)"] = "1"
+        repairState.base = poisoned
+        _ = CloudSyncCore(library: repairLib, state: repairState,
+                          store: store, key: key, policy: .mac,
+                          device: "repair", ingests: true)
+        try check(repairState.base[sent: repairID] == nil,
+                  "the poisoned recording stamp survived the repair")
+        try check(repairState.base[sent: "audio:\(repairID)"] == "1",
+                  "the repair invalidated an audio upload stamp")
+        var repaired = repairState.base
+        repaired[sent: repairID] = "current"
+        repairState.base = repaired
+        repairState.repairSuppressedRecordingPushesOnce()
+        try check(repairState.base[sent: repairID] == "current",
+                  "the one-time recording repair ran twice")
+        ok("existing recording stamps are rechecked once without reuploading audio")
+
         let mac = CloudSyncCore(library: macLib, state: EngineState(library: macLib),
                                 store: store, key: key, policy: .mac,
                                 device: "mac-1", ingests: true)
@@ -89,6 +116,9 @@ public enum FakeSync {
         """
         try seed(macLib, id: id, metadata: metadata,
                  transcript: #"{"segments":[],"duration":1800,"model":"parakeet-v3"}"#)
+        let sourceIcon = Data("small source icon".utf8)
+        try sourceIcon.write(to: macLib.folder(for: id)
+            .appendingPathComponent(DevicePolicy.sourceIcon))
 
         var push = CloudReport()
         await mac.push(into: &push)
@@ -103,6 +133,10 @@ public enum FakeSync {
         try check(landed == Data(metadata.utf8),
                   "metadata.json did not cross byte-identical")
         ok("metadata.json crosses verbatim, with fields neither device models")
+        let landedIcon = try Data(contentsOf: phoneLib.folder(for: id)
+            .appendingPathComponent(DevicePolicy.sourceIcon))
+        try check(landedIcon == sourceIcon, "the source app icon did not reach the phone")
+        ok("source app icons cross inside the sealed recording payload")
 
         // MARK: what the phone must never receive
 
@@ -118,6 +152,87 @@ public enum FakeSync {
         try check(!second.didSomething,
                   "a settled pair still had work: \(second.summary)")
         ok("a second pass is a no-op, so nothing rewrites what it received")
+
+        // MARK: a pull cannot hide a local sidecar from the following push
+
+        // A Mac publishes metadata before transcription finishes. Its next
+        // pass pulls that earlier record before it pushes the transcript it
+        // has just written. The pulled record does not contain the new files,
+        // so treating the Mac's richer folder as the thing just received marks
+        // unsent work as sent and leaves every other device waiting forever.
+        let lateID = "2026-08-12-104545-C0DE"
+        try seed(macLib, id: lateID,
+                 metadata: #"{"id":"\#(lateID)","title":"Late transcript","source":"mac","state":"transcribing"}"#,
+                 transcript: nil)
+        var earlyPush = CloudReport()
+        await mac.push(into: &earlyPush)
+
+        let lateFolder = macLib.folder(for: lateID)
+        try Data(#"{"segments":[{"speaker":"Me","start":0,"end":1,"text":"Arrived"}]}"#.utf8)
+            .write(to: lateFolder.appendingPathComponent("transcript.json"))
+        try Data(#"[{"speaker":"Me","start":0,"end":1,"text":"Arrived"}]"#.utf8)
+            .write(to: lateFolder.appendingPathComponent("turns.json"))
+
+        var selfPull = CloudReport()
+        await mac.pull(into: &selfPull)
+        var latePush = CloudReport()
+        await mac.push(into: &latePush)
+
+        let freshPhoneLib = try scratchLibrary(root.appendingPathComponent("fresh-phone"))
+        try? FileManager.default.removeItem(at: EngineState(library: freshPhoneLib).root)
+        let freshPhone = CloudSyncCore(
+            library: freshPhoneLib, state: EngineState(library: freshPhoneLib),
+            store: store, key: key, policy: .phone,
+            device: "phone-2", ingests: false)
+        var freshPull = CloudReport()
+        await freshPhone.pull(into: &freshPull)
+        try check(FileManager.default.fileExists(
+            atPath: freshPhoneLib.folder(for: lateID)
+                .appendingPathComponent("transcript.json").path),
+                  "pulling the earlier cloud record hid the Mac's new transcript")
+        try check(FileManager.default.fileExists(
+            atPath: freshPhoneLib.folder(for: lateID)
+                .appendingPathComponent("turns.json").path),
+                  "pulling the earlier cloud record hid the Mac's new turns")
+        ok("pulling an earlier record does not suppress newer local sidecars")
+
+        // A phone can still hold the sparse copy it originally uploaded while
+        // the Mac has already added the transcript. Its next push may add new
+        // local files, but it must not replace the richer record with the old
+        // metadata-only shape.
+        let stalePhoneLib = try scratchLibrary(root.appendingPathComponent("stale-phone"))
+        try? FileManager.default.removeItem(at: EngineState(library: stalePhoneLib).root)
+        try seed(stalePhoneLib, id: lateID,
+                 metadata: #"{"id":"\#(lateID)","title":"Late transcript","source":"iphone","state":"pending"}"#,
+                 transcript: nil)
+        let stalePhone = CloudSyncCore(
+            library: stalePhoneLib, state: EngineState(library: stalePhoneLib),
+            store: store, key: key, policy: .phone,
+            device: "phone-3", ingests: false)
+        var stalePush = CloudReport()
+        await stalePhone.push(into: &stalePush)
+
+        let afterStaleLib = try scratchLibrary(root.appendingPathComponent("after-stale-phone"))
+        try? FileManager.default.removeItem(at: EngineState(library: afterStaleLib).root)
+        let afterStalePhone = CloudSyncCore(
+            library: afterStaleLib, state: EngineState(library: afterStaleLib),
+            store: store, key: key, policy: .phone,
+            device: "phone-4", ingests: false)
+        var afterStalePull = CloudReport()
+        await afterStalePhone.pull(into: &afterStalePull)
+        try check(FileManager.default.fileExists(
+            atPath: afterStaleLib.folder(for: lateID)
+                .appendingPathComponent("transcript.json").path),
+                  "a stale phone push erased the Mac transcript")
+        try check(FileManager.default.fileExists(
+            atPath: afterStaleLib.folder(for: lateID)
+                .appendingPathComponent("turns.json").path),
+                  "a stale phone push erased the Mac turns")
+        let afterStaleMetadata = try Data(contentsOf: afterStaleLib.folder(for: lateID)
+            .appendingPathComponent("metadata.json"))
+        try check(String(decoding: afterStaleMetadata, as: UTF8.self).contains(#""source":"mac""#),
+                  "a stale phone push replaced the Mac metadata")
+        ok("a stale phone cannot downgrade a transcribed cloud record")
 
         // MARK: notes, and the four cases
 
@@ -138,6 +253,22 @@ public enum FakeSync {
         var up = CloudReport()
         await phone.push(into: &up)
 
+        var upload = CloudReport()
+        await phone.upload(phoneLib.find(memoID)!, into: &upload)
+        let transferName = CloudNaming.recordName(.audioTransfer, memoID, key: key)
+        try check(try await store.fetch(transferName, in: .transfer) != nil,
+                  "the phone did not upload its audio")
+
+        // A transfer can disappear before its library record carries audioOn.
+        // The phone still has the only durable copy, so a remembered upload is
+        // not enough reason to stop checking until a Mac acknowledges the bytes.
+        try await store.delete(transferName, in: .transfer)
+        var retryUpload = CloudReport()
+        await phone.upload(phoneLib.find(memoID)!, into: &retryUpload)
+        try check(try await store.fetch(transferName, in: .transfer) != nil,
+                  "a missing unacknowledged transfer was not uploaded again")
+        ok("unacknowledged phone audio is retried when its transfer disappears")
+
         var down = CloudReport()
         await phone.pull(into: &down)
         try check(FileManager.default.fileExists(
@@ -157,6 +288,22 @@ public enum FakeSync {
             atPath: phoneLib.folder(for: memoID).appendingPathComponent("mic.wav").path),
             "the phone kept audio a Mac had acknowledged")
         ok("audio is freed only once a Mac names itself in audioOn")
+
+        // The keep-audio preference retains the WAV after the same
+        // acknowledgement. That local copy must not turn a completed handoff
+        // back into an upload loop when the transfer is correctly absent.
+        try Data(repeating: 7, count: 4096).write(
+            to: phoneLib.folder(for: memoID).appendingPathComponent("mic.wav"))
+        try await store.delete(transferName, in: .transfer)
+        let keepingPhone = CloudSyncCore(
+            library: phoneLib, state: EngineState(library: phoneLib),
+            store: store, key: key, policy: .phone,
+            device: "phone-1", ingests: false, keepAudio: true)
+        var afterAcknowledgement = CloudReport()
+        await keepingPhone.upload(phoneLib.find(memoID)!, into: &afterAcknowledgement)
+        try check(try await store.fetch(transferName, in: .transfer) == nil,
+                  "acknowledged audio was uploaded again when retained")
+        ok("retained audio stays local after a Mac acknowledges it")
 
         // MARK: exactly one claimant
 

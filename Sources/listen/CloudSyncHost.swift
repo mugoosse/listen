@@ -15,6 +15,8 @@ final class CloudSyncHost {
 
     private var timer: Timer?
     private var running = false
+    /// Something asked for a sync while one was already going.
+    private var again = false
     private var subscribed = false
     private var passID: UUID?
 
@@ -89,7 +91,17 @@ final class CloudSyncHost {
     /// each refusing the other's compare-and-swap.
     @discardableResult
     func syncNow() async -> CloudReport {
-        guard !running else { return lastReport ?? CloudReport() }
+        // Asked while busy means asked again the moment this finishes.
+        //
+        // Refusing is right: two passes writing the same records would each
+        // refuse the other's compare-and-swap. Forgetting the request is not.
+        // A recording made while a pass was running waited out the two minute
+        // poll rather than going as soon as the pass ended, which reads as sync
+        // being slow when it is only being deaf.
+        guard !running else {
+            again = true
+            return lastReport ?? CloudReport()
+        }
         running = true
         let pass = UUID()
         passID = pass
@@ -175,6 +187,14 @@ final class CloudSyncHost {
 
         lastReport = report
         trace("cloud sync: \(report.summary)")
+
+        // Whatever arrived mid-pass, now. Cleared before running so a pass that
+        // is itself interrupted asks once more rather than looping.
+        if again {
+            again = false
+            running = false
+            return await syncNow()
+        }
         return report
     }
 }

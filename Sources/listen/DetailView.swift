@@ -1010,7 +1010,12 @@ final class DetailView: NSView {
         setPlayerCollapsed(hidden)
         for v in [playButton, timeLabel, waveform] as [NSView] { v.isHidden = !hasAudio }
         playerNote.isHidden = hasAudio
-        playerNote.stringValue = "The audio for this meeting is on the Mac that recorded it."
+        // Which device is coming for it depends on where it was made, and
+        // saying "the Mac that recorded it" about a phone recording is simply
+        // false: this Mac is the one that will fetch and transcribe it.
+        playerNote.stringValue = recording?.metadata.source == "iphone"
+            ? "The audio is coming from your iPhone."
+            : "The audio for this meeting is on the Mac that recorded it."
     }
 
     @objc private func switchShowing(_ sender: NSSegmentedControl) {
@@ -1866,6 +1871,13 @@ final class DetailView: NSView {
         // meeting, the transcript arrives when that machine has made it, and
         // nothing here is waiting to run. See `Recording.hasAudio`.
         if !recording.hasAudio {
+            // A phone recording is on its way *here*. Telling somebody to wait
+            // for another Mac when this one is about to do the work sends them
+            // looking at a machine that has nothing to say.
+            if recording.metadata.source == "iphone" {
+                return "The audio is coming from your iPhone."
+                    + " This Mac transcribes it once it arrives."
+            }
             return "The audio is on the Mac that recorded this."
                 + " The transcript appears here when that Mac has made it."
         }

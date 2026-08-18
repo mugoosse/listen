@@ -193,3 +193,56 @@ real voices at 0.47 and 0.57.
   of them.
 - Mixdown is generated on first playback and can take a moment on a long
   meeting; no progress is shown while it does.
+
+## Audio on every device, and who is transcribing
+
+Asked for on 18 Aug 2026: every device keeps a playable, re-transcribable copy
+of the audio; the iPhone plays it in the recording detail screen; a Mac that is
+transcribing says so to the others so nobody does it twice; the screen names
+that Mac and says when it started, finished and how long it ran; a per-device
+switch keeps or frees the audio, and the devices tell each other so the library
+can warn when **no** device is keeping it.
+
+Decided, with the measurements that decided it:
+
+- **FLAC, stereo, mic left and system right, one file per recording.** On this
+  library, 24.4 h in 40 recordings: raw Float32 tracks 500 MB/h and 12.2 GB;
+  FLAC stereo Int16 68 MB/h and 1.7 GB, lossless; AAC stereo 43 MB/h and 1.0 GB
+  at 98.9% word agreement, against a model whose own run-to-run variance
+  measured 0.0%. Lossless, because a device that frees its raw tracks has to be
+  giving up nothing or "keep audio" is a quality decision in disguise.
+- **A mono mixdown is not a candidate**, whatever it costs: `Mixdown` sums the
+  tracks and the pipeline transcribes them separately on purpose.
+- **No Production schema change.** The master rides `asset_mic_wav` on `r5`,
+  the lease rides `claimedBy` and `claimExpires` on `r1` (deployed, and written
+  by nothing before this), and provenance and per-device settings ride sealed
+  payloads. Production schema is append-only for ever, so this is worth keeping
+  true as the rest lands.
+- **Free the local copy only when another device reports holding it**, not when
+  the container has it. iCloud is a replica, and `Backups` exists because of it.
+
+Done: `AudioMaster` (build, split, both traps), the transcription lease and its
+four seams, `Metadata.transcribed_by` / `transcribed_on` / `transcribe_started`
+/ `transcribe_finished`.
+
+Left, roughly in dependency order:
+
+1. A durable master record in `z4`, pushed by any device holding audio and
+   pulled by any device that wants it. `ingest` keeps the raw pipe it has, so
+   the first transcription still reads the untouched tracks.
+2. `keepsAudio` and `holdsAudio` on `DeviceBlob`, which is sealed and needs no
+   schema, carried by the heartbeat that already runs every pass.
+3. The reclaim rule above, replacing "a Mac said `audioOn`".
+4. `Queue` taking, renewing and releasing the lease, and skipping a recording
+   another live device holds. Renewal matters: a long meeting outlives any
+   window short enough to be useful after a crash.
+5. Mac: the transcribing-on and finished-in lines, the keep-audio switch, the
+   device roster, and the warning when nothing is keeping a recording.
+6. iOS: playback in the detail screen (there is none today, no `AVAudioPlayer`
+   anywhere), the existing **Keep audio on this iPhone** switch wired to the
+   new policy, and the same two lines.
+
+One thing to decide when 4 lands: `takeTranscriptionLease` returns true when
+the container is unreachable, so an offline Mac still transcribes its own
+recording. `state: transcribing` travelling in the metadata is the only
+deterrent in that window, and whether that is enough has not been measured.

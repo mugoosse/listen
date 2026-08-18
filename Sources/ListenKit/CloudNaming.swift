@@ -52,6 +52,27 @@ public enum CloudNaming {
         /// heartbeats and audio uploads cannot wake every device for each
         /// other's traffic.
         case transfer = "z4"
+        /// The durable audio masters, one per recording, kept for ever.
+        ///
+        /// **Why not `z4`, which is where the plan said to put them.** `z4` is
+        /// a pipe and `ingest` lists it whole on every pass, with no change
+        /// token, deliberately: a transfer whose ingest failed has to be seen
+        /// again, and a token would hide it for ever. A listing fetches each
+        /// record with its assets attached, so one master per recording in
+        /// `z4` would have every Mac downloading the entire audio library
+        /// every two minutes. On this library that is 1.7 GB a pass.
+        ///
+        /// A zone costs nothing to add. Zones are created per account at
+        /// runtime by `CloudKitStore.prepare`, so unlike a record type or a
+        /// field they are **not** part of the schema that deploys to
+        /// Production and never comes back. The record type is still `r5` and
+        /// the bytes still ride `asset_mic_wav`, which is the half of that
+        /// constraint that is permanent.
+        ///
+        /// Nothing subscribes to it either, and nothing ever lists it. A
+        /// master is fetched by name, by a device that has already decided it
+        /// wants those bytes, which is the one shape of traffic worth 25 MB.
+        case masters = "z5"
     }
 
     /// Record types, opaque for the same reason as zones and permanent for the

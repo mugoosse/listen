@@ -15,6 +15,15 @@ final class CloudSyncHost {
 
     private var timer: Timer?
     private var running = false
+    /// One store for the life of the app rather than one per pass.
+    ///
+    /// It caches the server's copy of each record it has seen, which is what
+    /// CloudKit's compare-and-swap needs: a change tag cannot be synthesised,
+    /// so the only way to say "I am updating what I read" is to hold what was
+    /// read. Two stores would each hold half of that, and the transcription
+    /// lease is written from outside a pass while `push` writes the same `r1`
+    /// records inside one.
+    private var store: CloudKitStore?
     /// Something asked for a sync while one was already going.
     private var again = false
     private var subscribed = false
@@ -151,10 +160,11 @@ final class CloudSyncHost {
             at: library.root.appendingPathComponent("devices.json"))
 
         let identity = state.identity(name: Host.current().localizedName ?? "Mac", kind: "Mac")
-        let store = CloudKitStore(containerID: CloudAccount.containerID)
+        let store = sharedStore()
         let core = CloudSyncCore(
             library: library, state: state, store: store,
             key: key, policy: .mac, device: identity.id, ingests: true,
+            keepAudio: Settings.keepAudio,
             progress: { message in
                 Task { @MainActor in
                     guard CloudSyncHost.shared.passID == pass else { return }
@@ -166,7 +176,13 @@ final class CloudSyncHost {
         // voiceprints, so it subscribes to all four zones; a phone does not,
         // and is not woken by another Mac teaching itself a voice.
         if !subscribed {
-            await store.subscribe(to: CloudNaming.Zone.allCases)
+            // Named rather than `allCases`, because the master zone is
+            // deliberately not among them. A master is fetched by name by a
+            // device that has already decided it wants those bytes, so a
+            // subscription would wake every Mac forty times over the hour a
+            // library first publishes its audio, for records none of them
+            // would read from the notification.
+            await store.subscribe(to: [.library, .voiceprints, .devices, .transfer])
             subscribed = true
         }
 
@@ -204,6 +220,12 @@ final class CloudSyncHost {
 
         await core.push(into: &report)
         await core.pushVoiceprints(into: &report)
+        // The audio, in both directions and after everything small. A master
+        // is tens of megabytes, so it goes last: a pass that spends its time
+        // on audio first is a pass where the transcript somebody is waiting
+        // for arrives behind it.
+        await core.pushMasters(into: &report)
+        await core.pullMasters(devices, into: &report)
         // Claim before downloading, and prefer whichever Mac was chosen to keep
         // phone recordings. Empty means no preference and the first Mac awake
         // takes it.
@@ -211,8 +233,22 @@ final class CloudSyncHost {
         await core.ingest(preferred: preferred.isEmpty ? nil : preferred, into: &report)
 
         // Anything that arrived may be a recording with audio and no
-        // transcript, which is the definition of a pending job.
-        if report.pulledRecordings > 0 || report.claimed > 0 { Queue.shared.resume() }
+        // transcript, which is the definition of a pending job. Audio that
+        // arrived as a master counts: that is the whole point of replicating
+        // it, and `Queue` splits it back into tracks before it runs.
+        if report.pulledRecordings > 0 || report.claimed > 0 || report.pulledMasters > 0 {
+            Queue.shared.resume()
+        }
+
+        // Last, and only now that this pass has published what this Mac holds.
+        // Freeing a local copy is the one write here that cannot be undone, so
+        // it is taken with the freshest roster the pass has and never before
+        // this Mac's own heartbeat has said what it is keeping.
+        //
+        // Whatever the queue is holding is named, because a recording waiting
+        // to be transcribed here is a recording whose audio this Mac still
+        // needs, however many other devices have a copy.
+        await core.reclaim(devices, protecting: Queue.shared.activeIDs, into: &report)
 
         lastReport = report
         trace("cloud sync: \(report.summary)")
@@ -234,6 +270,79 @@ final class CloudSyncHost {
         return report
     }
 
+    private func sharedStore() -> CloudKitStore {
+        if let store { return store }
+        let made = CloudKitStore(containerID: CloudAccount.containerID)
+        store = made
+        return made
+    }
+
+    // MARK: - The transcription lease
+
+    /// A core built outside a pass, for the three lease calls the queue makes.
+    ///
+    /// Nil when this Mac is not syncing this library, and every caller reads
+    /// that as "there is nobody to race with". Listen works with the network
+    /// off and with iCloud never switched on, and a lease that could not be
+    /// taken must never be the reason a Mac declines to transcribe its own
+    /// recording.
+    private func leaseCore() -> CloudSyncCore? {
+        guard Settings.cloudSyncApplies, let key = KeyStore.shared.load() else { return nil }
+        let library = ListenKit.Library.mac()
+        let state = EngineState(library: library)
+        let identity = state.identity(name: Host.current().localizedName ?? "Mac", kind: "Mac")
+        return CloudSyncCore(library: library, state: state, store: sharedStore(),
+                             key: key, policy: .mac, device: identity.id,
+                             ingests: true, keepAudio: Settings.keepAudio)
+    }
+
+    /// This Mac's own id, which is what `Metadata.transcribed_by` records.
+    ///
+    /// Resolved once. It reads a file, and it is asked on every redraw of the
+    /// transcript pane, which is thirty times a track while a job runs. The
+    /// answer cannot change inside a process: `EngineState` is keyed on the
+    /// library path and `LISTEN_LIBRARY` is read at launch.
+    private static var cachedDeviceID: String?
+    static var deviceID: String {
+        if let cachedDeviceID { return cachedDeviceID }
+        let id = EngineState(library: ListenKit.Library.mac())
+            .identity(name: Host.current().localizedName ?? "Mac", kind: "Mac").id
+        cachedDeviceID = id
+        return id
+    }
+
+    static var deviceName: String { Host.current().localizedName ?? "Mac" }
+
+    /// Take the right to transcribe one recording, or find out who has it.
+    ///
+    /// True when there is nothing to ask, which is a Mac that does not sync
+    /// and a Mac whose container is unreachable alike. See
+    /// `CloudSyncCore.takeTranscriptionLease` for why that is the safe answer
+    /// and what the second deterrent is inside that window.
+    func takeTranscriptionLease(_ id: String) async -> Bool {
+        guard let core = leaseCore() else { return true }
+        return await core.takeTranscriptionLease(id)
+    }
+
+    func renewTranscriptionLease(_ id: String) async {
+        await leaseCore()?.renewTranscriptionLease(id)
+    }
+
+    func releaseTranscriptionLease(_ id: String) async {
+        await leaseCore()?.releaseTranscriptionLease(id)
+    }
+
+    /// Who is transcribing this recording, when it is not this Mac.
+    func transcriptionLease(_ id: String) async -> CloudSyncCore.TranscriptionLease? {
+        guard let core = leaseCore() else { return nil }
+        return await core.transcriptionLease(id)
+    }
+
+    /// The name of the device holding a lease, as the roster knows it.
+    static func deviceName(for id: String) -> String? {
+        shared.devices.first { $0.id == id }?.name
+    }
+
     /// The Mac that holds this recording's audio, when it is not this one.
     ///
     /// Nil means nothing else has claimed it, which is the ordinary state of a
@@ -253,6 +362,19 @@ final class CloudSyncHost {
     /// device list yet, and an unnamed holder is still worth saying.
     static func audioHolder(of id: String) -> String? {
         guard Settings.cloudSyncApplies else { return nil }
+        // The roster first, because it is the live answer and the other one is
+        // a latch. `holdsAudio` is republished from disk on every heartbeat by
+        // every device, so it names whichever machines have the bytes **now**,
+        // including one that was given a master and never recorded anything.
+        // `audioOn` names whichever Mac won an ingest, once, for ever, and
+        // says nothing at all about a meeting recorded on a Mac.
+        let holders = audioHolders(of: id)
+        if let first = holders.first {
+            if holders.count == 1 { return first.name }
+            // Two is worth saying rather than picking one: it is the answer to
+            // "is this safe" as well as to "where do I go".
+            return holders.map(\.name).joined(separator: " and ")
+        }
         let library = ListenKit.Library.mac()
         let state = EngineState(library: library)
         guard let holder = state.base[audioOn: id] else { return nil }
@@ -260,5 +382,86 @@ final class CloudSyncHost {
                                        kind: "Mac").id else { return nil }
         return shared.devices.first { $0.id == holder }?.name
             ?? "your other Mac"
+    }
+
+    /// Every device other than this one that says it holds this recording's
+    /// audio, most recently heard from first.
+    ///
+    /// Live devices only. A machine that has said nothing for a week is a
+    /// claim about a disk nobody can see, and the reclaim rule refuses to act
+    /// on one, so a screen that named it would be promising something the sync
+    /// itself does not believe. See `CloudRecords.DeviceBlob.isLive`.
+    /// `among` is the roster to answer from, and it is a parameter because the
+    /// CLI runs in a process where no pass has ever run: `shared.devices` is
+    /// filled by a sync pass, so a command that read it would silently answer
+    /// "nobody" every time. `listen audio` fetches the device zone itself and
+    /// hands it in.
+    static func audioHolders(of id: String,
+                             among devices: [CloudRecords.DeviceBlob]? = nil)
+        -> [CloudRecords.DeviceBlob] {
+        guard Settings.cloudSyncApplies else { return [] }
+        let me = deviceID
+        return (devices ?? shared.devices)
+            .filter { $0.id != me && $0.isLive() && $0.holds(id) }
+            .sorted { $0.lastSeen > $1.lastSeen }
+    }
+
+    /// Nothing anywhere has said it holds this recording's audio.
+    ///
+    /// **A statement about what has been reported, not about the universe**,
+    /// and worded that way wherever it is shown. A Mac shut in a drawer still
+    /// has whatever it had; it simply is not saying so, and a library cannot
+    /// tell that apart from a disk that was wiped. What it is good for is the
+    /// case that matters: every device that is talking has let go, so the next
+    /// thing to do is turn **Keep audio** on somewhere before the last copy
+    /// goes with a machine.
+    ///
+    /// False on a library with one device in it, where the question does not
+    /// arise and the answer would be alarming rather than useful.
+    static func nothingHolds(_ recording: Recording,
+                             among devices: [CloudRecords.DeviceBlob]? = nil) -> Bool {
+        let roster = devices ?? shared.devices
+        guard Settings.cloudSyncApplies, roster.count > 1 else { return false }
+        guard !recording.hasAudio else { return false }
+        return audioHolders(of: recording.id, among: roster).isEmpty
+    }
+
+    /// Every recording nothing has reported keeping the audio for.
+    ///
+    /// Counted in one pass over the roster rather than by asking per
+    /// recording, because the per-recording question reloads the library to
+    /// find the folder and a settings pane that refreshes every two seconds
+    /// would do that sixty times over.
+    static func unheld(among devices: [CloudRecords.DeviceBlob]? = nil) -> [Recording] {
+        let roster = devices ?? shared.devices
+        guard Settings.cloudSyncApplies, roster.count > 1 else { return [] }
+        let me = deviceID
+        var held: Set<String> = []
+        for blob in roster where blob.id != me && blob.isLive() {
+            held.formUnion(blob.holdsAudio ?? [])
+        }
+        return Recording.all().filter { !$0.hasAudio && !held.contains($0.id) }
+    }
+
+    /// The device roster, read straight from the container.
+    ///
+    /// For a process that never runs a pass, which is every CLI invocation.
+    /// Empty when this Mac does not sync this library, which is also the
+    /// honest answer: there is no roster.
+    static func roster() async -> [CloudRecords.DeviceBlob] {
+        guard Settings.cloudSyncApplies, let key = KeyStore.shared.load() else { return [] }
+        let store = CloudKitStore(containerID: CloudAccount.containerID)
+        guard let changes = try? await store.changes(in: .devices, since: nil) else { return [] }
+        return changes.changed
+            .compactMap { try? CloudRecords.openDevice($0, key: key) }
+            .sorted { $0.lastSeen > $1.lastSeen }
+    }
+
+    /// Whether this library has more than one device in it, which is the
+    /// question every provenance line is worth showing behind. On one Mac
+    /// "transcribed on this Mac" is noise: there is nowhere else it could
+    /// have happened.
+    static var isShared: Bool {
+        Settings.cloudSyncApplies && shared.devices.count > 1
     }
 }

@@ -327,8 +327,12 @@ that repo is being archived.**
 ### `.agents/notes/cloud-sync.md` (3k)
 
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
-`CloudRecords`, `MemoryStore`, `FakeSync`.
+`CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
 
+- The audio master has a zone of its own, because `z4` is listed whole
+- A device frees audio on a live device's list, never on a latch
+- One record type, two zones, and why the zone is the cheap half
+- The suite was not hermetic, and it passed once per scratch directory
 - A pull cannot stamp a richer local folder as sent
 - A stranded recording is invisible, and the screen said the opposite
 - A claim is not a delivery
@@ -470,8 +474,12 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - UI copy states the trade-off rather than hiding it in a tooltip.
 - Prefer measured numbers to remembered ones. Every threshold and size that came
   from a measurement says so.
-- A phone deletes audio only when `audioOn` names another device. Upload
-  completion, a claim and a transfer record are not durable-copy evidence.
+- A device frees its audio only when another **live** device that is **keeping**
+  audio reports holding that recording, in the `holdsAudio` list its heartbeat
+  republishes from disk every pass. Upload completion, a claim, a transfer
+  record, `audioOn` and the container holding a master are none of them
+  durable-copy evidence. `audioOn` is still written and still read, for the
+  transfer pipe and for saying where the bytes went; it decides no deletion.
 - Only the device that authored a recording serialises its `metadata.json`.
   Every other device stores those bytes verbatim and parses them leniently.
 - A new trap goes in the `.agents/notes/` file for its area, and its headline

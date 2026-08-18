@@ -170,6 +170,31 @@ struct Metadata: Codable {
     /// the thing this design is avoiding.
     var title_source: String?
 
+    /// Which device made the transcript, and how long it took.
+    ///
+    /// Provenance rather than state. `state` says what stage a recording has
+    /// reached; these say who did the work and when, which is the question a
+    /// library spread over three devices actually raises and one that never
+    /// came up while a recording could only be transcribed by the one machine
+    /// that could hear it.
+    ///
+    /// **`transcribed_by` is the device id and `transcribed_on` is its name**,
+    /// which is the same split as `app_bundle_id` and `app_name` and exists
+    /// for the same reason: the id is what code compares and survives a
+    /// rename, the name is what a person reads and survives the device being
+    /// dropped from the roster after a month of silence. Read "transcribed on
+    /// Studio", not "transcribed on Tuesday": the times are the two fields
+    /// below.
+    ///
+    /// Optional, like every other field added to this struct after there were
+    /// files on disk, and mirrored in `ListenKit.Metadata` so the phone can
+    /// show the same two lines. They live in `metadata.json` and therefore
+    /// inside the sealed payload, so they cost no CloudKit schema at all.
+    var transcribed_by: String?
+    var transcribed_on: String?
+    var transcribe_started: String?
+    var transcribe_finished: String?
+
     // The calendar, app, tag and model fields are all `Optional`, and that is
     // what makes them safe to add to a struct with 47 files already on disk.
     //
@@ -288,6 +313,10 @@ struct Recording {
     var micURL: URL { folder.appendingPathComponent("mic.wav") }
     var systemURL: URL { folder.appendingPathComponent("system.wav") }
     var mixURL: URL { folder.appendingPathComponent("mix.m4a") }
+    /// The replicated copy: one stereo FLAC, mic left and system right, which
+    /// is what a Mac that never recorded this meeting can end up holding. See
+    /// `AudioMaster`.
+    var masterURL: URL { AudioMaster.url(in: folder) }
     var transcriptURL: URL { folder.appendingPathComponent("transcript.json") }
     var turnsURL: URL { folder.appendingPathComponent("turns.json") }
     var embeddingsURL: URL { folder.appendingPathComponent("embeddings.json") }
@@ -380,8 +409,27 @@ struct Recording {
     /// the other Mac arrives as metadata before its transcript has been written,
     /// so for those minutes it has neither, and it is still not this machine's
     /// job.
+    /// The master counts, and that is what it is for. A Mac that was given one
+    /// and never had the tracks can play the meeting and transcribe it again,
+    /// so answering "no audio here" about it would be false in the direction
+    /// that hides a working copy. `Queue` takes it apart before a run, because
+    /// the pipeline reads the two tracks separately on purpose.
     var hasAudio: Bool {
         !tracks.isEmpty || FileManager.default.fileExists(atPath: mixURL.path)
+            || FileManager.default.fileExists(atPath: masterURL.path)
+    }
+
+    /// Whether the two separate tracks are here, which is what the pipeline
+    /// reads and a different question from `hasAudio`.
+    var hasTracks: Bool { !tracks.isEmpty }
+
+    /// Every audio file for this recording that is on this Mac, so that
+    /// measuring what audio costs, or freeing it, means all of it rather than
+    /// most of it.
+    var audioFiles: [URL] {
+        [micURL, systemURL, mixURL, masterURL].filter {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
     }
 
     func save() throws {

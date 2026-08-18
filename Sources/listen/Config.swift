@@ -740,16 +740,42 @@ extension Settings {
 
     /// Which Mac keeps a phone recording, and therefore transcribes it.
     ///
-    /// Not a plumbing detail. Audio never moves again once it lands, so the
-    /// Mac that claims a phone recording is the Mac you have to be sitting at
-    /// to play that memo back for ever afterwards. First-come-first-served
-    /// would hand a fifty-minute session to whichever machine happened to wake
-    /// first, which on a desk with a laptop and a desktop is close to random.
+    /// Not a plumbing detail, and less permanent than it was. The Mac that
+    /// claims a phone recording is the one that transcribes it and the one
+    /// that publishes its audio master, so it decides which machine does the
+    /// hour of work and which one has the bytes first. Every other device that
+    /// keeps audio then fetches that master, so this no longer decides for ever
+    /// which machine you have to be sitting at to hear the memo: it did, before
+    /// `AudioMaster` existed, and the sentence that used to be here said so.
     ///
     /// Empty means no preference, and then the first Mac awake takes it.
     static var preferredTranscriber: String {
         get { defaults.string(forKey: preferredTranscriberKey) ?? "" }
         set { defaults.set(newValue, forKey: preferredTranscriberKey) }
+    }
+
+    private static let keepAudioKey = "keepAudio"
+
+    /// Whether this Mac keeps a copy of every recording's audio.
+    ///
+    /// **On unless somebody turns it off**, which is the opposite default from
+    /// `cloudSync` and for the opposite reason: sync is about bytes leaving the
+    /// machine and this is about bytes staying on it. A Mac that has the audio
+    /// can play a meeting back and transcribe it again; one that does not has
+    /// to tell you to go and open another machine.
+    ///
+    /// On, this Mac fetches the master for anything it does not have. Off, it
+    /// fetches nothing and frees what it holds as soon as another device that
+    /// **is** keeping audio says it holds those bytes, which is the reclaim
+    /// invariant in `CloudSyncCore` and the one rule in this product where
+    /// being wrong loses a recording.
+    ///
+    /// The default is written as an absent key rather than a stored `true`, so
+    /// `defaults.bool` cannot answer for it: that returns false for a key
+    /// nobody has set, and false here is the value that deletes things.
+    static var keepAudio: Bool {
+        get { forcedBool(keepAudioKey) ?? (defaults.object(forKey: keepAudioKey) as? Bool ?? true) }
+        set { defaults.set(newValue, forKey: keepAudioKey) }
     }
 
     private static let userNameKey = "userName"

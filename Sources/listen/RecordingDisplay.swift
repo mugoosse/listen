@@ -137,6 +137,86 @@ extension Recording {
     /// there. See `Metadata.mic_silent`.
     var micWasSilent: Bool { metadata.mic_silent == true }
 
+    // MARK: - Who did the work
+
+    /// The device that made, or is making, this transcript, as a person reads
+    /// it. Nil when nothing recorded it, which is every recording transcribed
+    /// before there was a second device to wonder about.
+    ///
+    /// The stored name rather than the roster's, because a device drops off the
+    /// roster after a month of silence and "transcribed on a machine that is
+    /// not in your list" is worse than a name that has since changed. The
+    /// roster is consulted only to improve on it. See `Metadata.transcribed_by`.
+    @MainActor
+    var transcriberName: String? {
+        guard let device = metadata.transcribed_by else { return nil }
+        if device == CloudSyncHost.deviceID { return nil }
+        return CloudSyncHost.deviceName(for: device) ?? metadata.transcribed_on
+    }
+
+    /// Whether this Mac is the one that did it.
+    @MainActor
+    var transcribedHere: Bool { metadata.transcribed_by == CloudSyncHost.deviceID }
+
+    /// How long the run took, in words. Nil until both ends are recorded,
+    /// which is every recording made before this field existed and every one
+    /// still going.
+    var transcribeDuration: String? {
+        guard let started = metadata.transcribe_started.flatMap(Recording.moment),
+              let finished = metadata.transcribe_finished.flatMap(Recording.moment),
+              finished > started else { return nil }
+        return Recording.spell(finished.timeIntervalSince(started))
+    }
+
+    /// A span of time as a duration rather than as a clock.
+    ///
+    /// Not `length`, which reads `1:23:45` and is right for how long a meeting
+    /// is: "transcribed in 1:23:45" invites the reading that it finished at
+    /// twenty to two. A duration says its units.
+    static func spell(_ seconds: TimeInterval) -> String {
+        let t = Int(seconds.rounded())
+        if t < 60 { return "\(max(t, 1)) s" }
+        if t < 3600 { return "\(t / 60) min" }
+        let minutes = (t % 3600) / 60
+        return minutes == 0 ? "\(t / 3600) h" : "\(t / 3600) h \(minutes) min"
+    }
+
+    /// When the run began, if it has.
+    var transcribeStarted: Date? { metadata.transcribe_started.flatMap(Recording.moment) }
+
+    /// One line: which machine did it and how long it took.
+    ///
+    /// **Nil on a library with one device in it**, which the caller decides,
+    /// because on a single Mac this is noise: there is nowhere else it could
+    /// have happened. It is the answer to a question only a library spread
+    /// over three devices raises.
+    @MainActor
+    var transcribedLine: String? {
+        guard hasTranscript else { return nil }
+        let machine = transcribedHere ? "this Mac"
+            : (transcriberName ?? metadata.transcribed_on)
+        guard let machine else { return nil }
+        guard let took = transcribeDuration else { return "transcribed on \(machine)" }
+        return "transcribed on \(machine) in \(took)"
+    }
+
+    /// The same instant parser `date` uses, shared so a bad string means one
+    /// thing everywhere.
+    static func moment(_ text: String) -> Date? {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        return parser.date(from: text)
+    }
+
+    /// How long ago something happened, in words a sentence can take.
+    static func ago(_ date: Date, now: Date = Date()) -> String {
+        let seconds = now.timeIntervalSince(date)
+        if seconds < 120 { return "just now" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) minutes ago" }
+        if seconds < 86_400 { return "\(Int(seconds / 3600)) hours ago" }
+        return "\(Int(seconds / 86_400)) days ago"
+    }
+
     /// What produced this transcript, as somebody reads it.
     ///
     /// The transcript's own record of what ran, never the recording's choice for

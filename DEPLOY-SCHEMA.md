@@ -30,13 +30,25 @@ environment: Production or Development
   z2: r6×1
   z3: r4×2
   z4: empty
+  z5: 3 master(s) this Mac knows of, not listed (a listing would download them)
 
 9 record(s). Nothing above was decrypted to print it.
 ```
 
-Four zones and six record types, all of them opaque. `z4` is empty because a
+Five zones and six record types, all of them opaque. `z4` is empty because a
 transfer is deleted once a Mac holds the audio: that zone is a pipe, never a
 store, and an empty one is the correct state rather than a missing one.
+
+`z5` holds the audio masters and is the one zone this command does not list, on
+purpose. Every record in it is a whole recording's audio, and a listing fetches
+each record with its assets attached, so summarising the zone would download the
+library to print one line. The number shown is what this Mac's sync state
+remembers publishing or fetching.
+
+**A zone is not schema.** Zones are created per account at runtime, so `z5`
+needed no deploy and can be deleted; a record type or a field cannot. That is
+why the master is an `r5` in a new zone rather than a new `r7`, and why nothing
+below changes.
 
 If any record name were readable, `sync inspect` would print `NAMES ARE NOT
 OPAQUE` beside its zone. That check is the reason the command exists.
@@ -54,7 +66,7 @@ container `iCloud.eu.jacarandalabs.listen`, **Development**.
 | `r2` | a note | `z1` |
 | `r3` | a library file: `contacts.json`, `dictionary.json` | `z1` |
 | `r4` | a device | `z3` |
-| `r5` | audio in flight | `z4` |
+| `r5` | audio in flight, and the durable audio master | `z4` and `z5` |
 | `r6` | a voiceprint | `z2` |
 
 **Fields.** Only these, and no others:
@@ -67,7 +79,11 @@ container `iCloud.eu.jacarandalabs.listen`, **Development**.
   list.
 - `asset_transcript_json`, `asset_turns_json`, `asset_waveform_json`,
   `asset_mic_wav` — Asset. Sealed. Underscores rather than dots because a field
-  key may not contain one.
+  key may not contain one. `asset_mic_wav` carries two different things: a
+  phone's raw microphone WAV on a `z4` transfer, and the stereo FLAC master on a
+  `z5` record. The field name is a name and not a claim about the contents, and
+  reusing it is what kept this table from growing a permanent second audio
+  field.
 - `claimedBy`, `claimExpires`, `audioOn` — String, Date, String. **The only
   three fields written by a device that did not author the content**, which is
   the whole reason they are readable at all.

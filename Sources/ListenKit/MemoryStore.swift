@@ -57,7 +57,7 @@ public actor MemoryStore: RecordStore {
             zones[zone, default: [:]][row.name] = StoredRecord(
                 name: row.name, type: type, payload: row.payload, assets: row.assets,
                 claimedBy: row.claimedBy, claimExpires: row.claimExpires,
-                audioOn: row.audioOn, changeTag: row.changeTag)
+                audioOn: row.audioOn, changeTag: row.changeTag, zone: zone)
         }
         for event in snapshot.events {
             guard let zone = CloudNaming.Zone(rawValue: event.zone) else { continue }
@@ -70,7 +70,9 @@ public actor MemoryStore: RecordStore {
     // MARK: - RecordStore
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
-        let zone = record.type.zone
+        // The record's own zone, not its type's. One type lives in two zones:
+        // see `StoredRecord.zone`.
+        let zone = record.zone
         let existing = zones[zone]?[record.name]
 
         // The compare-and-swap, and the whole reason a lost update is not

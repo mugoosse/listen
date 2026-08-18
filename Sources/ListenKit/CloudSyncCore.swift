@@ -13,13 +13,19 @@ public struct CloudReport: Sendable, Equatable {
     /// Records taken out of the container because this device deleted them.
     public var deletedRemotely = 0
     public var claimed = 0
+    /// Audio masters published by this device, and taken down by it. Counted
+    /// apart from recordings because one of them is 25 MB, and a person
+    /// watching a pass deserves to know which kind of work it is doing.
+    public var pushedMasters = 0
+    public var pulledMasters = 0
     public var freedBytes = 0
     public var conflicts: [String] = []
     public var errors: [String] = []
 
     public var didSomething: Bool {
         pushedRecordings + pulledRecordings + pulledSidecars + pushedNotes
-            + pulledNotes + deletedLocally + deletedRemotely + claimed > 0 || freedBytes > 0
+            + pulledNotes + deletedLocally + deletedRemotely + claimed
+            + pushedMasters + pulledMasters > 0 || freedBytes > 0
     }
 
     public var summary: String {
@@ -32,6 +38,8 @@ public struct CloudReport: Sendable, Equatable {
         if pulledNotes + pushedNotes > 0 { parts.append("\(pulledNotes + pushedNotes) notes") }
         if deletedLocally > 0 { parts.append("removed \(deletedLocally)") }
         if deletedRemotely > 0 { parts.append("deleted \(deletedRemotely) everywhere") }
+        if pushedMasters > 0 { parts.append("sent audio for \(pushedMasters)") }
+        if pulledMasters > 0 { parts.append("got audio for \(pulledMasters)") }
         if freedBytes > 0 { parts.append("freed \(freedBytes / 1_048_576) MB") }
         return parts.joined(separator: ", ")
     }
@@ -56,8 +64,13 @@ public struct CloudSyncCore: Sendable {
     /// Whether this device may ingest a phone recording at all. A phone cannot:
     /// it is the one uploading.
     let ingests: Bool
-    /// True when the user has asked to keep audio on this device whatever a
-    /// Mac says. Turns `reclaim` off entirely.
+    /// True when this device has been asked to keep a copy of the audio.
+    ///
+    /// Two things at once, and they are the same switch seen from each side.
+    /// On, this device fetches the master for anything it does not already
+    /// have audio for, and never frees what it holds. Off, it fetches nothing
+    /// and frees a local copy as soon as another device that *is* keeping
+    /// audio says it holds those bytes. See `reclaim`.
     let keepAudio: Bool
 
     /// Said out loud as the pass runs, so a screen can show something moving.
@@ -272,8 +285,13 @@ public struct CloudSyncCore: Sendable {
             if isNew { report.pulledRecordings += 1 }
         }
 
-        // The phone stops holding audio only when a Mac says it holds it.
-        await reclaimIfAcknowledged(record, id: blob.id, into: &report)
+        // Nothing is freed here. A pull applies what arrived; letting go of
+        // the only other copy of a recording is a decision about the whole
+        // device roster and it is taken once a pass, in `reclaim`. It used to
+        // live in this function and could therefore only ever be reconsidered
+        // when a recording's own record changed, which is exactly what a
+        // stalled recording's record does not do. `askWhoHoldsTheWaiting`
+        // below exists because of the same blind spot.
 
         // Work made from the audio, rather than a device holding the audio.
         // A transcript is the usual evidence; a finished state is the other
@@ -347,6 +365,7 @@ public struct CloudSyncCore: Sendable {
             Trash.accept(recording.folder, in: library)
             base[sent: recording.id] = nil
             base[audioOn: recording.id] = nil
+            base[master: recording.id] = nil
             return true
         }
         for note in library.allNotes()
@@ -361,30 +380,225 @@ public struct CloudSyncCore: Sendable {
 
     // MARK: - The reclaim invariant
 
-    /// Delete this device's audio **only** when a Mac reports that audio on its
-    /// own disk. Never when the upload completes.
+    /// Free this device's audio **only** for recordings another live device
+    /// says it is keeping. Never when an upload completes, and never on the
+    /// strength of the container holding a copy.
     ///
-    /// Between "upload finished" and "a Mac has ingested it" the only copy of
-    /// that recording is an asset in a zone whose entire purpose is to be
+    /// Between "upload finished" and "another device has it" the only copy of
+    /// that recording can be an asset in a zone whose entire purpose is to be
     /// purged. Deleting the local copy in that window loses the recording
     /// permanently, and it is the only place in this design where that is
     /// possible.
     ///
-    /// `audioOn` is the acknowledgement, and it is the right one because there
-    /// is **no separate receipt to lose**: the Mac writes it after the bytes
-    /// are on its disk, in the same record this device is already reading.
-    private func reclaimIfAcknowledged(_ record: StoredRecord, id: String,
-                                       into report: inout CloudReport) async {
-        guard !keepAudio, !ingests else { return }
-        guard let holder = record.audioOn, holder != device else { return }
-        guard let recording = library.find(id), recording.hasAudio else { return }
-        let size = (try? FileManager.default.attributesOfItem(
-            atPath: recording.micURL.path)[.size] as? Int) ?? 0
-        do {
-            try FileManager.default.removeItem(at: recording.micURL)
-            report.freedBytes += size
-        } catch {
-            report.errors.append("could not free \(id)")
+    /// **What changed, and why `audioOn` was not enough any more.** `audioOn`
+    /// is one string on the recording, written by whichever Mac ingested it
+    /// and true for ever afterwards, including after that Mac has been wiped,
+    /// sold or reinstalled. It also only ever answers for the ingest, so it
+    /// could authorise a phone to let go and could say nothing at all about
+    /// two Macs. `holdsAudio` is a list republished from disk on every
+    /// heartbeat, so it goes stale the way a heartbeat does rather than the
+    /// way a latch does, and it answers for every device.
+    ///
+    /// Three conditions, and each one is load-bearing:
+    ///
+    /// - **Another device, live.** A week without a heartbeat and its list
+    ///   stops being evidence: see `DeviceBlob.isLive`.
+    /// - **That device keeps audio.** Otherwise two devices that are both
+    ///   trying to get rid of the same recording each read the other as a safe
+    ///   holder and delete on the same pass. That is mutual deletion of the
+    ///   only two copies, and it is the exact failure this whole invariant is
+    ///   about. A device that is keeping audio is not going to change its
+    ///   mind inside one pass.
+    /// - **Nothing is still owed on it here.** A device that transcribes does
+    ///   not free audio it has yet to produce a transcript from, and the
+    ///   caller names anything the queue is holding. Without the first, a Mac
+    ///   with the switch off would ingest a memo and delete it before the job
+    ///   started, and the phone would offer it again six hours later, for ever.
+    ///
+    /// `protecting` is the queue's, and it is a parameter rather than a lookup
+    /// because `CloudSyncCore` runs identically on a phone that has no queue.
+    public func reclaim(_ devices: [CloudRecords.DeviceBlob],
+                        protecting: Set<String> = [],
+                        into report: inout CloudReport, now: Date = Date()) async {
+        guard !keepAudio else { return }
+        let holders = keepers(devices, now: now)
+        guard !holders.isEmpty else { return }
+
+        for recording in library.all() where recording.hasAudio {
+            guard holders.contains(recording.id), !protecting.contains(recording.id) else {
+                continue
+            }
+            // A device that transcribes keeps the audio until there is
+            // something made from it. `delivered` is the same test a pull
+            // makes on an arriving record, and for the same reason: a
+            // recording with no speech in it never gains a transcript, so a
+            // finished state is the second half of it rather than a fallback.
+            if ingests, !delivered(recording) { continue }
+            for url in recording.audioFiles {
+                let size = (try? FileManager.default.attributesOfItem(
+                    atPath: url.path)[.size] as? Int) ?? 0
+                do {
+                    try FileManager.default.removeItem(at: url)
+                    report.freedBytes += size
+                } catch {
+                    report.errors.append("could not free \(recording.id)")
+                }
+            }
+        }
+    }
+
+    /// The recordings held by another device that is both live and keeping its
+    /// audio. The only set anything is allowed to be deleted on.
+    private func keepers(_ devices: [CloudRecords.DeviceBlob],
+                         now: Date) -> Set<String> {
+        var held: Set<String> = []
+        for blob in devices where blob.id != device && blob.keeps && blob.isLive(now) {
+            held.formUnion(blob.holdsAudio ?? [])
+        }
+        return held
+    }
+
+    /// Whether anything has been made from this recording's audio yet.
+    ///
+    /// A transcript is the usual evidence and a finished state is the other
+    /// half, because a recording with no speech in it never gains a transcript
+    /// and would otherwise read as work nobody had done. `transcribing` is
+    /// deliberately not finished: it says a run started, and a run that dies
+    /// leaves it behind.
+    private func delivered(_ recording: Recording) -> Bool {
+        if recording.hasTranscript { return true }
+        let finished: Set<Metadata.State> = [.needs_labelling, .done, .failed]
+        guard let raw = recording.metadata.state,
+              let state = Metadata.State(rawValue: raw) else { return false }
+        return finished.contains(state)
+    }
+
+    // MARK: - The audio master
+
+    /// How many masters one pass builds, sends or fetches.
+    ///
+    /// Three. Building one is an encode of the whole recording and sending it
+    /// is tens of megabytes; a library meeting this for the first time has
+    /// forty to make, and doing them all inside one pass would be an hour of
+    /// CPU and 1.7 GB of upload during which no other part of the sync runs.
+    /// Three a pass against a two-minute poll is the whole library within the
+    /// hour, in the background, with everything else still moving.
+    static let masterBatch = 3
+
+    /// Publish the audio this device holds, so every other device can have it.
+    ///
+    /// **Only from the raw tracks.** A device whose only audio is a master it
+    /// was given has nothing to add, and if it published anyway two devices
+    /// would take turns re-uploading the same bytes for ever. Raw tracks exist
+    /// on exactly one device per recording: the one that captured it, or the
+    /// one that won its ingest.
+    ///
+    /// `ingest` is untouched and stays the raw pipe it is, so the first
+    /// transcription still reads the tracks as they were captured rather than
+    /// a round trip through an encoder.
+    public func pushMasters(into report: inout CloudReport) async {
+        var base = state.base
+        defer { state.base = base }
+
+        let owed = library.all().filter { base[master: $0.id] == nil && $0.hasTracks }
+            .prefix(CloudSyncCore.masterBatch)
+        guard !owed.isEmpty else { return }
+
+        for (index, recording) in owed.enumerated() {
+            progress?("Preparing audio \(index + 1) of \(owed.count)")
+            do {
+                guard let url = try AudioMaster.make(micURL: recording.micURL,
+                                                     systemURL: recording.systemURL,
+                                                     into: recording.folder) else { continue }
+                let audio = try Data(contentsOf: url)
+                let record = try CloudRecords.master(
+                    id: recording.id, from: device, audio: audio,
+                    channels: AudioMaster.channels(in: url), key: key)
+                _ = try await store.save(record)
+                base[master: recording.id] = sha256Hex(audio)
+                report.pushedMasters += 1
+                // Removed once it has landed. This device holds the raw tracks
+                // by construction, which is a better copy than the master in
+                // every way that matters here: playback reads them, the
+                // pipeline reads them, and `hasAudio` is already true because
+                // of them. Keeping the master beside them would add 12% to
+                // every recording on the one machine that never needs it,
+                // which on this library is 1.5 GB to hold a second copy of
+                // audio it already has. Rebuilding one is four seconds.
+                try? FileManager.default.removeItem(at: url)
+            } catch StoreError.changedOnServer(let theirs) {
+                // Somebody published it first, which is possible only in the
+                // window where two devices both hold the raw tracks. Their
+                // copy is as good as ours by construction: it is the same
+                // audio, encoded losslessly. Stamped from what came back, so
+                // this device never asks again.
+                base[master: recording.id] =
+                    (try? CloudRecords.openMaster(theirs, key: key))?.digest ?? "theirs"
+            } catch {
+                report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Take down the audio for recordings this device wants and does not have.
+    ///
+    /// Gated on the device roster rather than on asking the container, because
+    /// a master is tens of megabytes and **"is it there" costs the same fetch
+    /// as "give it to me"**: `CKDatabase.record(for:)` brings the asset with
+    /// it. So the cheap question is answered from `holdsAudio`, which arrives
+    /// every pass in the device zone and carries no audio at all. A recording
+    /// no other device claims to hold is not asked about.
+    public func pullMasters(_ devices: [CloudRecords.DeviceBlob],
+                            into report: inout CloudReport, now: Date = Date()) async {
+        guard keepAudio else { return }
+        var base = state.base
+        defer { state.base = base }
+
+        var holders: Set<String> = []
+        for blob in devices where blob.id != device && blob.isLive(now) {
+            holders.formUnion(blob.holdsAudio ?? [])
+        }
+        guard !holders.isEmpty else { return }
+
+        let wanted = library.all().filter { !$0.hasAudio && holders.contains($0.id) }
+            .prefix(CloudSyncCore.masterBatch)
+        for (index, recording) in wanted.enumerated() {
+            progress?("Fetching audio \(index + 1) of \(wanted.count)")
+            do {
+                let name = CloudRecords.masterName(recording.id, key: key)
+                // Absent is ordinary: the device that holds the tracks has not
+                // published this one yet, and it publishes three a pass.
+                guard let record = try await store.fetch(name, in: .masters) else { continue }
+                let blob = try CloudRecords.openMaster(record, key: key)
+                guard blob.id == recording.id,
+                      let audio = try CloudRecords.openMasterAudio(record, blob, key: key)
+                else {
+                    report.errors.append("audio \(recording.id): the copy did not verify")
+                    continue
+                }
+                try audio.write(to: recording.masterURL, options: .atomic)
+                base[master: recording.id] = blob.digest
+                report.pulledMasters += 1
+            } catch {
+                report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Deletes owed to the master zone, for recordings that have gone. Safe to
+    /// retry for ever, because deleting a record that is not there is a no-op
+    /// in both stores. The same shape as `settleVoiceprintDebts`, and separate
+    /// from it because the two zones fail independently.
+    private func settleMasterDebts(_ base: inout SyncState,
+                                   into report: inout CloudReport) async {
+        for entry in base.base.keys.filter({ $0.hasPrefix(SyncState.r5DropKey("")) }) {
+            let id = String(entry.dropFirst(SyncState.r5DropKey("").count))
+            do {
+                try await store.delete(CloudRecords.masterName(id, key: self.key), in: .masters)
+                base.base[entry] = nil
+            } catch {
+                report.errors.append("audio delete \(id): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -544,6 +758,7 @@ public struct CloudSyncCore: Sendable {
         // to take its r6 record with it, and this is the retry path when
         // that delete failed on the pass that deleted r1.
         await settleVoiceprintDebts(&base, into: &report)
+        await settleMasterDebts(&base, into: &report)
 
         // A library that has lost everything is not a library that deleted
         // everything.
@@ -626,6 +841,16 @@ public struct CloudSyncCore: Sendable {
                 } catch {
                     base.base[SyncState.r6DropKey(id)] = "due"
                 }
+                // And the audio master, which is the largest thing a deleted
+                // recording can leave behind: tens of megabytes in a zone
+                // nothing lists, so nothing would ever notice it again.
+                do {
+                    try await store.delete(CloudRecords.masterName(id, key: self.key),
+                                           in: .masters)
+                } catch {
+                    base.base[SyncState.r5DropKey(id)] = "due"
+                }
+                base[master: id] = nil
             } catch {
                 report.errors.append("delete \(id): \(error.localizedDescription)")
             }
@@ -683,10 +908,18 @@ public struct CloudSyncCore: Sendable {
         let recordName = CloudNaming.recordName(.device, device, key: key)
         do {
             let existing = try await store.fetch(recordName, in: .devices)
+            // Read off the disk here rather than taken from the caller. It is
+            // the sentence every other device's reclaim rule is going to
+            // believe about this one, so there must be no way for a caller to
+            // be a version behind on what it means. A stat per audio file per
+            // recording: 61 recordings is a few hundred, and the pass it rides
+            // in is a network round trip.
+            let held = library.all().filter(\.hasAudio).map(\.id)
             var record = try CloudRecords.device(
                 CloudRecords.DeviceBlob(id: device, name: name, kind: kind,
                                         lastSeen: Metadata.stamp(now),
-                                        appVersion: appVersion), key: key)
+                                        appVersion: appVersion,
+                                        keepsAudio: keepAudio, holdsAudio: held), key: key)
             record.changeTag = existing?.changeTag
             _ = try await store.save(record)
         } catch {

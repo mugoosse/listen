@@ -1020,6 +1020,9 @@ final class DetailView: NSView {
         // from `metadata.source` whenever there is one.
         if let id = recording?.id, let holder = CloudSyncHost.audioHolder(of: id) {
             playerNote.stringValue = "The audio for this meeting is on \(holder)."
+        } else if let recording, CloudSyncHost.nothingHolds(recording) {
+            playerNote.stringValue = "No device has reported keeping the audio "
+                + "for this meeting."
         } else {
             playerNote.stringValue = recording?.metadata.source == "iphone"
                 ? "The audio is coming from your iPhone."
@@ -1867,6 +1870,20 @@ final class DetailView: NSView {
         // A transcript that exists and yields no turns is a recording with no
         // speech in it, whether or not the audio is on this Mac.
         if recording.hasTranscript { return "This recording has no speech in it." }
+        // Before the queue, because a recording another Mac took is one this
+        // Mac's queue has already declined and would otherwise fall through to
+        // a sentence about waiting for audio that is not coming.
+        //
+        // Named and timed, which is the whole point of the provenance fields:
+        // "transcribing" on its own is indistinguishable from a run that died
+        // hours ago on a machine nobody has opened since.
+        if recording.effectiveState == .transcribing, !recording.transcribedHere,
+           let who = recording.transcriberName {
+            guard let started = recording.transcribeStarted else {
+                return "Transcribing on \(who)."
+            }
+            return "Transcribing on \(who), started \(Recording.ago(started))."
+        }
         if Queue.shared.isQueued(recording.id) {
             // Named, because the model is the thing somebody just chose and the
             // run is the hour they have to wait to find out whether it was the
@@ -1888,6 +1905,14 @@ final class DetailView: NSView {
             if let holder = CloudSyncHost.audioHolder(of: recording.id) {
                 return "The audio for this recording is on \(holder)."
                     + " The transcript appears here when that Mac has made it."
+            }
+            // Every device that is talking has let go of this one. Said as
+            // what was reported rather than as what is true: a Mac shut in a
+            // drawer still has whatever it had, and a library cannot tell that
+            // apart from a disk that was wiped.
+            if CloudSyncHost.nothingHolds(recording) {
+                return "No device has reported keeping the audio for this recording."
+                    + " Turn on Keep audio in Settings on a device that still has it."
             }
             // A phone recording is on its way *here*. Telling somebody to wait
             // for another Mac when this one is about to do the work sends them
@@ -2006,9 +2031,17 @@ final class DetailView: NSView {
         // by the English-only model read as fluent nonsense with no fact on
         // screen to explain it, and the model that did it was the default. A
         // fact that only appears sometimes is one nobody learns to read.
+        // The fifth fact, and the only one that is about a machine rather than
+        // about the meeting: which device made this transcript and how long it
+        // took. **Only on a library with more than one device in it.** On a
+        // single Mac it is noise, because there is nowhere else it could have
+        // happened; on three devices it is the answer to "why has this one been
+        // sitting there since lunchtime" and to "which machine has the audio".
+        let provenance = CloudSyncHost.isShared ? (recording.transcribedLine ?? "") : ""
         let facts = [recording.when, recording.lengthText,
                      recording.appLabel ?? "",
-                     stored.map { Recording.modelName($0.model) } ?? ""]
+                     stored.map { Recording.modelName($0.model) } ?? "",
+                     provenance]
             .filter { !$0.isEmpty }.joined(separator: " · ")
 
         // The fifth fact, and the only one that is a warning. It goes on this
@@ -2399,7 +2432,16 @@ final class DetailView: NSView {
             return recording.mixURL
         }
         if let mix = try? Mixdown.make(for: recording) { return mix }
-        return recording.tracks.first
+        if let track = recording.tracks.first { return track }
+        // The master, for a Mac that never had the tracks. Played as it is
+        // rather than mixed down: it is already one file, it is stereo with
+        // the microphone on the left and the room on the right, and building
+        // a mono sum of it would cost an encode to lose the separation the
+        // format exists to keep. See `AudioMaster`.
+        if FileManager.default.fileExists(atPath: recording.masterURL.path) {
+            return recording.masterURL
+        }
+        return nil
     }
 
     /// Run `body` with a player, building one first if this is the first press.

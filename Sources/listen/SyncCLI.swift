@@ -266,6 +266,18 @@ enum SyncCLI {
         print("environment: \(CloudAccount.environment)\n")
         var total = 0
         for zone in CloudNaming.Zone.allCases {
+            // **`z5` is never listed, here or anywhere.** A listing fetches
+            // each record with its assets attached, and every record in there
+            // is a whole recording's audio: summarising the zone would
+            // download the entire library to print one line. What this Mac
+            // believes is in there is free, and it is printed instead.
+            if zone == .masters {
+                let known = EngineState(library: library).base.base.keys
+                    .filter { $0.hasPrefix(SyncState.masterKey("")) }.count
+                print("  z5: \(known) master(s) this Mac knows of, not listed "
+                      + "(a listing would download them)")
+                continue
+            }
             guard let changes = try? await store.changes(in: zone, since: nil) else {
                 print("  \(zone.rawValue): unreachable"); continue
             }
@@ -301,15 +313,24 @@ enum SyncCLI {
                 // devices on different builds, and this list is the only place
                 // that can say so. The heartbeat has carried it since the zone
                 // existed; nothing was printing it.
-                print("  \(blob.id)  \(blob.name) (\(blob.kind)), \(blob.seenAgo)"
-                      + ", \(blob.appVersion)")
+                // What it keeps and what it holds, because the reclaim rule
+                // reads exactly these two and a recording nobody is keeping is
+                // invisible without them. A device that says neither is on a
+                // build that predates the question.
+                var row = "  \(blob.id)  \(blob.name) (\(blob.kind)), \(blob.seenAgo)"
+                    + ", \(blob.appVersion)"
+                if let holds = blob.holdsAudio {
+                    row += blob.keeps ? ", keeps audio, holds \(holds.count)"
+                                      : ", frees audio, holds \(holds.count)"
+                }
+                print(row)
             }
             print("\n  drop one with: listen sync inspect --forget <id>")
         }
         done()
     }
 
-    /// One recording's row in the container, across all four zones.
+    /// One recording's row in the container, across the zones.
     ///
     /// The zone summary above answers "is anything there". This answers the
     /// question a stuck recording actually asks, which is **which device is
@@ -369,6 +390,20 @@ enum SyncCLI {
             print("  z4 r5:     present, from \(who(from)), mic.wav \(bytes) bytes sealed")
         } else {
             print("  z4 r5:     absent (either no Mac is owed the audio, or one took it)")
+        }
+
+        // The master, fetched rather than counted, which costs its bytes: this
+        // is a command somebody runs by hand about one stuck recording, and
+        // "is the audio in the container" is half of what they came to ask.
+        if let record = try? await store.fetch(CloudRecords.masterName(id, key: key),
+                                               in: .masters) {
+            let blob = try? CloudRecords.openMaster(record, key: key)
+            let bytes = record.assets["mic.wav"]?.count ?? 0
+            print("  z5 r5:     present, from \(who(blob?.from)), "
+                  + "\(blob.map { "\($0.channels) channel" } ?? "unknown"), "
+                  + "\(bytes) bytes sealed")
+        } else {
+            print("  z5 r5:     absent (no device has published this recording's audio)")
         }
 
         let r6 = CloudNaming.recordName(.voiceprint, id, key: key)

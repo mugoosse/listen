@@ -847,6 +847,13 @@ final class StoragePane: Pane {
             NSWorkspace.shared.selectFile(nil,
                 inFileViewerRootedAtPath: Library.recordings.path)
         }
+        // Almost all of that number is audio, and the switch that decides how
+        // much of it this Mac keeps is in Devices, beside the list of what the
+        // other devices are keeping. Pointed at rather than duplicated: two
+        // checkboxes for one setting is one of them being wrong.
+        note("Most of that is audio. Whether this Mac keeps a copy of every "
+             + "recording's audio is in Devices, next to what your other "
+             + "devices are keeping.")
 
         separator()
         // In Storage rather than in a section of its own, and not only because

@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// Runs transcription jobs, one at a time.
 ///
@@ -27,6 +28,18 @@ final class Queue {
     /// returned nothing until the whole track was done.
     private(set) var progress: TranscriptionProgress?
 
+    /// Recordings a live device other than this one is transcribing, and when
+    /// its claim runs out.
+    ///
+    /// Not a cache of the lease, which lives in the container. This is what
+    /// stops `resume` asking about the same contested recording on every pass:
+    /// it enqueues anything with audio and no transcript, and once audio is on
+    /// every device that is every recording the other Mac is working through.
+    private var elsewhere: [String: Date] = [:]
+
+    /// Renews the running job's lease while it runs. Cancelled when it ends.
+    private var renewal: Task<Void, Never>?
+
     /// The sentence alone, which is all a sidebar row has room for.
     var stage: String? { progress?.message }
 
@@ -49,6 +62,15 @@ final class Queue {
     var isBusy: Bool { running != nil }
 
     func isQueued(_ id: String) -> Bool { running == id || waiting.contains(id) }
+
+    /// Everything this Mac has taken on and not finished.
+    ///
+    /// Read by the sync pass before it frees any audio: a recording waiting
+    /// here is one whose audio this machine still needs, however many other
+    /// devices report holding a copy. See `CloudSyncCore.reclaim`.
+    var activeIDs: Set<String> {
+        Set(waiting).union(running.map { [$0] } ?? [])
+    }
 
     /// Queue everything on disk that has audio but no transcript.
     ///
@@ -81,6 +103,18 @@ final class Queue {
     @discardableResult
     func enqueue(_ id: String, using choice: ModelChoice? = nil) -> Bool {
         guard !isQueued(id) else { return false }
+
+        // Another device is on it and its claim has not run out. Asked once
+        // and remembered, rather than a round trip per recording per pass.
+        // A person pressing Transcribe Again is not affected: that clears the
+        // note by passing a model, and an expired claim is simply retried.
+        if let until = elsewhere[id] {
+            if until > Date(), choice == nil {
+                trace("not queueing \(id): another device is transcribing it")
+                return false
+            }
+            elsewhere[id] = nil
+        }
 
         if let choice, var recording = Recording.find(id),
            recording.metadata.asr_model != choice.id {
@@ -124,13 +158,86 @@ final class Queue {
     private func advance() {
         guard running == nil, !waiting.isEmpty else { return }
         let id = waiting.removeFirst()
-        guard var recording = Recording.find(id) else { advance(); return }
+        guard let recording = Recording.find(id) else { advance(); return }
 
+        // The slot is taken before the lease is asked for, so a second call
+        // into `advance` while that round trip is in flight cannot start a
+        // second job. Nothing is written to `metadata.json` yet: a recording
+        // this Mac turns out not to be allowed to transcribe must not be left
+        // saying `transcribing` on every other device.
         running = id
         progress = TranscriptionProgress()
+        onChange?(id)
+        Task { await self.start(recording) }
+    }
+
+    /// Take the recording on, if no other device has it, and run it.
+    ///
+    /// **The lease is taken before anything is written or read.** Audio used to
+    /// land on one Mac, so "has the bytes" was the lock and no second machine
+    /// could have transcribed if it wanted to. A replicated master removes that
+    /// accident and `resume` enqueues anything with audio and no transcript, so
+    /// without this the first pass that puts audio on both Macs starts both on
+    /// the same hour of work.
+    private func start(_ found: Recording) async {
+        var recording = found
+        let id = recording.id
+
+        guard await CloudSyncHost.shared.takeTranscriptionLease(id) else {
+            // Somebody else has it. Remembered with its expiry so the queue
+            // stops asking until that claim runs out: `resume` runs after
+            // every pass that pulls anything, and a contested recording would
+            // otherwise cost a round trip each time to be told the same thing.
+            let lease = await CloudSyncHost.shared.transcriptionLease(id)
+            let who = lease.flatMap { CloudSyncHost.deviceName(for: $0.device) }
+                ?? "another device"
+            elsewhere[id] = lease?.expires ?? Date().addingTimeInterval(900)
+            trace("not transcribing \(id): \(who) is")
+            running = nil
+            progress = nil
+            onChange?(id)
+            advance()
+            return
+        }
+
+        // A Mac whose only copy is the master takes it apart first. The
+        // pipeline reads the two tracks separately on purpose, and a mono sum
+        // is not a substitute for them: see `AudioMaster`.
+        var splitHere = false
+        if !recording.hasTracks,
+           FileManager.default.fileExists(atPath: recording.masterURL.path) {
+            do {
+                _ = try AudioMaster.split(recording.masterURL, into: recording.folder,
+                                          micURL: recording.micURL,
+                                          systemURL: recording.systemURL)
+                // On what actually appeared, not on the call returning. `split`
+                // answers 0 rather than throwing when it cannot make a buffer,
+                // and a run that then removed tracks it never wrote would be
+                // tidying up somebody else's files.
+                splitHere = recording.hasTracks
+                trace(splitHere ? "split the master for \(id)"
+                                : "the master for \(id) produced no tracks")
+            } catch {
+                log("could not take the master apart for \(id): \(error.localizedDescription)")
+            }
+        }
+
         recording.metadata.state = Metadata.State.transcribing.rawValue
+        // Written before the run rather than after it, for the same reason the
+        // model is: this is what every other device reads while the hour it
+        // takes goes by, and a field only written on success says nothing at
+        // all about a job that is still going or one that died.
+        recording.metadata.transcribed_by = CloudSyncHost.deviceID
+        recording.metadata.transcribed_on = CloudSyncHost.deviceName
+        recording.metadata.transcribe_started = Metadata.iso(Date())
+        recording.metadata.transcribe_finished = nil
         try? recording.save()
         onChange?(id)
+        // Say so promptly. `state: transcribing` travelling in the metadata is
+        // the second deterrent behind the lease, and the only one at all in the
+        // window where the container is unreachable and the lease was therefore
+        // granted by default.
+        CloudSyncHost.shared.syncSoon()
 
         // Resolved here rather than inside the pipeline, and traced, because a
         // recording carrying its own model is the case a resumed job gets wrong
@@ -138,43 +245,70 @@ final class Queue {
         let choice = recording.asrModel
         trace("transcribing \(id) with \(choice.title)")
 
-        Task { [pipeline] in
-            var result: Result<StoredTranscript, Error>
-            do {
-                let transcript = try await pipeline.run(recording, using: choice) { [weak self] step in
-                    Task { @MainActor in
-                        self?.progress = step
-                        self?.onProgress?(id)
-                    }
-                }
-                result = .success(transcript)
-            } catch {
-                result = .failure(error)
-            }
-
-            await MainActor.run {
-                var finished = Recording.find(id) ?? recording
-                switch result {
-                case .success(let transcript):
-                    finished.markTranscribed(transcript)
-                case .failure(let error):
-                    finished.metadata.state = Metadata.State.failed.rawValue
-                    log("transcription failed for \(id): \(error.localizedDescription)")
-                }
-                try? finished.save()
-                self.running = nil
-                self.progress = nil
-                self.onChange?(id)
-                // Send it now rather than at the next tick of the two minute
-                // poll. A phone that recorded a memo has one thing it is
-                // waiting for and it is this, and waiting out the poll is the
-                // difference between a transcript that appears and one that
-                // has to be waited for without knowing how long. The phone's
-                // upload already works this way, which is why the trip felt
-                // fast in one direction and slow in the other.
-                CloudSyncHost.shared.syncSoon()
-                self.advance()
+        // A meeting outlives any window short enough to be useful after a
+        // crash. Fifteen minutes is the window and five is the renewal, so a
+        // Mac that dies loses the recording to whichever machine is awake
+        // within a quarter of an hour, while an hour-long job keeps it
+        // throughout.
+        renewal = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                guard !Task.isCancelled else { return }
+                await CloudSyncHost.shared.renewTranscriptionLease(id)
             }
         }
+
+        var result: Result<StoredTranscript, Error>
+        do {
+            let transcript = try await pipeline.run(recording, using: choice) { [weak self] step in
+                Task { @MainActor in
+                    self?.progress = step
+                    self?.onProgress?(id)
+                }
+            }
+            result = .success(transcript)
+        } catch {
+            result = .failure(error)
+        }
+
+        renewal?.cancel()
+        renewal = nil
+
+        var finished = Recording.find(id) ?? recording
+        switch result {
+        case .success(let transcript):
+            finished.markTranscribed(transcript)
+        case .failure(let error):
+            finished.metadata.state = Metadata.State.failed.rawValue
+            log("transcription failed for \(id): \(error.localizedDescription)")
+        }
+        finished.metadata.transcribe_finished = Metadata.iso(Date())
+        try? finished.save()
+
+        // The tracks this run made out of the master go with it. A device
+        // holding only a master is holding 68 MB an hour; leaving the split
+        // behind would quietly make it 570, on a machine that was never asked
+        // to keep the raw audio and did not have it a moment ago.
+        if splitHere {
+            for url in [finished.micURL, finished.systemURL] {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        // On success and on failure alike. A failed run that keeps the lease
+        // until it expires is fifteen minutes in which nothing retries.
+        await CloudSyncHost.shared.releaseTranscriptionLease(id)
+
+        running = nil
+        progress = nil
+        onChange?(id)
+        // Send it now rather than at the next tick of the two minute poll. A
+        // phone that recorded a memo has one thing it is waiting for and it is
+        // this, and waiting out the poll is the difference between a transcript
+        // that appears and one that has to be waited for without knowing how
+        // long. The phone's upload already works this way, which is why the
+        // trip felt fast in one direction and slow in the other.
+        CloudSyncHost.shared.syncSoon()
+        advance()
     }
 }

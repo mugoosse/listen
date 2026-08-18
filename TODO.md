@@ -3,7 +3,7 @@
 Where the project is, what is left, and what needs a decision. Update this in
 the same commit as the work it describes.
 
-Last updated: notes built end to end, outline removed, sidebar navigation in.
+Last updated: audio on every device, and who is transcribing, all six steps in.
 All unreleased; 0.2.0 is the last thing published.
 
 ## Milestones
@@ -221,28 +221,74 @@ Decided, with the measurements that decided it:
 - **Free the local copy only when another device reports holding it**, not when
   the container has it. iCloud is a replica, and `Backups` exists because of it.
 
-Done: `AudioMaster` (build, split, both traps), the transcription lease and its
-four seams, `Metadata.transcribed_by` / `transcribed_on` / `transcribe_started`
-/ `transcribe_finished`.
+All six steps are in. 50 seams pass, twice against the same directory, and
+both apps build.
 
-Left, roughly in dependency order:
+- [x] **The durable master.** `z5` rather than `z4`, which is the one thing
+      here that departs from the plan above and the reason is measured:
+      `ingest` lists `z4` whole on every pass with no change token, on purpose,
+      and a listing fetches assets, so masters in there would have every Mac
+      downloading 1.7 GB every two minutes. The permanent half of the
+      constraint is kept: still `r5`, still `asset_mic_wav`. A zone is created
+      at runtime and is not schema. Pushed only by a device holding the raw
+      tracks, three a pass; fetched by name, never listed, never subscribed to.
+      `ingest` is untouched. The master is deleted locally once it lands: the
+      device that published it holds the raw tracks, which are the better copy,
+      and keeping both would add 1.5 GB to the one machine that never needs it.
+- [x] **`keepsAudio` and `holdsAudio` on `DeviceBlob`**, both optional so an
+      older device record still decodes, computed in `heartbeat` from the disk
+      rather than taken from the caller.
+- [x] **The reclaim rule.** Another live device that is *keeping* audio has to
+      report holding it, and nothing here still owes work on it. `audioOn`
+      decides no deletion any more.
+- [x] **The lease in `Queue`.** Taken before anything is written, renewed every
+      five minutes against a fifteen minute window, released on success and on
+      failure. A recording another device holds is remembered with its expiry
+      so `resume` stops asking. The four provenance fields are written at the
+      start of the run rather than the end.
+- [x] **Mac UI.** The transcribing-on line names the device and says when it
+      started; the finished-in line is a subtitle fact, shown only on a library
+      with more than one device in it. Keep audio is in Settings › Devices,
+      beside a roster that says what each device keeps and holds, with the
+      count of recordings nothing reports keeping. Playback falls back to the
+      master.
+- [x] **iOS.** `RecordingPlayer` and a transport in the detail screen, the same
+      two lines, and the switch wired to the new policy with its copy corrected.
 
-1. A durable master record in `z4`, pushed by any device holding audio and
-   pulled by any device that wants it. `ingest` keeps the raw pipe it has, so
-   the first transcription still reads the untouched tracks.
-2. `keepsAudio` and `holdsAudio` on `DeviceBlob`, which is sealed and needs no
-   schema, carried by the heartbeat that already runs every pass.
-3. The reclaim rule above, replacing "a Mac said `audioOn`".
-4. `Queue` taking, renewing and releasing the lease, and skipping a recording
-   another live device holds. Renewal matters: a long meeting outlives any
-   window short enough to be useful after a crash.
-5. Mac: the transcribing-on and finished-in lines, the keep-audio switch, the
-   device roster, and the warning when nothing is keeping a recording.
-6. iOS: playback in the detail screen (there is none today, no `AVAudioPlayer`
-   anywhere), the existing **Keep audio on this iPhone** switch wired to the
-   new policy, and the same two lines.
+`listen audio [<id>] [--build]` is new, for the same reason `sync inspect` is:
+this subsystem's whole state is files that are not there. `--build` is also how
+the encoder was measured on real meetings.
 
-One thing to decide when 4 lands: `takeTranscriptionLease` returns true when
-the container is unreachable, so an offline Mac still transcribes its own
-recording. `state: transcribing` travelling in the metadata is the only
-deterrent in that window, and whether that is enough has not been measured.
+### Measured, on a real 1.07 hour meeting
+
+    tracks   494.4 MB   Float32, 461 MB/h
+    master    61.0 MB   12% of the tracks, 57 MB/h, built in 3.8 s
+
+Building is an order of magnitude cheaper than budgeted. Memory is not: both
+tracks are read whole, about a gigabyte resident at the peak, which is why
+`pushMasters` does three a pass. The encoder pads its final packet, so a master
+is up to 4608 frames (32 ms of silence) longer than its tracks; nothing is lost
+and nothing shifts.
+
+### Left over
+
+- **The offline lease window is still unmeasured.** `takeTranscriptionLease`
+  returns true when the container is unreachable, so an offline Mac still
+  transcribes its own recording. `Queue` now writes `state: transcribing` and
+  calls `syncSoon` before the run rather than after it, which is the best that
+  window allows, and whether it is enough is still not measured.
+- **Nothing has run against the real container yet.** Every claim above is the
+  fake store plus one encoder measurement. The first real pass will publish
+  three masters and create `z5`; watch `listen audio` and `listen sync inspect`
+  on both Macs before turning the switch off anywhere.
+- **The second Mac must be updated before either switch goes off.** A Mac on
+  0.15.0 publishes no `holdsAudio`, so it authorises nothing, which is the safe
+  direction: nothing is freed rather than something being freed wrongly.
+- **A phone cannot fetch a master.** Deliberate, and its footer says so. An
+  on-demand "download this one" would need a per-recording pin so `reclaim`
+  does not take it straight back, which is the next piece of design if the
+  phone should play a meeting it did not record.
+- **An imported recording gets no master.** `AudioMaster.make` builds from the
+  two tracks and an import has only `mix.m4a`, so those recordings keep their
+  mixdown and are never freed. Safe, and worth knowing before somebody wonders
+  why the count in `listen audio` does not reach the whole library.

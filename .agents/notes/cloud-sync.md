@@ -5,6 +5,136 @@ through a separate transfer record, and the Mac acknowledges durable ingest by
 setting `audioOn` on the library record. These are separate proofs and their
 state keys must stay separate.
 
+## The audio master has a zone of its own, because `z4` is listed whole
+
+The plan said `z4`, which is where audio already travels, and it is wrong for
+one measured reason.
+
+`ingest` lists that zone whole on every pass, `since: nil`, deliberately: a
+transfer whose ingest failed stays in the zone and has to be seen again, and a
+change token would hide it for ever. A listing fetches each record **with its
+assets attached**, so one master per recording in `z4` would have every Mac
+downloading the entire audio library every two minutes. On this library that is
+1.7 GB a pass.
+
+So the masters live in `z5`, and the half of the constraint that is permanent is
+kept: the record type is still `r5` and the bytes still ride `asset_mic_wav`.
+Production schema is append-only for ever and a **record type or a field is part
+of it**; a zone is not. Zones are created per account at runtime by
+`CloudKitStore.prepare`, so `z5` costs nothing that cannot be undone and needs no
+deploy.
+
+Nothing subscribes to `z5` and nothing ever lists it. A master is fetched by name
+by a device that has already decided it wants those bytes, which is the one shape
+of traffic worth 25 MB. `listen sync inspect` therefore prints how many masters
+*this Mac knows of* rather than what is in the zone, because summarising it would
+download the library to print one line.
+
+The side effect worth knowing: a Mac on an older build never sees a master at
+all. In `z4` it would have claimed each one, failed to open it as a transfer,
+logged an error, and re-claimed it on the next pass for ever, which is churn in
+the one zone every device subscribes to.
+
+Measured on a real meeting, 1.07 hours, with `listen audio <id> --build`:
+
+    tracks   494.4 MB   Float32, 461 MB/h
+    master    61.0 MB   12% of the tracks, 57 MB/h, built in 3.8 s
+
+Two facts that three seconds of synthetic tones could not show. Building is
+cheap, four seconds an hour, so the hour budgeted for a library's worth was
+wrong by an order of magnitude. And it is not cheap in **memory**: both tracks
+are read whole as `[Float]`, about a gigabyte resident at the peak. That is why
+`pushMasters` builds three a pass rather than everything it is owed.
+
+The master is also **deleted locally once it has landed**. The device that
+published it holds the raw tracks by construction, and those are the better copy
+in every way that matters here: playback reads them, the pipeline reads them, and
+`hasAudio` is already true because of them. Keeping the master beside them would
+add 12% to every recording on the one machine that never needs it, which on this
+library is 1.5 GB to hold a second copy of audio it already has. Rebuilding one
+is four seconds. So `listen audio` reading `masters here: 0` on the Mac that
+recorded everything is the correct state rather than a missing one, and a Mac
+that was *given* audio is the one where that number is not zero.
+
+## A device frees audio on a live device's list, never on a latch
+
+`audioOn` was the acknowledgement and could not go on being it.
+
+It is one string on the recording, written by whichever Mac won the ingest, and
+it is true for ever afterwards: after that Mac has been wiped, sold, or
+reinstalled. It only ever answers for an ingest, so it could authorise a phone
+to let go and had nothing at all to say about a meeting recorded on a Mac, which
+is most of the library. And it is only reconsidered when that recording's record
+changes, which is exactly what a stalled recording's record does not do.
+`askWhoHoldsTheWaiting` exists because of the same blind spot.
+
+`DeviceBlob.holdsAudio` replaces it: the ids whose audio is on that device's own
+disk, republished from disk by every heartbeat, in the device zone, which is
+pulled every pass and carries no audio. It goes stale the way a heartbeat does
+rather than the way a latch does.
+
+`reclaim` runs once a pass, over the whole local library, and frees a recording
+only when **all** of these hold:
+
+- **Another device says it holds it.** Not the container: iCloud is a replica
+  and `Backups` exists because of it.
+- **That device is live.** Seven days without a heartbeat and its list stops
+  being evidence, which is much shorter than the thirty days the roster keeps a
+  row: being listed is a convenience, being believed about somebody else's only
+  copy is not.
+- **That device keeps audio.** This is the one that is not obvious. Two devices
+  that are both trying to get rid of the same recording each read the other as a
+  safe holder and delete on the same pass, which is mutual deletion of the only
+  two copies. A device that is keeping audio is not going to change its mind
+  inside one pass. `FakeSync` proves both halves.
+- **Nothing here still owes work on it.** A device that transcribes does not
+  free audio it has yet to produce a transcript from, and `CloudSyncHost` names
+  whatever `Queue` is holding. Without the first, a Mac with the switch off
+  would ingest a memo, delete it before the job started, and the phone would
+  offer it again six hours later, for ever.
+
+`audioOn` is still written and still read. It is what the transfer pipe turns on
+and what `sync inspect` prints; it decides no deletion any more.
+
+The switch is per device: `Settings.keepAudio` on the Mac, on by default, and
+**Keep audio on this iPhone**, off by default. The phone's meaning is
+deliberately narrow and its footer says so: it keeps what this phone recorded and
+it never downloads the meetings the Macs recorded. That library is 1.7 GB of
+audio and the switch has never meant that.
+
+## One record type, two zones, and why the zone is the cheap half
+
+`StoredRecord.zone` is new. It defaults to `type.zone`, which is right for every
+record but the master, and the two stopped being the same question the moment one
+type had to live in two places.
+
+The alternative was a new record type, `r7`. That is a Production schema change,
+which is permanent, for a thing a runtime-created zone does for free. Worth
+stating plainly because the obvious implementation is the expensive one:
+
+    record type   permanent, deployed, never removable
+    field         permanent, deployed, never removable
+    zone          created per account at runtime, deletable
+
+## The suite was not hermetic, and it passed once per scratch directory
+
+`EngineState` lives beside the library, keyed on the library path, so removing
+the scratch tree at the top of `FakeSync.run` does not clear it. Two of the
+libraries were cleared by hand and the rest were not, so a second run against the
+same `--at` directory started holding a change token issued by the first run's
+store. A fresh `MemoryStore` has never heard of that token: nothing is fetched,
+and the failure surfaces several assertions later as a missing `metadata.json` on
+whichever library was unlucky.
+
+It passed for as long as it did because every run used a fresh directory.
+`scratchLibrary` clears the state directory now, which is what the file's own
+header always claimed.
+
+The same pass found a real flake in the lease seam: it asserted **which** of two
+devices won a genuine race, and passed until the suite grew enough around it to
+change the timing. What has to be true is that both devices name the same holder
+and exactly one reads it as its own.
+
 ## A pull cannot stamp a richer local folder as sent
 
 A Mac can publish metadata and waveform before transcription finishes. If the
@@ -331,3 +461,13 @@ again, source icon bytes reach the phone, a device without the audio comes out
 of a pull knowing which device has it, a claim that publishes nothing expires
 into a fresh offer, and only the Mac holding the audio authors an ingested
 recording's metadata.
+
+For the audio master it must prove that a pull frees nothing, that an empty
+roster, a stale device's list and a device that is itself letting go each
+authorise nothing, that a live keeping device's list does, that a master reaches
+a device with no audio and splits back into the two tracks sample for sample,
+that the device which received it does not publish it back, that `z4` never
+carries one, and that deleting a recording deletes its master.
+
+It is hermetic and repeatable: run it twice against the same `--at` directory
+before believing it.

@@ -32,14 +32,25 @@ public struct StoredRecord: Sendable, Equatable {
     /// CloudKit calls it a change tag and the fake calls it a counter.
     public var changeTag: String?
 
+    /// Where this record lives.
+    ///
+    /// Defaults to the type's usual zone, which is the answer for every record
+    /// but one. **The audio master is an `r5` in `z5`**, because a record type
+    /// is permanent Production schema and a zone is not: adding `r7` would be a
+    /// deploy that can never be undone, while `z5` is created per account at
+    /// runtime. So the type says what a record is and this says where it is,
+    /// and the two stopped being the same question the moment one type had to
+    /// live in two places. See `CloudNaming.Zone.masters`.
+    public var zone: CloudNaming.Zone
+
     public init(name: String, type: CloudNaming.RecordType, payload: Data,
                 assets: [String: Data] = [:], claimedBy: String? = nil,
                 claimExpires: Date? = nil, audioOn: String? = nil,
-                changeTag: String? = nil) {
+                changeTag: String? = nil, zone: CloudNaming.Zone? = nil) {
         self.name = name; self.type = type; self.payload = payload
         self.assets = assets; self.claimedBy = claimedBy
         self.claimExpires = claimExpires; self.audioOn = audioOn
-        self.changeTag = changeTag
+        self.changeTag = changeTag; self.zone = zone ?? type.zone
     }
 }
 

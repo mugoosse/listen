@@ -42,6 +42,20 @@ public struct SyncState: Codable, Sendable {
     /// Its own prefix, disjoint from `sent:`, so the deletion scan in
     /// `pushDeletions` never mistakes one for a recording stamp.
     public static func r6DropKey(_ id: String) -> String { "r6drop:" + id }
+    /// A master record this device owes the container a delete for, because
+    /// the recording it belonged to has gone. Its own prefix for the same
+    /// reason `r6drop:` has one.
+    public static func r5DropKey(_ id: String) -> String { "r5drop:" + id }
+    /// The digest of the audio master this device knows is in the container.
+    ///
+    /// A stamp about the container, like `sent:`, and it is what stops every
+    /// pass asking about every recording: a master is 25 MB and both "is it
+    /// there" and "give it to me" cost the same fetch, so the cheap question
+    /// has to be answered locally. Written after a push that landed and after
+    /// a pull that verified, and cleared when the recording is deleted. Its
+    /// own prefix, disjoint from `sent:` and `note:`, because `pushDeletions`
+    /// walks those two and reads a stamp with no folder as a deletion to send.
+    public static func masterKey(_ id: String) -> String { "master:" + id }
     /// Which device the container last said holds a recording's audio.
     ///
     /// Bookkeeping about the container, like `sent:`, and part of no decision
@@ -76,6 +90,14 @@ public struct SyncState: Codable, Sendable {
     public subscript(audioOn id: String) -> String? {
         get { base[SyncState.audioOnKey(id)] }
         set { base[SyncState.audioOnKey(id)] = newValue }
+    }
+
+    /// The digest of the master in the container, as far as this device knows.
+    /// Nil means "ask", which is the state of every recording until a pass has
+    /// either published one or fetched one.
+    public subscript(master id: String) -> String? {
+        get { base[SyncState.masterKey(id)] }
+        set { base[SyncState.masterKey(id)] = newValue }
     }
 
     // MARK: - Coding

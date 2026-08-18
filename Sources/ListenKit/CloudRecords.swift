@@ -289,10 +289,68 @@ public enum CloudRecords {
         public var lastSeen: String
         public var appVersion: String
 
+        /// Whether this device has been asked to keep audio.
+        ///
+        /// The switch, not the outcome. A device with this on pulls the master
+        /// for every recording it does not already have audio for; a device
+        /// with it off frees what it holds as soon as somebody else says they
+        /// have it.
+        ///
+        /// **Optional, and every consumer reads `keeps`.** Devices already in
+        /// the container were written by a build that had never heard of this,
+        /// and the synthesised decoder throws on a missing key for a
+        /// non-optional. `openDevice` is called behind a `try?`, so throwing
+        /// would not report anything: it would silently drop that machine out
+        /// of the roster, which is the list the reclaim rule reads. The same
+        /// lesson `Metadata` learned by making meetings disappear.
+        public var keepsAudio: Bool?
+        /// The recordings whose audio is on this device's own disk, right now.
+        ///
+        /// The answer to the only question the reclaim invariant asks: is
+        /// there another device holding these bytes? A record in the container
+        /// is not an answer to it, and neither is `audioOn`, which says a
+        /// device once took the audio and stays true after that device has
+        /// been wiped. This is republished every pass from what is actually
+        /// on disk, so it goes stale the way a heartbeat does rather than the
+        /// way a latch does.
+        ///
+        /// A list of ids rather than a count, because the question is per
+        /// recording. At 61 recordings it is about 1.2 KB inside a sealed
+        /// payload with a 1 MB ceiling.
+        public var holdsAudio: [String]?
+
         public init(id: String, name: String, kind: String,
-                    lastSeen: String, appVersion: String) {
+                    lastSeen: String, appVersion: String,
+                    keepsAudio: Bool? = nil, holdsAudio: [String]? = nil) {
             self.id = id; self.name = name; self.kind = kind
             self.lastSeen = lastSeen; self.appVersion = appVersion
+            self.keepsAudio = keepsAudio; self.holdsAudio = holdsAudio
+        }
+
+        /// What this device asked for, with the answer an older build could
+        /// not give. A device that has never said either way is treated as
+        /// keeping its audio, because that is the assumption under which
+        /// nothing is deleted.
+        public var keeps: Bool { keepsAudio ?? true }
+
+        /// Whether this device says it holds a recording's audio.
+        ///
+        /// A device that has never published the list answers **no** to every
+        /// id rather than yes, which is the direction that cannot lose a
+        /// recording: an old build authorises no deletions at all.
+        public func holds(_ id: String) -> Bool { holdsAudio?.contains(id) ?? false }
+
+        /// Whether its last heartbeat is recent enough to be evidence.
+        ///
+        /// A device that has said nothing for a week may have been wiped,
+        /// reinstalled or thrown away, and its list is a claim about a disk
+        /// nobody can see. Long enough to cover a laptop shut for a weekend
+        /// and much shorter than the thirty days the roster keeps a row, on
+        /// purpose: being listed is a convenience and being believed about
+        /// somebody else's only copy is not.
+        public func isLive(_ now: Date = Date(), within: TimeInterval = 7 * 86_400) -> Bool {
+            guard let when = Metadata.parser.date(from: lastSeen) else { return false }
+            return now.timeIntervalSince(when) <= within
         }
 
         /// When it last said anything, in words. A device list without this
@@ -354,6 +412,81 @@ public enum CloudRecords {
     public static func openTransfer(_ record: StoredRecord,
                                     key: PairingKey) throws -> TransferBlob {
         try JSONDecoder().decode(TransferBlob.self, from: try key.open(record.payload))
+    }
+
+    // MARK: - The audio master
+
+    /// The one durable copy of a recording's audio, so that a device which
+    /// never had the bytes can have them and a device that has them can let go.
+    ///
+    /// **`r5` in `z5`, and the asset is called `mic.wav`.** Both are the same
+    /// constraint wearing two hats: Production schema is append-only for ever,
+    /// so a new record type or a second audio field would be permanent, while
+    /// a zone is created per account at runtime and costs nothing. The bytes
+    /// are a stereo FLAC and the field they ride is `asset_mic_wav`, which is
+    /// a name rather than a claim about the contents. See `AudioMaster` for
+    /// what is in it and `CloudNaming.Zone.masters` for why not `z4`.
+    ///
+    /// The natural key is prefixed, so a recording's master and a recording's
+    /// transfer derive two different opaque names from the same id and can
+    /// exist at the same time. They usually do: a phone memo is in flight and
+    /// its master is published by the Mac that ingests it.
+    public struct MasterBlob: Codable, Sendable {
+        public var id: String
+        /// The device that published it. Provenance, and read by nothing.
+        public var from: String
+        /// SHA-256 of the FLAC. What a receiver checks the bytes against, and
+        /// what a sender compares before spending an upload on a file the
+        /// container already holds.
+        public var digest: String
+        public var bytes: Int
+        /// Two for a meeting, one for a voice memo. Here so a device can say
+        /// what it is about to get without opening it.
+        public var channels: Int
+
+        public init(id: String, from: String, digest: String, bytes: Int, channels: Int) {
+            self.id = id; self.from = from; self.digest = digest
+            self.bytes = bytes; self.channels = channels
+        }
+    }
+
+    /// The asset key, which decides the CloudKit field.
+    ///
+    /// `mic.wav` maps to `asset_mic_wav`, which Production already has. A key
+    /// of `master.flac` would ask for `asset_master_flac`, and that is a field
+    /// deployed for ever to carry what an existing one already carries.
+    static let masterAsset = "mic.wav"
+
+    public static func masterName(_ id: String, key: PairingKey) -> String {
+        CloudNaming.recordName(.audioTransfer, "master:" + id, key: key)
+    }
+
+    public static func master(id: String, from: String, audio: Data, channels: Int,
+                              key: PairingKey) throws -> StoredRecord {
+        let blob = MasterBlob(id: id, from: from, digest: sha256Hex(audio),
+                              bytes: audio.count, channels: channels)
+        return StoredRecord(
+            name: masterName(id, key: key),
+            type: .audioTransfer,
+            payload: try key.seal(try JSONEncoder().encode(blob)),
+            assets: [masterAsset: try key.seal(audio)],
+            zone: .masters)
+    }
+
+    public static func openMaster(_ record: StoredRecord,
+                                  key: PairingKey) throws -> MasterBlob {
+        try JSONDecoder().decode(MasterBlob.self, from: try key.open(record.payload))
+    }
+
+    /// The FLAC itself, unsealed and checked against the digest it travelled
+    /// with. Nil when the record carries no asset, which is a save that landed
+    /// without its bytes and is worth ignoring rather than writing to disk.
+    public static func openMasterAudio(_ record: StoredRecord, _ blob: MasterBlob,
+                                       key: PairingKey) throws -> Data? {
+        guard let sealed = record.assets[masterAsset] else { return nil }
+        let audio = try key.open(sealed)
+        guard sha256Hex(audio) == blob.digest else { return nil }
+        return audio
     }
 
     // MARK: - Voiceprint

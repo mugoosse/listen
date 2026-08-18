@@ -10,6 +10,7 @@ import ListenKit
 final class DevicesPane: Pane {
     private var cloudStatus: NSTextField?
     private var cloudDevices: NSTextField?
+    private var audioStatus: NSTextField?
     private var poll: Timer?
 
     override func viewDidAppear() {
@@ -70,6 +71,41 @@ final class DevicesPane: Pane {
             stack.addArrangedSubview(toggle)
         }
         separator()
+
+        // Audio, and the switch that decides whether this Mac keeps any.
+        //
+        // Here rather than in Storage, although it is a decision about the
+        // disk, because it is only legible beside the device list above: what
+        // makes "do not keep audio" safe is another device saying it is
+        // keeping it, and that sentence is a few lines up. A switch in Storage
+        // would be a delete button with its reason on another screen.
+        //
+        // **After the sync checkbox and not before it.** Between the key
+        // sentence and that checkbox, the checkbox read as part of this
+        // section: "Sync this library through iCloud" appeared to be one of
+        // the audio settings. Seen on screen rather than reasoned about.
+        if Settings.cloudSyncApplies {
+            heading("Audio")
+            let keep = NSButton(checkboxWithTitle: "Keep a copy of every recording's audio "
+                                + "on this Mac",
+                                target: self, action: #selector(toggleKeepAudio(_:)))
+            keep.state = Settings.keepAudio ? .on : .off
+            if Settings.isForced("keepAudio") {
+                keep.isEnabled = false
+                stack.addArrangedSubview(keep)
+                note("Whether this Mac keeps audio is set by your organisation's "
+                     + "device profile and cannot be changed here.")
+            } else {
+                stack.addArrangedSubview(keep)
+            }
+            audioStatus = note(audioStatusText())
+            note("On, this Mac fetches the audio for every recording, so any meeting "
+                 + "can be played back and transcribed again here. Off, it frees its "
+                 + "copy as soon as another device that is keeping audio says it has "
+                 + "those bytes, and never before: the last copy of a recording is "
+                 + "never deleted to save space.")
+            separator()
+        }
     }
 
     override func refresh() { refreshCloud() }
@@ -80,6 +116,50 @@ final class DevicesPane: Pane {
         if cloudStatus?.stringValue != status { cloudStatus?.stringValue = status }
         let devices = deviceListText(host)
         if cloudDevices?.stringValue != devices { cloudDevices?.stringValue = devices }
+        if let audioStatus {
+            let audio = audioStatusText()
+            if audioStatus.stringValue != audio { audioStatus.stringValue = audio }
+        }
+    }
+
+    /// What this Mac holds, and the warning that matters.
+    ///
+    /// The count of recordings nothing has reported keeping is the whole
+    /// reason the devices tell each other what they hold. It is said as what
+    /// was reported rather than as what is true, because a Mac shut in a
+    /// drawer still has whatever it had and is simply not saying so.
+    private func audioStatusText() -> String {
+        let recordings = Recording.all()
+        let here = recordings.filter(\.hasAudio)
+        var lines = ["Audio for \(here.count) of \(recordings.count) recordings is on "
+                     + "this Mac, using "
+                     + ModelChoice.humanBytes(here.reduce(0) { $0 + Self.audioSize(of: $1) })
+                     + "."]
+        let unheld = CloudSyncHost.unheld()
+        if !unheld.isEmpty {
+            lines.append("")
+            lines.append("\(unheld.count) recording\(unheld.count == 1 ? " has" : "s have") "
+                         + "no device reporting that it keeps the audio. Turn Keep audio "
+                         + "on here, or on whichever device still has it.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func audioSize(of recording: Recording) -> Int64 {
+        recording.audioFiles.reduce(0) { total, url in
+            total + Int64((try? FileManager.default.attributesOfItem(
+                atPath: url.path)[.size] as? Int) ?? 0)
+        }
+    }
+
+    @objc private func toggleKeepAudio(_ sender: NSButton) {
+        guard !Settings.isForced("keepAudio") else { return }
+        Settings.keepAudio = sender.state == .on
+        // Say so at once. Every other device's reclaim rule reads this Mac's
+        // heartbeat, and a switch whose effect waits out a two minute poll is
+        // one somebody presses twice.
+        CloudSyncHost.shared.syncSoon()
+        refreshCloud()
     }
 
     /// A path as somebody would say it out loud, which is the same shortening
@@ -140,7 +220,16 @@ final class DevicesPane: Pane {
         guard !host.devices.isEmpty else { return "No devices have checked in yet." }
         var rows = ["On this account:"]
         for device in host.devices {
-            rows.append("  \(device.name) (\(device.kind)), \(device.seenAgo)")
+            // What it is keeping, which is the half of this list that decides
+            // anything. A device that has never said either way is a build
+            // that predates the question, and saying nothing about it is
+            // better than guessing on its behalf.
+            var row = "  \(device.name) (\(device.kind)), \(device.seenAgo)"
+            if let holds = device.holdsAudio {
+                row += device.keeps ? ", keeping audio for \(holds.count)"
+                                    : ", not keeping audio (\(holds.count) left)"
+            }
+            rows.append(row)
         }
         rows.append("")
         rows.append("A device that has said nothing for 30 days is dropped from this list by itself.")

@@ -14,6 +14,7 @@ enum CLI {
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts", "notes", "tags", "ask", "sync", "backup", "activity", "forget",
+        "audio",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -177,6 +178,8 @@ enum CLI {
             exit(0)
         case "sync":
             await SyncCLI.run(rest)
+        case "audio":
+            await AudioCLI.run(rest)
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }
@@ -1387,6 +1390,10 @@ enum CLI {
       calibrate                  voiceprint threshold report
       voices <id> [--apply]      who the bank thinks each unnamed speaker is
       sources                    what meeting detection sees, run during a call
+      audio [<id>] [--build]     what audio this Mac holds and which devices
+                                 are keeping it. An id narrows it to one
+                                 recording; --build makes its master here and
+                                 says what that cost.
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
       activity [--limit N]       what has touched the library: tool calls,

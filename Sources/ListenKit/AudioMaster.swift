@@ -25,6 +25,33 @@ import Foundation
 /// 1.1% of words is a small price; it is just not a price anybody should pay
 /// silently on the copy that is meant to be the master.
 ///
+/// **Measured again on a real meeting**, once the encoder was wired into the
+/// sync rather than only into the seam suite. `listen audio <id> --build` on a
+/// 1.07 hour two-track conversation:
+///
+///     tracks   494.4 MB   (Float32, 461 MB/h)
+///     master    61.0 MB   (12% of the tracks, 57 MB/h)
+///     built in   3.8 s
+///
+/// Two things that run of the whole file showed and three seconds of tones
+/// could not. It is fast: an hour of conversation is four seconds, so building
+/// a library's worth is minutes rather than the hour that was budgeted for.
+/// And it is **not free of memory**: both tracks are read whole as `[Float]`,
+/// which was about a gigabyte resident at the peak for that recording. That is
+/// the same shape `Mixdown` has and the reason it is not worse is that
+/// `pushMasters` builds three a pass; a version that built forty at once would
+/// be a different question.
+///
+/// The master is deleted locally once `pushMasters` has landed it. The device
+/// that publishes one holds the raw tracks by construction, and those are the
+/// better copy for everything on that machine; keeping both would add 12% to
+/// every recording on the one Mac that never needs it.
+///
+/// The encoder also pads its final packet, so a master is up to 4608 frames
+/// longer than the tracks it came from: 513 frames, or 32 ms of silence, on
+/// the recording above. Nothing is lost and nothing shifts, and the seam
+/// compares the overlap for that reason rather than the lengths.
+///
 /// **Stereo, mic left and system right.** A mono sum is what `Mixdown` makes
 /// for playback and it is worthless here: the pipeline transcribes the two
 /// tracks separately on purpose, and `.agents/notes/asr.md` records why
@@ -79,6 +106,14 @@ public enum AudioMaster {
         try? FileManager.default.removeItem(at: out)
         try FileManager.default.moveItem(at: temporary, to: out)
         return out
+    }
+
+    /// How many channels a master carries: two for a meeting, one for a voice
+    /// memo. Zero when the file is absent or will not open, which is the same
+    /// answer a caller wants for both.
+    public static func channels(in url: URL) -> Int {
+        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
+        return Int(file.processingFormat.channelCount)
     }
 
     /// Take the master apart again, which is what makes it a master rather than

@@ -83,8 +83,10 @@ public actor CloudKitStore: RecordStore {
     // MARK: - Save
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
-        try await prepare(record.type.zone)
-        let id = CKRecord.ID(recordName: record.name, zoneID: zoneID(record.type.zone))
+        // The record's own zone rather than its type's, because the audio
+        // master is an `r5` that lives in `z5`. See `StoredRecord.zone`.
+        try await prepare(record.zone)
+        let id = CKRecord.ID(recordName: record.name, zoneID: zoneID(record.zone))
 
         // An update modifies the instance we last read, so CloudKit can tell
         // whether anybody wrote in between. A create is a fresh record with no
@@ -257,7 +259,10 @@ public actor CloudKitStore: RecordStore {
             claimedBy: record["claimedBy"] as? String,
             claimExpires: record["claimExpires"] as? Date,
             audioOn: record["audioOn"] as? String,
-            changeTag: record.recordChangeTag)
+            changeTag: record.recordChangeTag,
+            // Read back from the record rather than inferred from the type,
+            // which is the only way an `r5` in `z5` survives a round trip.
+            zone: CloudNaming.Zone(rawValue: record.recordID.zoneID.zoneName))
     }
 
     /// Tokens travel as strings because the store protocol says so and the

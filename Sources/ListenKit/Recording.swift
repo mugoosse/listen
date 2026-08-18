@@ -20,6 +20,9 @@ public struct Recording: Sendable, Identifiable {
     public var systemURL: URL { folder.appendingPathComponent("system.wav") }
     public var mixURL: URL { folder.appendingPathComponent("mix.m4a") }
     public var flacURL: URL { folder.appendingPathComponent("mic.flac") }
+    /// The replicated copy: one stereo FLAC, mic left and system right. See
+    /// `AudioMaster`.
+    public var masterURL: URL { AudioMaster.url(in: folder) }
     public var metadataURL: URL { folder.appendingPathComponent("metadata.json") }
     public var transcriptURL: URL { folder.appendingPathComponent("transcript.json") }
     public var turnsURL: URL { folder.appendingPathComponent("turns.json") }
@@ -40,8 +43,25 @@ public struct Recording: Sendable, Identifiable {
     /// the Mac acknowledges receipt, so after a few minutes even a recording
     /// the phone made itself answers false, and the transcript screen has to
     /// say where the audio went rather than appearing broken.
+    /// The master counts, and that is the whole point of it. A device that
+    /// received one and never had the raw tracks can play the recording and
+    /// re-transcribe it, so answering "no audio here" about it would be false
+    /// in the direction that hides a working copy.
     public var hasAudio: Bool {
-        [micURL, systemURL, mixURL, flacURL].contains(where: Recording.exists)
+        [micURL, systemURL, mixURL, flacURL, masterURL].contains(where: Recording.exists)
+    }
+
+    /// Whether the raw tracks are here, which is a different question from
+    /// `hasAudio` and the one that decides who builds the master. A device
+    /// holding only a master it was given has nothing to add, and a device
+    /// that pushed anyway would take turns with the other one re-uploading the
+    /// same bytes for ever.
+    public var hasTracks: Bool { [micURL, systemURL].contains(where: Recording.exists) }
+
+    /// Every audio file for this recording that is on this device, so that
+    /// freeing one means freeing all of it rather than most of it.
+    public var audioFiles: [URL] {
+        [micURL, systemURL, mixURL, flacURL, masterURL].filter(Recording.exists)
     }
 
     public var state: Metadata.State {

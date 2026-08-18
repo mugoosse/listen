@@ -3370,6 +3370,9 @@ extension LibraryWindow: NSMenuDelegate {
                 + "\(TranscriptFormat.stamp(turn.start))\n\n\(turn.text)\n\n"
         }
         try? out.write(to: url, atomically: true, encoding: .utf8)
+        // The id and the format, not the destination: a filename is the
+        // user's own words about the meeting.
+        ActivityLog.append("export", ["recording_id": recording.id, "format": "md"])
     }
 
     @objc func deleteSelected() {
@@ -3399,6 +3402,7 @@ extension LibraryWindow: NSMenuDelegate {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? recording.delete()
+        ActivityLog.append("recording_deleted", ["recording_id": recording.id])
         reload()
     }
 }

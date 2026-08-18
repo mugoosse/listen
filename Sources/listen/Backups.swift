@@ -37,37 +37,58 @@ import ListenKit
 @MainActor
 enum Backups {
     static var root: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        // A managed path first: an organisation that keeps backups on an
+        // encrypted volume says where, and the default stays for everyone
+        // else.
+        if let managed = Settings.backupsPath, !managed.isEmpty {
+            return URL(fileURLWithPath: (managed as NSString).expandingTildeInPath)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Backups/Listen")
     }
 
     private static let clonesKept = 7
     private static let sidecarsKept = 30
 
+    /// Create the backup folder owner-only, and keep it that way.
+    ///
+    /// `~/Library` is 700 and the backups hold the same recordings, so a
+    /// default 755 here would make the copy more readable than the original.
+    /// The chmod runs every time because roots created by earlier versions
+    /// exist with the default mode, and once is all it takes.
+    private static func ensureRoot() {
+        let manager = FileManager.default
+        try? manager.createDirectory(at: root, withIntermediateDirectories: true,
+                                     attributes: [.posixPermissions: 0o700])
+        try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+    }
+
     /// Once a day, on launch and on the sync host's timer.
     ///
     /// Keyed on the date rather than an interval, so a Mac opened twice a day
     /// takes one and a Mac left open for a week still takes one per day.
     static func runIfDue(now: Date = Date()) {
+        guard !Settings.backupsDisabled else { return }
         let day = String(ListenKit.Metadata.stamp(now).prefix(10))
         let marker = root.appendingPathComponent(".last")
         let last = (try? String(contentsOf: marker, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard last != day else { return }
         run(day: day)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        ensureRoot()
         try? Data(day.utf8).write(to: marker, options: .atomic)
     }
 
     /// Take one now, whatever the marker says. For `listen backup --now`.
     static func runNow(at now: Date = Date()) {
+        guard !Settings.backupsDisabled else { return }
         run(day: String(ListenKit.Metadata.stamp(now).prefix(10)))
     }
 
     static func run(day: String) {
         let library = ListenKit.Library.mac()
         let manager = FileManager.default
-        try? manager.createDirectory(at: root, withIntermediateDirectories: true)
+        ensureRoot()
 
         // The clone. `-c` asks for a copy-on-write clone and fails rather than
         // falling back silently, so `-R` is the second attempt: on a volume
@@ -87,15 +108,23 @@ enum Backups {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
             task.currentDirectoryURL = library.root
+            // `activity.jsonl` rides along when it exists: the audit trail is
+            // worth a durable copy for the same reason the notes are, and tar
+            // fails on a named member that is absent, hence the check.
+            var members = ["recordings", "notes"]
+            if manager.fileExists(atPath: ActivityLog.file.path) {
+                members.append(ActivityLog.file.lastPathComponent)
+            }
             task.arguments = ["--exclude=*.wav", "--exclude=*.m4a", "--exclude=*.flac",
                               "--exclude=staging", "--exclude=" + Trash.directory,
-                              "-czf", tarball.path, "recordings", "notes"]
+                              "-czf", tarball.path] + members
             try? task.run()
             task.waitUntilExit()
         }
 
         prune(prefix: "library-", keeping: clonesKept)
         prune(prefix: "sidecars-", keeping: sidecarsKept)
+        ActivityLog.append("backup", ["day": day])
         trace("backups: \(day)")
     }
 
@@ -136,6 +165,10 @@ enum Backups {
 
     /// What is held, for somebody deciding whether to trust it.
     static func describe() -> String {
+        if Settings.backupsDisabled {
+            return "Backups are turned off by a managed profile. Nothing is "
+                 + "copied, and what exists at \(root.path) is left as it is."
+        }
         let manager = FileManager.default
         let all = ((try? manager.contentsOfDirectory(at: root,
                                                      includingPropertiesForKeys: nil)) ?? [])

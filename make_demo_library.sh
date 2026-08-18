@@ -16,9 +16,49 @@
 # A Finder launch inherits no shell environment, so the app has to be started
 # from a terminal for the variable to be seen. That is the same reason
 # `env -u HF_HOME` matters when testing model downloads.
+#
+# **`LISTEN_LIBRARY` scopes the library and not the container**, and this file
+# used to say "touches nothing" without that qualification. There is one iCloud
+# container per account, so on a Mac with sync on, the invented meetings below
+# were pushed into it and pulled down onto the real library, an iPhone and a
+# second Mac. Measured on the shipped 0.15.0 build: three meetings and four
+# notes, in about two minutes.
+#
+# What stops it now is `Config.cloudSyncLibrary`: sync runs only for the library
+# it was turned on for, so a pass over this one is refused and says so. The
+# check below is belt and braces, because that guard lives in a build somebody
+# may not have yet, and because a script that invites a run should be the thing
+# that answers for it.
 set -e
 
 DIR="${1:-/tmp/listen-demo}"
+
+# Refuse to build one on a Mac whose sync could carry it away, unless the
+# running build is new enough to refuse the run itself.
+#
+# Read out of the defaults domain rather than by asking the app, because the app
+# is the thing that has not been built yet at this point, and because the two
+# keys together are the whole question: sync on, and on for a library that is
+# not this one. `sync: on for this library` from `listen sync status` is the
+# same answer from the other side, once you have a binary to ask.
+if [ "$(defaults read com.mgo.listen cloudSync 2>/dev/null || echo 0)" = "1" ]; then
+    CONSENTED=$(defaults read com.mgo.listen cloudSyncLibrary 2>/dev/null || echo "")
+    if [ -z "$CONSENTED" ]; then
+        echo "iCloud sync is on for this Mac and no library is recorded against" >&2
+        echo "that consent, so a demo library could be pushed into the real" >&2
+        echo "container. Either this build of Listen predates the per-library" >&2
+        echo "guard, or it has the guard and has not been launched since." >&2
+        echo >&2
+        echo "Launch Listen once, which records it, then run this again. Or:" >&2
+        echo >&2
+        echo "  listen sync enable --off" >&2
+        exit 1
+    fi
+    # A recorded library that is not the one being built is the ordinary case
+    # and needs nothing said: the guard in the app refuses that pass, and
+    # `listen sync status` prints "off for this library" from inside it.
+fi
+
 rm -rf "$DIR"
 mkdir -p "$DIR/recordings" "$DIR/notes"
 

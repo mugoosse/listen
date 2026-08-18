@@ -77,6 +77,11 @@ enum DictationHistory {
     }()
 
     static func append(_ e: Entry) {
+        // An organisation can turn the history off wholesale: everything
+        // dictated lands in other apps' documents anyway, and a second copy
+        // in a plaintext file is exactly what a managed deployment is trying
+        // not to have. The dictation itself still works.
+        guard !Settings.dictationHistoryDisabled else { return }
         try? Library.prepare()
 
         var obj: [String: Any] = [

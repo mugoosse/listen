@@ -12,7 +12,9 @@ phone recording and when the phone may release its audio.
 
 - Metadata, transcripts, turns, waveforms, notes, contacts and the dictionary
   travel between Macs and iPhone.
-- Voiceprints travel between Macs only.
+- Voiceprints travel between Macs only. Forgetting a person's voiceprints
+  travels too: the forget is a sealed tombstone in the same zone, applied on
+  every pass, so a stripped voice does not come back from a stale Mac.
 - Mac recordings keep their audio on the Mac that made them.
 - Phone recordings keep their audio until `audioOn` names the Mac that has
   ingested it. The phone can keep another copy when its storage setting is on.

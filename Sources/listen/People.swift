@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// One person, across the whole library.
 ///
@@ -236,6 +237,9 @@ enum People {
                        in library: [Recording] = Recording.all()) -> [String] {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard check(trimmed) == nil, trimmed != label else { return [] }
+        // The print moves with the name, so the name is back in a bank and
+        // its old tombstone, if any, must stop applying.
+        unforgetVoiceprints(trimmed)
         return relabel(label, to: trimmed, in: library)
     }
 
@@ -260,6 +264,9 @@ enum People {
         guard !from.isEmpty, !to.isEmpty, from != to else { return [] }
         guard from != SpeakerName.you else { return [] }
         guard !VoiceBank.isPlaceholder(to) else { return [] }
+        // Same rule as `rename`: a bank gains this name, so the name must
+        // not stay forgotten.
+        unforgetVoiceprints(to)
         return relabel(from, to: to, in: library)
     }
 
@@ -290,6 +297,51 @@ enum People {
         // any more, and `set` drops an entry with neither an address nor a note.
         ContactBook.set(Contact(name: label, emails: [], notes: nil))
         return changed
+    }
+
+    /// Strip somebody's voiceprints from every bank, here and on every Mac.
+    ///
+    /// The other half of `unname`, which deliberately keeps the print. This
+    /// is for the person who asked to be forgotten: a voiceprint is biometric
+    /// material, so "remove them" has to have a version that actually removes
+    /// it. The forget is written as a tombstone that replicates through the
+    /// sync, because a bare local rewrite is undone by the next pull; see
+    /// `VoiceprintTombstones` for both races. Transcripts and audio are
+    /// untouched, because deleting what somebody said is a recording
+    /// deletion, and that verb already exists.
+    ///
+    /// Returns the ids whose banks changed or emptied.
+    @discardableResult
+    static func forgetVoiceprints(_ label: String) -> [String] {
+        guard label != SpeakerName.you, !VoiceBank.isPlaceholder(label) else { return [] }
+        let library = ListenKit.Library.mac()
+        var stones = VoiceprintTombstones.load(library)
+        stones.forget(label)
+        stones.save(library)
+        let applied = VoiceprintTombstones.apply([label], to: library)
+        // Emptied banks owe the container a record delete; the debt lives in
+        // the sync state so a failed pass retries rather than forgets.
+        if !applied.emptied.isEmpty {
+            let state = EngineState(library: library)
+            var base = state.base
+            for id in applied.emptied { base.base[SyncState.r6DropKey(id)] = "due" }
+            state.base = base
+        }
+        ActivityLog.append("voiceprints_forgotten",
+                           ["recordings": applied.changed + applied.emptied])
+        Task { @MainActor in CloudSyncHost.shared.syncSoon() }
+        return applied.changed + applied.emptied
+    }
+
+    /// A name that gains a voiceprint again must not be stripped by its own
+    /// old tombstone. Called wherever a print is deliberately filed under a
+    /// name: rename, merge and enrolment.
+    static func unforgetVoiceprints(_ label: String) {
+        let library = ListenKit.Library.mac()
+        var stones = VoiceprintTombstones.load(library)
+        guard stones.activeNames().contains(label) else { return }
+        stones.unforget(label)
+        stones.save(library)
     }
 
     /// Take one speaker's name off in **one** recording, leaving them in it.

@@ -209,9 +209,19 @@ final class AgentPane: Pane {
         // confirmed before it is saved rather than after. A loopback one is
         // added with no ceremony, because it changes nothing.
         guard confirm(provider) else { return }
-        Settings.addProvider(provider)
+        guard Settings.addProvider(provider) else { refuseManaged(provider); return }
         fillAdder()
         detect()
+    }
+
+    /// The store said no, and the reason is a device profile, so say so.
+    private func refuseManaged(_ provider: Provider) {
+        let alert = NSAlert()
+        alert.messageText = "\(provider.name) cannot be added"
+        alert.informativeText = "Your organisation's device profile restricts "
+            + "Ask to endpoints on this Mac, so a hosted provider cannot be "
+            + "used. Ollama and LM Studio still work."
+        alert.runModal()
     }
 
     /// Ask for a base URL, for a server that is not in the catalogue.
@@ -237,12 +247,19 @@ final class AgentPane: Pane {
             bad.runModal()
             return
         }
+        if let problem = Provider.schemeProblem(url) {
+            let bad = NSAlert()
+            bad.messageText = "That endpoint needs https"
+            bad.informativeText = problem
+            bad.runModal()
+            return
+        }
         // `custom` returns the catalogue entry when the URL is one Listen
         // already has a name for, so pasting Ollama's URL adds the row called
         // Ollama rather than a second one called localhost.
         let provider = Provider.custom(url: url)
         guard confirm(provider) else { return }
-        Settings.addProvider(provider)
+        guard Settings.addProvider(provider) else { refuseManaged(provider); return }
         fillAdder()
         detect()
     }

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen, HIPAA deployment</title>
+<meta name="description" content="Deploying Listen where recordings are protected health information.">
+<link rel="icon" href="icon.png">
+<style>
+:root {
+  --ink:        #0d0d0c;
+  --ink-raised: #161615;
+  --line:       #262624;
+  --text:       #f2f2f0;
+  --grey:       #a0a09d;
+  --grey-dim:   #6d6d6a;
+  --blue:       #5c7cff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+header { padding: 64px 0 40px; }
+h1 { font-size: 32px; margin: 0 0 12px; letter-spacing: -0.02em; }
+.tagline { color: var(--grey); font-size: 16px; margin: 0; }
+section { padding: 40px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
+p { margin: 0 0 16px; color: var(--grey); }
+p.lead { color: var(--text); }
+a { color: var(--blue); }
+code, pre {
+  font-family: inherit; background: var(--ink-raised);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+code { padding: 2px 6px; font-size: 13px; }
+pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; margin: 0 0 16px; }
+pre code { border: 0; padding: 0; background: none; }
+ul, ol { padding-left: 20px; color: var(--grey); }
+li { margin-bottom: 10px; }
+strong { color: var(--text); font-weight: 600; }
+.note {
+  background: var(--ink-raised); border: 1px solid var(--line);
+  border-radius: 8px; padding: 14px 18px; margin: 0 0 16px;
+}
+.note p { margin: 0; font-size: 13.5px; }
+footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
+footer a { color: var(--grey); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Deploying under HIPAA</h1>
+  <p class="tagline">How to run Listen where recordings are protected health
+  information, and why its architecture makes that unusually simple.</p>
+</header>
+
+<section>
+  <h2>Who holds what</h2>
+  <p class="lead">Listen's maker never creates, receives, maintains, or
+  transmits PHI on your behalf: there is no server, no account, and no
+  support channel that touches your library. HIPAA's obligations therefore
+  sit where your data sits, with you, and the software's job is to be
+  deployable in a compliant configuration. This page is that
+  configuration.</p>
+  <p>There is no such thing as a HIPAA certification, for Listen or for
+  anything else; HHS recognises no certifying body. What a diligent buyer can
+  ask for is exactly what this page and the
+  <a href="security.html">security page</a> provide: the controls, their
+  locations in the code, and the way to verify them.</p>
+</section>
+
+<section>
+  <h2>The two rules that matter most</h2>
+  <ol>
+    <li><strong>Keep iCloud sync off for PHI libraries.</strong> Apple does
+    not sign Business Associate Agreements for iCloud, and HHS treats even a
+    no-view host of ciphertext as a business associate. Sync is off by
+    default; a device profile can force it off so nobody can turn it on. The
+    end-to-end sealing is real, but the BAA question is about paperwork
+    Apple does not offer, so the guide's answer is: not for PHI.</li>
+    <li><strong>Keep AI on the machine, or under your own BAA.</strong> The
+    Ask feature sends the meetings you ask about to whatever endpoint you
+    configure. Loopback endpoints (Ollama, LM Studio) send nothing anywhere
+    and are always fine. A hosted provider is fine only under a BAA you hold
+    with that provider (Microsoft Azure OpenAI, Anthropic, and OpenAI all
+    offer them). The Claude and Codex desktop harnesses send transcripts to
+    their vendors, so treat them the same way. A profile can force
+    Ask to loopback only.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>The Mac checklist</h2>
+  <ul>
+    <li><strong>FileVault on.</strong> The library is plain files under the
+    user's account; whole-disk encryption is the at-rest control.</li>
+    <li><strong>One macOS account per person</strong>, with a login password
+    and automatic screen lock. That is HIPAA's unique-user-identification and
+    automatic-logoff, provided by the OS.</li>
+    <li><strong>Install the device profile.</strong>
+    <a href="https://github.com/mugoosse/listen/blob/main/docs/listen-managed.mobileconfig">listen-managed.mobileconfig</a>
+    forces sync off, Ask to loopback only, and the dictation history off.
+    <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>
+    documents every key and how to verify it took.</li>
+    <li><strong>Backups on encrypted storage.</strong> Listen's daily copies
+    under <code>~/Backups/Listen</code> are owner-only and covered by
+    FileVault; Time Machine targets should be encrypted volumes. Deleted
+    recordings persist in backups for up to 7 days (clones) and 30 days
+    (sidecar archives); that retention schedule is part of your risk
+    analysis.</li>
+    <li><strong>Know your audit trail.</strong> <code>listen activity</code>
+    shows every tool call, agent run, export, deletion and backup, with
+    recording ids and no content.</li>
+    <li><strong>Be deliberate about MCP.</strong> Any agent you connect can
+    read the whole library through the stdio server. Connect only tools your
+    policies cover, and remember the activity log records their calls.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The iPhone checklist</h2>
+  <ul>
+    <li><strong>Device passcode</strong> (Face ID counts). The library sits
+    under iOS Data Protection keyed off it.</li>
+    <li><strong>Storage, Include in iPhone backups: off</strong>, unless the
+    user runs Apple's Advanced Data Protection. A device backup is a copy in
+    a cloud whose keys Apple holds by default, which is rule one again in
+    different clothes.</li>
+    <li><strong>Sync off</strong>, as on the Mac, and for the same reason.
+    Without it the phone app is an entirely local recorder.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>People's biometrics and consent</h2>
+  <ul>
+    <li><strong>Voiceprints are deletable, everywhere.</strong> "Forget this
+    person" (in the People pane, or <code>listen forget</code>) strips their
+    voice embeddings from every recording and propagates the forget across
+    devices and iCloud. Use it when a patient or colleague asks to be
+    removed.</li>
+    <li><strong>Consent to record is your obligation.</strong> Two-party
+    consent states, national recording laws, and your own consent workflows
+    sit outside any software. Nothing in Listen makes an unlawful recording
+    lawful.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>What a security questionnaire will ask</h2>
+  <pre><code>Where is PHI stored?        On the covered entity's own devices only.
+Who can access it?          The OS account that owns the library.
+Is it encrypted at rest?    FileVault (required) / iOS Data Protection.
+Is it encrypted in transit? Nothing transits by default. Optional sync is
+                            end-to-end ChaCha20-Poly1305; hosted AI requires
+                            https and the customer's own BAA.
+Vendor access to PHI?       None. No server, no account, no remote support.
+Audit logging?              activity.jsonl, ids only, listen activity to read.
+Subprocessors?              None for product data.</code></pre>
+</section>
+
+<section>
+  <h2>The caveat that belongs on every page like this</h2>
+  <div class="note">
+    <p>This is engineering documentation written by the people who built the
+    software, not legal advice. Have your privacy officer or counsel review
+    your deployment against your own risk analysis. The architecture was
+    built to make that review short.</p>
+  </div>
+</section>
+
+<footer>
+  <p><a href="index.html">Listen</a> ·
+  <a href="security.html">Security</a> ·
+  <a href="privacy.html">Privacy</a> ·
+  <a href="https://github.com/mugoosse/listen">Source</a></p>
+</footer>
+
+</div>
+</body>
+</html>

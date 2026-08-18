@@ -125,6 +125,12 @@ actor Enroll {
         guard !bank.isEmpty else {
             return Result(id: recording.id, named: [:], unmatched: unmatched)
         }
+        // An enrolment files prints under names on purpose, so any of those
+        // names that was forgotten is forgotten no longer, or the tombstone
+        // would strip this bank on the next pass.
+        for name in bank.keys where !VoiceBank.isPlaceholder(name) {
+            People.unforgetVoiceprints(name)
+        }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(bank).write(to: recording.embeddingsURL, options: .atomic)

@@ -30,7 +30,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a divergence: the poll is still there underneath.
     func application(_ application: NSApplication,
                      didReceiveRemoteNotification userInfo: [String: Any]) {
-        guard Settings.cloudSync else { return }
+        guard Settings.cloudSyncApplies else { return }
         trace("cloud sync: woken by another device")
         Task { @MainActor in await CloudSyncHost.shared.syncNow() }
     }
@@ -45,6 +45,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
+
+        // Before anything reads it, and above the preview branch because it
+        // writes a preference rather than touching the library. See
+        // `Config.stampCloudSyncLibraryOnce`: it records the library an
+        // existing consent was always about, so that an absent key means "this
+        // build has no per-library guard" and nothing else.
+        Settings.stampCloudSyncLibraryOnce()
 
         // At launch, not when the first question is asked. The monitor's first
         // update is asynchronous, so one started at the moment somebody presses
@@ -133,7 +140,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // carries no content of its own, only the fact that there is something
         // to fetch, which is what makes it safe to let Apple deliver for a
         // product whose claim is that Apple cannot read what it stores.
-        if Settings.cloudSync { NSApplication.shared.registerForRemoteNotifications() }
+        // `cloudSyncApplies`, so a scratch library does not even ask to be
+        // woken. A push it cannot act on is only noise, and registering is the
+        // one step here that tells the container this process exists.
+        if Settings.cloudSyncApplies { NSApplication.shared.registerForRemoteNotifications() }
 
         // Open at login, on by default, for new installations only.
         //

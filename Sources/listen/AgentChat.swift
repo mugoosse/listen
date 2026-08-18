@@ -193,6 +193,21 @@ struct Provider: Codable, Equatable {
         if parts[0] == 169 && parts[1] == 254 { return true }
         return false
     }
+
+    /// Plain http is accepted only where the packets stay: this Mac or this
+    /// network. A hosted endpoint receives transcripts of the meetings asked
+    /// about, so it has to be https, or those transcripts cross the internet
+    /// in clear text. Returns the sentence to show, or nil when the URL is
+    /// fine. One rule, used by the pane and the CLI, so they cannot disagree.
+    static func schemeProblem(_ url: URL) -> String? {
+        guard url.scheme == "http" else { return nil }
+        if case .elsewhere(let host) = Provider.custom(url: url).exposure {
+            return "\(host) is not on this Mac or your network, so it needs "
+                 + "https. Plain http would send transcripts across the "
+                 + "internet unencrypted."
+        }
+        return nil
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,11 +301,14 @@ extension Provider {
         let normalised = Provider(id: "", name: "", base: url, needsKey: false, note: "").base
         if let known = catalogue.first(where: { $0.base == normalised }) { return known }
         let host = normalised.host ?? "endpoint"
+        let probe = Provider(id: "", name: "", base: normalised, needsKey: false, note: "")
         return Provider(id: customID(for: normalised), name: name ?? host, base: normalised,
                         // A URL nobody catalogued may or may not want a key, and
                         // the field is offered either way. Loopback almost never
-                        // needs one; anything else usually does.
-                        needsKey: !(host == "localhost" || host == "127.0.0.1" || host == "::1"),
+                        // needs one; anything else usually does. Through
+                        // `exposure` rather than a third hand-rolled host list,
+                        // which is how `[::1]` was missed here before.
+                        needsKey: !probe.isLoopback,
                         note: "added by you")
     }
 }
@@ -328,10 +346,17 @@ extension Settings {
     static func provider(_ id: String) -> Provider? { providers.first { $0.id == id } }
 
     /// Add or replace by id, so adding the same one twice updates it.
-    static func addProvider(_ provider: Provider) {
+    ///
+    /// False, and nothing stored, when a managed profile restricts providers
+    /// to this Mac and the candidate is not on it. Refused at the store
+    /// rather than only in each surface, so a new surface cannot forget.
+    @discardableResult
+    static func addProvider(_ provider: Provider) -> Bool {
+        if Settings.agentLoopbackOnly, !provider.isLoopback { return false }
         var list = providers.filter { $0.id != provider.id }
         list.append(provider)
         providers = list
+        return true
     }
 
     static func removeProvider(_ id: String) {
@@ -766,6 +791,28 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
         guard let model = question.model, !model.isEmpty else {
             throw Failure.noModel(provider.name)
         }
+        // Belt and braces under a managed profile: `addProvider` refuses new
+        // hosted rows, and this catches one stored before the profile
+        // arrived, or a `--to` override that never went through the store.
+        if Settings.agentLoopbackOnly, !provider.isLoopback {
+            throw Failure.managedLoopbackOnly(provider.name)
+        }
+
+        // Host and exposure, never the question. The log answers "did
+        // transcripts leave, and for where", which is the whole reason a
+        // hosted run is worth a line and a loopback one still gets one.
+        let exposure: String
+        switch provider.exposure {
+        case .thisMac: exposure = "thisMac"
+        case .thisNetwork: exposure = "thisNetwork"
+        case .elsewhere: exposure = "elsewhere"
+        }
+        ActivityLog.append("agent_run", ["backend": "endpoint",
+                                         "provider": provider.id.isEmpty
+                                             ? provider.host : provider.id,
+                                         "host": provider.host,
+                                         "exposure": exposure])
+
         let configuration = URLSessionConfiguration.ephemeral
         // No timeout on the resource: a local model on a busy Mac can take
         // minutes over a long transcript, and a run that is producing tokens is
@@ -791,12 +838,17 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
 
     enum Failure: LocalizedError {
         case noModel(String)
+        case managedLoopbackOnly(String)
 
         var errorDescription: String? {
             switch self {
             case .noModel(let name):
                 return "No model is chosen for \(name). Pick one in Settings › Ask, "
                      + "or pass --model."
+            case .managedLoopbackOnly(let name):
+                return "Your organisation's device profile restricts Ask to "
+                     + "endpoints on this Mac, so \(name) cannot be used. "
+                     + "Ollama and LM Studio still work."
             }
         }
     }

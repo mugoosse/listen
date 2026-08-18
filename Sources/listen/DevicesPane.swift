@@ -33,7 +33,7 @@ final class DevicesPane: Pane {
         cloudStatus = note(cloudStatusText(host))
         cloudDevices = note(deviceListText(host))
 
-        if Settings.cloudSync {
+        if Settings.cloudSyncApplies {
             let syncNow = NSButton(title: "Sync now", target: self,
                                    action: #selector(syncNowPressed(_:)))
             syncNow.bezelStyle = .rounded
@@ -53,8 +53,22 @@ final class DevicesPane: Pane {
 
         let toggle = NSButton(checkboxWithTitle: "Sync this library through iCloud",
                               target: self, action: #selector(toggleCloud(_:)))
-        toggle.state = Settings.cloudSync ? .on : .off
-        stack.addArrangedSubview(toggle)
+        // Ticked for the library on screen, not for the install. With sync on
+        // for the real library and a scratch one open, the box used to read
+        // "on" over a pane where nothing was syncing, which is the one reading
+        // that would have prevented this whole guard being needed. Ticking it
+        // here consents to *this* library, because the setter stamps the path.
+        toggle.state = Settings.cloudSyncApplies ? .on : .off
+        // A forced value gets a disabled control and a sentence naming who
+        // decided, rather than a checkbox that snaps back.
+        if Settings.isForced("cloudSync") {
+            toggle.isEnabled = false
+            stack.addArrangedSubview(toggle)
+            note("iCloud sync is set by your organisation's device profile "
+                 + "and cannot be changed here.")
+        } else {
+            stack.addArrangedSubview(toggle)
+        }
         separator()
     }
 
@@ -68,10 +82,26 @@ final class DevicesPane: Pane {
         if cloudDevices?.stringValue != devices { cloudDevices?.stringValue = devices }
     }
 
+    /// A path as somebody would say it out loud, which is the same shortening
+    /// the Storage pane makes on the library it prints.
+    private func short(_ path: String) -> String {
+        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+
     private func cloudStatusText(_ host: CloudSyncHost) -> String {
         guard Settings.cloudSync else {
             return "Off. This Mac keeps its local library, but no other device can "
                 + "learn about changes until iCloud sync is turned on."
+        }
+        // Said as its own sentence rather than folded into "Off", because the
+        // two have different repairs and this one is usually a surprise: the
+        // Mac is a syncing Mac, and the library in front of you is not the one
+        // it syncs. Both paths are named, since the whole confusion is which
+        // library is open.
+        guard Settings.cloudSyncApplies else {
+            return "Off for this library. iCloud sync is on for \(short(Settings.cloudSyncLibrary)), "
+                + "and the library open now is \(short(ListenKit.Library.mac().root.path)). "
+                + "Nothing here is sent anywhere. Tick the box below to sync this one instead."
         }
 
         var lines: [String] = []
@@ -136,8 +166,23 @@ final class DevicesPane: Pane {
         alert.addButton(withTitle: "Copy")
         alert.addButton(withTitle: "Done")
         if alert.runModal() == .alertFirstButtonReturn {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(key.code, forType: .string)
+            // The general pasteboard is the least private place on this Mac:
+            // every process can read it and Universal Clipboard carries it to
+            // nearby devices. The concealed type asks clipboard managers not
+            // to keep it, and the timer takes it back after a minute. The
+            // changeCount guard is what makes the timer safe: it must never
+            // destroy something the user copied afterwards.
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(key.code, forType: .string)
+            pasteboard.setString("", forType:
+                NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            let written = pasteboard.changeCount
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+                if NSPasteboard.general.changeCount == written {
+                    NSPasteboard.general.clearContents()
+                }
+            }
         }
     }
 
@@ -153,8 +198,14 @@ final class DevicesPane: Pane {
     }
 
     @objc private func toggleCloud(_ sender: NSButton) {
+        guard !Settings.isForced("cloudSync") else { return }
+        // Turning it on consents to the library that is open, which is what
+        // `cloudSync`'s setter stamps. Turning it off is the install's answer
+        // and not this library's: there is one container, and "stop sending my
+        // meetings" has to mean all of them.
         Settings.cloudSync = sender.state == .on
-        if Settings.cloudSync { CloudSyncHost.shared.startIfEnabled() }
+        ActivityLog.append(Settings.cloudSync ? "sync_enabled" : "sync_disabled")
+        if Settings.cloudSyncApplies { CloudSyncHost.shared.startIfEnabled() }
         else { CloudSyncHost.shared.stop() }
         rebuild()
     }

@@ -48,6 +48,15 @@ public struct EngineState: Sendable {
             .appendingPathComponent("ListenSync")
             .appendingPathComponent(String(digest.prefix(16)))
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #if os(iOS)
+        // The same protection class the library gets in `Library.prepare`,
+        // for the same reasons, and here because this directory is a sibling
+        // of the library rather than a child: coverage applied only to the
+        // library tree would miss the change tokens and device identity.
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: root.path)
+        #endif
     }
 
     private var engineFile: URL { root.appendingPathComponent("engine-state.dat") }

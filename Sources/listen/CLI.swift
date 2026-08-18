@@ -13,7 +13,7 @@ enum CLI {
     private static let commands = [
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
-        "calendar", "contacts", "notes", "tags", "ask", "sync", "backup",
+        "calendar", "contacts", "notes", "tags", "ask", "sync", "backup", "activity", "forget",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -126,6 +126,10 @@ enum CLI {
             mergePeople(rest)
         case "unname":
             unnamePerson(rest)
+        case "forget":
+            forgetPerson(rest)
+        case "activity":
+            activity(rest)
         case "me":
             me(rest)
         case "import":
@@ -963,8 +967,12 @@ enum CLI {
         entries.append(contentsOf: result.added)
         CustomDictionary.save(entries)
 
-        log("added \(kind.rawValue) `\(text)`"
-            + (replacement.isEmpty ? "" : " -> `\(replacement)`"))
+        // The event without the words: a spawned `listen` sends stderr to the
+        // caller's log, and a dictionary entry is often a person's name. The
+        // user typed the text one line up, so echoing it back adds nothing.
+        log("added \(kind.rawValue)"
+            + (replacement.isEmpty ? "" : " with a correction"))
+        trace("  `\(text)`" + (replacement.isEmpty ? "" : " -> `\(replacement)`"))
         if kind == .term, !CustomDictionary.eligible(text) {
             log("it will do nothing as it stands: a term needs five letters, or eight "
                 + "across a phrase, to be matched by sound. Add it as a correction "
@@ -1197,15 +1205,20 @@ enum CLI {
             fail("no note `\(name)`. `listen notes list` shows them.")
         }
         print(note.body)
-        log("\(note.slug): \(note.title), written by \(note.source)"
+        // The body already went to stdout, where the user asked for it. The
+        // stderr sidecar keeps to slugs and ids: a spawned `listen` sends
+        // stderr to the caller's log, and a note title can hold anything a
+        // meeting held.
+        log("\(note.slug), written by \(note.source)"
             + (note.updated.isEmpty ? "" : " on \(note.updated)"))
-        if let prompt = note.prompt, !prompt.isEmpty { log("prompt: \(prompt)") }
+        trace("  title: \(note.title)")
+        if let prompt = note.prompt, !prompt.isEmpty { trace("  prompt: \(prompt)") }
         // Every source, including one the library no longer has, which prints
         // as a bare id. A note that quietly stopped listing a deleted meeting
         // would be claiming it was never about it.
         for source in Notes.sources(of: note) {
             log("about: \(source.id)"
-                + (source.title.map { " (\($0))" } ?? "  [no longer in the library]"))
+                + (source.title == nil ? "  [no longer in the library]" : ""))
         }
         exit(0)
     }
@@ -1299,7 +1312,8 @@ enum CLI {
         }
         do {
             let note = try Notes.delete(name)
-            log("deleted `\(note.slug)` (\(note.title))")
+            log("deleted `\(note.slug)`")
+            trace("  title: \(note.title)")
             exit(0)
         } catch {
             fail(error.localizedDescription)
@@ -1360,6 +1374,8 @@ enum CLI {
       rename <name> <new name>   rename one person in every recording
       merge <name> <into>        two rows in the roster, one human
       unname <name>              take a name off, leaving speakers to name again
+      forget <name>              strip their voiceprints from every bank, on
+                                 every Mac. Transcripts are untouched.
       me [<name> | --clear]      what the microphone track is called on screen
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
@@ -1373,6 +1389,9 @@ enum CLI {
       sources                    what meeting detection sees, run during a call
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
+      activity [--limit N]       what has touched the library: tool calls,
+                                 agent runs, exports, deletions, backups.
+                                 Ids only, never content. --json for jq.
       provider <sub>             the OpenAI-compatible backends: list, add,
                                  key, model, remove. Ollama and anything else
                                  speaking the same shape.
@@ -1963,6 +1982,7 @@ enum CLI {
         }
         guard let id else { fail("export needs a recording id.") }
         guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        ActivityLog.append("export", ["recording_id": recording.id, "format": format])
         let turns = recording.storedTurns
 
         switch format {
@@ -2253,6 +2273,78 @@ enum CLI {
         let changed = People.unname(person.label)
         print("unnamed \(person.display) in \(changed.count) recording(s)")
         for id in changed { print("  \(id)") }
+        exit(0)
+    }
+
+    /// `listen forget <person>`: strip their voiceprints, here and everywhere.
+    ///
+    /// The other half of `unname`, for the person who asked to be forgotten.
+    /// `unname` keeps the print so the bank can suggest them again; this
+    /// removes it from every bank, and the forget travels: other Macs drop
+    /// theirs on the next sync pass, and the CloudKit records go with it.
+    /// Transcripts and audio are untouched, because deleting what somebody
+    /// said is a recording deletion, and that verb already exists.
+    private static func forgetPerson(_ args: [String]) -> Never {
+        guard let name = args.first else {
+            fail("forget needs a person. Try `listen help`.")
+        }
+        guard let person = People.findByDisplayName(args.joined(separator: " "))
+                ?? People.findByDisplayName(name) else {
+            fail("nobody called `\(name)`. `listen people` lists everyone.")
+        }
+        guard person.label != SpeakerName.you else {
+            fail("`\(SpeakerName.you)` is the microphone track. Forgetting your "
+                 + "own voice would only make the next recording ask who you are.")
+        }
+        let touched = People.forgetVoiceprints(person.label)
+        print("forgot \(person.display)'s voiceprints in \(touched.count) recording(s)")
+        print("Other Macs drop theirs on the next sync pass. Their name in the "
+              + "transcripts is untouched: `listen unname` is the verb for that.")
+        exit(0)
+    }
+
+    /// `listen activity [--limit N] [--json]`: what has touched the library.
+    ///
+    /// Reads `activity.jsonl`, which carries events and ids and never content,
+    /// so this output is safe wherever it lands. `--json` prints the raw lines
+    /// for jq.
+    private static func activity(_ args: [String]) -> Never {
+        var limit = 50
+        if let index = args.firstIndex(of: "--limit"), index + 1 < args.count,
+           let n = Int(args[index + 1]) { limit = max(1, n) }
+        let entries = ActivityLog.recent(limit)
+        if args.contains("--json") {
+            for entry in entries {
+                guard let data = try? JSONSerialization.data(
+                    withJSONObject: entry,
+                    options: [.sortedKeys, .withoutEscapingSlashes]),
+                      let line = String(data: data, encoding: .utf8) else { continue }
+                print(line)
+            }
+            exit(0)
+        }
+        guard !entries.isEmpty else {
+            print("No activity recorded yet. The log starts with the first tool "
+                  + "call, agent run, export, deletion or backup.")
+            exit(0)
+        }
+        for entry in entries {
+            let at = (entry["at"] as? String ?? "")
+                .replacingOccurrences(of: "T", with: " ")
+                .replacingOccurrences(of: "Z", with: "")
+            var parts = [at, entry["event"] as? String ?? "?"]
+            if let tool = entry["tool"] as? String { parts.append(tool) }
+            if let host = entry["host"] as? String { parts.append(host) }
+            else if let backend = entry["backend"] as? String { parts.append(backend) }
+            if let ids = entry["recordings"] as? [Any] {
+                let names = ids.compactMap { $0 as? String }
+                if !names.isEmpty { parts.append(names.joined(separator: ",")) }
+            }
+            if let id = entry["recording_id"] as? String { parts.append(id) }
+            if let count = entry["count"] { parts.append("count=\(count)") }
+            if let transport = entry["transport"] as? String { parts.append(transport) }
+            print(parts.joined(separator: "  "))
+        }
         exit(0)
     }
 
@@ -2969,7 +3061,11 @@ enum CLI {
         // stored name. It gets one from the catalogue by URL, which names
         // `http://localhost:11434/v1` as Ollama rather than as a bare host.
         let label = endpointOverride.map { Provider.custom(url: $0).name } ?? status.name
-        log("\(label) · \(question)")
+        // The backend, not the question: a spawned `listen ask` sends stderr
+        // to the caller's log, and the question names what the meeting was
+        // about. The user typed it one line up.
+        log("\(label) · asking")
+        trace("  \(question)")
         let done = DispatchSemaphore(value: 0)
         var failure: String?
         // Not `.main`: this thread is about to block on the semaphore, and
@@ -3118,15 +3214,39 @@ enum CLI {
                 provider = known
             } else if let url = URL(string: word), url.host != nil,
                       url.scheme == "http" || url.scheme == "https" {
+                if let problem = Provider.schemeProblem(url) { fail(problem) }
                 provider = Provider.custom(url: url, name: rest.dropFirst().first)
             } else {
                 fail("`\(word)` is neither a catalogue id nor a base URL. "
                      + "`listen provider list` shows what is available.")
             }
-            Settings.addProvider(provider)
+            // The profile's refusal comes before the question: asking y/n
+            // about a provider a managed profile will refuse anyway reads as
+            // the CLI not knowing its own rules.
+            if Settings.agentLoopbackOnly, !provider.isLoopback {
+                fail("your organisation's device profile restricts Ask to "
+                     + "endpoints on this Mac, so `\(provider.name)` cannot be "
+                     + "added. Ollama and LM Studio still work.")
+            }
+            // Said on the way in rather than after the save, and answered
+            // before it: this is the moment the claim on the tin changes, so
+            // a non-loopback provider is confirmed the way the pane confirms
+            // it. `--yes` is for scripts, which cannot answer.
+            if !provider.isLoopback && !rest.contains("--yes") {
+                print("Send transcripts to \(provider.host)?")
+                print(provider.exposure.sentence)
+                print("Type y to add it, anything else to stop: ", terminator: "")
+                let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased()
+                guard answer == "y" || answer == "yes" else {
+                    fail("Not added.")
+                }
+            }
+            guard Settings.addProvider(provider) else {
+                fail("your organisation's device profile restricts Ask to "
+                     + "endpoints on this Mac, so `\(provider.name)` cannot be "
+                     + "added. Ollama and LM Studio still work.")
+            }
             print("\(provider.name)  \(provider.base.absoluteString)")
-            // Said on the way in rather than buried in a pane nobody reopens.
-            // This is the moment the claim on the tin changes.
             print(provider.exposure.sentence)
             if provider.needsKey && !AgentKey.has(provider.host) {
                 print("")

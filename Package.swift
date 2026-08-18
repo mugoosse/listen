@@ -10,7 +10,12 @@ let package = Package(
     name: "listen",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", branch: "main"),
+        // Pinned to a revision rather than `branch: "main"`: the branch form
+        // re-resolves to whatever main holds on the day of the build, which
+        // makes a release unrepeatable and hands the update channel of this
+        // dependency to anyone who can push to it. Move the pin deliberately.
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git",
+                 revision: "4266f988d170a83017d1e82e2e4654602f277f1d"),
         // Diarization and speaker embeddings, CoreML on the Neural Engine.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.6.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.9.4"),

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen, privacy</title>
+<meta name="description" content="What the maker of Listen receives about you: as close to nothing as software can get.">
+<link rel="icon" href="icon.png">
+<style>
+:root {
+  --ink:        #0d0d0c;
+  --ink-raised: #161615;
+  --line:       #262624;
+  --text:       #f2f2f0;
+  --grey:       #a0a09d;
+  --grey-dim:   #6d6d6a;
+  --blue:       #5c7cff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+header { padding: 64px 0 40px; }
+h1 { font-size: 32px; margin: 0 0 12px; letter-spacing: -0.02em; }
+.tagline { color: var(--grey); font-size: 16px; margin: 0; }
+section { padding: 40px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
+p { margin: 0 0 16px; color: var(--grey); }
+p.lead { color: var(--text); }
+a { color: var(--blue); }
+code {
+  font-family: inherit; background: var(--ink-raised);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 2px 6px; font-size: 13px;
+}
+ul { padding-left: 20px; color: var(--grey); }
+li { margin-bottom: 8px; }
+strong { color: var(--text); font-weight: 600; }
+footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
+footer a { color: var(--grey); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Privacy</h1>
+  <p class="tagline">What the maker of Listen receives about you, which is as
+  close to nothing as software can get. Last updated 14 August 2026.</p>
+</header>
+
+<section>
+  <h2>The product</h2>
+  <p class="lead">Listen runs entirely on your devices. Jacaranda Labs
+  operates no server for it, requires no account, and collects no telemetry,
+  analytics, or crash reports. Your recordings, transcripts, notes and
+  voiceprints are yours, on hardware you control, and we cannot see them.</p>
+  <p>If you enable iCloud sync, data moves between <em>your own</em> devices
+  through <em>your own</em> Apple account, sealed with a key we never hold.
+  If you point the Ask feature at a hosted AI provider, the transcripts you
+  ask about go to that provider under your agreement with them, not ours.
+  Both are off until you turn them on.</p>
+</section>
+
+<section>
+  <h2>What we incidentally touch</h2>
+  <p>Some infrastructure sees ordinary connection metadata, such as your IP
+  address, because of how the internet works:</p>
+  <ul>
+    <li><strong>GitHub</strong> serves the update check (every two days), the
+    downloads, and this website (GitHub Pages). GitHub's own privacy policy
+    governs its logs; we run no analytics on any of it.</li>
+    <li><strong>Hugging Face</strong> serves the one-time speech model
+    download.</li>
+    <li><strong>Apple</strong> handles App Store and TestFlight distribution
+    of the iPhone app, under Apple's terms.</li>
+  </ul>
+  <p>None of these connections carries your recordings, transcripts, or
+  anything derived from them.</p>
+</section>
+
+<section>
+  <h2>Your responsibilities as the recorder</h2>
+  <p>You are the controller of what you record. Recording other people is
+  regulated nearly everywhere: consent rules differ by country and by US
+  state, and workplaces have their own. Listen gives you the tools
+  (deletion that propagates everywhere, voiceprint forgetting, an activity
+  log), and the obligation to record lawfully is yours.</p>
+</section>
+
+<section>
+  <h2>Data rights</h2>
+  <p>Every right a data subject might exercise against a Listen library is
+  exercised on the device that holds it, by its owner: the library is open
+  WAV and JSON files, so access and portability are the file system, and
+  deletion is deletion, propagated to every synced device and to iCloud.
+  There is no copy at Jacaranda Labs to ask about, correct, or erase.</p>
+</section>
+
+<section>
+  <h2>Questions</h2>
+  <p>This notice changes only via the public repository, where its history is
+  visible. Questions:
+  <a href="https://github.com/mugoosse/listen/issues">github.com/mugoosse/listen/issues</a>.</p>
+</section>
+
+<footer>
+  <p><a href="index.html">Listen</a> ·
+  <a href="security.html">Security</a> ·
+  <a href="hipaa.html">HIPAA deployment</a> ·
+  <a href="https://github.com/mugoosse/listen">Source</a></p>
+</footer>
+
+</div>
+</body>
+</html>

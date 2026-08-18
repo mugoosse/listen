@@ -1191,8 +1191,11 @@ final class AboutPane: Pane {
 
         separator()
         note("Listen is free software under the AGPL 3.0. It has no account and no "
-             + "telemetry. It uses the network twice: to download a model you chose, "
-             + "and to ask whether a newer version of Listen exists.")
+             + "telemetry. On its own it uses the network twice: to download a model "
+             + "you chose, and to ask whether a newer version of Listen exists. Two "
+             + "features add a connection only if you turn them on: iCloud sync, "
+             + "which stores sealed data Apple cannot read, and a hosted Ask "
+             + "provider, which receives the meetings you ask about.")
         // The AGPL is a source-availability licence, so the About box is the
         // honest place to say where that source is.
         let source = button(Self.sourceURL) {

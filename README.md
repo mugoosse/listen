@@ -528,6 +528,13 @@ The guest list is copied into `metadata.json` rather than looked up when needed,
 so a recording keeps answering after the meeting is deleted from the calendar or
 you take the permission away again.
 
+When iCloud sync is on, or after `listen backup --now`, Listen also keeps
+copies at `~/Backups/Listen`: a daily APFS clone of the whole library, seven
+kept, and a nightly tarball of the sidecars without audio, thirty kept. The
+folder is readable by your account alone. A recording you delete stays in
+those copies until they age out, which is the point of a backup and worth
+knowing when a delete has to be final: `listen backup` says what is there.
+
 Because it is only folders, a file sync tool is all it takes to read the same
 library on a second Mac. [`SYNC.md`](SYNC.md) is the guide, and the short version
 is that the transcripts are 6.5 MB and the audio is 8.3 GB, so the audio stays on
@@ -535,16 +542,27 @@ the machine that recorded it.
 
 ## What leaves your Mac
 
-Two things, both declared in `InternetAccessPolicy.plist` for firewall tools
-like Little Snitch:
+With everything at its defaults, two things, both declared in
+`InternetAccessPolicy.plist` for firewall tools like Little Snitch:
 
 - **huggingface.co**, once, to download the speech model.
 - **github.com**, every two days, to check for an update.
 
-That is all. Audio, transcripts and voiceprints are never uploaded, and there
-is no telemetry. Reading your calendar adds nothing to this list: it is the
-local calendar store, not a network call, which is the reason the feature needs
-no account.
+Two more exist only if you turn them on, and are in the same policy file:
+
+- **iCloud sync**, off by default. Everything Listen puts in your private
+  CloudKit database is sealed on your devices with a key Apple never holds, so
+  Apple stores ciphertext it cannot read. [`SYNC.md`](SYNC.md) says exactly
+  what travels and what stays.
+- **The agent endpoint**, unset by default. If you point Settings, Ask at a
+  hosted provider, transcripts of the meetings you ask about are sent to it,
+  at the moment you ask and never in the background. An endpoint on this Mac,
+  which is what Ollama gives you, sends nothing anywhere.
+
+Audio never leaves except as sealed phone-to-Mac transfer during sync, and
+there is no telemetry. Reading your calendar adds nothing to this list: it is
+the local calendar store, not a network call, which is the reason the feature
+needs no account.
 
 The MCP server adds nothing either, because it opens no port and speaks over a
 pipe. What it does do is hand transcript text to whatever is on the other end of

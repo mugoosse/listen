@@ -39,6 +39,7 @@ enum MCP {
     static let protocolVersion = "2024-11-05"
 
     static func serve() -> Never {
+        transport = "stdio"
         // Line-delimited JSON-RPC on stdin. Nothing else may write to stdout
         // for the lifetime of the process: a stray print corrupts the stream
         // and the client sees a parse error rather than a message from us.
@@ -99,6 +100,15 @@ enum MCP {
 
         case "resources/read":
             let uri = params["uri"] as? String ?? ""
+            // The resource route reads the same transcripts the tools do, so
+            // it leaves the same trace. The uri's last component is the id.
+            ActivityLog.append("mcp_resource", [
+                "transport": transport,
+                "recordings": ActivityLog.recordingIDs(
+                    in: ["recording_id": uri.split(separator: "/")
+                        .dropLast(uri.hasSuffix("/transcript") ? 1 : 0)
+                        .last.map(String.init) ?? ""]),
+            ])
             if let text = readResource(uri) {
                 send(result(id: id, ["contents": [[
                     "uri": uri,
@@ -421,13 +431,42 @@ enum MCP {
         }
     }
 
+    /// Which way the library is being read, for the activity log. `serve()`
+    /// stamps it `stdio` at startup; everything in-process stays `in-app`.
+    /// One static rather than a parameter, because `call` has many callers
+    /// and exactly two transports.
+    static var transport = "in-app"
+
     /// Run one tool and return what it would have sent back over the wire.
     ///
+    /// The single choke point for every tool invocation: the stdio server,
+    /// the in-app agent, and the CLI harnesses (which reach the library only
+    /// through a spawned `listen mcp`) all land here, which is what lets one
+    /// line make the whole surface auditable. The log carries the tool name
+    /// and recording ids, never arguments: a query names what a meeting was
+    /// about, and the log must stay safe to read aloud.
+    static func call(_ name: String, _ args: [String: Any]) throws -> String {
+        do {
+            let out = try perform(name, args)
+            ActivityLog.append("mcp_call", [
+                "tool": name, "transport": transport,
+                "recordings": ActivityLog.recordingIDs(in: args), "ok": true,
+            ])
+            return out
+        } catch {
+            ActivityLog.append("mcp_call", [
+                "tool": name, "transport": transport,
+                "recordings": ActivityLog.recordingIDs(in: args), "ok": false,
+            ])
+            throw error
+        }
+    }
+
     /// Synchronous, and it reads the library off disk: `Recording.all()` walks
     /// every folder and `search_transcripts` reads every transcript. Over stdio
     /// that cost lands in a second process and nobody notices. In-process it is
     /// the caller's job to be off the main thread, which `AgentChat` is.
-    static func call(_ name: String, _ args: [String: Any]) throws -> String {
+    private static func perform(_ name: String, _ args: [String: Any]) throws -> String {
         switch name {
         case "list_recordings":
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)

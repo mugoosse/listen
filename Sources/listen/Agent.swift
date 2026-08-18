@@ -949,12 +949,18 @@ final class AgentRun {
     /// once it has.
     enum Failure: LocalizedError {
         case offline(AgentBackend)
+        case managed(AgentBackend)
 
         var errorDescription: String? {
             switch self {
             case .offline(let backend):
                 return "No internet connection, so the question cannot be sent. "
                      + "Recording and transcription are local; \(backend.name) is not."
+            case .managed(let backend):
+                return "Your organisation's device profile restricts Ask to "
+                     + "endpoints on this Mac, and \(backend.name) sends the "
+                     + "meetings you ask about to its own service. An endpoint "
+                     + "running on this Mac, like Ollama, still works."
             }
         }
     }
@@ -1339,6 +1345,19 @@ final class AgentRun {
         if question.backend.needsNetwork, Reachability.offline() {
             throw Failure.offline(question.backend)
         }
+
+        // Both CLIs send transcripts to their vendor by construction, so a
+        // loopback-only profile rules them out entirely, before the process
+        // exists.
+        if Settings.agentLoopbackOnly {
+            throw Failure.managed(question.backend)
+        }
+
+        // The event and the backend, never the question: both CLIs send the
+        // transcripts they read to their vendor, and the log's job is to say
+        // that happened, not what was asked.
+        ActivityLog.append("agent_run", ["backend": "\(question.backend)",
+                                         "remote": true])
 
         process.executableURL = question.path
         process.arguments = Self.arguments(for: question)

@@ -356,11 +356,16 @@ actor Pipeline {
         if !fired.isEmpty { trace("cleanup fired: \(fired)") }
 
         let rules = Self.applyDictionary(to: &cleaned)
-        // On stderr rather than behind LISTEN_DEBUG, unlike the cleanup counts.
-        // Cleanup is the app tidying up after the model, and the rules are ours.
-        // The dictionary is the user's own list rewriting their own meeting, and
-        // somebody who added a rule this morning should be told it fired.
-        if !rules.isEmpty { log("dictionary applied: \(rules)") }
+        // The count stays on stderr unconditionally: the dictionary is the
+        // user's own list rewriting their own meeting, and somebody who added
+        // a rule this morning should be told it fired. The rule text is behind
+        // LISTEN_DEBUG, because a GUI launch sends stderr to the unified log
+        // and a correction like a person's name should not sit there in plain
+        // text.
+        if !rules.isEmpty {
+            log("dictionary applied: \(rules.count) rule(s)")
+            trace("  rules: \(rules)")
+        }
 
         let stored = StoredTranscript(
             segments: cleaned,

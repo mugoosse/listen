@@ -383,6 +383,24 @@ final class SidebarViewController: NSViewController {
         reloading = true
         table.reloadData()
 
+        // A selected person is kept the same way, and first for the same
+        // reason: whichever of the three is set is the one the pane is showing.
+        //
+        // Their row is the one that can stop existing without them being
+        // deleted, because it is only in this list while a query names them.
+        // Whether it survived decides nothing about the card: `selectedPerson`
+        // is what the pane and the menu read, and it stays set either way. See
+        // `deselect`, which is the half of this that used to be missing.
+        if let keepLabel = selectedPerson?.label, let row = rows.firstIndex(where: {
+            if case .person(let p) = $0 { return p.label == keepLabel }
+            return false
+        }) {
+            table.selectRowIndexes([row], byExtendingSelection: false)
+            if case .person(let fresh) = rows[row] { selectedPerson = fresh }
+            reloading = false
+            return
+        }
+
         // A selected note is kept the same way and for the same reason, and
         // first because the two are mutually exclusive: whichever one is set is
         // the one the pane is showing.
@@ -726,10 +744,26 @@ final class SidebarViewController: NSViewController {
     /// Put the open page away and give the pane back to the composer.
     ///
     /// `deselectAll` posts the selection notification, which is what carries
-    /// the nil onwards, so this does not report it a second time.
+    /// the nil onwards, so that path does not report it a second time.
+    ///
+    /// **What is open and what is selected are two different questions, and
+    /// only the second one is the table's.** A person is the one page that can
+    /// be open with no row behind it: their row exists only while a query names
+    /// them, so opening a card from the search results and then clearing the
+    /// field rebuilds the list without it. `deselectAll` on an empty selection
+    /// changes nothing, so it posts nothing, so Close did nothing at all on the
+    /// screen it is the only way off. Measured on the shipped build: the card
+    /// stayed up and the menu went on offering Close.
     func deselect() {
         loadViewIfNeeded()
         guard hasSelection else { return }
+        guard table.selectedRow >= 0 else {
+            selectedRecording = nil
+            selectedNote = nil
+            selectedPerson = nil
+            onSelect?(nil)
+            return
+        }
         table.deselectAll(nil)
     }
 

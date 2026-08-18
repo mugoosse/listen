@@ -322,12 +322,15 @@ enum VoiceBank {
         updated.metadata.auto_named =
             (updated.metadata.auto_named ?? []) + applied.map(\.name)
         try? updated.save()
-        // To stderr rather than behind `LISTEN_DEBUG`, for the reason the
-        // dictionary counts are: this is the app writing somebody's name into an
-        // archive nobody may open for a month.
+        // The event stays on stderr unconditionally: this is the app writing
+        // into an archive nobody may open for a month, and that has to be
+        // visible. The name itself is behind `LISTEN_DEBUG`, because a GUI
+        // launch sends stderr to the unified log, where a person's name would
+        // sit in plain text for any diagnostic report to sweep up.
         for a in applied {
-            log("named \(SpeakerName.display(a.speaker)) as \(a.name) by voice "
+            log("named \(SpeakerName.display(a.speaker)) by voice "
                 + "in \(recording.id)")
+            trace("  as \(a.name)")
         }
         return applied
     }

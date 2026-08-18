@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sample managed-preferences profile for Listen. See MANAGED.md for what each
+  key does and how to verify it took effect. Edit the mcx_preference_settings
+  dictionary, then install by opening this file and approving it in
+  System Settings, General, Device Management, or push it through your MDM.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.ManagedClient.preferences</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>eu.jacarandalabs.listen.managed.preferences</string>
+            <key>PayloadUUID</key>
+            <string>7A1E4C02-9B7D-4F5E-8C31-2D9A6E5B0F11</string>
+            <key>PayloadDisplayName</key>
+            <string>Listen managed preferences</string>
+            <key>PayloadContent</key>
+            <dict>
+                <key>com.mgo.listen</key>
+                <dict>
+                    <key>Forced</key>
+                    <array>
+                        <dict>
+                            <key>mcx_preference_settings</key>
+                            <dict>
+                                <!-- Sync stays off: Apple signs no BAA for
+                                     iCloud, so a regulated library must not
+                                     enable it. -->
+                                <key>cloudSync</key>
+                                <false/>
+                                <!-- Ask may only talk to endpoints on the
+                                     Mac itself, such as Ollama. -->
+                                <key>agentLoopbackOnly</key>
+                                <true/>
+                                <!-- No plaintext dictation history file. -->
+                                <key>dictationHistoryDisabled</key>
+                                <true/>
+                                <!-- Optional: move the daily backups, for
+                                     example onto an encrypted volume.
+                                <key>backupsPath</key>
+                                <string>/Volumes/Encrypted/ListenBackups</string>
+                                -->
+                            </dict>
+                        </dict>
+                    </array>
+                </dict>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadIdentifier</key>
+    <string>eu.jacarandalabs.listen.managed</string>
+    <key>PayloadUUID</key>
+    <string>5B0D2E91-3C4A-4D8F-9E62-8F1B7C3A2D40</string>
+    <key>PayloadDisplayName</key>
+    <string>Listen compliance settings</string>
+    <key>PayloadDescription</key>
+    <string>Forces Listen's sync, agent and history settings for managed deployments.</string>
+    <key>PayloadOrganization</key>
+    <string>Your organisation</string>
+</dict>
+</plist>

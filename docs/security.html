@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen, security</title>
+<meta name="description" content="What runs where, what leaves the machine, and how to check it.">
+<link rel="icon" href="icon.png">
+<style>
+:root {
+  --ink:        #0d0d0c;
+  --ink-raised: #161615;
+  --line:       #262624;
+  --text:       #f2f2f0;
+  --grey:       #a0a09d;
+  --grey-dim:   #6d6d6a;
+  --blue:       #5c7cff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+header { padding: 64px 0 40px; }
+h1 { font-size: 32px; margin: 0 0 12px; letter-spacing: -0.02em; }
+.tagline { color: var(--grey); font-size: 16px; margin: 0; }
+section { padding: 40px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
+p { margin: 0 0 16px; color: var(--grey); }
+p.lead { color: var(--text); }
+a { color: var(--blue); }
+code, pre {
+  font-family: inherit; background: var(--ink-raised);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+code { padding: 2px 6px; font-size: 13px; }
+pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; margin: 0 0 16px; }
+pre code { border: 0; padding: 0; background: none; }
+ul { padding-left: 20px; color: var(--grey); }
+li { margin-bottom: 8px; }
+strong { color: var(--text); font-weight: 600; }
+.tablewrap { overflow-x: auto; margin: 0 0 16px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border: 1px solid var(--line); color: var(--grey); vertical-align: top; }
+th { color: var(--text); background: var(--ink-raised); font-weight: 600; }
+footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
+footer a { color: var(--grey); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Security</h1>
+  <p class="tagline">What runs where, what leaves the machine, and how to
+  check every claim on this page yourself.</p>
+</header>
+
+<section>
+  <h2>The shape of the thing</h2>
+  <p class="lead">Listen has no server, no account, and no telemetry. There is
+  nothing of yours for us to hold, lose, or be compelled to hand over.</p>
+  <p>Recording, transcription, speaker identification and search all run on
+  your own hardware. The source is public under the AGPL 3.0, so none of this
+  page has to be taken on trust: the code is the claim.</p>
+</section>
+
+<section>
+  <h2>What runs on the device</h2>
+  <ul>
+    <li><strong>Transcription</strong>: NVIDIA Parakeet through MLX, or Apple
+    Intelligence, on the Mac. Audio has no network path at all.</li>
+    <li><strong>Speaker identification</strong>: FluidAudio diarization and
+    voice embeddings, on the Neural Engine.</li>
+    <li><strong>Search, notes, tags</strong>: plain files under
+    <code>~/Library/Application Support/Listen</code>, one folder per
+    recording, no database.</li>
+    <li><strong>The iPhone app</strong> records and plays; it does not
+    transcribe, and it has zero third-party dependencies.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Every connection, declared</h2>
+  <p class="lead">The repository ships
+  <a href="https://github.com/mugoosse/listen/blob/main/InternetAccessPolicy.plist">
+  <code>InternetAccessPolicy.plist</code></a>, a machine-readable list of every
+  outbound connection, which firewall tools such as Little Snitch display.</p>
+  <ul>
+    <li><strong>huggingface.co</strong>, once, for the speech model. No audio
+    is ever uploaded.</li>
+    <li><strong>github.com</strong>, every two days, to ask whether a newer
+    version exists. Updates are Ed25519-signed and notarized.</li>
+    <li><strong>iCloud</strong>, only if you turn sync on. Off by default.</li>
+    <li><strong>The Ask endpoint you configure</strong>, if you configure one.
+    Nothing is set out of the box, and the local Ollama default sends nothing
+    anywhere.</li>
+  </ul>
+  <p>An organisation can force the last two off with a device profile: see
+  <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>.</p>
+</section>
+
+<section>
+  <h2>How sync is sealed</h2>
+  <p class="lead">Sync goes through your own private CloudKit database. There
+  is no Listen server in the path, and Apple stores ciphertext it cannot
+  read.</p>
+  <ul>
+    <li>Every payload is sealed on your device with
+    <strong>ChaCha20-Poly1305</strong> under a <strong>256-bit key</strong>
+    generated on your first Mac and carried between your devices by iCloud
+    Keychain. The key never touches a Listen system, because there is none.</li>
+    <li>Record names are <strong>HMAC-SHA256</strong> of the content key, so
+    even the names of records reveal nothing: no titles, no dates.</li>
+    <li>Voiceprints live in their own zone that only Macs subscribe to. The
+    phone never receives one, by construction rather than by politeness.</li>
+  </ul>
+  <p>What CloudKit can see, exactly: record counts, change timestamps, asset
+  sizes, and three plaintext coordination fields (<code>claimedBy</code>,
+  <code>claimExpires</code>, <code>audioOn</code>) whose values are opaque
+  device identifiers. That is the complete list, and
+  <code>listen sync inspect</code> prints the container's actual shape so you
+  can confirm it against a live account.</p>
+</section>
+
+<section>
+  <h2>Protection at rest</h2>
+  <ul>
+    <li><strong>Mac</strong>: the library inherits your account's protections;
+    FileVault is the disk-level answer and the
+    <a href="hipaa.html">deployment guide</a> requires it for regulated use.
+    Daily backups under <code>~/Backups/Listen</code> are created owner-only
+    (mode 700), keep 7 daily clones and 30 sidecar archives, then age out.</li>
+    <li><strong>iPhone</strong>: the library is held under iOS Data Protection
+    (<code>completeUntilFirstUserAuthentication</code>, chosen so a recording
+    survives a locked screen), and whether it rides device backups is a
+    setting in Storage.</li>
+    <li><strong>Voiceprints are deletable everywhere.</strong> A voiceprint is
+    biometric material, so "forget this person" exists as a first-class
+    operation: it strips their embeddings from every recording, propagates
+    through sync so every Mac and the CloudKit records follow, and a
+    re-taught name is honoured again. <code>listen forget</code> is the CLI
+    verb.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The activity log</h2>
+  <p>Every MCP tool call, agent run, export, deletion and backup leaves one
+  line in <code>activity.jsonl</code> beside the library: the event and
+  recording ids, never transcript text, names or questions. It exists because
+  an agent that can read your whole library should not be able to do so
+  tracelessly. <code>listen activity</code> reads it back.</p>
+</section>
+
+<section>
+  <h2>What this does not defend against</h2>
+  <p>Honesty about the boundary is part of the design. Anyone who can run
+  code as your user account can read the library, exactly as they could read
+  your documents; the MCP server is a pipe available to processes on your
+  Mac, which is the point of it, and connecting an agent to it is a decision
+  you make. A person holding your unlocked phone can read what the phone
+  holds. The protections above are about the network, other people's clouds,
+  and devices at rest, not about an already-compromised session.</p>
+</section>
+
+<section>
+  <h2>Regulatory mapping</h2>
+  <p>For HIPAA-regulated deployments, the technical safeguards of 45 CFR
+  164.312 map to Listen and the OS as follows. The
+  <a href="hipaa.html">deployment guide</a> turns this into a checklist.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Safeguard</th><th>Where it lands</th></tr>
+    <tr><td>Access control, unique user identification</td>
+        <td>One library per OS account; macOS login and FileVault. No Listen
+        account exists to be shared.</td></tr>
+    <tr><td>Automatic logoff</td>
+        <td>OS screen lock, required by the deployment guide.</td></tr>
+    <tr><td>Audit controls</td>
+        <td><code>activity.jsonl</code> and <code>listen activity</code>.</td></tr>
+    <tr><td>Integrity</td>
+        <td>AEAD authentication on every sealed payload; compare-and-swap on
+        concurrent note edits.</td></tr>
+    <tr><td>Transmission security</td>
+        <td>End-to-end sealing for sync; https required for hosted Ask
+        endpoints; a profile can force Ask local-only.</td></tr>
+  </table></div>
+  <p>Under GDPR, the operator of Listen is the controller of what they record;
+  no personal data reaches the maker of the software. Erasure is real
+  deletion propagated across devices, voiceprints included; portability is
+  the file layout itself, open WAV and JSON on disk; and privacy by design is
+  the architecture on this page, with everything off by default.</p>
+</section>
+
+<section>
+  <h2>Checking, not trusting</h2>
+<pre><code># every outbound host, for your firewall
+open InternetAccessPolicy.plist
+
+# what the container actually holds, without decrypting it
+Listen.app/Contents/MacOS/Listen sync inspect
+
+# the whole sync design, proved offline in about a second
+Listen.app/Contents/MacOS/Listen sync --fake
+
+# who touched the library
+Listen.app/Contents/MacOS/Listen activity</code></pre>
+  <p>This page is engineering documentation, not legal advice. If you are
+  deploying Listen under a regulatory framework, have counsel review your
+  configuration; the architecture makes that review short.</p>
+</section>
+
+<footer>
+  <p><a href="index.html">Listen</a> ·
+  <a href="privacy.html">Privacy</a> ·
+  <a href="hipaa.html">HIPAA deployment</a> ·
+  <a href="https://github.com/mugoosse/listen">Source</a></p>
+</footer>
+
+</div>
+</body>
+</html>

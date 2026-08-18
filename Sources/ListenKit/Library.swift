@@ -12,19 +12,38 @@ public struct Library: Sendable {
 
     public init(root: URL) { self.root = root }
 
+    /// Where a Mac keeps its library when nobody has said otherwise.
+    ///
+    /// Separate from `mac()` because two callers need the question asked
+    /// without the override applied: the sync consent, which has to know what
+    /// an install that predates `Config.cloudSyncLibrary` meant, and anything
+    /// reporting the difference between the two to a human.
+    public static var defaultMacRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Listen")
+    }
+
     /// The Mac's real library, honouring `LISTEN_LIBRARY` exactly as Listen
     /// and its CLI do, so a scratch library works here too.
+    ///
+    /// **Local reads and writes only. This does not scope the container**, and
+    /// nothing can: `CloudAccount.containerID` is one constant per iCloud
+    /// account. Whether a pass may run at all is `Config.cloudSyncApplies`,
+    /// which compares this against the library the consent was given for.
     public static func mac() -> Library {
         if let override = ProcessInfo.processInfo.environment["LISTEN_LIBRARY"], !override.isEmpty {
             return Library(root: URL(fileURLWithPath: override))
         }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory,
-                                               in: .userDomainMask)[0]
-        return Library(root: support.appendingPathComponent("Listen"))
+        return Library(root: defaultMacRoot)
     }
 
-    /// The phone's library, inside the app container so it is covered by the
-    /// device passcode and excluded from unencrypted backups by default.
+    /// The phone's library, inside the app container.
+    ///
+    /// The container puts it behind iOS file protection (made explicit in
+    /// `prepare`), and **inside device backups**: an earlier version of this
+    /// comment claimed backup exclusion that no code performed, and the code
+    /// won the argument. Whether the library rides backups is the user's
+    /// setting now, applied through `setBackupExcluded`.
     public static func phone() -> Library {
         let support = FileManager.default.urls(for: .applicationSupportDirectory,
                                                in: .userDomainMask)[0]
@@ -39,6 +58,33 @@ public struct Library: Sendable {
         for dir in [recordings, staging, notes] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        #if os(iOS)
+        // Explicit rather than inherited from the process default, because
+        // the choice is load-bearing in both directions. `.complete` would
+        // break the two locked-phone behaviours that are the product: the
+        // open `mic.wav` handle writing through a lock, and a silent push
+        // writing sidecars while locked. Weaker than this and the claim
+        // "covered by the passcode" is the OS's accident rather than ours.
+        // Set on the directories, which new files inherit; `.atomic` writes
+        // replace files and would shed a per-file class, so the directory is
+        // the only durable place for it.
+        for dir in [root, recordings, staging, notes] {
+            try? FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: dir.path)
+        }
+        #endif
+    }
+
+    /// Whether this library rides device backups, from the user's Storage
+    /// setting. The flag is per-URL and sticky, so it is applied and cleared
+    /// symmetrically, and re-applying on every launch costs nothing while
+    /// covering a restore onto a new phone.
+    public func setBackupExcluded(_ excluded: Bool) {
+        var url = root
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = excluded
+        try? url.setResourceValues(values)
     }
 
     /// Every recording, newest first. `compactMap` is load-bearing: a folder

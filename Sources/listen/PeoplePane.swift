@@ -806,7 +806,8 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
                 }
                 guard confirm(renaming: person, to: typed) else { return }
                 let changed = People.rename(person.label, to: typed)
-                log("renamed \(person.label) to \(typed) in \(changed.count) recording(s)")
+                log("renamed a person in \(changed.count) recording(s)")
+                trace("  \(person.label) to \(typed)")
                 // Nothing rewritten where there was something to rewrite means
                 // the rename did not happen: a transcript that would not
                 // decode, or one that could not be written. Carrying on files
@@ -874,7 +875,8 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
         let target = others[popup.indexOfSelectedItem]
         let changed = People.merge(person.label, into: target.label)
-        log("merged \(person.label) into \(target.label) in \(changed.count) recording(s)")
+        log("merged two people in \(changed.count) recording(s)")
+        trace("  \(person.label) into \(target.label)")
         onLandOn?(target.label)
     }
 
@@ -907,12 +909,22 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
               + "voiceprint stays with the speaker, so the bank can still "
               + "suggest who they are."
         alert.alertStyle = .warning
+        // Off by default, because the base text above promises the voiceprint
+        // stays and the checkbox is the sentence that changes that. "On every
+        // Mac" is in the label because it is the surprising half: everything
+        // else on this pane is local.
+        let forget = NSButton(checkboxWithTitle:
+            "Also forget their voiceprints, on every Mac", target: nil, action: nil)
+        forget.state = .off
+        alert.accessoryView = forget
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        if forget.state == .on { People.forgetVoiceprints(person.label) }
         let changed = People.unname(person.label)
-        log("unnamed \(person.label) in \(changed.count) recording(s)")
+        log("unnamed a person in \(changed.count) recording(s)")
+        trace("  \(person.label)")
         editing = false
         // The person on screen no longer exists under that name, and this time
         // they are nobody: the empty string lands the roster on no page at all.

@@ -2715,6 +2715,18 @@ enum CLI {
         }
         await MainActor.run { updated.markTranscribeStarted() }
 
+        // A Mac that was given a master and never had the tracks is an
+        // ordinary state now, and this command meets it as often as the queue
+        // does. Without the split it finds no audio at all on a machine whose
+        // own library says it has some.
+        // **Not a `defer`.** Both ways out of this function are `exit`, which
+        // does not unwind, so a deferred cleanup here never runs: measured by
+        // running it, which left a 60 MB `mic.wav` beside a master on a Mac
+        // that had deliberately not kept the raw audio.
+        let splitHere = updated.splitMasterIfNeeded()
+        if splitHere { log("split the master into its tracks") }
+        func dropSplitTracks() { if splitHere { updated.removeSplitTracks() } }
+
         log("transcribing with \(choice.title)")
         do {
             let t0 = Date()
@@ -2729,6 +2741,7 @@ enum CLI {
             // they both just transcribed.
             updated.markTranscribed(transcript)
             updated.markTranscribeFinished()
+            dropSplitTracks()
             await CloudSyncHost.shared.releaseTranscriptionLease(updated.id)
             log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
                        transcript.duration))
@@ -2755,6 +2768,7 @@ enum CLI {
             // The lease goes back on failure too. A run that dies holding one
             // is fifteen minutes in which nothing retries, anywhere.
             updated.markTranscribeFinished()
+            dropSplitTracks()
             await CloudSyncHost.shared.releaseTranscriptionLease(updated.id)
             fail(error.localizedDescription)
         }

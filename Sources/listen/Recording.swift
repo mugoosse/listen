@@ -453,6 +453,41 @@ struct Recording {
         try enc.encode(metadata).write(to: metadataURL, options: .atomic)
     }
 
+    /// Take the master apart, when it is the only audio here.
+    ///
+    /// **Shared by the queue and by `listen transcribe <id>`**, because a Mac
+    /// that was given a master and never had the tracks is now an ordinary
+    /// state and both ways into the pipeline meet it. `Pipeline.run` reads the
+    /// two tracks separately on purpose and a mono sum is not a substitute, so
+    /// without this the command finds no audio at all on a machine whose
+    /// library says it has some.
+    ///
+    /// Returns whether this call wrote the tracks, so the caller can remove
+    /// them again: a device holding only a master is holding 68 MB an hour,
+    /// and leaving the split behind would quietly make it 570 on a machine
+    /// that was never asked to keep the raw audio.
+    ///
+    /// Answered on what appeared rather than on the call returning. `split`
+    /// reports 0 rather than throwing when it cannot make a buffer, and a run
+    /// that then removed tracks it never wrote would be tidying up somebody
+    /// else's files.
+    func splitMasterIfNeeded() -> Bool {
+        guard !hasTracks, let layout = masterLayout else { return false }
+        do {
+            _ = try AudioMaster.split(masterURL, layout: layout, into: folder,
+                                      micURL: micURL, systemURL: systemURL)
+        } catch {
+            log("could not take the master apart for \(id): \(error.localizedDescription)")
+            return false
+        }
+        return hasTracks
+    }
+
+    /// Remove tracks that `splitMasterIfNeeded` wrote.
+    func removeSplitTracks() {
+        for url in [micURL, systemURL] { try? FileManager.default.removeItem(at: url) }
+    }
+
     /// Write down that a run is starting here, and save.
     ///
     /// **Shared by the queue and by `listen transcribe <id>`**, because two

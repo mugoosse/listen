@@ -227,32 +227,10 @@ final class Queue {
             return decline(id)
         }
 
-        // A Mac whose only copy is the master takes it apart first. The
-        // pipeline reads the two tracks separately on purpose, and a mono sum
-        // is not a substitute for them: see `AudioMaster`.
-        var splitHere = false
-        if !recording.hasTracks, let layout = recording.masterLayout {
-            do {
-                // The layout decides which side of the pipeline a one-channel
-                // master lands on, and getting it wrong is not a small error:
-                // an imported meeting written back as `mic.wav` is transcribed
-                // as the user's own voice, with every speaker in it labelled
-                // `Me`.
-                _ = try AudioMaster.split(recording.masterURL, layout: layout,
-                                          into: recording.folder,
-                                          micURL: recording.micURL,
-                                          systemURL: recording.systemURL)
-                // On what actually appeared, not on the call returning. `split`
-                // answers 0 rather than throwing when it cannot make a buffer,
-                // and a run that then removed tracks it never wrote would be
-                // tidying up somebody else's files.
-                splitHere = recording.hasTracks
-                trace(splitHere ? "split the master for \(id)"
-                                : "the master for \(id) produced no tracks")
-            } catch {
-                log("could not take the master apart for \(id): \(error.localizedDescription)")
-            }
-        }
+        // A Mac whose only copy is the master takes it apart first, through the
+        // same call `listen transcribe <id>` makes.
+        let splitHere = recording.splitMasterIfNeeded()
+        if splitHere { trace("split the master for \(id)") }
 
         recording.markTranscribeStarted()
         onChange?(id)
@@ -307,15 +285,8 @@ final class Queue {
         }
         finished.markTranscribeFinished()
 
-        // The tracks this run made out of the master go with it. A device
-        // holding only a master is holding 68 MB an hour; leaving the split
-        // behind would quietly make it 570, on a machine that was never asked
-        // to keep the raw audio and did not have it a moment ago.
-        if splitHere {
-            for url in [finished.micURL, finished.systemURL] {
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
+        // The tracks this run made out of the master go with it.
+        if splitHere { finished.removeSplitTracks() }
 
         // On success and on failure alike. A failed run that keeps the lease
         // until it expires is fifteen minutes in which nothing retries.

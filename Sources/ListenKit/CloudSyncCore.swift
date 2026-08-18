@@ -366,6 +366,7 @@ public struct CloudSyncCore: Sendable {
             base[sent: recording.id] = nil
             base[audioOn: recording.id] = nil
             base[master: recording.id] = nil
+            base[pinned: recording.id] = false
             return true
         }
         for note in library.allNotes()
@@ -424,10 +425,17 @@ public struct CloudSyncCore: Sendable {
         let holders = keepers(devices, now: now)
         guard !holders.isEmpty else { return }
 
+        let base = state.base
         for recording in library.all() where recording.hasAudio {
             guard holders.contains(recording.id), !protecting.contains(recording.id) else {
                 continue
             }
+            // Asked for by hand, one recording at a time. The device-wide
+            // switch is a policy and this is an instruction; without the
+            // difference, a phone with **Keep audio** off could never be given
+            // one meeting to listen to, because the next pass would take it
+            // straight back and the button would appear not to work.
+            if base[pinned: recording.id] { continue }
             // A device that transcribes keeps the audio until there is
             // something made from it. `delivered` is the same test a pull
             // makes on an arriving record, and for the same reason: a
@@ -500,20 +508,27 @@ public struct CloudSyncCore: Sendable {
         var base = state.base
         defer { state.base = base }
 
-        let owed = library.all().filter { base[master: $0.id] == nil && $0.hasTracks }
+        // Anything with audio of its own that no master has been published for.
+        // `hasTracks` is the usual case; a recording whose only audio is the
+        // mixdown a legacy recorder produced is the other, and it used to be
+        // skipped in silence, so an import could never reach a second device in
+        // any playable form at all.
+        let owed = library.all()
+            .filter { base[master: $0.id] == nil && ($0.hasTracks || $0.hasMixdownOnly) }
             .prefix(CloudSyncCore.masterBatch)
         guard !owed.isEmpty else { return }
 
         for (index, recording) in owed.enumerated() {
             progress?("Preparing audio \(index + 1) of \(owed.count)")
             do {
-                guard let url = try AudioMaster.make(micURL: recording.micURL,
-                                                     systemURL: recording.systemURL,
-                                                     into: recording.folder) else { continue }
-                let audio = try Data(contentsOf: url)
+                guard let built = try AudioMaster.make(micURL: recording.micURL,
+                                                       systemURL: recording.systemURL,
+                                                       mixURL: recording.mixURL,
+                                                       into: recording.folder) else { continue }
+                let audio = try Data(contentsOf: built.url)
                 let record = try CloudRecords.master(
                     id: recording.id, from: device, audio: audio,
-                    channels: AudioMaster.channels(in: url), key: key)
+                    channels: built.channels, layout: built.layout, key: key)
                 _ = try await store.save(record)
                 base[master: recording.id] = sha256Hex(audio)
                 report.pushedMasters += 1
@@ -525,7 +540,14 @@ public struct CloudSyncCore: Sendable {
                 // every recording on the one machine that never needs it,
                 // which on this library is 1.5 GB to hold a second copy of
                 // audio it already has. Rebuilding one is four seconds.
-                try? FileManager.default.removeItem(at: url)
+                //
+                // Not for a mixdown-only recording. There are no tracks there
+                // to be the better copy, so removing it would leave the device
+                // that published it holding an m4a its own pipeline reads and
+                // nothing else does.
+                if built.layout == .tracks {
+                    try? FileManager.default.removeItem(at: built.url)
+                }
             } catch StoreError.changedOnServer(let theirs) {
                 // Somebody published it first, which is possible only in the
                 // window where two devices both hold the raw tracks. Their
@@ -564,24 +586,87 @@ public struct CloudSyncCore: Sendable {
             .prefix(CloudSyncCore.masterBatch)
         for (index, recording) in wanted.enumerated() {
             progress?("Fetching audio \(index + 1) of \(wanted.count)")
-            do {
-                let name = CloudRecords.masterName(recording.id, key: key)
-                // Absent is ordinary: the device that holds the tracks has not
-                // published this one yet, and it publishes three a pass.
-                guard let record = try await store.fetch(name, in: .masters) else { continue }
-                let blob = try CloudRecords.openMaster(record, key: key)
-                guard blob.id == recording.id,
-                      let audio = try CloudRecords.openMasterAudio(record, blob, key: key)
-                else {
-                    report.errors.append("audio \(recording.id): the copy did not verify")
-                    continue
-                }
-                try audio.write(to: recording.masterURL, options: .atomic)
-                base[master: recording.id] = blob.digest
-                report.pulledMasters += 1
-            } catch {
-                report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            await receiveMaster(recording, base: &base, into: &report)
+        }
+    }
+
+    /// Fetch one recording's audio because somebody asked for it, and keep it.
+    ///
+    /// The deliberate exception to `pullMasters`, which is a policy. This is an
+    /// instruction, so it works on a device whose switch is off, and it pins
+    /// the recording: `reclaim` leaves a pinned copy alone however many other
+    /// devices report holding it. Without the pin the next pass would free what
+    /// the tap had just downloaded, which is the whole reason the phone could
+    /// not offer this before.
+    ///
+    /// False when there is nothing to fetch yet, which is ordinary: no device
+    /// holding the tracks has published this one.
+    @discardableResult
+    public func fetchMaster(_ id: String, into report: inout CloudReport) async -> Bool {
+        guard Metadata.isValidID(id), let recording = library.find(id) else { return false }
+        var base = state.base
+        defer { state.base = base }
+        if recording.hasAudio {
+            // Already here. Pin it anyway: being asked for it is the
+            // instruction, and it must survive whatever the switch says next.
+            base[pinned: id] = true
+            return true
+        }
+        let received = await receiveMaster(recording, base: &base, into: &report)
+        if received { base[pinned: id] = true }
+        return received
+    }
+
+    /// Let go of one recording's audio on this device, because somebody asked.
+    ///
+    /// The other half of `fetchMaster`, and the only thing in this file that
+    /// frees audio without consulting the roster: a person saying "remove this"
+    /// is not the reclaim invariant, it is somebody deciding about their own
+    /// disk. It still refuses when nobody else reports holding the bytes,
+    /// because "I want the space back" is not "I want to lose the recording".
+    @discardableResult
+    public func freeMaster(_ id: String, _ devices: [CloudRecords.DeviceBlob],
+                           into report: inout CloudReport,
+                           now: Date = Date()) async -> Bool {
+        guard Metadata.isValidID(id), let recording = library.find(id),
+              recording.hasAudio else { return false }
+        guard keepers(devices, now: now).contains(id) else { return false }
+        var base = state.base
+        defer { state.base = base }
+        base[pinned: id] = false
+        for url in recording.audioFiles {
+            let size = (try? FileManager.default.attributesOfItem(
+                atPath: url.path)[.size] as? Int) ?? 0
+            if (try? FileManager.default.removeItem(at: url)) != nil { report.freedBytes += size }
+        }
+        return true
+    }
+
+    /// Take one master down and write it beside the recording. Shared by the
+    /// policy path and the asked-for path so the two cannot verify differently.
+    @discardableResult
+    private func receiveMaster(_ recording: Recording, base: inout SyncState,
+                               into report: inout CloudReport) async -> Bool {
+        do {
+            let name = CloudRecords.masterName(recording.id, key: key)
+            // Absent is ordinary: the device that holds the tracks has not
+            // published this one yet, and it publishes three a pass.
+            guard let record = try await store.fetch(name, in: .masters) else { return false }
+            let blob = try CloudRecords.openMaster(record, key: key)
+            guard blob.id == recording.id,
+                  let audio = try CloudRecords.openMasterAudio(record, blob, key: key)
+            else {
+                report.errors.append("audio \(recording.id): the copy did not verify")
+                return false
             }
+            try audio.write(to: AudioMaster.url(in: recording.folder, blob.layout),
+                            options: .atomic)
+            base[master: recording.id] = blob.digest
+            report.pulledMasters += 1
+            return true
+        } catch {
+            report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -851,6 +936,7 @@ public struct CloudSyncCore: Sendable {
                     base.base[SyncState.r5DropKey(id)] = "due"
                 }
                 base[master: id] = nil
+                base[pinned: id] = false
             } catch {
                 report.errors.append("delete \(id): \(error.localizedDescription)")
             }
@@ -1310,34 +1396,119 @@ public struct CloudSyncCore: Sendable {
         return TranscriptionLease(device: holder, expires: expires, mine: holder == device)
     }
 
+    /// What asking for the lease answered.
+    ///
+    /// Three cases and not two, because "yes" and "nobody could say no" are
+    /// different facts and the caller has to be able to tell them apart. The
+    /// old signature was a `Bool` and the difference was a comment.
+    public enum LeaseOutcome: Sendable, Equatable {
+        /// It is this device's, and the container agreed.
+        case taken
+        /// Somebody else holds it, and this is their claim.
+        case held(TranscriptionLease)
+        /// **Granted by default.** The container could not be reached, so
+        /// nothing could refuse. Listen works with the network off and a Mac
+        /// must still transcribe its own recording, so the answer is yes; but
+        /// the caller now knows nothing checked, and `othersRunLooksLive` is
+        /// what it is expected to ask next.
+        case unreachable
+
+        /// Whether the caller may go ahead on this answer alone. False only
+        /// for `.held`: `.unreachable` is a yes with a caveat, not a no.
+        public var granted: Bool {
+            if case .held = self { return false }
+            return true
+        }
+
+        /// Who has it, when somebody does.
+        public var holder: TranscriptionLease? {
+            if case .held(let lease) = self { return lease }
+            return nil
+        }
+    }
+
+    /// How long another device's unfinished run is believed when the container
+    /// cannot be asked about it.
+    ///
+    /// Six hours, the same number and the same argument as `claimGrace`. A
+    /// lease is fifteen minutes and renewed, but renewals live in the container
+    /// and this is the window where the container is exactly what cannot be
+    /// read, so the only clock available is `transcribe_started` in a
+    /// `metadata.json` that arrived before the network went. A run that has
+    /// shown nothing for six hours is asleep, stuck or on a machine that has
+    /// been shut, and in all three cases transcribing it here beats waiting.
+    /// Being wrong costs one duplicated hour of CPU and cannot cost data:
+    /// nothing here deletes anything.
+    public static let offlineGrace: TimeInterval = 6 * 3600
+
+    /// Whether the recording's own metadata says another device is on this,
+    /// recently enough to be believed.
+    ///
+    /// **The deterrent for the offline window, promoted from a comment to a
+    /// function.** `state: transcribing` used to be described as travelling in
+    /// the metadata and nothing read it, so a Mac that could not reach the
+    /// container started every job it had regardless of what the last sync had
+    /// told it. This is that sentence, asked.
+    ///
+    /// Pure, so it can be checked without a network and without a queue.
+    /// Takes the four fields rather than a `Metadata`, because the Mac app
+    /// models that document with a struct of its own and the answer must not
+    /// depend on which of the two the caller happens to hold.
+    public static func othersRunLooksLive(transcribedBy: String?, state: String?,
+                                          started: String?, finished: String?,
+                                          device: String, now: Date = Date()) -> Bool {
+        guard let holder = transcribedBy, holder != device else { return false }
+        guard Metadata.State(rawValue: state ?? "") == .transcribing else { return false }
+        // Finished is finished, whatever `state` still says.
+        guard finished == nil else { return false }
+        // A run that never said when it began is not evidence: it could be from
+        // any build and any month, and believing it would park the recording.
+        guard let began = started.flatMap(Metadata.parser.date(from:)) else { return false }
+        let age = now.timeIntervalSince(began)
+        return age >= 0 && age < CloudSyncCore.offlineGrace
+    }
+
     /// Take it, or lose it to whoever already has it.
     ///
-    /// True also when there is no record yet, which is a recording this device
-    /// has made and not pushed: nobody else can be transcribing something they
-    /// have never heard of, and refusing would stall the common case on the
-    /// network.
+    /// `.taken` also when there is no record yet, which is a recording this
+    /// device has made and not pushed: nobody else can be transcribing
+    /// something they have never heard of, and refusing would stall the common
+    /// case on the network.
     @discardableResult
     public func takeTranscriptionLease(_ id: String, window: TimeInterval = 900,
-                                       now: Date = Date()) async -> Bool {
-        guard Metadata.isValidID(id) else { return false }
+                                       now: Date = Date()) async -> LeaseOutcome {
+        guard Metadata.isValidID(id) else { return .unreachable }
         let name = CloudNaming.recordName(.recording, id, key: key)
         // A throw here is the container being unreachable, and that must not
         // stop a Mac transcribing its own recording: Listen works with the
         // network off, and the cost of two Macs doing the same hour of work is
-        // wasted CPU rather than lost data. `state: transcribing` travelling in
-        // the metadata is the second deterrent for that window.
+        // wasted CPU rather than lost data. Reported as its own case so the
+        // caller can apply the second deterrent rather than assume there is
+        // one.
         let found: StoredRecord?
-        do { found = try await store.fetch(name, in: .library) } catch { return true }
-        guard var record = found else { return true }
+        do { found = try await store.fetch(name, in: .library) } catch { return .unreachable }
+        guard var record = found else { return .taken }
         if let holder = record.claimedBy, holder != device,
            let expires = record.claimExpires, expires > now {
-            return false
+            return .held(TranscriptionLease(device: holder, expires: expires, mine: false))
         }
         record.claimedBy = device
         record.claimExpires = now.addingTimeInterval(window)
         // The compare-and-swap is the whole mechanism: two Macs waking
         // together both read no holder, and exactly one save lands.
-        return (try? await store.save(record)) != nil
+        guard (try? await store.save(record)) != nil else {
+            // Somebody landed first. Read back who, so the caller can say so
+            // rather than reporting a failure it cannot explain.
+            if let theirs = try? await store.fetch(name, in: .library),
+               let holder = theirs.claimedBy, holder != device,
+               let expires = theirs.claimExpires {
+                return .held(TranscriptionLease(device: holder, expires: expires, mine: false))
+            }
+            return .held(TranscriptionLease(device: "another device",
+                                            expires: now.addingTimeInterval(window),
+                                            mine: false))
+        }
+        return .taken
     }
 
     /// Hold it for another window. A job that outlives its lease invites a

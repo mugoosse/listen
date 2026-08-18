@@ -184,20 +184,25 @@ extension Recording {
     /// When the run began, if it has.
     var transcribeStarted: Date? { metadata.transcribe_started.flatMap(Recording.moment) }
 
-    /// One line: which machine did it and how long it took.
+    /// One line: how long the transcription took, and which machine did it
+    /// when that was not this one.
     ///
-    /// **Nil on a library with one device in it**, which the caller decides,
-    /// because on a single Mac this is noise: there is nowhere else it could
-    /// have happened. It is the answer to a question only a library spread
-    /// over three devices raises.
+    /// **The duration is shown everywhere and the device is not**, which is a
+    /// correction to the first shape of this. That one hid the whole line
+    /// unless the library had more than one device in it, on the grounds that
+    /// naming a machine is noise when there is only one. The naming is; the
+    /// hour it took is not, and it is the same fact on one Mac as on three.
+    /// "Transcribed on this Mac" was the noise, so that is the half that goes.
     @MainActor
     var transcribedLine: String? {
         guard hasTranscript else { return nil }
-        let machine = transcribedHere ? "this Mac"
-            : (transcriberName ?? metadata.transcribed_on)
-        guard let machine else { return nil }
-        guard let took = transcribeDuration else { return "transcribed on \(machine)" }
-        return "transcribed on \(machine) in \(took)"
+        let elsewhere = transcribedHere ? nil : (transcriberName ?? metadata.transcribed_on)
+        switch (elsewhere, transcribeDuration) {
+        case (let machine?, let took?): return "transcribed on \(machine) in \(took)"
+        case (let machine?, nil):       return "transcribed on \(machine)"
+        case (nil, let took?):          return "transcribed in \(took)"
+        case (nil, nil):                return nil
+        }
     }
 
     /// The same instant parser `date` uses, shared so a bad string means one

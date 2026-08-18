@@ -20,9 +20,14 @@ public struct Recording: Sendable, Identifiable {
     public var systemURL: URL { folder.appendingPathComponent("system.wav") }
     public var mixURL: URL { folder.appendingPathComponent("mix.m4a") }
     public var flacURL: URL { folder.appendingPathComponent("mic.flac") }
-    /// The replicated copy: one stereo FLAC, mic left and system right. See
-    /// `AudioMaster`.
-    public var masterURL: URL { AudioMaster.url(in: folder) }
+    /// The replicated copy: one FLAC, whichever kind is here. See
+    /// `AudioMaster.Layout` for why there are two names.
+    public var masterURL: URL {
+        AudioMaster.found(in: folder)?.url ?? AudioMaster.url(in: folder, .tracks)
+    }
+
+    /// What the master here is made of, when there is one.
+    public var masterLayout: AudioMaster.Layout? { AudioMaster.found(in: folder)?.layout }
     public var metadataURL: URL { folder.appendingPathComponent("metadata.json") }
     public var transcriptURL: URL { folder.appendingPathComponent("transcript.json") }
     public var turnsURL: URL { folder.appendingPathComponent("turns.json") }
@@ -48,7 +53,15 @@ public struct Recording: Sendable, Identifiable {
     /// re-transcribe it, so answering "no audio here" about it would be false
     /// in the direction that hides a working copy.
     public var hasAudio: Bool {
-        [micURL, systemURL, mixURL, flacURL, masterURL].contains(where: Recording.exists)
+        [micURL, systemURL, mixURL, flacURL].contains(where: Recording.exists)
+            || AudioMaster.found(in: folder) != nil
+    }
+
+    /// The legacy shape: a mixdown and nothing else, which is what an import
+    /// with a single-track m4a leaves behind. It is the everyone-track and the
+    /// pipeline reads it as one, so it can have a master like anything else.
+    public var hasMixdownOnly: Bool {
+        !hasTracks && Recording.exists(mixURL) && AudioMaster.found(in: folder) == nil
     }
 
     /// Whether the raw tracks are here, which is a different question from
@@ -61,7 +74,8 @@ public struct Recording: Sendable, Identifiable {
     /// Every audio file for this recording that is on this device, so that
     /// freeing one means freeing all of it rather than most of it.
     public var audioFiles: [URL] {
-        [micURL, systemURL, mixURL, flacURL, masterURL].filter(Recording.exists)
+        ([micURL, systemURL, mixURL, flacURL]
+            + AudioMaster.filenames.map(folder.appendingPathComponent)).filter(Recording.exists)
     }
 
     public var state: Metadata.State {

@@ -443,10 +443,22 @@ public enum CloudRecords {
         /// Two for a meeting, one for a voice memo. Here so a device can say
         /// what it is about to get without opening it.
         public var channels: Int
+        /// What the channels **are**, which is a different question from how
+        /// many there are and the one that decides where they are split back
+        /// to. Optional because records published before this field existed
+        /// carry none, and every one of those was built from separate tracks.
+        /// See `AudioMaster.Layout`.
+        public var layoutName: String?
 
-        public init(id: String, from: String, digest: String, bytes: Int, channels: Int) {
+        public var layout: AudioMaster.Layout {
+            layoutName.flatMap(AudioMaster.Layout.init(rawValue:)) ?? .tracks
+        }
+
+        public init(id: String, from: String, digest: String, bytes: Int, channels: Int,
+                    layout: AudioMaster.Layout = .tracks) {
             self.id = id; self.from = from; self.digest = digest
             self.bytes = bytes; self.channels = channels
+            self.layoutName = layout.rawValue
         }
     }
 
@@ -462,9 +474,10 @@ public enum CloudRecords {
     }
 
     public static func master(id: String, from: String, audio: Data, channels: Int,
+                              layout: AudioMaster.Layout = .tracks,
                               key: PairingKey) throws -> StoredRecord {
         let blob = MasterBlob(id: id, from: from, digest: sha256Hex(audio),
-                              bytes: audio.count, channels: channels)
+                              bytes: audio.count, channels: channels, layout: layout)
         return StoredRecord(
             name: masterName(id, key: key),
             type: .audioTransfer,

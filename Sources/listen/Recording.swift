@@ -316,7 +316,9 @@ struct Recording {
     /// The replicated copy: one stereo FLAC, mic left and system right, which
     /// is what a Mac that never recorded this meeting can end up holding. See
     /// `AudioMaster`.
-    var masterURL: URL { AudioMaster.url(in: folder) }
+    var masterURL: URL {
+        AudioMaster.found(in: folder)?.url ?? AudioMaster.url(in: folder, .tracks)
+    }
     var transcriptURL: URL { folder.appendingPathComponent("transcript.json") }
     var turnsURL: URL { folder.appendingPathComponent("turns.json") }
     var embeddingsURL: URL { folder.appendingPathComponent("embeddings.json") }
@@ -416,18 +418,31 @@ struct Recording {
     /// the pipeline reads the two tracks separately on purpose.
     var hasAudio: Bool {
         !tracks.isEmpty || FileManager.default.fileExists(atPath: mixURL.path)
-            || FileManager.default.fileExists(atPath: masterURL.path)
+            || AudioMaster.found(in: folder) != nil
     }
 
     /// Whether the two separate tracks are here, which is what the pipeline
     /// reads and a different question from `hasAudio`.
     var hasTracks: Bool { !tracks.isEmpty }
 
+    /// The legacy shape: a mixdown and nothing else, which is what an import
+    /// with a single-track m4a leaves behind. `Pipeline.run` reads it as the
+    /// everyone-track, so it can have a master like anything else, and it used
+    /// to get none at all.
+    var hasMixdownOnly: Bool {
+        !hasTracks && FileManager.default.fileExists(atPath: mixURL.path)
+            && AudioMaster.found(in: folder) == nil
+    }
+
+    /// What the master here is made of, when there is one.
+    var masterLayout: AudioMaster.Layout? { AudioMaster.found(in: folder)?.layout }
+
     /// Every audio file for this recording that is on this Mac, so that
     /// measuring what audio costs, or freeing it, means all of it rather than
     /// most of it.
     var audioFiles: [URL] {
-        [micURL, systemURL, mixURL, masterURL].filter {
+        ([micURL, systemURL, mixURL]
+            + AudioMaster.filenames.map(folder.appendingPathComponent)).filter {
             FileManager.default.fileExists(atPath: $0.path)
         }
     }
@@ -436,6 +451,31 @@ struct Recording {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(metadata).write(to: metadataURL, options: .atomic)
+    }
+
+    /// Write down that a run is starting here, and save.
+    ///
+    /// **Shared by the queue and by `listen transcribe <id>`**, because two
+    /// places that both transcribe and only one of which records who did it is
+    /// a library where the provenance is missing for reasons nobody can see.
+    /// Written before the run rather than after it, for the same reason the
+    /// model is: this is what every other device reads while the hour it takes
+    /// goes by, and a field only written on success says nothing about a job
+    /// that is still going or one that died.
+    @MainActor
+    mutating func markTranscribeStarted(at when: Date = Date()) {
+        metadata.state = Metadata.State.transcribing.rawValue
+        metadata.transcribed_by = CloudSyncHost.deviceID
+        metadata.transcribed_on = CloudSyncHost.deviceName
+        metadata.transcribe_started = Metadata.iso(when)
+        metadata.transcribe_finished = nil
+        try? save()
+    }
+
+    /// And that it has stopped, whatever the outcome.
+    mutating func markTranscribeFinished(at when: Date = Date()) {
+        metadata.transcribe_finished = Metadata.iso(when)
+        try? save()
     }
 
     static func load(_ folder: URL) -> Recording? {

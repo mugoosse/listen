@@ -2031,13 +2031,13 @@ final class DetailView: NSView {
         // by the English-only model read as fluent nonsense with no fact on
         // screen to explain it, and the model that did it was the default. A
         // fact that only appears sometimes is one nobody learns to read.
-        // The fifth fact, and the only one that is about a machine rather than
-        // about the meeting: which device made this transcript and how long it
-        // took. **Only on a library with more than one device in it.** On a
-        // single Mac it is noise, because there is nowhere else it could have
-        // happened; on three devices it is the answer to "why has this one been
-        // sitting there since lunchtime" and to "which machine has the audio".
-        let provenance = CloudSyncHost.isShared ? (recording.transcribedLine ?? "") : ""
+        // The fifth fact: how long the transcription took, and which machine
+        // did it when that was not this one. No gate on the library being
+        // shared, which the first shape of this had: the duration is the same
+        // fact on one Mac as on three, and it was the device name that was
+        // noise on a single Mac rather than the whole line. See
+        // `Recording.transcribedLine`.
+        let provenance = recording.transcribedLine ?? ""
         let facts = [recording.when, recording.lengthText,
                      recording.appLabel ?? "",
                      stored.map { Recording.modelName($0.model) } ?? "",

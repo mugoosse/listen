@@ -315,13 +315,39 @@ final class CloudSyncHost {
 
     /// Take the right to transcribe one recording, or find out who has it.
     ///
-    /// True when there is nothing to ask, which is a Mac that does not sync
-    /// and a Mac whose container is unreachable alike. See
-    /// `CloudSyncCore.takeTranscriptionLease` for why that is the safe answer
-    /// and what the second deterrent is inside that window.
-    func takeTranscriptionLease(_ id: String) async -> Bool {
-        guard let core = leaseCore() else { return true }
+    /// `.unreachable` when there is nothing to ask, which is a Mac that does
+    /// not sync and a Mac whose container is down alike. Both mean go ahead,
+    /// and both mean nothing refused, which is why the caller is told which
+    /// answer it got: see `CloudSyncCore.othersRunLooksLive` for the second
+    /// deterrent that applies inside that window.
+    func takeTranscriptionLease(_ id: String) async -> CloudSyncCore.LeaseOutcome {
+        guard let core = leaseCore() else { return .unreachable }
         return await core.takeTranscriptionLease(id)
+    }
+
+    /// Fetch one recording's audio because somebody asked for it, and keep it.
+    @discardableResult
+    func fetchAudio(_ id: String) async -> Bool {
+        guard let core = leaseCore() else { return false }
+        var report = CloudReport()
+        let got = await core.fetchMaster(id, into: &report)
+        if got { RecordingEvents.changed?() }
+        return got
+    }
+
+    /// Let go of one recording's audio here, when another device is keeping it.
+    @discardableResult
+    func freeAudio(_ id: String) async -> Bool {
+        guard let core = leaseCore() else { return false }
+        var report = CloudReport()
+        let freed = await core.freeMaster(id, devices, into: &report)
+        if freed { RecordingEvents.changed?() }
+        return freed
+    }
+
+    /// Whether this device was asked to keep this one recording's audio.
+    static func isPinned(_ id: String) -> Bool {
+        EngineState(library: ListenKit.Library.mac()).base[pinned: id]
     }
 
     func renewTranscriptionLease(_ id: String) async {
@@ -457,11 +483,4 @@ final class CloudSyncHost {
             .sorted { $0.lastSeen > $1.lastSeen }
     }
 
-    /// Whether this library has more than one device in it, which is the
-    /// question every provenance line is worth showing behind. On one Mac
-    /// "transcribed on this Mac" is noise: there is nowhere else it could
-    /// have happened.
-    static var isShared: Bool {
-        Settings.cloudSyncApplies && shared.devices.count > 1
-    }
 }

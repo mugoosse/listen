@@ -3127,6 +3127,26 @@ extension LibraryWindow: NSMenuDelegate {
         // ellipsis and the sidebar's right-click menu both, because they share
         // this delegate.
         add(menu, "Tags…", #selector(tagSelected), "number")
+
+        // This one recording's audio, asked for or given back.
+        //
+        // Separate from the Keep audio switch on purpose: that is a policy for
+        // the whole library and this is an instruction about one meeting, and a
+        // Mac that keeps no audio still needs a way to hear one. Offered only
+        // when another live device says it holds the bytes, which is both what
+        // makes fetching possible and what makes removing safe: nothing here
+        // may hand back the only copy.
+        if CloudSyncHost.audioHolders(of: recording.id).isEmpty == false {
+            menu.addItem(.separator())
+            if recording.hasAudio {
+                add(menu, "Remove the Audio from This Mac",
+                    #selector(freeAudioSelected), "externaldrive.badge.minus")
+            } else {
+                add(menu, "Download the Audio", #selector(fetchAudioSelected),
+                    "arrow.down.circle")
+            }
+        }
+
         menu.addItem(.separator())
         add(menu, "Show in Finder", #selector(revealSelected), "folder")
         menu.addItem(.separator())
@@ -3136,6 +3156,31 @@ extension LibraryWindow: NSMenuDelegate {
         // not look like the others.
         delete.attributedTitle = NSAttributedString(
             string: "Delete", attributes: [.foregroundColor: NSColor.systemRed])
+    }
+
+    /// Bring one recording's audio down and keep it, whatever the switch says.
+    @objc func fetchAudioSelected() {
+        guard let recording = selected else { return }
+        Task { @MainActor in
+            if await CloudSyncHost.shared.fetchAudio(recording.id) {
+                self.reload()
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "The audio has not arrived yet"
+                alert.informativeText = "The device holding this recording publishes its "
+                    + "audio a few at a time. Try again in a few minutes."
+                alert.runModal()
+            }
+        }
+    }
+
+    /// Give it back, when another device that keeps audio has those bytes.
+    @objc func freeAudioSelected() {
+        guard let recording = selected else { return }
+        Task { @MainActor in
+            _ = await CloudSyncHost.shared.freeAudio(recording.id)
+            self.reload()
+        }
     }
 
     @discardableResult

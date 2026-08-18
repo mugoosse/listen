@@ -270,25 +270,53 @@ tracks are read whole, about a gigabyte resident at the peak, which is why
 is up to 4608 frames (32 ms of silence) longer than its tracks; nothing is lost
 and nothing shifts.
 
-### Left over
+### Closed since, and how
 
-- **The offline lease window is still unmeasured.** `takeTranscriptionLease`
-  returns true when the container is unreachable, so an offline Mac still
-  transcribes its own recording. `Queue` now writes `state: transcribing` and
-  calls `syncSoon` before the run rather than after it, which is the best that
-  window allows, and whether it is enough is still not measured.
-- **Nothing has run against the real container yet.** Every claim above is the
-  fake store plus one encoder measurement. The first real pass will publish
-  three masters and create `z5`; watch `listen audio` and `listen sync inspect`
-  on both Macs before turning the switch off anywhere.
-- **The second Mac must be updated before either switch goes off.** A Mac on
-  0.15.0 publishes no `holdsAudio`, so it authorises nothing, which is the safe
-  direction: nothing is freed rather than something being freed wrongly.
-- **A phone cannot fetch a master.** Deliberate, and its footer says so. An
-  on-demand "download this one" would need a per-recording pin so `reclaim`
-  does not take it straight back, which is the next piece of design if the
-  phone should play a meeting it did not record.
-- **An imported recording gets no master.** `AudioMaster.make` builds from the
-  two tracks and an import has only `mix.m4a`, so those recordings keep their
-  mixdown and are never freed. Safe, and worth knowing before somebody wonders
-  why the count in `listen audio` does not reach the whole library.
+- **The offline lease window is measured.** `takeTranscriptionLease` answers
+  three ways now rather than two: `.taken`, `.held(lease)`, and `.unreachable`,
+  which is a yes with the caveat that nothing could refuse. `state:
+  transcribing` used to be described as travelling in the metadata and
+  **nothing read it**, so a Mac that could not reach the container started
+  every job it had. `CloudSyncCore.othersRunLooksLive` is that sentence asked:
+  another device's unfinished run, with a start time inside six hours, is a
+  reason to leave the recording alone. Six hours is `claimGrace`'s number and
+  its argument. Seven seams, against a store that throws on everything.
+- **`listen transcribe <id>` takes the same lease** and writes the same four
+  provenance fields, through `markTranscribeStarted` and
+  `markTranscribeFinished` shared with `Queue`. It was a second way into the
+  pipeline with neither, so a Mac running it while the other Mac's queue was on
+  the same recording was the race the lease exists to stop.
+- **The provenance line is on screen**, and it changed shape on the way. It was
+  hidden unless the library had more than one device in it, on the grounds that
+  naming a machine is noise on a single Mac. The naming is; the hour it took is
+  not. So the duration shows everywhere and the machine is named only when it
+  is not this one: `8 Aug 2026 at 08:27 · 0:36 · Parakeet v2 · transcribed in
+  1 s`, photographed on a scratch library holding one real 36 second recording.
+- **A device can be given one recording's audio.** `SyncState` gained `pin:`,
+  `reclaim` leaves a pinned recording alone, and `fetchMaster` and `freeMaster`
+  are the pair behind **Download the audio** in the iOS detail screen and
+  **Download the Audio** in the Mac's actions menu. The device switch stays a
+  policy and this is an instruction: **Keep audio on this iPhone** still means
+  "keep what I recorded" and still never downloads the Macs' meetings.
+  `freeMaster` refuses when nothing else reports holding the bytes, because
+  wanting the space back is not wanting to lose the recording.
+- **An import gets a master.** `AudioMaster.Layout` is `tracks` or `everyone`,
+  the name on disk carries it (`master.flac` against `master-everyone.flac`),
+  and the mixdown is decoded through `AVAssetReader` so a 44.1 kHz stereo m4a
+  does not come back three times too slow. It matters which: an `everyone`
+  master written back as `mic.wav` is an imported meeting transcribed as the
+  user's own voice, with every speaker in it labelled `Me`.
+
+56 seams, three times against the same directory. On the real container: 40 of
+40 masters published, `z4` empty throughout, this Mac reporting `keeps audio,
+holds 40`, and the pass settling to `Up to date`.
+
+### Still open
+
+- **The other two devices are on the old build.** They publish no `holdsAudio`,
+  so they authorise no deletion anywhere, which is the safe direction and also
+  means nothing is freed until they are updated.
+- **Nothing has pulled a master on a real second device yet.** The push half is
+  proven against the live container; the pull half is proven against the fake,
+  plus a by-name fetch through `sync inspect --recording` which does open and
+  verify a real blob.

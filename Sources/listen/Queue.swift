@@ -155,6 +155,14 @@ final class Queue {
         return true
     }
 
+    /// Give the slot back and move on, for a recording this Mac may not take.
+    private func decline(_ id: String) {
+        running = nil
+        progress = nil
+        onChange?(id)
+        advance()
+    }
+
     private func advance() {
         guard running == nil, !waiting.isEmpty else { return }
         let id = waiting.removeFirst()
@@ -183,31 +191,55 @@ final class Queue {
         var recording = found
         let id = recording.id
 
-        guard await CloudSyncHost.shared.takeTranscriptionLease(id) else {
-            // Somebody else has it. Remembered with its expiry so the queue
-            // stops asking until that claim runs out: `resume` runs after
-            // every pass that pulls anything, and a contested recording would
-            // otherwise cost a round trip each time to be told the same thing.
-            let lease = await CloudSyncHost.shared.transcriptionLease(id)
-            let who = lease.flatMap { CloudSyncHost.deviceName(for: $0.device) }
-                ?? "another device"
-            elsewhere[id] = lease?.expires ?? Date().addingTimeInterval(900)
+        let outcome = await CloudSyncHost.shared.takeTranscriptionLease(id)
+        // Somebody else has it. Remembered with its expiry so the queue stops
+        // asking until that claim runs out: `resume` runs after every pass that
+        // pulls anything, and a contested recording would otherwise cost a
+        // round trip each time to be told the same thing.
+        if let lease = outcome.holder {
+            let who = CloudSyncHost.deviceName(for: lease.device) ?? "another device"
+            elsewhere[id] = lease.expires
             trace("not transcribing \(id): \(who) is")
-            running = nil
-            progress = nil
-            onChange?(id)
-            advance()
-            return
+            return decline(id)
+        }
+        // **Nothing refused, because nothing could be asked.** The container is
+        // unreachable, or this Mac does not sync at all, and Listen has to keep
+        // working with the network off. The only thing left that knows anything
+        // is the recording's own `metadata.json`, which is what the last pull
+        // put there, so ask it: another device's unfinished run, started
+        // recently enough to still be running, is a reason to leave this alone.
+        //
+        // This is the window the design flagged and could not measure. It is
+        // measured now, in `FakeSync`, against a store that throws.
+        if outcome == .unreachable,
+           CloudSyncCore.othersRunLooksLive(
+               transcribedBy: recording.metadata.transcribed_by,
+               state: recording.metadata.state,
+               started: recording.metadata.transcribe_started,
+               finished: recording.metadata.transcribe_finished,
+               device: CloudSyncHost.deviceID) {
+            let who = recording.metadata.transcribed_on ?? "another device"
+            // Believed for the offline grace and no longer, so a machine that
+            // died mid-run cannot park a recording for ever.
+            elsewhere[id] = (recording.transcribeStarted ?? Date())
+                .addingTimeInterval(CloudSyncCore.offlineGrace)
+            trace("not transcribing \(id): \(who) started it and iCloud is unreachable")
+            return decline(id)
         }
 
         // A Mac whose only copy is the master takes it apart first. The
         // pipeline reads the two tracks separately on purpose, and a mono sum
         // is not a substitute for them: see `AudioMaster`.
         var splitHere = false
-        if !recording.hasTracks,
-           FileManager.default.fileExists(atPath: recording.masterURL.path) {
+        if !recording.hasTracks, let layout = recording.masterLayout {
             do {
-                _ = try AudioMaster.split(recording.masterURL, into: recording.folder,
+                // The layout decides which side of the pipeline a one-channel
+                // master lands on, and getting it wrong is not a small error:
+                // an imported meeting written back as `mic.wav` is transcribed
+                // as the user's own voice, with every speaker in it labelled
+                // `Me`.
+                _ = try AudioMaster.split(recording.masterURL, layout: layout,
+                                          into: recording.folder,
                                           micURL: recording.micURL,
                                           systemURL: recording.systemURL)
                 // On what actually appeared, not on the call returning. `split`
@@ -222,16 +254,7 @@ final class Queue {
             }
         }
 
-        recording.metadata.state = Metadata.State.transcribing.rawValue
-        // Written before the run rather than after it, for the same reason the
-        // model is: this is what every other device reads while the hour it
-        // takes goes by, and a field only written on success says nothing at
-        // all about a job that is still going or one that died.
-        recording.metadata.transcribed_by = CloudSyncHost.deviceID
-        recording.metadata.transcribed_on = CloudSyncHost.deviceName
-        recording.metadata.transcribe_started = Metadata.iso(Date())
-        recording.metadata.transcribe_finished = nil
-        try? recording.save()
+        recording.markTranscribeStarted()
         onChange?(id)
         // Say so promptly. `state: transcribing` travelling in the metadata is
         // the second deterrent behind the lease, and the only one at all in the
@@ -282,8 +305,7 @@ final class Queue {
             finished.metadata.state = Metadata.State.failed.rawValue
             log("transcription failed for \(id): \(error.localizedDescription)")
         }
-        finished.metadata.transcribe_finished = Metadata.iso(Date())
-        try? finished.save()
+        finished.markTranscribeFinished()
 
         // The tracks this run made out of the master go with it. A device
         // holding only a master is holding 68 MB an hour; leaving the split

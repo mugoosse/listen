@@ -329,6 +329,9 @@ that repo is being archived.**
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
 
+- The offline window had a deterrent nobody read
+- A switch is a policy, and a tap is an instruction
+- A one-channel master is two different things
 - The audio master has a zone of its own, because `z4` is listed whole
 - A device frees audio on a live device's list, never on a latch
 - One record type, two zones, and why the zone is the cheap half

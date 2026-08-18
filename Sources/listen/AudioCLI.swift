@@ -96,30 +96,37 @@ enum AudioCLI {
         }
 
         if build {
-            guard recording.hasTracks else {
-                print("\nNothing to build from: this Mac has no separate tracks.")
+            guard recording.hasTracks || recording.hasMixdownOnly else {
+                print("\nNothing to build from: this Mac has no audio for it.")
                 exit(0)
             }
             // Removed first, so `--build` measures a build rather than
             // reporting the one that is already there: `AudioMaster.make`
             // returns an existing master untouched, on purpose.
-            try? FileManager.default.removeItem(at: recording.masterURL)
+            for name in AudioMaster.filenames {
+                try? FileManager.default.removeItem(
+                    at: recording.folder.appendingPathComponent(name))
+            }
             let began = Date()
             do {
-                guard let url = try AudioMaster.make(micURL: recording.micURL,
-                                                     systemURL: recording.systemURL,
-                                                     into: recording.folder) else {
+                guard let built = try AudioMaster.make(micURL: recording.micURL,
+                                                       systemURL: recording.systemURL,
+                                                       mixURL: recording.mixURL,
+                                                       into: recording.folder) else {
                     print("\nNo master was made.")
                     exit(1)
                 }
                 let took = Date().timeIntervalSince(began)
-                let tracks = recording.tracks.reduce(Int64(0)) { $0 + fileSize($1) }
-                let master = fileSize(url)
-                print("\nbuilt \(url.lastPathComponent) in \(String(format: "%.1f", took))s")
-                print("  tracks: \(ModelChoice.humanBytes(tracks))")
+                let from = built.layout == .everyone ? [recording.mixURL] : recording.tracks
+                let source = from.reduce(Int64(0)) { $0 + fileSize($1) }
+                let master = fileSize(built.url)
+                print("\nbuilt \(built.url.lastPathComponent) in "
+                      + "\(String(format: "%.1f", took))s")
+                print("  source: \(ModelChoice.humanBytes(source)) "
+                      + "(\(built.layout == .everyone ? "the mixdown" : "the tracks"))")
                 print("  master: \(ModelChoice.humanBytes(master)), "
-                      + "\(AudioMaster.channels(in: url)) channel"
-                      + " (\(percent(master, of: tracks)) of the tracks)")
+                      + "\(built.channels) channel, \(built.layout.rawValue)"
+                      + " (\(percent(master, of: source)) of the source)")
             } catch {
                 print("\ncould not build a master: \(error.localizedDescription)")
                 exit(1)

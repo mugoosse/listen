@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// The `listen` command.
 ///
@@ -2689,6 +2690,31 @@ enum CLI {
             try? updated.save()
         }
         let choice = chosen ?? updated.asrModel
+
+        // **The same lease the queue takes, and for the same reason.** This
+        // command is a second way into the pipeline, so a Mac running it while
+        // the other Mac's queue is on the same recording is exactly the race
+        // the lease exists to stop, and a path that skipped it would be a hole
+        // in the guard rather than a shortcut around it.
+        let outcome = await CloudSyncHost.shared.takeTranscriptionLease(updated.id)
+        if let lease = outcome.holder {
+            let who = await CloudSyncHost.deviceName(for: lease.device) ?? "another device"
+            fail("\(who) is transcribing this recording. It will arrive here when that "
+                 + "Mac has finished, or try again after \(ListenKit.Metadata.stamp(lease.expires)).")
+        }
+        if outcome == .unreachable,
+           CloudSyncCore.othersRunLooksLive(
+               transcribedBy: updated.metadata.transcribed_by,
+               state: updated.metadata.state,
+               started: updated.metadata.transcribe_started,
+               finished: updated.metadata.transcribe_finished,
+               device: await CloudSyncHost.deviceID) {
+            fail("\(updated.metadata.transcribed_on ?? "another device") started transcribing "
+                 + "this recording and iCloud cannot be reached to check whether it finished. "
+                 + "Try again when this Mac is back online.")
+        }
+        await MainActor.run { updated.markTranscribeStarted() }
+
         log("transcribing with \(choice.title)")
         do {
             let t0 = Date()
@@ -2702,6 +2728,8 @@ enum CLI {
             // the two cannot come to different conclusions about a recording
             // they both just transcribed.
             updated.markTranscribed(transcript)
+            updated.markTranscribeFinished()
+            await CloudSyncHost.shared.releaseTranscriptionLease(updated.id)
             log(String(format: "%.1fs for %.0fs of audio", Date().timeIntervalSince(t0),
                        transcript.duration))
             log(transcript.cleanup.isEmpty ? "cleanup fired: never"
@@ -2724,6 +2752,10 @@ enum CLI {
             }
             exit(0)
         } catch {
+            // The lease goes back on failure too. A run that dies holding one
+            // is fifteen minutes in which nothing retries, anywhere.
+            updated.markTranscribeFinished()
+            await CloudSyncHost.shared.releaseTranscriptionLease(updated.id)
             fail(error.localizedDescription)
         }
     }

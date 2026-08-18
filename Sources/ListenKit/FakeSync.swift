@@ -105,10 +105,11 @@ public enum FakeSync {
         let leftIn = try tone(440, to: leftURL)
         let rightIn = try tone(660, to: rightURL)
 
-        guard let made = try AudioMaster.make(micURL: leftURL, systemURL: rightURL,
-                                              into: masterFolder) else {
+        guard let built = try AudioMaster.make(micURL: leftURL, systemURL: rightURL,
+                                               into: masterFolder) else {
             throw Failure(description: "no master was made from two tracks")
         }
+        let made = built.url
         let masterBytes = try Data(contentsOf: made).count
         let rawBytes = try Data(contentsOf: leftURL).count + Data(contentsOf: rightURL).count
         try check(masterBytes < rawBytes,
@@ -161,8 +162,9 @@ public enum FakeSync {
         _ = try tone(440, to: memoMic)
         guard let mono = try AudioMaster.make(micURL: memoMic, systemURL: nil, into: memoFolder)
         else { throw Failure(description: "no master was made from one track") }
-        try check(try AVAudioFile(forReading: mono).processingFormat.channelCount == 1,
+        try check(try AVAudioFile(forReading: mono.url).processingFormat.channelCount == 1,
                   "a voice memo was widened to stereo")
+        try check(mono.layout == .tracks, "a microphone track was not a tracks master")
         ok("one track stays one channel")
 
         // MARK: sealing and naming
@@ -702,6 +704,120 @@ public enum FakeSync {
                   "a device that received a master did not report holding it")
         ok("a device that received a master reports holding it")
 
+        // MARK: audio asked for by hand, on a device that keeps none
+
+        // The phone is the case this exists for. **Keep audio on this iPhone**
+        // is off by default and means "keep what I recorded"; it deliberately
+        // does not mean "download every meeting the Macs made", which is
+        // gigabytes. So there has to be a way to ask for one recording, and it
+        // has to survive the pass that would otherwise take it straight back.
+        var phoneCatchUp = CloudReport()
+        await phone.pull(into: &phoneCatchUp)
+        try check(phoneLib.find(sharedID) != nil, "the meeting never reached the phone")
+        try check(phoneLib.find(sharedID)?.hasAudio == false,
+                  "a pull brought the phone audio it never asked for")
+
+        var asked = CloudReport()
+        try check(await phone.fetchMaster(sharedID, into: &asked),
+                  "asking for one recording's audio brought nothing down")
+        try check(phoneLib.find(sharedID)?.hasAudio == true,
+                  "the audio was fetched and not written")
+        try check(EngineState(library: phoneLib).base[pinned: sharedID],
+                  "audio asked for by hand was not pinned")
+
+        // Now every Mac reports holding it and the phone keeps no audio, which
+        // is exactly the state that freed everything else above.
+        let macsHold = await mac.heartbeat(name: "Studio", kind: "Mac", appVersion: "test")
+        var wouldFree = CloudReport()
+        await phone.reclaim(macsHold, into: &wouldFree)
+        try check(phoneLib.find(sharedID)?.hasAudio == true,
+                  "the next pass took back the audio somebody had just asked for")
+        ok("audio asked for by hand survives the reclaim that would otherwise free it")
+
+        // And it can be given back, which is the other half: a person saying
+        // "remove this" is not the reclaim invariant, it is somebody deciding
+        // about their own disk. It still refuses when nobody else holds the
+        // bytes, because wanting the space back is not wanting to lose the
+        // recording.
+        var refused = CloudReport()
+        try check(!(await phone.freeMaster(sharedID, [], into: &refused)),
+                  "audio was removed with nobody else reporting a copy")
+        try check(phoneLib.find(sharedID)?.hasAudio == true,
+                  "refusing to remove the audio removed it anyway")
+        var released = CloudReport()
+        try check(await phone.freeMaster(sharedID, macsHold, into: &released),
+                  "audio a Mac holds could not be removed by hand")
+        try check(phoneLib.find(sharedID)?.hasAudio == false,
+                  "removing the audio left it on disk")
+        try check(!EngineState(library: phoneLib).base[pinned: sharedID],
+                  "removing the audio left the pin behind")
+        ok("and it can be handed back, but never when nothing else holds it")
+
+        // MARK: an import has a mixdown and nothing else
+
+        // A legacy recording whose m4a held one track has no separate tracks
+        // at all, and it used to get no master: a second device could neither
+        // play it nor transcribe it again, for ever. The mixdown **is** the
+        // everyone-track, so it can have one like anything else, and the
+        // master has to say that is what it is: written back as `mic.wav` an
+        // import is transcribed as the user's own voice and every speaker in
+        // it comes out labelled `Me`.
+        let importID = "2026-05-04-090000-0DDE"
+        let importFolder = macLib.folder(for: importID)
+        try FileManager.default.createDirectory(at: importFolder,
+                                                withIntermediateDirectories: true)
+        // Written as an m4a at 44.1 kHz stereo, which is what a legacy
+        // recorder produced and is the case a straight read gets wrong: taking
+        // those samples for 16 kHz mono would slow an hour of talk to three.
+        try writeLegacyMixdown(to: importFolder.appendingPathComponent("mix.m4a"))
+        try Data(#"{"id":"\#(importID)","title":"Imported call","source":"import","state":"done"}"#.utf8)
+            .write(to: importFolder.appendingPathComponent("metadata.json"))
+        let imported = try unwrap(macLib.find(importID), "the import did not load")
+        try check(imported.hasMixdownOnly, "a mixdown-only recording did not say so")
+
+        var importPush = CloudReport()
+        await mac.push(into: &importPush)
+        var importMaster = CloudReport()
+        await mac.pushMasters(into: &importMaster)
+        let importRecord = try unwrap(
+            try await store.fetch(CloudRecords.masterName(importID, key: key), in: .masters),
+            "no master was published for a mixdown-only recording")
+        let importBlob = try CloudRecords.openMaster(importRecord, key: key)
+        try check(importBlob.layout == .everyone,
+                  "a mixdown's master did not say what its channel is")
+        try check(importBlob.channels == 1, "a mixdown's master was not one channel")
+        ok("a recording with only a mixdown gets a master, and it says it is everybody")
+
+        // The receiving device writes it under the name that carries the
+        // layout, and splits it to the side of the pipeline that reads the
+        // everyone-track.
+        let importerLib = try scratchLibrary(root.appendingPathComponent("mac-import"))
+        let importer = CloudSyncCore(library: importerLib,
+                                     state: EngineState(library: importerLib),
+                                     store: store, key: key, policy: .mac,
+                                     device: "mac-import", ingests: true, keepAudio: true)
+        var importerPull = CloudReport()
+        await importer.pull(into: &importerPull)
+        var importerGot = CloudReport()
+        await importer.pullMasters(await mac.heartbeat(name: "Studio", kind: "Mac",
+                                                       appVersion: "test"),
+                                   into: &importerGot)
+        let landedImport = try unwrap(importerLib.find(importID),
+                                      "the imported recording did not reach the second Mac")
+        try check(landedImport.masterLayout == .everyone,
+                  "the received master lost what its channel is")
+        let importSplit = importerLib.folder(for: importID)
+        _ = try AudioMaster.split(landedImport.masterURL, layout: .everyone, into: importSplit,
+                                  micURL: importSplit.appendingPathComponent("mic.wav"),
+                                  systemURL: importSplit.appendingPathComponent("system.wav"))
+        try check(!FileManager.default.fileExists(
+            atPath: importSplit.appendingPathComponent("mic.wav").path),
+            "an imported meeting was split back as the user's own microphone")
+        try check(FileManager.default.fileExists(
+            atPath: importSplit.appendingPathComponent("system.wav").path),
+            "an imported meeting was not split back as the everyone-track")
+        ok("a mixdown master comes back as the everyone-track, never as the microphone")
+
         // A deleted recording takes its audio with it. Nothing lists the
         // master zone, so a master left behind is tens of megabytes nobody
         // would ever see again.
@@ -731,8 +847,10 @@ public enum FakeSync {
         async let leaseHere = mac.takeTranscriptionLease(jobID)
         async let leaseThere = rival.takeTranscriptionLease(jobID)
         let both = await [leaseHere, leaseThere]
-        try check(both.filter { $0 }.count == 1,
-                  "\(both.filter { $0 }.count) devices took the same transcription")
+        try check(both.filter(\.granted).count == 1,
+                  "\(both.filter(\.granted).count) devices took the same transcription")
+        try check(both.contains { $0.holder != nil },
+                  "the device that lost was not told who has it")
         ok("exactly one device may transcribe a recording at a time")
 
         // **Which** device won is a real race and not a property worth
@@ -755,16 +873,75 @@ public enum FakeSync {
         let later = Date().addingTimeInterval(1_000)
         try check(await mac.transcriptionLease(jobID, now: later) == nil,
                   "the lease outlived its window")
-        try check(await rival.takeTranscriptionLease(jobID, now: later),
+        try check(await rival.takeTranscriptionLease(jobID, now: later).granted,
                   "an expired lease could not be taken over")
         ok("a lease expires, so a Mac that dies mid-run does not park the work")
 
         await rival.releaseTranscriptionLease(jobID)
         try check(await mac.transcriptionLease(jobID) == nil,
                   "releasing the lease left it held")
-        try check(await mac.takeTranscriptionLease(jobID), "a released lease could not be retaken")
+        try check(await mac.takeTranscriptionLease(jobID).granted,
+                  "a released lease could not be retaken")
         await mac.releaseTranscriptionLease(jobID)
         ok("releasing frees it at once, rather than after the window")
+
+        // MARK: the offline window, which nothing could refuse in
+
+        // A Mac with no container still transcribes its own recording, because
+        // Listen works with the network off and the cost of two Macs doing the
+        // same hour of work is wasted CPU rather than lost data. What was never
+        // measured is what happens to a recording another Mac had already
+        // started, and the answer used to be "both of them do it": `state:
+        // transcribing` was described as travelling in the metadata and nothing
+        // read it.
+        let offlineLib = try scratchLibrary(root.appendingPathComponent("mac-offline"))
+        let offline = CloudSyncCore(library: offlineLib,
+                                    state: EngineState(library: offlineLib),
+                                    store: UnreachableStore(), key: key, policy: .mac,
+                                    device: "mac-offline", ingests: true, keepAudio: true)
+        try check(await offline.takeTranscriptionLease(jobID) == .unreachable,
+                  "an unreachable container did not say so")
+        try check(await offline.takeTranscriptionLease(jobID).granted,
+                  "an offline Mac was stopped from transcribing")
+        try check(await offline.transcriptionLease(jobID) == nil,
+                  "an unreachable container answered who holds a lease")
+        ok("an unreachable container grants the lease and says that is what it did")
+
+        // The deterrent, asked rather than assumed. These are the four fields
+        // as they arrive in `metadata.json`, which is the only thing an offline
+        // Mac has to go on.
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        func looksLive(by who: String?, state: String?, started: Date?, finished: String? = nil,
+                       at now: Date) -> Bool {
+            CloudSyncCore.othersRunLooksLive(
+                transcribedBy: who, state: state,
+                started: started.map(Metadata.stamp), finished: finished,
+                device: "mac-offline", now: now)
+        }
+        try check(looksLive(by: "mac-1", state: "transcribing", started: began,
+                            at: began.addingTimeInterval(300)),
+                  "a run another Mac started five minutes ago read as nobody's")
+        try check(!looksLive(by: "mac-offline", state: "transcribing", started: began,
+                             at: began.addingTimeInterval(300)),
+                  "this Mac's own run read as somebody else's")
+        try check(!looksLive(by: "mac-1", state: "done", started: began,
+                             at: began.addingTimeInterval(300)),
+                  "a finished recording read as a run in progress")
+        try check(!looksLive(by: "mac-1", state: "transcribing", started: began,
+                             finished: Metadata.stamp(began), at: began.addingTimeInterval(300)),
+                  "a run that recorded its own end read as still going")
+        try check(!looksLive(by: "mac-1", state: "transcribing", started: nil,
+                             at: began.addingTimeInterval(300)),
+                  "a run with no start time was believed anyway")
+        // And it expires, so a Mac that died mid-run cannot park a recording
+        // for ever on a machine that cannot ask anybody about it.
+        try check(!looksLive(by: "mac-1", state: "transcribing", started: began,
+                             at: began.addingTimeInterval(CloudSyncCore.offlineGrace + 60)),
+                  "an abandoned run was believed past its grace")
+        try check(looksLive(by: "mac-1", state: "transcribing", started: began,
+                            at: began.addingTimeInterval(CloudSyncCore.offlineGrace - 60)),
+                  "a run inside its grace was not believed")
+        ok("offline, another device's unfinished run is believed for six hours and no longer")
 
         // MARK: exactly one claimant
 
@@ -1141,6 +1318,28 @@ public enum FakeSync {
 
     // MARK: - Scratch
 
+    /// A container that cannot be reached, for the one window the design
+    /// flagged and could not measure.
+    ///
+    /// `takeTranscriptionLease` answers `.unreachable` here rather than
+    /// refusing, because Listen works with the network off and a Mac must
+    /// still transcribe its own recording. What that costs, and what the
+    /// second deterrent is, is the thing this store exists to make provable.
+    actor UnreachableStore: RecordStore {
+        func save(_ record: StoredRecord) async throws -> StoredRecord {
+            throw StoreError.unavailable("the network is off")
+        }
+        func delete(_ name: String, in zone: CloudNaming.Zone) async throws {
+            throw StoreError.unavailable("the network is off")
+        }
+        func changes(in zone: CloudNaming.Zone, since token: String?) async throws -> StoreChanges {
+            throw StoreError.unavailable("the network is off")
+        }
+        func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
+            throw StoreError.unavailable("the network is off")
+        }
+    }
+
     /// A library with nothing behind it, **including the state that is kept
     /// somewhere else**.
     ///
@@ -1161,6 +1360,42 @@ public enum FakeSync {
         try? FileManager.default.removeItem(at: EngineState(library: library).root)
         try library.prepare()
         return library
+    }
+
+    /// An m4a of the shape a legacy recorder wrote: one track, stereo, at a
+    /// sample rate that is not the one Listen works in. Both of those are what
+    /// make a straight read of it wrong.
+    private static func writeLegacyMixdown(to url: URL) throws {
+        let rate = 44_100.0
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: rate,
+            AVNumberOfChannelsKey: 2,
+            AVEncoderBitRateKey: 64_000,
+        ]
+        var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: settings)
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
+                                   channels: 2, interleaved: false)!
+        var written = 0
+        let frames = Int(rate * 2)      // two seconds
+        while written < frames {
+            let count = Swift.min(4096, frames - written)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                                frameCapacity: AVAudioFrameCount(count))
+            else { break }
+            buffer.frameLength = AVAudioFrameCount(count)
+            for channel in 0..<2 {
+                guard let samples = buffer.floatChannelData?[channel] else { break }
+                for i in 0..<count {
+                    let t = Double(written + i) / rate
+                    samples[i] = Float(sin(t * 440 * 2 * Double.pi) * 0.4)
+                }
+            }
+            try file?.write(from: buffer)
+            written += count
+        }
+        // The same finalisation trap `AudioMaster.write` records.
+        file = nil
     }
 
     private static func seed(_ library: Library, id: String, metadata: String,

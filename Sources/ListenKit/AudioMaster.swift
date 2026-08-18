@@ -60,8 +60,55 @@ import Foundation
 /// inside one file, which also means the master fits the `asset_mic_wav` field
 /// that Production already has. A second asset field would have been permanent.
 public enum AudioMaster {
+    /// What a master's channels are, which decides what they must be split
+    /// back into.
+    ///
+    /// **The name on disk carries it, and that is deliberate.** A one-channel
+    /// master is either a voice memo, whose channel is the microphone, or an
+    /// imported meeting, whose channel is everybody at once. Those go to
+    /// opposite sides of the pipeline: written back as `mic.wav`, an import
+    /// would be transcribed as the user's own voice and every speaker in it
+    /// would come out labelled `Me`, which is the trap
+    /// `.agents/notes/speakers.md` records as "An imported recording has no mic
+    /// track, and must not pretend otherwise". The channel count cannot tell
+    /// them apart, so the file says which it is: a recording is a folder and
+    /// the files in it are the truth, and a fact kept anywhere else is a fact
+    /// that can be lost while the audio survives.
+    public enum Layout: String, Codable, Sendable, CaseIterable {
+        /// Microphone left, system right, or the microphone alone. Split back
+        /// into the two tracks the pipeline reads.
+        case tracks
+        /// One track holding everybody, which is what an import has. Split back
+        /// as the everyone-track and never as the microphone.
+        case everyone
+
+        var filename: String {
+            switch self {
+            case .tracks:   return "master.flac"
+            case .everyone: return "master-everyone.flac"
+            }
+        }
+    }
+
     /// One file, whatever the recording is made of.
-    public static let filename = "master.flac"
+    public static let filename = Layout.tracks.filename
+
+    /// Every name a master can have on disk, so a caller looking for one does
+    /// not have to know which kind it is.
+    public static var filenames: [String] { Layout.allCases.map(\.filename) }
+
+    /// What is actually here, if anything.
+    public static func found(in folder: URL) -> (url: URL, layout: Layout)? {
+        for layout in Layout.allCases {
+            let url = folder.appendingPathComponent(layout.filename)
+            if FileManager.default.fileExists(atPath: url.path) { return (url, layout) }
+        }
+        return nil
+    }
+
+    public static func url(in folder: URL, _ layout: Layout) -> URL {
+        folder.appendingPathComponent(layout.filename)
+    }
 
     /// 16 kHz, because everything downstream of capture is, and Int16, because
     /// `AudioFile` measured Float32 as 144 dB of range for a source with about
@@ -80,15 +127,44 @@ public enum AudioMaster {
     ///
     /// Nil when there is no audio here at all, which is the ordinary state of a
     /// recording this device has only ever received.
+    /// What one build produced, so a caller can publish it without opening it
+    /// again to find out what it is.
+    public struct Built: Sendable {
+        public var url: URL
+        public var layout: Layout
+        public var channels: Int
+    }
+
     @discardableResult
-    public static func make(micURL: URL, systemURL: URL?, into folder: URL) throws -> URL? {
-        let out = url(in: folder)
-        if FileManager.default.fileExists(atPath: out.path) { return out }
+    public static func make(micURL: URL, systemURL: URL?, mixURL: URL? = nil,
+                            into folder: URL) throws -> Built? {
+        if let existing = found(in: folder) {
+            return Built(url: existing.url, layout: existing.layout,
+                         channels: channels(in: existing.url))
+        }
 
         let hasMic = FileManager.default.fileExists(atPath: micURL.path)
         let hasSystem = systemURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-        guard hasMic || hasSystem else { return nil }
 
+        // No separate tracks, only the mixdown a legacy recorder produced. That
+        // is a real recording and it was getting no master at all, so a device
+        // that had never seen it could neither play it nor transcribe it again,
+        // for ever. It is decoded through `AVAssetReader` rather than read
+        // straight, because an imported m4a is whatever sample rate and channel
+        // count that recorder used and the master is 16 kHz: reading its
+        // samples as though they were already 16 kHz would slow an hour of
+        // conversation to three.
+        guard hasMic || hasSystem else {
+            guard let mixURL, FileManager.default.fileExists(atPath: mixURL.path),
+                  let mixed = try decodeToMono(mixURL), !mixed.isEmpty else { return nil }
+            let out = url(in: folder, .everyone)
+            try writeAtomically(left: mixed, right: [], frames: mixed.count,
+                                channels: 1, to: out, named: Layout.everyone.filename,
+                                in: folder)
+            return Built(url: out, layout: .everyone, channels: 1)
+        }
+
+        let out = url(in: folder, .tracks)
         let left = hasMic ? try read(micURL) : []
         let right = hasSystem ? try read(systemURL!) : []
         let frames = max(left.count, right.count)
@@ -97,15 +173,63 @@ public enum AudioMaster {
         // half doubling a voice memo's size for nothing.
         let channels: AVAudioChannelCount = (hasMic && hasSystem) ? 2 : 1
 
-        // Written beside the target and moved, so a master half-written by a
-        // process that died is never mistaken for one that is whole. The rest
-        // of this library writes `metadata.json` last for the same reason.
-        let temporary = folder.appendingPathComponent("." + filename + ".part")
+        try writeAtomically(left: left, right: right, frames: frames, channels: channels,
+                            to: out, named: Layout.tracks.filename, in: folder)
+        return Built(url: out, layout: .tracks, channels: Int(channels))
+    }
+
+    /// Written beside the target and moved, so a master half-written by a
+    /// process that died is never mistaken for one that is whole. The rest of
+    /// this library writes `metadata.json` last for the same reason.
+    private static func writeAtomically(left: [Float], right: [Float], frames: Int,
+                                        channels: AVAudioChannelCount, to out: URL,
+                                        named name: String, in folder: URL) throws {
+        let temporary = folder.appendingPathComponent("." + name + ".part")
         try? FileManager.default.removeItem(at: temporary)
         try write(left: left, right: right, frames: frames, channels: channels, to: temporary)
         try? FileManager.default.removeItem(at: out)
         try FileManager.default.moveItem(at: temporary, to: out)
-        return out
+    }
+
+    /// Any audio file, as 16 kHz mono Float32, with the downmix and the sample
+    /// rate conversion done inside AVFoundation rather than here.
+    ///
+    /// The same shape `AudioExtract` uses on the Mac, kept here because
+    /// `AudioMaster` is in the shared framework and the phone compiles it too.
+    private static func decodeToMono(_ url: URL) throws -> [Float]? {
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .audio).first else { return nil }
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ])
+        guard reader.canAdd(output) else { return nil }
+        reader.add(output)
+        guard reader.startReading() else { return nil }
+
+        var samples: [Float] = []
+        while let buffer = output.copyNextSampleBuffer() {
+            guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
+            var length = 0
+            var pointer: UnsafeMutablePointer<Int8>?
+            guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil,
+                                              totalLengthOut: &length,
+                                              dataPointerOut: &pointer) == noErr,
+                  let pointer, length >= MemoryLayout<Float>.size else { continue }
+            pointer.withMemoryRebound(to: Float.self,
+                                      capacity: length / MemoryLayout<Float>.size) {
+                samples.append(contentsOf: UnsafeBufferPointer(
+                    start: $0, count: length / MemoryLayout<Float>.size))
+            }
+        }
+        guard reader.status != .failed else { return nil }
+        return samples
     }
 
     /// How many channels a master carries: two for a meeting, one for a voice
@@ -119,8 +243,14 @@ public enum AudioMaster {
     /// Take the master apart again, which is what makes it a master rather than
     /// a preview: a device holding only this can still re-transcribe, and gets
     /// the two separate tracks the pipeline needs rather than a mono sum.
+    /// Take a master apart into whatever this device's pipeline reads.
+    ///
+    /// `layout` decides which side of the pipeline a one-channel master lands
+    /// on, and getting it wrong is not a small error: an `everyone` master
+    /// written to `mic.wav` is an imported meeting transcribed as the user's
+    /// own voice, with every speaker in it labelled `Me`.
     @discardableResult
-    public static func split(_ master: URL, into folder: URL,
+    public static func split(_ master: URL, layout: Layout = .tracks, into folder: URL,
                              micURL: URL, systemURL: URL) throws -> Int {
         let file = try AVAudioFile(forReading: master)
         let channels = Int(file.processingFormat.channelCount)
@@ -139,7 +269,11 @@ public enum AudioMaster {
         // format the rest of Listen reads: 16 kHz Int16 mono WAV, with the
         // header rewritten on close. Anything else here would be a second
         // definition of "a Listen track".
-        try writeTrack(Array(UnsafeBufferPointer(start: data[0], count: n)), to: micURL)
+        // Everybody at once goes to the system side, which is where
+        // `Pipeline.run` looks for the everyone-track, and there is
+        // deliberately no microphone track to go with it.
+        let first = layout == .everyone ? systemURL : micURL
+        try writeTrack(Array(UnsafeBufferPointer(start: data[0], count: n)), to: first)
         if channels > 1 {
             try writeTrack(Array(UnsafeBufferPointer(start: data[1], count: n)), to: systemURL)
         }

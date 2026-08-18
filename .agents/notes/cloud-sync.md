@@ -135,6 +135,84 @@ devices won a genuine race, and passed until the suite grew enough around it to
 change the timing. What has to be true is that both devices name the same holder
 and exactly one reads it as its own.
 
+## The offline window had a deterrent nobody read
+
+`takeTranscriptionLease` returns yes when the container is unreachable, and that
+is right: Listen works with the network off and a Mac must still transcribe its
+own recording. What was written down beside it, twice, was that `state:
+transcribing` travelling in the metadata was the second deterrent for that
+window. **Nothing read it.** A Mac that could not reach the container started
+every job it had, whatever the last pull had told it about the other machine.
+
+So the answer has three cases now instead of two. `.taken` is the container
+agreeing, `.held(lease)` is somebody else having it, and `.unreachable` is a yes
+with the caveat that nothing could refuse. `CloudSyncCore.othersRunLooksLive` is
+the sentence, asked: another device named in `transcribed_by`, a state of
+`transcribing`, no `transcribe_finished`, and a `transcribe_started` inside six
+hours. Six hours is `claimGrace`'s number and its argument, and the failure it
+avoids is the same one: a run that has shown nothing for that long is asleep,
+stuck or on a machine that has been shut, and believing it for ever parks the
+recording.
+
+Four things are deliberately **not** evidence, and each is a seam: this device's
+own run, a finished state, a run that recorded its own end, and a run with no
+start time at all. The last one matters most: a `transcribing` with no clock
+could be from any build and any month.
+
+`listen transcribe <id>` was the other half of the hole. It is a second way into
+the pipeline and it took no lease and wrote no provenance, so a Mac running it
+while the other Mac's queue was on the same recording was exactly the race the
+lease exists to stop. Both paths now go through `markTranscribeStarted` and
+`markTranscribeFinished`, so the two cannot come to different conclusions about
+a recording they both just transcribed.
+
+## A switch is a policy, and a tap is an instruction
+
+**Keep audio on this iPhone** is off by default and means "keep what I recorded
+here". It has never meant "download every meeting the Macs made", which on this
+library is 1.7 GB, and the footer says so. That left the phone with no way to
+play back a meeting it did not record, which is most of them.
+
+The missing piece was small and it is not the switch. `SyncState` gained `pin:`,
+`reclaim` skips a pinned recording, and `fetchMaster` sets the pin. Without it
+the next pass takes back what the tap just downloaded and the button appears not
+to work: the phone keeps no audio by policy, and the Macs all report holding
+those bytes, so every condition for freeing it is met within two minutes.
+
+`freeMaster` is the other half and it refuses when nothing else reports holding
+the recording. Wanting the space back is not wanting to lose the meeting, and a
+button that can hand back the only copy is a button that will.
+
+The same pair is in the Mac's actions menu, for a Mac whose switch is off.
+
+## A one-channel master is two different things
+
+A master built from a microphone track and a master built from an imported
+mixdown are both one channel, and they go to opposite sides of the pipeline.
+`Pipeline.run` reads `system.wav` as the everyone-track and `mic.wav` as the
+user; `.agents/notes/speakers.md` records the trap in full as "An imported
+recording has no mic track, and must not pretend otherwise". An `everyone`
+master split back as `mic.wav` is an imported meeting transcribed as the user's
+own voice, with every speaker in it labelled `Me`.
+
+The channel count cannot tell them apart, so the **file name** does:
+`master.flac` against `master-everyone.flac`. A recording is a folder and the
+files in it are the truth, and a fact kept anywhere else is one that can be lost
+while the audio survives. `MasterBlob.layout` carries it on the wire, optional,
+because records published before it exist and every one of those was built from
+tracks.
+
+Until this, a mixdown-only recording got no master at all: `AudioMaster.make`
+built from the two tracks and an import has neither, so those recordings could
+never reach a second device in any playable form. The mixdown is decoded through
+`AVAssetReader` rather than read straight, because a legacy m4a is whatever
+sample rate and channel count that recorder used: reading a 44.1 kHz stereo file
+as though it were already 16 kHz mono slows an hour of conversation to three.
+
+The published master is kept on disk in this one case. There are no tracks
+behind it to be the better copy, so removing it would leave the device that
+published it holding an m4a its own pipeline reads and nothing else does.
+
 ## A pull cannot stamp a richer local folder as sent
 
 A Mac can publish metadata and waveform before transcription finishes. If the

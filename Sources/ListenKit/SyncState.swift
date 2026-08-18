@@ -56,6 +56,17 @@ public struct SyncState: Codable, Sendable {
     /// own prefix, disjoint from `sent:` and `note:`, because `pushDeletions`
     /// walks those two and reads a stamp with no folder as a deletion to send.
     public static func masterKey(_ id: String) -> String { "master:" + id }
+    /// A recording whose audio this device was **asked** to keep, one at a
+    /// time, whatever the device-wide switch says.
+    ///
+    /// The device switch is a policy and this is an instruction, and the two
+    /// have to be separable or the phone cannot have both. **Keep audio on
+    /// this iPhone** is off by default and means "keep what I recorded"; it
+    /// deliberately does not mean "download every meeting my Macs made", which
+    /// is gigabytes. So asking for one recording's audio has to leave a mark
+    /// that `reclaim` reads, or the next pass takes back what the tap just
+    /// fetched and the button appears not to work.
+    public static func pinKey(_ id: String) -> String { "pin:" + id }
     /// Which device the container last said holds a recording's audio.
     ///
     /// Bookkeeping about the container, like `sent:`, and part of no decision
@@ -98,6 +109,12 @@ public struct SyncState: Codable, Sendable {
     public subscript(master id: String) -> String? {
         get { base[SyncState.masterKey(id)] }
         set { base[SyncState.masterKey(id)] = newValue }
+    }
+
+    /// Whether this device was asked to keep this one recording's audio.
+    public subscript(pinned id: String) -> Bool {
+        get { base[SyncState.pinKey(id)] != nil }
+        set { base[SyncState.pinKey(id)] = newValue ? "1" : nil }
     }
 
     // MARK: - Coding

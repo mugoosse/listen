@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// The whole sync, against a store in a dictionary, in about a second.
@@ -85,6 +86,92 @@ public enum FakeSync {
                                   store: store, key: key, policy: .phone,
                                   device: "phone-1", ingests: false)
 
+        // MARK: the audio master
+
+        // Synthetic tracks, because what is being proved is the codec path and
+        // not anybody's voice: two tones a fifth apart, so a channel landing in
+        // the wrong half of the file is visible rather than plausible.
+        let masterFolder = root.appendingPathComponent("master")
+        try FileManager.default.createDirectory(at: masterFolder, withIntermediateDirectories: true)
+        let leftURL = masterFolder.appendingPathComponent("mic.wav")
+        let rightURL = masterFolder.appendingPathComponent("system.wav")
+        func tone(_ hz: Double, to url: URL, seconds: Int = 3) throws -> [Int16] {
+            let writer = try AudioFile.Writer(url: url)
+            var all: [Int16] = []
+            for second in 0..<seconds {
+                let block = (0..<16_000).map { i -> Int16 in
+                    let t = Double(second * 16_000 + i) / 16_000
+                    return Int16(sin(t * hz * 2 * Double.pi) * 12_000)
+                }
+                try writer.append(block)
+                all.append(contentsOf: block)
+            }
+            _ = try writer.close()
+            return all
+        }
+        let leftIn = try tone(440, to: leftURL)
+        let rightIn = try tone(660, to: rightURL)
+
+        guard let made = try AudioMaster.make(micURL: leftURL, systemURL: rightURL,
+                                              into: masterFolder) else {
+            throw Failure(description: "no master was made from two tracks")
+        }
+        let masterBytes = try Data(contentsOf: made).count
+        let rawBytes = try Data(contentsOf: leftURL).count + Data(contentsOf: rightURL).count
+        try check(masterBytes < rawBytes,
+                  "the master (\(masterBytes)) did not come out smaller than the tracks (\(rawBytes))")
+
+        // Readable at all, which is the finalisation trap: left alive to the
+        // end of the process the encoder produces a file of exactly the right
+        // size that no decoder will open.
+        let reopened = try AVAudioFile(forReading: made)
+        try check(reopened.processingFormat.channelCount == 2,
+                  "two tracks did not make a two channel master")
+        try check(abs(Double(reopened.length) / 16_000 - 3) < 0.05,
+                  "the master lost or gained time: \(reopened.length) frames")
+        ok("two tracks become one stereo master, smaller than the pair and readable")
+
+        let backFolder = root.appendingPathComponent("master-split")
+        try FileManager.default.createDirectory(at: backFolder, withIntermediateDirectories: true)
+        let backMic = backFolder.appendingPathComponent("mic.wav")
+        let backSystem = backFolder.appendingPathComponent("system.wav")
+        _ = try AudioMaster.split(made, into: backFolder, micURL: backMic, systemURL: backSystem)
+        func peaks(_ url: URL) throws -> [Int16] {
+            let data = try Data(contentsOf: url)
+            var out: [Int16] = []
+            var i = 44
+            while i + 1 < data.count {
+                out.append(Int16(bitPattern: UInt16(data[i]) | UInt16(data[i + 1]) << 8))
+                i += 2
+            }
+            return out
+        }
+        let leftOut = try peaks(backMic), rightOut = try peaks(backSystem)
+        func worst(_ a: [Int16], _ b: [Int16]) -> Int {
+            var m = 0
+            for i in 0..<Swift.min(a.count, b.count) { m = Swift.max(m, abs(Int(a[i]) - Int(b[i]))) }
+            return m
+        }
+        // Lossless, which is the whole reason this is FLAC and not AAC: a
+        // device that frees its raw tracks has to be giving up nothing.
+        try check(worst(leftIn, leftOut) <= 1,
+                  "the left channel came back changed by \(worst(leftIn, leftOut))")
+        try check(worst(rightIn, rightOut) <= 1,
+                  "the right channel came back changed by \(worst(rightIn, rightOut))")
+        try check(worst(leftIn, rightOut) > 100, "the two channels were not kept apart")
+        ok("the master splits back into the two tracks, sample for sample")
+
+        // One track stays one channel, rather than paying for a silent half.
+        let memoFolder = root.appendingPathComponent("master-mono")
+        try FileManager.default.createDirectory(at: memoFolder, withIntermediateDirectories: true)
+        let memoMic = memoFolder.appendingPathComponent("mic.wav")
+        _ = try tone(440, to: memoMic)
+        guard let mono = try AudioMaster.make(micURL: memoMic, systemURL: nil, into: memoFolder)
+        else { throw Failure(description: "no master was made from one track") }
+        try check(try AVAudioFile(forReading: mono).processingFormat.channelCount == 1,
+                  "a voice memo was widened to stereo")
+        ok("one track stays one channel")
+
         // MARK: sealing and naming
 
         let sealed = try key.seal(Data("a meeting nobody else may read".utf8))
@@ -137,6 +224,27 @@ public enum FakeSync {
             .appendingPathComponent(DevicePolicy.sourceIcon))
         try check(landedIcon == sourceIcon, "the source app icon did not reach the phone")
         ok("source app icons cross inside the sealed recording payload")
+
+        // A second Mac without that application installed cannot make the
+        // icon, and pushing the same recording from there used to take it out
+        // of the container. Its `push` builds the record from local files, so
+        // a file it can never hold reads as a file that has been removed.
+        let iconless = try scratchLibrary(root.appendingPathComponent("mac-iconless"))
+        try seed(iconless, id: id, metadata: metadata,
+                 transcript: #"{"segments":[],"duration":1800,"model":"parakeet-v3"}"#)
+        let iconlessMac = CloudSyncCore(library: iconless, state: EngineState(library: iconless),
+                                        store: store, key: key, policy: .mac,
+                                        device: "mac-3", ingests: true)
+        var iconlessPush = CloudReport()
+        await iconlessMac.push(into: &iconlessPush)
+        let republished = try CloudRecords.openRecording(
+            try await store.fetch(CloudNaming.recordName(.recording, id, key: key),
+                                  in: .library)!, key: key)
+        try check(republished.sourceIcon == sourceIcon,
+                  "a Mac that cannot make the icon removed it from the container")
+        try check(republished.digests[DevicePolicy.sourceIcon] != nil,
+                  "the icon survived the payload but not the manifest")
+        ok("a Mac without the application cannot strip a source icon it never had")
 
         // MARK: what the phone must never receive
 
@@ -289,6 +397,118 @@ public enum FakeSync {
             "the phone kept audio a Mac had acknowledged")
         ok("audio is freed only once a Mac names itself in audioOn")
 
+        // The same pull has to leave behind *which* Mac said so. A device
+        // without the bytes could not name the device with them, so the window
+        // guessed from `metadata.source` and told a two-Mac library that a
+        // claimed phone recording was still on its way here. Nothing syncs on
+        // this key; it exists so the sentence on screen can be true.
+        try check(EngineState(library: phoneLib).base[audioOn: memoID] == "mac-1",
+                  "the pull did not record which device holds the audio")
+        var stillHeld = CloudReport()
+        await phone.pull(into: &stillHeld)
+        try check(EngineState(library: phoneLib).base[audioOn: memoID] == "mac-1",
+                  "a pass that changed nothing forgot who holds the audio")
+        ok("a device without the audio knows which device has it")
+
+        // MARK: a claim that produces nothing expires
+
+        // The record above carries `state done`, so taking the audio was also
+        // delivering it and the phone is finished with it. A claim over a
+        // recording nothing has been published for is the other case, and it
+        // used to be indistinguishable: any `audioOn` wrote `acknowledged`,
+        // nothing ever cleared it, and a Mac that could not publish parked the
+        // recording for ever while the phone sat on the only other copy.
+        // **A phone that keeps its audio is the only phone this can help**, and
+        // that is deliberate rather than a gap. A phone that lets go does so on
+        // `audioOn`, which is a Mac reporting the bytes on its own disk, and
+        // that report stays true when the transcript never follows: the
+        // recording is on that Mac, not lost. Nothing here touches the reclaim
+        // invariant. Written with a keep-audio core for exactly that reason,
+        // and the first draft used the ordinary one and failed, which is the
+        // suite saying so.
+        let keeper = CloudSyncCore(
+            library: phoneLib, state: EngineState(library: phoneLib),
+            store: store, key: key, policy: .phone,
+            device: "phone-1", ingests: false, keepAudio: true)
+
+        let strandedID = "2026-08-12-222222-CAFE"
+        try seed(phoneLib, id: strandedID,
+                 metadata: #"{"id":"\#(strandedID)","title":"Stranded","source":"iphone","state":"pending"}"#,
+                 transcript: nil, audio: Data(repeating: 9, count: 4096))
+        var strandedUp = CloudReport()
+        await keeper.push(into: &strandedUp)
+        await keeper.upload(phoneLib.find(strandedID)!, into: &strandedUp)
+
+        // A Mac takes it, says so, and then publishes nothing made from it.
+        let strandedTransfer = CloudNaming.recordName(.audioTransfer, strandedID, key: key)
+        try await store.delete(strandedTransfer, in: .transfer)
+        let strandedName = CloudNaming.recordName(.recording, strandedID, key: key)
+        var claimedRecord = try await store.fetch(strandedName, in: .library)!
+        claimedRecord.audioOn = "mac-1"
+        _ = try await store.save(claimedRecord)
+
+        let claimedAt = Date(timeIntervalSince1970: 1_760_000_000)
+        var noticed = CloudReport()
+        await keeper.pull(into: &noticed, now: claimedAt)
+        try check(EngineState(library: phoneLib).base[sent: "audio:" + strandedID]
+                  == CloudSyncCore.claimed(at: claimedAt),
+                  "a claim with nothing published read as a delivery")
+
+        // Inside the window the phone stays quiet, because a Mac that is
+        // merely slow must not be hammered with the same audio every pass.
+        var tooSoon = CloudReport()
+        await keeper.upload(phoneLib.find(strandedID)!, into: &tooSoon,
+                            now: claimedAt.addingTimeInterval(CloudSyncCore.claimGrace - 60))
+        try check(try await store.fetch(strandedTransfer, in: .transfer) == nil,
+                  "the phone re-offered audio a Mac had only just taken")
+
+        // Past it, the audio goes back up for whichever Mac is awake.
+        var again = CloudReport()
+        await keeper.upload(phoneLib.find(strandedID)!, into: &again,
+                            now: claimedAt.addingTimeInterval(CloudSyncCore.claimGrace + 60))
+        try check(try await store.fetch(strandedTransfer, in: .transfer) != nil,
+                  "a stranded recording was never offered again")
+        try check(FileManager.default.fileExists(
+            atPath: phoneLib.find(strandedID)!.micURL.path),
+            "offering the audio again removed it from the phone")
+        ok("a claim that publishes nothing expires, and the phone offers again")
+
+        // MARK: the ingesting Mac authors its own metadata
+
+        // `ingest` publishes the phone's `metadata.json`, then the pipeline
+        // rewrites it here. Until the next push the record still carries the
+        // pre-ingest snapshot, and pulling it used to hand this Mac its own
+        // recording back with `state` reset to `pending`.
+        let ingested = macLib.folder(for: strandedID)
+        try FileManager.default.createDirectory(at: ingested, withIntermediateDirectories: true)
+        try Data(#"{"id":"\#(strandedID)","title":"Stranded","source":"iphone","state":"needs_labelling"}"#.utf8)
+            .write(to: ingested.appendingPathComponent("metadata.json"))
+        var holds = try await store.fetch(strandedName, in: .library)!
+        holds.audioOn = "mac-1"
+        _ = try await store.save(holds)
+
+        var macPull = CloudReport()
+        await mac.pull(into: &macPull)
+        let afterPull = try Data(contentsOf: ingested.appendingPathComponent("metadata.json"))
+        try check(String(data: afterPull, encoding: .utf8)?.contains("needs_labelling") == true,
+                  "a pull reset the state on the Mac that holds the audio")
+
+        // And a Mac that does not hold it still stores the bytes verbatim,
+        // which is the rule this is a single exception to.
+        let bystanderLib = try scratchLibrary(root.appendingPathComponent("mac2"))
+        let bystander = CloudSyncCore(library: bystanderLib,
+                                      state: EngineState(library: bystanderLib),
+                                      store: store, key: key, policy: .mac,
+                                      device: "mac-2", ingests: true)
+        var bystanderPull = CloudReport()
+        await bystander.pull(into: &bystanderPull)
+        let theirs = try Data(contentsOf: bystanderLib.folder(for: strandedID)
+            .appendingPathComponent("metadata.json"))
+        try check(String(data: theirs, encoding: .utf8)?.contains("\"state\":\"pending\"") == true
+                  || String(data: theirs, encoding: .utf8)?.contains("\"state\": \"pending\"") == true,
+                  "a Mac without the audio did not store the record's metadata verbatim")
+        ok("only the Mac holding the audio authors an ingested recording's metadata")
+
         // The keep-audio preference retains the WAV after the same
         // acknowledgement. That local copy must not turn a completed handoff
         // back into an upload loop when the transfer is correctly absent.
@@ -304,6 +524,51 @@ public enum FakeSync {
         try check(try await store.fetch(transferName, in: .transfer) == nil,
                   "acknowledged audio was uploaded again when retained")
         ok("retained audio stays local after a Mac acknowledges it")
+
+        // MARK: exactly one transcriber
+
+        // The same race as the ingest below, one layer up. Audio landing on
+        // every device removes the accident that used to serialise this: a
+        // recording only one Mac could hear was a recording only one Mac could
+        // transcribe.
+        let jobID = "2026-08-12-131313-BEEF"
+        try seed(macLib, id: jobID,
+                 metadata: #"{"id":"\#(jobID)","title":"Standup","source":"mac","state":"pending"}"#,
+                 transcript: nil)
+        var jobPush = CloudReport()
+        await mac.push(into: &jobPush)
+
+        let rival = CloudSyncCore(library: macLib, state: EngineState(library: macLib),
+                                  store: store, key: key, policy: .mac,
+                                  device: "mac-9", ingests: true)
+        async let leaseHere = mac.takeTranscriptionLease(jobID)
+        async let leaseThere = rival.takeTranscriptionLease(jobID)
+        let both = await [leaseHere, leaseThere]
+        try check(both.filter { $0 }.count == 1,
+                  "\(both.filter { $0 }.count) devices took the same transcription")
+        ok("exactly one device may transcribe a recording at a time")
+
+        let held = await rival.transcriptionLease(jobID)
+        try check(held != nil, "the lease was not readable by the device that lost")
+        try check(held?.mine == false, "the losing device read the lease as its own")
+        ok("the device that lost can say who is transcribing, and it is not itself")
+
+        // A lease that never expired would park a recording for ever on a Mac
+        // that died mid-run, which is the failure the ingest claim already
+        // learned about.
+        let later = Date().addingTimeInterval(1_000)
+        try check(await mac.transcriptionLease(jobID, now: later) == nil,
+                  "the lease outlived its window")
+        try check(await rival.takeTranscriptionLease(jobID, now: later),
+                  "an expired lease could not be taken over")
+        ok("a lease expires, so a Mac that dies mid-run does not park the work")
+
+        await rival.releaseTranscriptionLease(jobID)
+        try check(await mac.transcriptionLease(jobID) == nil,
+                  "releasing the lease left it held")
+        try check(await mac.takeTranscriptionLease(jobID), "a released lease could not be retaken")
+        await mac.releaseTranscriptionLease(jobID)
+        ok("releasing frees it at once, rather than after the window")
 
         // MARK: exactly one claimant
 
@@ -510,7 +775,167 @@ public enum FakeSync {
                   "an expired change token deleted a recording that still exists")
         ok("a refetch after an expired token neither resurrects nor destroys")
 
+        // MARK: forgetting a voiceprint sticks, in the exact order that undid it
+
+        // A third Mac, because the resurrection race needs a device whose
+        // files are stale and whose pass runs in the wrong order on purpose.
+        let mac3Lib = try scratchLibrary(root.appendingPathComponent("mac-3"))
+        try? FileManager.default.removeItem(at: EngineState(library: mac3Lib).root)
+        let mac3 = CloudSyncCore(library: mac3Lib, state: EngineState(library: mac3Lib),
+                                 store: store, key: key, policy: .mac,
+                                 device: "mac-3", ingests: false)
+
+        let vp1 = "2026-08-13-140000-AAAA", vp2 = "2026-08-13-150000-BBBB"
+        for (vpID, bank) in [(vp1, #"{"Anna":{"embedding":[0.1]},"Ben":{"embedding":[0.2]}}"#),
+                             (vp2, #"{"Anna":{"embedding":[0.3]}}"#)] {
+            try seed(macLib, id: vpID,
+                     metadata: #"{"id":"\#(vpID)","title":"Voices","source":"mac","state":"done"}"#,
+                     transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+            try Data(bank.utf8).write(to: macLib.folder(for: vpID)
+                .appendingPathComponent("embeddings.json"))
+        }
+        var vpSend = CloudReport()
+        await mac.push(into: &vpSend)
+        await mac.pushVoiceprints(into: &vpSend)
+        try check(vpSend.errors.isEmpty, "seeding voiceprints failed: \(vpSend.errors)")
+        var vpGet = CloudReport()
+        await mac3.pull(into: &vpGet)
+        await mac3.pullVoiceprints(into: &vpGet)
+        let crossed = try Data(contentsOf: mac3Lib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json"))
+        try check(crossed == Data(contentsOf: macLib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json")),
+                  "a voiceprint bank did not cross byte-identical between Macs")
+        ok("voiceprint banks cross byte-identical between Macs")
+
+        // The forget, on the first Mac only.
+        var stones = VoiceprintTombstones.load(macLib)
+        stones.forget("Anna")
+        stones.save(macLib)
+        var forgetPush = CloudReport()
+        await mac.pushVoiceprints(into: &forgetPush)
+        try check(forgetPush.errors.isEmpty, "the forget pass failed: \(forgetPush.errors)")
+        let vp1Bank = String(decoding: try Data(contentsOf: macLib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json")), as: UTF8.self)
+        try check(!vp1Bank.contains("Anna") && vp1Bank.contains("Ben"),
+                  "the forget did not strip the local bank")
+        try check(!FileManager.default.fileExists(atPath: macLib.folder(for: vp2)
+            .appendingPathComponent("embeddings.json").path),
+                  "a bank holding only the forgotten person survived")
+        let vp2Record = try await store.fetch(
+            CloudNaming.recordName(.voiceprint, vp2, key: key), in: .voiceprints)
+        try check(vp2Record == nil, "the emptied bank's record was not deleted")
+        let tombRecord = try await store.fetch(
+            CloudNaming.recordName(.voiceprint, VoiceprintTombstones.cloudKey, key: key),
+            in: .voiceprints)
+        try check(tombRecord != nil, "no tombstone record was pushed")
+        ok("a forget strips the banks, empties the emptied record, and leaves a tombstone")
+
+        // The race, deliberately in the wrong order: the stale Mac pushes
+        // before it pulls, which is exactly how a fat bank comes back.
+        var wrongOrder = CloudReport()
+        await mac3.pushVoiceprints(into: &wrongOrder)
+        let resurrected = try await store.fetch(
+            CloudNaming.recordName(.voiceprint, vp1, key: key), in: .voiceprints)
+        let resurrectedBank = try CloudRecords.openBlob(
+            try unwrap(resurrected, "the stale Mac pushed nothing"), key: key)
+        try check(String(decoding: resurrectedBank.contents, as: UTF8.self).contains("Anna"),
+                  "the race this design exists for did not occur, so it proves nothing")
+        var repairRace = CloudReport()
+        await mac3.pushVoiceprints(into: &repairRace)
+        var settleMac = CloudReport()
+        await mac.pullVoiceprints(into: &settleMac)
+        for (lib, name) in [(macLib, "mac"), (mac3Lib, "mac-3")] {
+            for vpID in [vp1, vp2] {
+                let file = lib.folder(for: vpID).appendingPathComponent("embeddings.json")
+                if let data = try? Data(contentsOf: file) {
+                    try check(!String(decoding: data, as: UTF8.self).contains("Anna"),
+                              "\(name) still holds the forgotten voiceprint in \(vpID)")
+                }
+            }
+        }
+        let settled = try await store.fetch(
+            CloudNaming.recordName(.voiceprint, vp1, key: key), in: .voiceprints)
+        let settledBank = try CloudRecords.openBlob(
+            try unwrap(settled, "the repaired record vanished"), key: key)
+        try check(!String(decoding: settledBank.contents, as: UTF8.self).contains("Anna"),
+                  "the container still holds the forgotten voiceprint")
+        try check(try await store.fetch(
+            CloudNaming.recordName(.voiceprint, vp2, key: key), in: .voiceprints) == nil,
+                  "the emptied record came back and stayed")
+        ok("a stale Mac pushing before it pulls is repaired on its next pass")
+
+        // Convergence: another pass on both changes nothing in the zone.
+        let snapshotBefore = (try? await store.changes(in: .voiceprints, since: nil))?
+            .changed.map { $0.name + ":" + sha256Hex($0.payload) }.sorted() ?? []
+        var idleA = CloudReport(), idleB = CloudReport()
+        await mac.pushVoiceprints(into: &idleA)
+        await mac3.pushVoiceprints(into: &idleB)
+        let snapshotAfter = (try? await store.changes(in: .voiceprints, since: nil))?
+            .changed.map { $0.name + ":" + sha256Hex($0.payload) }.sorted() ?? []
+        try check(snapshotBefore == snapshotAfter,
+                  "a settled voiceprint zone was rewritten by an idle pass")
+        ok("the voiceprint zone converges and stays put")
+
+        // A deleted recording takes its voiceprint record with it.
+        let vp3 = "2026-08-13-160000-CCCC"
+        try seed(macLib, id: vp3,
+                 metadata: #"{"id":"\#(vp3)","title":"Leaving","source":"mac","state":"done"}"#,
+                 transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+        try Data(#"{"Cara":{"embedding":[0.4]}}"#.utf8).write(
+            to: macLib.folder(for: vp3).appendingPathComponent("embeddings.json"))
+        var vp3Send = CloudReport()
+        await mac.push(into: &vp3Send)
+        await mac.pushVoiceprints(into: &vp3Send)
+        try FileManager.default.removeItem(at: macLib.folder(for: vp3))
+        var vp3Delete = CloudReport()
+        await mac.push(into: &vp3Delete)
+        try check(try await store.fetch(
+            CloudNaming.recordName(.recording, vp3, key: key), in: .library) == nil,
+                  "the deleted recording's record survived")
+        try check(try await store.fetch(
+            CloudNaming.recordName(.voiceprint, vp3, key: key), in: .voiceprints) == nil,
+                  "the deleted recording left its voiceprint behind")
+        ok("deleting a recording deletes its voiceprint record too")
+
+        // Unforget: a re-taught name crosses again.
+        var pardon = VoiceprintTombstones.load(macLib)
+        pardon.unforget("Anna", now: Date().addingTimeInterval(5))
+        pardon.save(macLib)
+        try Data(#"{"Anna":{"embedding":[0.9]}}"#.utf8).write(
+            to: macLib.folder(for: vp2).appendingPathComponent("embeddings.json"))
+        var reSend = CloudReport()
+        await mac.pushVoiceprints(into: &reSend)
+        var reGet = CloudReport()
+        await mac3.pullVoiceprints(into: &reGet)
+        let returned = try Data(contentsOf: mac3Lib.folder(for: vp2)
+            .appendingPathComponent("embeddings.json"))
+        try check(String(decoding: returned, as: UTF8.self).contains("Anna"),
+                  "an unforgotten voiceprint could not come back")
+        ok("unforget lets a re-taught voiceprint travel again")
+
+        // Expiry: an entry old enough to be dead weight is dropped on merge.
+        let stale = VoiceprintTombstones(entries: [.init(
+            name: "Old", at: Metadata.stamp(Date().addingTimeInterval(-91 * 86_400)))])
+        try check(VoiceprintTombstones.merged(stale, VoiceprintTombstones()).entries.isEmpty,
+                  "an expired tombstone survived a merge")
+        ok("tombstones expire after 90 days rather than naming people for ever")
+
+        // And the phone still receives none of it, tombstone included.
+        var phoneVP = CloudReport()
+        await phone.pullVoiceprints(into: &phoneVP)
+        try check(!FileManager.default.fileExists(
+            atPath: VoiceprintTombstones.url(in: phoneLib).path),
+                  "the tombstone list reached the phone")
+        ok("the voiceprint zone, tombstones included, never reaches the phone")
+
         return out
+    }
+
+    /// Unwrap for the suite: the failure text is the assertion.
+    private static func unwrap<T>(_ value: T?, _ what: String) throws -> T {
+        guard let value else { throw Failure(description: what) }
+        return value
     }
 
     private static func checkNote(_ note: Note?, named slug: String) throws -> Note {

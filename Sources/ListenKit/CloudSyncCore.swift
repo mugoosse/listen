@@ -88,7 +88,7 @@ public struct CloudSyncCore: Sendable {
     /// `Library.all` is a compactMap over `load`, so a recording arriving is
     /// invisible rather than half-present and a pull that dies halfway leaves
     /// nothing to clean up.
-    public func pull(into report: inout CloudReport) async {
+    public func pull(into report: inout CloudReport, now: Date = Date()) async {
         var seen = state.everSeen
         var base = state.base
         defer { state.everSeen = seen; state.base = base }
@@ -115,9 +115,25 @@ public struct CloudSyncCore: Sendable {
                         // following push never repairs the cloud record. Let
                         // push fetch and compare once; an exact match is still
                         // a no-op, while a richer folder is sent.
-                        let id = try await pullRecording(record, into: &report)
+                        let pulled = try await pullRecording(record, into: &report)
+                        let id = pulled.id
+                        // Remember who holds the audio even when that is
+                        // nobody. A device without the bytes had no way to
+                        // name the device with them, so the window inferred it
+                        // from `metadata.source` and told a two-Mac library
+                        // that every phone recording was on its way *here*.
+                        // For one that another Mac had claimed hours earlier
+                        // that sentence was false in the only way that
+                        // matters: it named a machine that was never going to
+                        // do anything, and hid the one that owed the work.
+                        base[audioOn: id] = record.audioOn
                         if !ingests, let holder = record.audioOn, holder != device {
-                            base[sent: "audio:" + id] = "acknowledged"
+                            // A claim is not a delivery, and the difference is
+                            // what stops a Mac parking a recording for ever.
+                            // See `audioMarker`.
+                            base[sent: "audio:" + id] = pulled.delivered
+                                ? CloudSyncCore.acknowledged
+                                : CloudSyncCore.claimed(at: now)
                         }
                     case .note: try pullNote(record, base: &base, into: &report)
                     case .blob: try pullBlob(record, into: &report)
@@ -155,11 +171,49 @@ public struct CloudSyncCore: Sendable {
         } catch {
             report.errors.append(error.localizedDescription)
         }
+
+        await askWhoHoldsTheWaiting(&base)
     }
+
+    /// Ask, for the few recordings this device is waiting on, which device
+    /// holds their audio.
+    ///
+    /// The change feed cannot answer this. It reports what has changed since a
+    /// token, and a recording that is stuck is precisely one whose record is
+    /// **not** changing: the Mac that claimed it published once and then went
+    /// quiet. So the device that most needs to say where the audio went is the
+    /// one the pull will never tell. Found immediately after adding
+    /// `audioOn:<id>` to the pull, on the recording that prompted all of this:
+    /// zero keys written, because nothing had moved in the container since.
+    ///
+    /// Waiting is "no audio here and no transcript here", which is the exact
+    /// set somebody is looking at a spinner over. It is normally empty or one,
+    /// and it is capped at eight newest-first so that a Mac midway through its
+    /// first sync spends eight fetches rather than one per recording it has yet
+    /// to receive. Nothing is written for a record that cannot be fetched, and
+    /// an unclaimed recording is asked about again next pass, because "nobody
+    /// holds it yet" is a state that changes.
+    private func askWhoHoldsTheWaiting(_ base: inout SyncState) async {
+        let waiting = library.all()
+            .filter { !$0.hasAudio && !$0.hasTranscript }
+            .prefix(8)
+        for recording in waiting {
+            let name = CloudNaming.recordName(.recording, recording.id, key: key)
+            guard let record = try? await store.fetch(name, in: .library) else { continue }
+            base[audioOn: recording.id] = record.audioOn
+        }
+    }
+
+    /// What a pull of one recording leaves the caller needing to know.
+    ///
+    /// `delivered` is whether the record carries work made *from* the audio,
+    /// which is a different question from whether a device holds the audio and
+    /// is the one a phone has to ask before it stops offering its copy.
+    struct Pulled { var id: String; var delivered: Bool }
 
     @discardableResult
     private func pullRecording(_ record: StoredRecord,
-                               into report: inout CloudReport) async throws -> String {
+                               into report: inout CloudReport) async throws -> Pulled {
         let blob = try CloudRecords.openRecording(record, key: key)
         guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
         let folder = library.folder(for: blob.id)
@@ -187,7 +241,29 @@ public struct CloudSyncCore: Sendable {
 
         let metadataURL = folder.appendingPathComponent("metadata.json")
         let have = try? Data(contentsOf: metadataURL)
-        if have.map(sha256Hex) != blob.digests["metadata.json"] {
+
+        // **The device holding the audio authors this document from ingest
+        // onwards, and a pull must not write over it.**
+        //
+        // `ingest` publishes the phone's `metadata.json` verbatim, because at
+        // that instant the phone is still the author. The pipeline then runs
+        // here and rewrites the file: `state` leaves `pending`, `asr_model`
+        // and `room` are decided, `AutoTitle` may name it. The record still
+        // carries the pre-ingest snapshot until the next push, so the pull in
+        // between was handing this Mac its own recording back with the state
+        // reset, and the push that followed republished `pending` for work
+        // that had finished hours earlier. Measured on the memo in
+        // `.agents/notes/cloud-sync.md`: the record read `state pending` for a
+        // recording that was transcribed, diarized and speaker-labelled.
+        //
+        // Narrow on purpose. Every other device still stores the bytes
+        // verbatim, which is the rule in `CLAUDE.md` and is what keeps fields
+        // this build has never heard of alive. This is the one device the rule
+        // was wrong about, and `audioOn` is how it says so rather than a guess
+        // from `metadata.source`. It cannot lose a phone edit either: a rename
+        // on the phone already loses to `addingPhoneContent` on the way up.
+        let authored = have != nil && record.audioOn == device
+        if !authored, have.map(sha256Hex) != blob.digests["metadata.json"] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             // Verbatim. The bytes the authoring device wrote, not a
             // re-encoding of them through whatever struct this device happens
@@ -198,7 +274,23 @@ public struct CloudSyncCore: Sendable {
 
         // The phone stops holding audio only when a Mac says it holds it.
         await reclaimIfAcknowledged(record, id: blob.id, into: &report)
-        return blob.id
+
+        // Work made from the audio, rather than a device holding the audio.
+        // A transcript is the usual evidence; a finished state is the other
+        // half, because a recording with no speech in it never gains a
+        // transcript and would otherwise look like a Mac that had done nothing
+        // for ever. See `.agents/notes/asr.md`, "A silent track must not cost a
+        // transcript".
+        //
+        // `transcribing` is deliberately not finished. It says a Mac started,
+        // which is the claim itself restated, and a run that dies leaves it
+        // behind: believing it would rebuild the latch this replaces.
+        let state = (try? JSONDecoder().decode(Metadata.self, from: blob.metadata))
+            .flatMap { $0.state }.flatMap(Metadata.State.init(rawValue:))
+        let finished: Set<Metadata.State> = [.needs_labelling, .done, .failed]
+        let delivered = blob.digests["transcript.json"] != nil
+            || state.map(finished.contains) == true
+        return Pulled(id: blob.id, delivered: delivered)
     }
 
     private func pullNote(_ record: StoredRecord, base: inout SyncState,
@@ -254,6 +346,7 @@ public struct CloudSyncCore: Sendable {
         where CloudNaming.recordName(.recording, recording.id, key: key) == recordName {
             Trash.accept(recording.folder, in: library)
             base[sent: recording.id] = nil
+            base[audioOn: recording.id] = nil
             return true
         }
         for note in library.allNotes()
@@ -325,6 +418,10 @@ public struct CloudSyncCore: Sendable {
                 var record = try CloudRecords.recording(recording, policy: policy, key: key)
                 if let existing, !ingests {
                     record = try CloudRecords.addingPhoneContent(record, to: existing, key: key)
+                } else if let existing {
+                    // A Mac may be unable to make the source icon at all, and
+                    // must not take one away because of it.
+                    record = try CloudRecords.keepingSourceIcon(record, from: existing, key: key)
                 }
                 record.changeTag = existing?.changeTag
                 record.audioOn = existing?.audioOn
@@ -442,6 +539,12 @@ public struct CloudSyncCore: Sendable {
         let manager = FileManager.default
         var drop: [String] = []
 
+        // Voiceprint debts first, and on every device: the phone does not
+        // keep voiceprints, but a recording deleted from the phone still has
+        // to take its r6 record with it, and this is the retry path when
+        // that delete failed on the pass that deleted r1.
+        await settleVoiceprintDebts(&base, into: &report)
+
         // A library that has lost everything is not a library that deleted
         // everything.
         //
@@ -512,6 +615,17 @@ public struct CloudSyncCore: Sendable {
                                        in: .library)
                 report.deletedRemotely += 1
                 drop.append(key)
+                // The voiceprint goes with the recording. Not gated on
+                // `keepsVoiceprints`: the phone never holds one, but a
+                // deletion it originates still has to clean the zone it
+                // cannot see. A miss is a no-op, a failure becomes a debt.
+                do {
+                    try await store.delete(CloudNaming.recordName(.voiceprint, id,
+                                                                  key: self.key),
+                                           in: .voiceprints)
+                } catch {
+                    base.base[SyncState.r6DropKey(id)] = "due"
+                }
             } catch {
                 report.errors.append("delete \(id): \(error.localizedDescription)")
             }
@@ -617,6 +731,16 @@ public struct CloudSyncCore: Sendable {
     /// "the phone declines to save one".
     public func pushVoiceprints(into report: inout CloudReport) async {
         guard policy.keepsVoiceprints else { return }
+        var base = state.base
+        defer { state.base = base }
+
+        // This device's forgets are applied before anything is sealed, so a
+        // pass never pushes a name the user has asked to be gone. A bank that
+        // empties becomes a debt, settled below.
+        let stones = VoiceprintTombstones.load(library)
+        let applied = VoiceprintTombstones.apply(stones.activeNames(), to: library)
+        for id in applied.emptied { base.base[SyncState.r6DropKey(id)] = "due" }
+
         for recording in library.all() {
             for file in DevicePolicy.voiceprintFiles {
                 let url = recording.folder.appendingPathComponent(file)
@@ -637,6 +761,60 @@ public struct CloudSyncCore: Sendable {
                 }
             }
         }
+
+        await settleVoiceprintDebts(&base, into: &report)
+
+        // The tombstone record, merged rather than replaced. Two Macs that
+        // forget different people in the same window both land, because
+        // whichever pushes second starts from a fetch of the first, and the
+        // changeTag turns a genuine cross push into a retry rather than an
+        // overwrite.
+        let name = CloudNaming.recordName(.voiceprint, VoiceprintTombstones.cloudKey,
+                                          key: key)
+        do {
+            let existing = try await store.fetch(name, in: .voiceprints)
+            var remote = VoiceprintTombstones()
+            if let existing {
+                let blob = try CloudRecords.openBlob(existing, key: key)
+                remote = (try? JSONDecoder().decode(VoiceprintTombstones.self,
+                                                    from: blob.contents)) ?? remote
+            }
+            let merged = VoiceprintTombstones.merged(stones, remote)
+            if merged != stones { merged.save(library) }
+            let shouldSave = existing == nil
+                ? !merged.entries.isEmpty
+                : merged != remote
+            if shouldSave {
+                var record = try CloudRecords.voiceprint(
+                    id: VoiceprintTombstones.cloudKey,
+                    contents: try JSONEncoder().encode(merged), key: key)
+                record.changeTag = existing?.changeTag
+                _ = try await store.save(record)
+            }
+        } catch {
+            report.errors.append("forgotten people: " + error.localizedDescription)
+        }
+    }
+
+    /// Deletes owed to the voiceprint zone: banks that emptied under a
+    /// forget, and voiceprints whose recording went while the record delete
+    /// failed. Safe to retry for ever, because deleting a record that is not
+    /// there is a no-op in both stores.
+    private func settleVoiceprintDebts(_ base: inout SyncState,
+                                       into report: inout CloudReport) async {
+        let owed = base.base.keys.filter { $0.hasPrefix(SyncState.r6DropKey("")) }
+        for entry in owed {
+            let id = String(entry.dropFirst(SyncState.r6DropKey("").count))
+            do {
+                try await store.delete(CloudNaming.recordName(.voiceprint, id,
+                                                              key: self.key),
+                                       in: .voiceprints)
+                base.base[entry] = nil
+            } catch {
+                report.errors.append("voiceprint delete \(id): "
+                                     + error.localizedDescription)
+            }
+        }
     }
 
     /// Take other Macs' voiceprints down. The voice bank has no database and
@@ -644,16 +822,77 @@ public struct CloudSyncCore: Sendable {
     /// recognise a voice it has already been taught.
     public func pullVoiceprints(into report: inout CloudReport) async {
         guard policy.keepsVoiceprints else { return }
+        var base = state.base
+        defer { state.base = base }
         guard let changes = try? await store.changes(in: .voiceprints, since: nil) else { return }
-        for record in changes.changed {
+
+        // The tombstone record first, so a forget that arrives in the same
+        // pass as the banks it strips is applied to them rather than one pass
+        // late. An old build never reaches this record: its blob name is not
+        // a valid recording id, so the guard below skips it silently.
+        var stones = VoiceprintTombstones.load(library)
+        let tombName = CloudNaming.recordName(.voiceprint,
+                                              VoiceprintTombstones.cloudKey, key: key)
+        for record in changes.changed where record.name == tombName {
             guard let blob = try? CloudRecords.openBlob(record, key: key),
+                  let remote = try? JSONDecoder().decode(VoiceprintTombstones.self,
+                                                         from: blob.contents)
+            else { continue }
+            let merged = VoiceprintTombstones.merged(stones, remote)
+            if merged != stones { merged.save(library); stones = merged }
+        }
+        let active = stones.activeNames()
+        let applied = VoiceprintTombstones.apply(active, to: library)
+        for id in applied.emptied { base.base[SyncState.r6DropKey(id)] = "due" }
+
+        for record in changes.changed {
+            guard record.name != tombName,
+                  let blob = try? CloudRecords.openBlob(record, key: key),
                   Metadata.isValidID(blob.name) else { continue }
             let folder = library.folder(for: blob.name)
             guard FileManager.default.fileExists(atPath: folder.path) else { continue }
             let url = folder.appendingPathComponent("embeddings.json")
-            if let have = try? Data(contentsOf: url), sha256Hex(have) == blob.version { continue }
-            try? blob.contents.write(to: url, options: .atomic)
+            // Strip before the compare, so a record still carrying a
+            // forgotten name neither lands on disk nor reads as agreement.
+            // The record itself is repaired by this device's next push, which
+            // sees the stripped file disagree with the fat record.
+            var contents = blob.contents
+            var version = blob.version
+            if let stripped = VoiceprintTombstones.strip(active, fromBank: contents) {
+                if stripped.empty {
+                    try? FileManager.default.removeItem(at: url)
+                    base.base[SyncState.r6DropKey(blob.name)] = "due"
+                    continue
+                }
+                contents = stripped.data
+                version = sha256Hex(contents)
+            }
+            if let have = try? Data(contentsOf: url), sha256Hex(have) == version { continue }
+            try? contents.write(to: url, options: .atomic)
             report.pulledSidecars += 1
+        }
+
+        // One sweep of voiceprints whose recording was deleted before r6
+        // records were deleted alongside r1. Absence on this disk proves
+        // nothing on a Mac mid first pull, so the recording record is asked
+        // for: absent in the container is the evidence that counts.
+        if base.base["migration:r6-orphans-v1"] == nil {
+            var swept = true
+            for record in changes.changed {
+                guard record.name != tombName,
+                      let blob = try? CloudRecords.openBlob(record, key: key),
+                      Metadata.isValidID(blob.name),
+                      !FileManager.default.fileExists(
+                          atPath: library.folder(for: blob.name).path)
+                else { continue }
+                do {
+                    let r1 = CloudNaming.recordName(.recording, blob.name, key: key)
+                    if try await store.fetch(r1, in: .library) == nil {
+                        try await store.delete(record.name, in: .voiceprints)
+                    }
+                } catch { swept = false }
+            }
+            if swept { base.base["migration:r6-orphans-v1"] = "done" }
         }
     }
 
@@ -669,20 +908,63 @@ public struct CloudSyncCore: Sendable {
     /// **This does not free the local audio.** Nothing here does. See
     /// `reclaimIfAcknowledged`, and the reason it keys on a Mac saying it holds
     /// the bytes rather than on this upload finishing.
-    public func upload(_ recording: Recording, into report: inout CloudReport) async {
+    /// A Mac has published work made from this recording's audio. Final: there
+    /// is nothing left for this phone to offer, whatever it still holds.
+    static let acknowledged = "acknowledged"
+
+    /// A Mac took the audio and has published nothing made from it yet.
+    ///
+    /// Stamped rather than boolean, because it expires. `acknowledged` used to
+    /// be written the moment any `audioOn` appeared and nothing ever cleared
+    /// it, so a Mac that took a recording and then could not publish it parked
+    /// that recording for ever: the phone went quiet holding the only other
+    /// copy, and clearing `audioOn` in the container would not have woken it.
+    /// That is not hypothetical, and the incident is in
+    /// `.agents/notes/cloud-sync.md`.
+    static func claimed(at when: Date) -> String { "claimed:" + Metadata.stamp(when) }
+
+    /// How long a claim with nothing to show for it is believed.
+    ///
+    /// Six hours. A Mac that has taken the audio and published neither a
+    /// transcript nor a finished state in six hours is asleep, stuck, or on a
+    /// build that cannot publish, and in all three cases offering the audio to
+    /// whichever Mac is awake beats waiting. Shorter would re-offer across an
+    /// ordinary closed lid; longer stops being same-day. Being wrong costs one
+    /// upload of audio this phone still has, and **cannot** cost the recording:
+    /// nothing here deletes anything, and `reclaimIfAcknowledged` is still the
+    /// only thing that frees a local copy.
+    static let claimGrace: TimeInterval = 6 * 3600
+
+    public func upload(_ recording: Recording, into report: inout CloudReport,
+                       now: Date = Date()) async {
         guard !ingests else { return }
         guard recording.hasAudio, let audio = try? Data(contentsOf: recording.micURL) else { return }
 
-        // Remember a Mac's acknowledgement permanently, because the transfer
-        // record is deleted on purpose the moment a Mac takes the audio.
+        // Remember a Mac's acknowledgement, because the transfer record is
+        // deleted on purpose the moment a Mac takes the audio.
         //
         // Until that acknowledgement arrives, a remembered upload is not
         // durable proof. If the transfer has disappeared while this phone still
         // owns the bytes, recreate it. Once acknowledged, keep-audio phones can
         // retain their WAVs without re-sending the whole library every pass.
+        //
+        // A bare claim is believed only for `claimGrace`, and then this phone
+        // offers the audio again. One offer per window, because the pull that
+        // follows re-stamps the claim, so a Mac that is merely slow is not
+        // hammered and one that is stuck does not win by silence.
         var base = state.base
         let sentKey = "audio:" + recording.id
-        if base[sent: sentKey] == "acknowledged" { return }
+        switch base[sent: sentKey] {
+        case CloudSyncCore.acknowledged:
+            return
+        case let marker? where marker.hasPrefix("claimed:"):
+            let stamp = String(marker.dropFirst("claimed:".count))
+            guard let when = Metadata.parser.date(from: stamp),
+                  now.timeIntervalSince(when) >= CloudSyncCore.claimGrace
+            else { return }
+        default:
+            break
+        }
 
         let metadataURL = recording.folder.appendingPathComponent("metadata.json")
         guard let metadata = try? Data(contentsOf: metadataURL) else { return }
@@ -754,6 +1036,101 @@ public struct CloudSyncCore: Sendable {
                 report.errors.append("ingest: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - Claiming a transcription
+
+    /// Who is transcribing a recording, and until when.
+    public struct TranscriptionLease: Sendable, Equatable {
+        public var device: String
+        public var expires: Date
+        public var mine: Bool
+    }
+
+    /// **`claimedBy` and `claimExpires` on the recording record, which were
+    /// already deployed and written by nothing.**
+    ///
+    /// `claim` only ever touches transfer records; `push` merely carries these
+    /// two through on `r1`. So the lease costs no Production schema at all,
+    /// and Production schema is append-only for ever. They are also exactly
+    /// the right shape: typed and readable, because they are written by a
+    /// device that is not the content's author and read to decide a race,
+    /// which is the reason those three fields are in the clear at all.
+    ///
+    /// **Why a lease is needed now and was not before.** Audio used to land on
+    /// one Mac, so "has the bytes" *was* the lock: no other machine could have
+    /// transcribed if it wanted to. A replicated master removes that accident,
+    /// and `Queue.resume` enqueues anything with audio and no transcript, so
+    /// without this every Mac transcribes every recording, burning an hour of
+    /// each machine to produce two answers to the same question.
+    ///
+    /// It expires so a Mac that dies mid-run does not park a recording for
+    /// ever, and it is renewed while the job runs, because a long meeting
+    /// outlives any window short enough to be useful after a crash.
+    public func transcriptionLease(_ id: String, now: Date = Date()) async -> TranscriptionLease? {
+        guard Metadata.isValidID(id) else { return nil }
+        let name = CloudNaming.recordName(.recording, id, key: key)
+        guard let record = try? await store.fetch(name, in: .library),
+              let holder = record.claimedBy, let expires = record.claimExpires,
+              expires > now
+        else { return nil }
+        return TranscriptionLease(device: holder, expires: expires, mine: holder == device)
+    }
+
+    /// Take it, or lose it to whoever already has it.
+    ///
+    /// True also when there is no record yet, which is a recording this device
+    /// has made and not pushed: nobody else can be transcribing something they
+    /// have never heard of, and refusing would stall the common case on the
+    /// network.
+    @discardableResult
+    public func takeTranscriptionLease(_ id: String, window: TimeInterval = 900,
+                                       now: Date = Date()) async -> Bool {
+        guard Metadata.isValidID(id) else { return false }
+        let name = CloudNaming.recordName(.recording, id, key: key)
+        // A throw here is the container being unreachable, and that must not
+        // stop a Mac transcribing its own recording: Listen works with the
+        // network off, and the cost of two Macs doing the same hour of work is
+        // wasted CPU rather than lost data. `state: transcribing` travelling in
+        // the metadata is the second deterrent for that window.
+        let found: StoredRecord?
+        do { found = try await store.fetch(name, in: .library) } catch { return true }
+        guard var record = found else { return true }
+        if let holder = record.claimedBy, holder != device,
+           let expires = record.claimExpires, expires > now {
+            return false
+        }
+        record.claimedBy = device
+        record.claimExpires = now.addingTimeInterval(window)
+        // The compare-and-swap is the whole mechanism: two Macs waking
+        // together both read no holder, and exactly one save lands.
+        return (try? await store.save(record)) != nil
+    }
+
+    /// Hold it for another window. A job that outlives its lease invites a
+    /// second Mac to start the same hour of work.
+    public func renewTranscriptionLease(_ id: String, window: TimeInterval = 900,
+                                        now: Date = Date()) async {
+        guard Metadata.isValidID(id) else { return }
+        let name = CloudNaming.recordName(.recording, id, key: key)
+        guard var record = try? await store.fetch(name, in: .library),
+              record.claimedBy == device
+        else { return }
+        record.claimExpires = now.addingTimeInterval(window)
+        _ = try? await store.save(record)
+    }
+
+    /// Let it go, on success or on failure alike. A failed run that keeps the
+    /// lease until it expires is fifteen minutes in which nothing retries.
+    public func releaseTranscriptionLease(_ id: String) async {
+        guard Metadata.isValidID(id) else { return }
+        let name = CloudNaming.recordName(.recording, id, key: key)
+        guard var record = try? await store.fetch(name, in: .library),
+              record.claimedBy == device
+        else { return }
+        record.claimedBy = nil
+        record.claimExpires = nil
+        _ = try? await store.save(record)
     }
 
     // MARK: - Claiming an ingest

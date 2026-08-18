@@ -29,6 +29,25 @@ public struct Metadata: Codable, Sendable, Equatable {
     public var app_bundle_id: String?
     public var app_name: String?
     public var calendar_event_id: String?
+
+    /// Which device made the transcript, and how long it took.
+    ///
+    /// Provenance rather than state. `state` says what stage the recording has
+    /// reached; these say who did the work and when, which is the question a
+    /// library spread over three devices actually raises. On a single Mac they
+    /// are noise, so nothing shows them until there is more than one device.
+    ///
+    /// In the sealed payload, so they cost no CloudKit schema at all. That is
+    /// the whole reason a new field goes in `metadata.json`: see `CloudNaming`.
+    ///
+    /// The **name** as well as the id, because a device record can be forgotten
+    /// from the roster and a Mac can be renamed, and "transcribed on a device
+    /// that is not in the list" is worse than a name that has since changed.
+    /// The id is what code compares; the name is what a person reads.
+    public var transcribed_by: String?
+    public var transcribed_on: String?
+    public var transcribe_started: String?
+    public var transcribe_finished: String?
     // `calendar_people` is deliberately absent. On disk it is a list of objects
     // with `email`, `name`, `is_me` and `is_organizer`, nothing here reads it,
     // and declaring it as `[String]` is what taught this file the lesson below.
@@ -66,6 +85,10 @@ public struct Metadata: Codable, Sendable, Equatable {
         app_bundle_id = try? c.decodeIfPresent(String.self, forKey: .app_bundle_id)
         app_name = try? c.decodeIfPresent(String.self, forKey: .app_name)
         calendar_event_id = try? c.decodeIfPresent(String.self, forKey: .calendar_event_id)
+        transcribed_by = try? c.decodeIfPresent(String.self, forKey: .transcribed_by)
+        transcribed_on = try? c.decodeIfPresent(String.self, forKey: .transcribed_on)
+        transcribe_started = try? c.decodeIfPresent(String.self, forKey: .transcribe_started)
+        transcribe_finished = try? c.decodeIfPresent(String.self, forKey: .transcribe_finished)
     }
 
     public init(id: String, recordedAt: Date, duration: Double, title: String,

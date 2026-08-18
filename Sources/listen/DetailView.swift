@@ -1013,9 +1013,18 @@ final class DetailView: NSView {
         // Which device is coming for it depends on where it was made, and
         // saying "the Mac that recorded it" about a phone recording is simply
         // false: this Mac is the one that will fetch and transcribe it.
-        playerNote.stringValue = recording?.metadata.source == "iphone"
-            ? "The audio is coming from your iPhone."
-            : "The audio for this meeting is on the Mac that recorded it."
+        //
+        // Unless another Mac already took it. A claimed phone recording is on
+        // a named machine and is never coming here, because audio does not
+        // move once it lands, so the container's answer wins over the guess
+        // from `metadata.source` whenever there is one.
+        if let id = recording?.id, let holder = CloudSyncHost.audioHolder(of: id) {
+            playerNote.stringValue = "The audio for this meeting is on \(holder)."
+        } else {
+            playerNote.stringValue = recording?.metadata.source == "iphone"
+                ? "The audio is coming from your iPhone."
+                : "The audio for this meeting is on the Mac that recorded it."
+        }
     }
 
     @objc private func switchShowing(_ sender: NSSegmentedControl) {
@@ -1871,6 +1880,15 @@ final class DetailView: NSView {
         // meeting, the transcript arrives when that machine has made it, and
         // nothing here is waiting to run. See `Recording.hasAudio`.
         if !recording.hasAudio {
+            // Named, when the container has named one. "This Mac transcribes
+            // it once it arrives" is a promise about a claimed recording that
+            // this Mac cannot keep and will never be asked to: the audio is on
+            // the Mac that claimed it and stays there. Saying which one turns
+            // a wait with nothing to do into a machine to go and open.
+            if let holder = CloudSyncHost.audioHolder(of: recording.id) {
+                return "The audio for this recording is on \(holder)."
+                    + " The transcript appears here when that Mac has made it."
+            }
             // A phone recording is on its way *here*. Telling somebody to wait
             // for another Mac when this one is about to do the work sends them
             // looking at a machine that has nothing to say.

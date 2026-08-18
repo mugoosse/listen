@@ -38,7 +38,19 @@ final class CloudSyncHost {
     private let interval: TimeInterval = 120
 
     func startIfEnabled() {
-        guard Settings.cloudSync, timer == nil else { return }
+        // Refused rather than silently skipped, because a scratch library that
+        // does not sync looks exactly like one that does until the damage shows
+        // up on another device, and by then it is somebody else's screen.
+        if Settings.cloudSync, !Settings.cloudSyncApplies {
+            trace("""
+                  cloud sync: off for this library.
+                    consented:  \(Settings.cloudSyncLibrary)
+                    active:     \(ListenKit.Library.mac().root.path)
+                  Turn it on for this one with `listen sync enable`.
+                  """)
+            return
+        }
+        guard Settings.cloudSyncApplies, timer == nil else { return }
 
         // Anything that changes the library is worth sending, and the file
         // system is what knows. See `LibraryWatch` for why this is not a hook
@@ -79,7 +91,7 @@ final class CloudSyncHost {
     /// phone still sees the transcript while it is looking at the recording it
     /// is waiting for.
     func syncSoon() {
-        guard Settings.cloudSync else { return }
+        guard Settings.cloudSyncApplies else { return }
         soon?.invalidate()
         soon = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in
             Task { @MainActor in await CloudSyncHost.shared.syncNow() }
@@ -91,6 +103,18 @@ final class CloudSyncHost {
     /// each refusing the other's compare-and-swap.
     @discardableResult
     func syncNow() async -> CloudReport {
+        // **The consent is checked here and not only by the callers.** Every
+        // route into a pass had its own `Settings.cloudSync` guard, which is
+        // five places that have to agree and a sixth that will be added without
+        // one. This is the choke point, so this is where the question is
+        // answered; the callers keep their own checks for what they say and
+        // draw, not for whether the pass may run.
+        //
+        // `cloudSyncApplies`, because sync being on for this Mac is not the
+        // same as it being on for the library that is open. See
+        // `Config.cloudSyncLibrary` for what that cost.
+        guard Settings.cloudSyncApplies else { return lastReport ?? CloudReport() }
+
         // Asked while busy means asked again the moment this finishes.
         //
         // Refusing is right: two passes writing the same records would each
@@ -192,6 +216,13 @@ final class CloudSyncHost {
 
         lastReport = report
         trace("cloud sync: \(report.summary)")
+        // Deletions applied on another device's say-so are the one write here
+        // the user did not make on this Mac, so they are the one thing a pass
+        // leaves in the activity log. Counts only: `CloudReport` carries no
+        // ids, deliberately, and the trash holds the folders for a fortnight.
+        if report.deletedLocally > 0 {
+            ActivityLog.append("sync_deleted", ["count": report.deletedLocally])
+        }
 
         // Whatever arrived mid-pass, now. Cleared before running so a pass that
         // is itself interrupted asks once more rather than looping.
@@ -201,5 +232,33 @@ final class CloudSyncHost {
             return await syncNow()
         }
         return report
+    }
+
+    /// The Mac that holds this recording's audio, when it is not this one.
+    ///
+    /// Nil means nothing else has claimed it, which is the ordinary state of a
+    /// phone recording still on its way here, and of every recording in a
+    /// library that does not sync.
+    ///
+    /// **Why this is not `metadata.source`.** A phone recording goes to
+    /// whichever Mac claims the transfer first, so on a two-Mac library the
+    /// source says who *made* it and never who has it. That was wrong in the
+    /// worst direction for the recording that made this necessary: the other
+    /// Mac had taken the audio hours earlier and was on a build that never
+    /// published the transcript it then made, and this Mac spent the afternoon
+    /// promising to transcribe audio that was never coming.
+    ///
+    /// The name is the heartbeat's, so it is the name shown in Settings and
+    /// on the machine itself. Before the first pass of a launch there is no
+    /// device list yet, and an unnamed holder is still worth saying.
+    static func audioHolder(of id: String) -> String? {
+        guard Settings.cloudSyncApplies else { return nil }
+        let library = ListenKit.Library.mac()
+        let state = EngineState(library: library)
+        guard let holder = state.base[audioOn: id] else { return nil }
+        guard holder != state.identity(name: Host.current().localizedName ?? "Mac",
+                                       kind: "Mac").id else { return nil }
+        return shared.devices.first { $0.id == holder }?.name
+            ?? "your other Mac"
     }
 }

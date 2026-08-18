@@ -36,7 +36,15 @@ enum SyncCLI {
     // MARK: - Shared
 
     /// Honour `LISTEN_LIBRARY` exactly as the rest of Listen does, so a
-    /// scratch CloudKit run remains isolated from the real library.
+    /// scratch run reads and writes a scratch library.
+    ///
+    /// **Isolated from the library, and not from the container.** There is one
+    /// container per iCloud account and `CloudAccount.containerID` is a
+    /// constant, so a scratch library pushes its recordings into the same place
+    /// the real one lives and the other devices pull them down as ordinary
+    /// meetings. The `--library` guard below is why this verb cannot be pointed
+    /// at the real library; nothing stops the reverse, which has happened. See
+    /// `.agents/notes/cloud-sync.md`.
     private static var library: ListenKit.Library { .mac() }
 
     /// iCloud Keychain, and nothing else.
@@ -79,6 +87,14 @@ enum SyncCLI {
     /// make that distinction visible rather than reassuring.
     private static func status() -> Never {
         print("library:     \(library.root.path)")
+        // Before the key and the account, because it is the line that decides
+        // whether either of them matters, and the one that says a scratch
+        // library is a scratch library. See `Config.cloudSyncLibrary`.
+        print("sync:        " + (Settings.cloudSyncApplies
+                                 ? "on for this library"
+                                 : Settings.cloudSync
+                                   ? "off for this library, on for \(Settings.cloudSyncLibrary)"
+                                   : "off"))
         // One store now, so one sentence. It used to name both while the file
         // was still a fallback, because saying "none yet" when the only copy
         // sat in a file sent somebody hunting a keychain problem they did not
@@ -241,6 +257,9 @@ enum SyncCLI {
         if let at = args.firstIndex(of: "--forget"), at + 1 < args.count {
             await forget(args[at + 1])
         }
+        if let id = option("--recording", &args) {
+            await inspectRecording(id)
+        }
         guard let key = pairingKey else { die("no sync key") }
         let store = CloudKitStore(containerID: CloudAccount.containerID)
         print("container:   \(CloudAccount.containerID)")
@@ -278,10 +297,95 @@ enum SyncCLI {
             print("\ndevices:")
             for record in changes.changed {
                 guard let blob = try? CloudRecords.openDevice(record, key: key) else { continue }
-                print("  \(blob.id)  \(blob.name) (\(blob.kind)), \(blob.seenAgo)")
+                // The version, because a sync that half works is usually two
+                // devices on different builds, and this list is the only place
+                // that can say so. The heartbeat has carried it since the zone
+                // existed; nothing was printing it.
+                print("  \(blob.id)  \(blob.name) (\(blob.kind)), \(blob.seenAgo)"
+                      + ", \(blob.appVersion)")
             }
             print("\n  drop one with: listen sync inspect --forget <id>")
         }
+        done()
+    }
+
+    /// One recording's row in the container, across all four zones.
+    ///
+    /// The zone summary above answers "is anything there". This answers the
+    /// question a stuck recording actually asks, which is **which device is
+    /// holding it up**: whether the audio is still in flight, which Mac took
+    /// it, and whether that Mac has published the transcript it then made.
+    /// Without it the only evidence is absence on this disk, and absence
+    /// cannot tell "no Mac has it" apart from "a Mac has it and never said so".
+    ///
+    /// Opened rather than counted, like the device list and for the same
+    /// reason: this is the user's own library on the user's own machine, and
+    /// nothing here is printed that the window does not already show. Sidecar
+    /// names and byte counts only, never their contents.
+    private static func inspectRecording(_ id: String) async -> Never {
+        guard ListenKit.Metadata.isValidID(id) else { die("\"\(id)\" is not a recording id.") }
+        guard let key = pairingKey else { die("no sync key") }
+        let store = CloudKitStore(containerID: CloudAccount.containerID)
+
+        // Device names first, so every id below can be printed as the machine
+        // whose lid you would have to open.
+        var names: [String: String] = [:]
+        if let changes = try? await store.changes(in: .devices, since: nil) {
+            for record in changes.changed {
+                guard let blob = try? CloudRecords.openDevice(record, key: key) else { continue }
+                names[blob.id] = "\(blob.name), \(blob.kind), seen \(blob.seenAgo)"
+            }
+        }
+        func who(_ device: String?) -> String {
+            guard let device else { return "nobody" }
+            return names[device].map { "\(device)  (\($0))" } ?? device
+        }
+
+        print("recording:   \(id)")
+        print("container:   \(CloudAccount.containerID)\n")
+
+        let r1 = CloudNaming.recordName(.recording, id, key: key)
+        if let record = try? await store.fetch(r1, in: .library) {
+            let blob = try? CloudRecords.openRecording(record, key: key)
+            let state = blob.flatMap {
+                try? JSONDecoder().decode(ListenKit.Metadata.self, from: $0.metadata)
+            }?.state ?? "unknown"
+            print("  z1 r1:     present, state \(state)")
+            print("    audio on:  \(who(record.audioOn))")
+            if let holder = record.claimedBy {
+                let until = record.claimExpires.map(ListenKit.Metadata.stamp) ?? "an unknown time"
+                print("    claimed:   \(who(holder)) until \(until)")
+            }
+            let manifest = (blob?.digests.keys.sorted() ?? []).joined(separator: ", ")
+            print("    manifest:  \(manifest.isEmpty ? "nothing" : manifest)")
+        } else {
+            print("  z1 r1:     absent")
+        }
+
+        let r5 = CloudNaming.recordName(.audioTransfer, id, key: key)
+        if let record = try? await store.fetch(r5, in: .transfer) {
+            let from = (try? CloudRecords.openTransfer(record, key: key))?.from
+            let bytes = record.assets["mic.wav"]?.count ?? 0
+            print("  z4 r5:     present, from \(who(from)), mic.wav \(bytes) bytes sealed")
+        } else {
+            print("  z4 r5:     absent (either no Mac is owed the audio, or one took it)")
+        }
+
+        let r6 = CloudNaming.recordName(.voiceprint, id, key: key)
+        if let record = try? await store.fetch(r6, in: .voiceprints) {
+            let bytes = (try? CloudRecords.openBlob(record, key: key))?.contents.count ?? 0
+            print("  z6 r6:     present, \(bytes) bytes")
+        } else {
+            print("  z6 r6:     absent")
+        }
+
+        // What this Mac holds, beside it, so the two halves of the answer are
+        // in one place rather than one here and one in Finder.
+        let folder = library.folder(for: id)
+        let here = (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.sorted()
+        print("\n  on this Mac: " + ((here?.joined(separator: ", ")).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? "nothing"))
         done()
     }
 
@@ -313,13 +417,33 @@ enum SyncCLI {
     private static func enable(_ args: inout [String]) -> Never {
         if flag("--off", &args) {
             Settings.cloudSync = false
+            ActivityLog.append("sync_disabled")
             print("CloudKit sync is off. Nothing was removed from the container.")
             done()
         }
         guard flag("--on", &args) else {
+            // "On" has to mean on *for the library this command is looking at*.
+            // The setting is per install and the library is not, so a Mac that
+            // syncs its real library would otherwise report sync on while
+            // standing in a scratch one, which is the reading that made a
+            // scratch run look safe. See `Config.cloudSyncLibrary`.
             print("""
-                CloudKit sync is \(Settings.cloudSync ? "on" : "off") for
+                CloudKit sync is \(Settings.cloudSyncApplies ? "on" : "off") for
                 \(library.root.path)
+                """)
+            if Settings.cloudSync, !Settings.cloudSyncApplies {
+                print("""
+
+                    It is on for a different library:
+                    \(Settings.cloudSyncLibrary)
+
+                    Nothing in the library above is sent anywhere until you say
+                    so here. That is deliberate: there is one iCloud container
+                    per account, so a scratch library would otherwise push into
+                    the same place the real one lives.
+                    """)
+            }
+            print("""
 
                   listen sync enable --on     start syncing this library
                   listen sync enable --off    stop, leaving the container as it is
@@ -330,6 +454,7 @@ enum SyncCLI {
             done()
         }
         Settings.cloudSync = true
+        ActivityLog.append("sync_enabled")
         print("CloudKit sync is on for \(library.root.path).")
         print("It runs while Listen is open. `listen sync inspect` says what is up there.")
         done()
@@ -343,6 +468,7 @@ enum SyncCLI {
           --fake                          every seam of the CloudKit sync, offline
           cloud --library D               one pass against the real container
           inspect [--forget ID]           what is in the container, by zone
+          inspect --recording ID          one recording's row, across the zones
           trash                           deletions received in the last fortnight
           key [--show]                    the key that seals what iCloud holds
           enable [--on|--off]             sync this Mac's real library

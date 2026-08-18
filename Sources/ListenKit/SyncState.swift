@@ -37,6 +37,20 @@ public struct SyncState: Codable, Sendable {
     public static func noteKey(_ slug: String) -> String { "note:" + slug }
     public static func fileKey(_ name: String) -> String { "file:" + name }
     public static func sentKey(_ id: String) -> String { "sent:" + id }
+    /// A voiceprint record this device owes the container a delete for,
+    /// because the recording's bank emptied or its file went with the folder.
+    /// Its own prefix, disjoint from `sent:`, so the deletion scan in
+    /// `pushDeletions` never mistakes one for a recording stamp.
+    public static func r6DropKey(_ id: String) -> String { "r6drop:" + id }
+    /// Which device the container last said holds a recording's audio.
+    ///
+    /// Bookkeeping about the container, like `sent:`, and part of no decision
+    /// the sync takes: `audioOn` on the record is still the only thing the
+    /// reclaim invariant reads. This is here so a device **without** the audio
+    /// can say where it went, which nothing could do before. Its own prefix,
+    /// disjoint from `sent:` and `note:`, because `pushDeletions` walks those
+    /// two and treats a stamp whose folder has gone as a deletion to send.
+    public static func audioOnKey(_ id: String) -> String { "audioOn:" + id }
 
     public subscript(note slug: String) -> String? {
         get { base[SyncState.noteKey(slug)] }
@@ -54,6 +68,14 @@ public struct SyncState: Codable, Sendable {
     public subscript(sent id: String) -> String? {
         get { base[SyncState.sentKey(id)] }
         set { base[SyncState.sentKey(id)] = newValue }
+    }
+
+    /// The device id in the record's `audioOn`, as of the last pull that
+    /// mentioned it. Nil means the container has never named a holder, which
+    /// is a phone recording still in flight rather than one that has landed.
+    public subscript(audioOn id: String) -> String? {
+        get { base[SyncState.audioOnKey(id)] }
+        set { base[SyncState.audioOnKey(id)] = newValue }
     }
 
     // MARK: - Coding

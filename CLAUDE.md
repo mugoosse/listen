@@ -330,9 +330,16 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`.
 
 - A pull cannot stamp a richer local folder as sent
+- A stranded recording is invisible, and the screen said the opposite
+- A claim is not a delivery
+- Only the Mac holding the audio authors an ingested recording's metadata
+- A Mac without the application strips the source icon
 - A remembered audio upload is not an acknowledgement
 - A phone update cannot replace richer Mac content
 - Source icons travel inside the sealed recording payload
+- A forgotten voiceprint needs a tombstone, or the sync resurrects it
+- `LISTEN_LIBRARY` scopes the library, and never the container
+- The activity log is one line, appended with O_APPEND
 
 ### `.agents/notes/agent.md` (144k)
 
@@ -479,7 +486,9 @@ tests must run through `xcodebuild`, not `swift test`.
 One script stands in for one, over the app built in the working directory:
 
 ```sh
-./verify_title.sh    # every claim in .agents/notes/titles.md, as assertions
+./verify_title.sh       # every claim in .agents/notes/titles.md, as assertions
+./verify_compliance.sh  # the CLI's redaction, endpoint, managed-preference,
+                        # backup-permission and activity-log claims
 ```
 
 It builds a scratch `LISTEN_LIBRARY` out of copies of five real recordings and
@@ -504,6 +513,28 @@ the sidecars: copy `metadata.json`, `transcript.json`, `turns.json` and
 `embeddings.json` out of a recording and leave the WAVs behind. Everything about
 speakers, people and notes works on that; only playback and Transcribe Again do
 not, and `Recording.hasAudio` already says so.
+
+**`LISTEN_LIBRARY` scopes the library and not the container, and the app is what
+knows that now.** There is one CloudKit container per iCloud account, so a
+scratch library used to push into the same place the real one lives and the pull
+that followed wrote what it found into whatever library was active on the
+receiving device. Measured on 0.15.0: two minutes of `make_demo_library.sh`
+output under `LISTEN_LIBRARY` put three invented meetings and four invented
+notes into the real library, the container, and both other devices.
+
+Sync is now consented per library rather than per install, so a pass over a
+library that is not the consented one is refused and prints both paths. Check
+it rather than assuming it, because the guard is a build old enough to have it:
+
+```sh
+LISTEN_LIBRARY=/tmp/listen-demo Listen.app/Contents/MacOS/Listen sync status
+# sync:  off for this library, on for /Users/…/Application Support/Listen
+```
+
+`.agents/notes/cloud-sync.md` has the rest under "`LISTEN_LIBRARY` scopes the
+library, and never the container", including how to retract from the container
+if an older build has already sent something, which is not the obvious way
+round.
 
 **Launch the binary, never `open`.** Two traps stack, and together they cost a
 real scare:

@@ -1,4 +1,9 @@
 import AppKit
+// Named here, because `Settings` reaches for `ListenKit.Library` and
+// whole-module optimization only lends it another file's import until the
+// file order shifts. It compiled until it did not, and the error then names
+// this file rather than the one it had been borrowing from.
+import ListenKit
 
 /// Everything downstream of capture works at 16 kHz mono. Parakeet wants it,
 /// FluidAudio wants it, and storing anything higher would cost disk for an
@@ -430,6 +435,66 @@ enum Settings {
         return suite
     }()
 
+    // MARK: Managed preferences
+
+    /// Values an organisation forces through an MDM configuration profile.
+    ///
+    /// Plain keys in the app's own domain, read through `objectIsForced`, so
+    /// a profile needs no schema of Listen's own and forced keys compose: an
+    /// organisation can force sync off without touching dictation. A forced
+    /// value wins over whatever the pane or the CLI stored, and the control
+    /// that would change it is disabled with a sentence saying who decided.
+    /// `docs/MANAGED.md` documents the keys and carries a sample profile.
+    ///
+    /// `LISTEN_MANAGED` is the test seam: a JSON object of the same keys,
+    /// treated as forced. Same family as `LISTEN_LIBRARY`, and safe for the
+    /// same reason: a Finder launch inherits no shell environment, so no
+    /// profile can be faked from a double-click.
+    private static let managedOverride: [String: Any] = {
+        guard let raw = ProcessInfo.processInfo.environment["LISTEN_MANAGED"],
+              let data = raw.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data)
+                  as? [String: Any] else { return [:] }
+        return parsed
+    }()
+
+    static func isForced(_ key: String) -> Bool {
+        managedOverride[key] != nil || defaults.objectIsForced(forKey: key)
+    }
+
+    static func forcedBool(_ key: String) -> Bool? {
+        if let value = managedOverride[key] as? Bool { return value }
+        guard defaults.objectIsForced(forKey: key) else { return nil }
+        return defaults.bool(forKey: key)
+    }
+
+    static func forcedString(_ key: String) -> String? {
+        if let value = managedOverride[key] as? String { return value }
+        guard defaults.objectIsForced(forKey: key) else { return nil }
+        return defaults.string(forKey: key)
+    }
+
+    /// Hosted Ask providers are refused; loopback ones still work.
+    static var agentLoopbackOnly: Bool {
+        forcedBool("agentLoopbackOnly") ?? defaults.bool(forKey: "agentLoopbackOnly")
+    }
+
+    /// `dictations.jsonl` is not written.
+    static var dictationHistoryDisabled: Bool {
+        forcedBool("dictationHistoryDisabled")
+            ?? defaults.bool(forKey: "dictationHistoryDisabled")
+    }
+
+    /// The daily copies under `~/Backups/Listen` are not taken.
+    static var backupsDisabled: Bool {
+        forcedBool("backupsDisabled") ?? defaults.bool(forKey: "backupsDisabled")
+    }
+
+    /// Where the daily copies go instead, when an organisation says so.
+    static var backupsPath: String? {
+        forcedString("backupsPath") ?? defaults.string(forKey: "backupsPath")
+    }
+
     private static let modelKey = "modelID"
 
     /// The chosen model, or the default when nothing has been chosen.
@@ -595,8 +660,80 @@ extension Settings {
     /// person's meetings leave the machine, sealed or not. That is a decision
     /// to be taken rather than inherited from a default.
     static var cloudSync: Bool {
-        get { defaults.bool(forKey: cloudSyncKey) }
-        set { defaults.set(newValue, forKey: cloudSyncKey) }
+        // The forced value first, so an organisation's profile wins over
+        // whatever the pane stored before the profile arrived. Every call
+        // site complies through this one getter.
+        get { forcedBool(cloudSyncKey) ?? defaults.bool(forKey: cloudSyncKey) }
+        // The consent is for a library, so the library it was given for is
+        // written down with it. See `cloudSyncLibrary`.
+        set {
+            defaults.set(newValue, forKey: cloudSyncKey)
+            if newValue { cloudSyncLibrary = ListenKit.Library.mac().root.path }
+        }
+    }
+
+    private static let cloudSyncLibraryKey = "cloudSyncLibrary"
+
+    /// Which library the answer above was given about.
+    ///
+    /// **The consent is per library and the setting is per install, and those
+    /// are not the same thing.** `LISTEN_LIBRARY` moves every read and write
+    /// this app performs; it does not move the container, because there is one
+    /// per iCloud account. So a scratch library launched on a Mac whose sync is
+    /// on used to push its recordings into the real container and the other
+    /// devices pulled them down as ordinary meetings. Measured, on the shipped
+    /// 0.15.0 build: two minutes of `make_demo_library.sh` output put three
+    /// invented meetings and four invented notes into the real library, the
+    /// container, an iPhone and a second Mac.
+    ///
+    /// Storing the path is what makes the guard fail safe. A marker file in the
+    /// scratch library would only protect the libraries somebody remembered to
+    /// mark, which is the same class of mistake as remembering not to run the
+    /// command. This way an unfamiliar library is refused whether or not
+    /// anybody anticipated it, and the only cost is that moving a real library
+    /// asks the question again, which is honest: `EngineState` is already keyed
+    /// on the path, so a library at a new path is a new device to the container
+    /// whatever this setting says.
+    ///
+    /// Empty is migration and not consent-to-everything. An install that turned
+    /// sync on before this key existed meant the default library, so that is
+    /// what it is read as, rather than whatever happens to be active on the
+    /// first launch after the update.
+    static var cloudSyncLibrary: String {
+        get {
+            let stored = defaults.string(forKey: cloudSyncLibraryKey) ?? ""
+            return stored.isEmpty ? ListenKit.Library.defaultMacRoot.path : stored
+        }
+        set { defaults.set(newValue, forKey: cloudSyncLibraryKey) }
+    }
+
+    /// Write down what the fallback above already assumes, once.
+    ///
+    /// The fallback alone is enough to behave correctly, and it is not enough
+    /// to be *readable*: an absent key means both "this install predates the
+    /// guard" and "this install has the guard and has never moved", and a
+    /// script deciding whether it is safe to build a demo library cannot tell
+    /// those apart. `make_demo_library.sh` asks exactly that, refused a
+    /// perfectly good build, and was right to refuse given what it could see.
+    ///
+    /// Always `defaultMacRoot`, never the active library, so running the
+    /// migration under `LISTEN_LIBRARY` cannot quietly consent to a scratch
+    /// library. Only when sync is already on: an install that has never turned
+    /// it on has no consent to record.
+    static func stampCloudSyncLibraryOnce() {
+        guard cloudSync, (defaults.string(forKey: cloudSyncLibraryKey) ?? "").isEmpty
+        else { return }
+        cloudSyncLibrary = ListenKit.Library.defaultMacRoot.path
+    }
+
+    /// Sync is on **and** it is on for the library that is actually open.
+    ///
+    /// The one question every pass asks. `cloudSync` on its own answers "is
+    /// this Mac a syncing Mac", which is not the same question and is the one
+    /// that let a scratch library through.
+    static var cloudSyncApplies: Bool {
+        cloudSync && ListenKit.Library.mac().root.standardizedFileURL.path
+            == URL(fileURLWithPath: cloudSyncLibrary).standardizedFileURL.path
     }
 
     private static let preferredTranscriberKey = "preferredTranscriber"

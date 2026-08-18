@@ -170,6 +170,37 @@ public enum CloudRecords {
         return merged
     }
 
+    /// Keep an icon this device could not have made.
+    ///
+    /// `source-icon.png` is the one sidecar a Mac can legitimately be unable to
+    /// produce: `SourceIconExporter` resolves it from the installed
+    /// application, so a Mac that does not have that app has no local copy and
+    /// never will. `push` builds a record out of local files alone, so that
+    /// Mac's push **removed** the icon from the container, and the Mac that
+    /// could make it then skipped its own push because its `sent:` stamp said
+    /// the record was already sent. Eleven recordings lost their row icon that
+    /// way in a single pass, on a second Mac whose stamps had just been
+    /// cleared, and it took a manifest diff between the two machines to see it.
+    ///
+    /// Only the icon, deliberately. A general "never remove a sidecar this
+    /// device lacks" rule would also preserve `<id>.raw.json.bak`, whose
+    /// *absence* is the evidence that a transcript carries no hand
+    /// corrections, so a blanket rule would quietly change what
+    /// `hasHumanEdits` answers on every other device. See `DevicePolicy`.
+    public static func keepingSourceIcon(_ ours: StoredRecord, from existing: StoredRecord,
+                                         key: PairingKey) throws -> StoredRecord {
+        var mine = try openRecording(ours, key: key)
+        let theirs = try openRecording(existing, key: key)
+        guard mine.id == theirs.id, mine.sourceIcon == nil, let icon = theirs.sourceIcon,
+              let digest = theirs.digests[DevicePolicy.sourceIcon]
+        else { return ours }
+        mine.sourceIcon = icon
+        mine.digests[DevicePolicy.sourceIcon] = digest
+        var merged = ours
+        merged.payload = try key.seal(try JSONEncoder().encode(mine))
+        return merged
+    }
+
     /// Open one, back into something a device can write to disk.
     public static func openRecording(_ record: StoredRecord,
                                      key: PairingKey) throws -> RecordingBlob {

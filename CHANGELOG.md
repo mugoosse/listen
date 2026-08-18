@@ -8,6 +8,56 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.16.0 (2026-08-18)
+
+### Every device keeps a copy of the audio
+
+Until now, only the Mac that recorded a meeting had its audio; every other
+device had the transcript and nothing to play or re-transcribe. Listen can now
+publish a lossless copy, mic and system audio kept apart in one stereo FLAC
+file, so any device can play a recording or run it through the pipeline again.
+Settings, Devices has a **Keep audio** switch and a roster of what each device
+keeps and holds, so the choice to free local space is visible rather than
+silent.
+
+Measured on a 1.07 hour meeting: 494 MB of raw tracks becomes a 61 MB master
+in 3.8 seconds, about an eighth of the size, with the two channels intact so
+speaker separation still works on a re-transcribe. A device only frees its own
+copy once another live device that is keeping audio reports actually holding
+it, never on the strength of the network alone.
+
+### The library says who is transcribing, and how long it took
+
+A recording being worked on now names the Mac doing it and when it started, so
+two devices never race to transcribe the same recording, and a finished one
+carries "transcribed on \<device\> in \<time\>" once the library has more than
+one device in it. `listen transcribe <id>` takes the same lease as the
+background queue, so running it by hand no longer opens a second way in.
+
+### A stranded recording says so
+
+A recording waiting on audio from another device could sit that way for hours
+with nothing on screen to explain it. `listen sync inspect --recording <id>`
+now shows who holds the audio, whether a transfer is in flight, and what the
+manifest actually names, across every zone. A claim on a recording that goes
+nowhere expires after six hours rather than parking it forever, and only the
+device holding the audio writes that recording's metadata, so a stalled
+recording can no longer be handed back to itself with its progress erased.
+
+### Compliance and managed deployment
+
+`docs/hipaa.html`, `docs/privacy.html` and `docs/security.html` document what
+Listen sends where, what a security questionnaire will ask, and where it maps
+onto HIPAA and GDPR obligations, for anyone deploying it in a regulated
+setting. An organisation can now force Listen's settings through a standard
+MDM configuration profile: iCloud sync off, Ask restricted to a local model
+only, dictation history off, or backups redirected or disabled, each with a
+sample `.mobileconfig` and `verify_compliance.sh` to check it took. The
+activity log (`listen activity`) now records every tool call by name and id
+only, never by content, and that claim is asserted rather than assumed.
+Forgetting a person now leaves a tombstone, so a stale Mac pushing its old
+voiceprints back can no longer bring a forgotten speaker back to life.
+
 ## 0.15.0 (2026-08-14)
 
 ### A phone recording comes back with its transcript

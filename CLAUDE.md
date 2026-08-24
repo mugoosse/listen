@@ -124,6 +124,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - A silent track must not cost a transcript
 - A model directory that exists is not a model, and both ways it can lie were measured
 - A copy of the right size that will not load has to be replaceable
+- MLX keeps every buffer it ever freed, until it is told a limit
 
 ### `.agents/notes/speakers.md` (37k)
 

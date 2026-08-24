@@ -677,3 +677,46 @@ yield lets a queued dictation run between pieces and bounds that wait to one.
 The transcript is unaffected and the reentrancy is safe: each piece decodes from
 `flat`, which nothing else writes, and the accumulators are actor state only
 that call touches. A reentrant dictation reads no part of them.
+
+## MLX keeps every buffer it ever freed, until it is told a limit
+
+**The "Listen is using 30 GB" report is not a leak, and no Swift allocation is
+involved.** MLX pools every Metal buffer it frees, and its default ceiling for
+that pool is its memory limit: 1.5x the machine's recommended working set. On
+a large Mac that is more than the machine, so the pool never evicts, and macOS
+charges all of it to Listen. `footprint` on the process mid-transcription made
+the attribution unambiguous: 45 GB of a 47 GB footprint was dirty
+`IOAccelerator (graphics)` memory across 3,765 regions, with under 1 GB of
+ordinary malloc.
+
+The growth is content-dependent, which is what made the first measurement lie.
+Decoding a silent track emits nearly no tokens and stayed flat at 5.8 GB, so
+the CLI looked innocent; the same build on the same meeting's speech-bearing
+track went to 27 GB in 14 seconds. Decode allocations come in sizes that
+rarely repeat, so the pool grows instead of being reused. All measured on a
+128 GB machine against the 75 minute meeting `2026-08-18-170206-0912`:
+
+| run | peak footprint |
+|---|---|
+| CLI, silent system track (different meeting) | 5.8 GB, flat |
+| CLI, speech-bearing system track | 27 GB in 14 s |
+| GUI queue, three copies of the meeting | 47 GB, held while idle |
+
+Idle is the operative word in the last row: the pool is only returned when the
+process exits, and the app is left open, so the user sees tens of GB against
+an app doing nothing.
+
+Two lines fix it, both in `ASR`. `Memory.cacheLimit` is set in `load`, the one
+place every consumer of the model passes through, and `Memory.clearCache()`
+runs when `transcribe(_ url:)` finishes so a done job hands even the capped
+pool back. 512 MB is measured, not guessed: same track, decode 14.4 s uncapped
+against 14.7 s capped, peak 27 GB against 3.2 GB, transcript byte-identical.
+The full queue harness over three meetings then plateaued in single digits
+where the uncapped build sat at 47 GB.
+
+Dictation deliberately keeps its pool between utterances: many short clips are
+the one shape here whose allocation sizes recur, and the cap bounds it anyway.
+`LISTEN_MLX_CACHE` overrides the cap in whole MB for measurement, 0 disabling
+the pool; it is `LISTEN_CHUNK`'s sibling, not a user setting. The mlx-swift
+`GPU.set(cacheLimit:)` spelling is deprecated in the pinned revision; the
+property is `MLX.Memory.cacheLimit`.

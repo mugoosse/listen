@@ -172,6 +172,35 @@ actor ASR {
     static let chunkSeconds: Float =
         Float(ProcessInfo.processInfo.environment["LISTEN_CHUNK"] ?? "") ?? 120
 
+    /// How much freed Metal memory MLX may keep pooled for reuse, in bytes.
+    ///
+    /// MLX pools every buffer it frees, and its default ceiling for the pool is
+    /// its memory limit: 1.5x the machine's recommended working set, which is
+    /// more memory than the machine will give one process. Decoding speech
+    /// allocates buffers in sizes that rarely repeat, so the pool grows instead
+    /// of being reused, and the process keeps the peak of every job it has ever
+    /// run. Measured on a 128 GB machine transcribing a 75 minute meeting: one
+    /// track took the process to 27 GB, the app's queue over three such
+    /// meetings sat at 47 GB, and it held all of it while idle, because nothing
+    /// is given back until the process exits. That is the "Listen is using
+    /// 30 GB" report, verbatim.
+    ///
+    /// 512 MB is measured, not guessed: against an uncapped run of the same
+    /// track, decode time was unchanged (14.4 s uncapped, 14.7 s capped), the
+    /// peak footprint fell from 27 GB to 3.2 GB, and the transcript came out
+    /// byte-identical. The pool only helps when an allocation's size recurs,
+    /// and this workload's mostly do not.
+    ///
+    /// `LISTEN_MLX_CACHE` overrides it in whole MB, 0 disabling the pool
+    /// entirely. Like `LISTEN_CHUNK` it exists for measurement, not for users.
+    static let gpuCacheLimit: Int = {
+        if let raw = ProcessInfo.processInfo.environment["LISTEN_MLX_CACHE"],
+           let mb = Int(raw), mb >= 0 {
+            return mb << 20
+        }
+        return 512 << 20
+    }()
+
     /// Load the weights, downloading them first if they are not on disk.
     ///
     /// The download is driven here rather than left to `STT.loadModel` because
@@ -180,6 +209,11 @@ actor ASR {
     /// into exactly the directory it checks, so the load below finds a
     /// populated cache and never touches the network.
     func load(_ choice: ModelChoice, progress: (@Sendable (String) -> Void)? = nil) async throws {
+        // Cap MLX's buffer pool before anything can allocate from it. Every
+        // consumer of the model comes through here, so this is the one place
+        // the cap cannot be forgotten. See `gpuCacheLimit` for the measurement.
+        Memory.cacheLimit = Self.gpuCacheLimit
+
         if loadedRepo == choice.repo, model != nil { return }
         model = nil                      // drop the old weights before loading
         loadedRepo = nil
@@ -244,6 +278,13 @@ actor ASR {
     func transcribe(_ url: URL,
                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> Transcript {
         guard let model else { throw ASRError.modelUnavailable("model not loaded") }
+
+        // Hand the buffer pool back when the file is done, so an idle app is
+        // the weights and nothing else. The cap above bounds what a job can
+        // hold; this is what stops even that much outliving the job. Dictation
+        // deliberately keeps its pool: it runs many short utterances, which is
+        // the one shape here that reuses what it freed.
+        defer { Memory.clearCache() }
 
         let audio: MLXArray
         do {

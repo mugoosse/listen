@@ -34,6 +34,10 @@ final class CloudSyncHost {
     private(set) var lastReport: CloudReport?
     private(set) var lastRun: Date?
     private(set) var devices: [CloudRecords.DeviceBlob] = []
+    /// Live work keyed by recording, shared by the sidebar and detail pane.
+    private(set) var activities: [String: CloudActivity] = [:]
+    /// Redraw only the recording whose activity moved.
+    var onActivity: ((String) -> Void)?
     /// The part of the current pass somebody is waiting on. Cleared when the
     /// pass ends so the Devices pane cannot mistake an old count for live work.
     private(set) var progress: String?
@@ -170,6 +174,9 @@ final class CloudSyncHost {
                     guard CloudSyncHost.shared.passID == pass else { return }
                     CloudSyncHost.shared.progress = message
                 }
+            },
+            activity: { update in
+                Task { @MainActor in CloudSyncHost.shared.setActivity(update) }
             })
 
         // Ask to be told rather than asking repeatedly. A Mac keeps
@@ -275,6 +282,13 @@ final class CloudSyncHost {
         let made = CloudKitStore(containerID: CloudAccount.containerID)
         store = made
         return made
+    }
+
+    func activity(for id: String) -> CloudActivity? { activities[id] }
+
+    func setActivity(_ activity: CloudActivity) {
+        activities[activity.recordingID] = activity
+        onActivity?(activity.recordingID)
     }
 
     // MARK: - The transcription lease

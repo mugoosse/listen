@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 
 /// The recording list.
 ///
@@ -957,6 +958,9 @@ extension SidebarViewController: NSMenuDelegate {
 final class RecordingCell: NSView {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
+    private let activityBar = BrandProgressBar()
+    private var activityTop: NSLayoutConstraint!
+    private var activityHeight: NSLayoutConstraint!
 
     /// The app the call was in, as its icon.
     ///
@@ -994,8 +998,9 @@ final class RecordingCell: NSView {
         subtitle.font = Self.subtitleFont
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
+        activityBar.isHidden = true
 
-        for v in [title, subtitle, appIcon] as [NSView] {
+        for v in [title, subtitle, appIcon, activityBar] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -1008,6 +1013,9 @@ final class RecordingCell: NSView {
         // label that truncates asks for its whole string.
         let block = NSLayoutGuide()
         addLayoutGuide(block)
+
+        activityTop = activityBar.topAnchor.constraint(equalTo: subtitle.bottomAnchor)
+        activityHeight = activityBar.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             appIcon.leadingAnchor.constraint(equalTo: leadingAnchor,
@@ -1027,8 +1035,13 @@ final class RecordingCell: NSView {
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
 
+            activityTop,
+            activityHeight,
+            activityBar.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            activityBar.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+
             block.topAnchor.constraint(equalTo: title.topAnchor),
-            block.bottomAnchor.constraint(equalTo: subtitle.bottomAnchor),
+            block.bottomAnchor.constraint(equalTo: activityBar.bottomAnchor),
             block.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -1094,6 +1107,34 @@ final class RecordingCell: NSView {
             line.append(run("your mic caught nothing", .systemOrange))
         }
         subtitle.attributedStringValue = line
+
+        let active: CloudActivity?
+        if Queue.shared.running == recording.id {
+            active = CloudActivity(
+                recordingID: recording.id, stage: .transcribing,
+                fraction: Queue.shared.progress?.overall,
+                detail: Queue.shared.progress?.message)
+        } else {
+            active = CloudSyncHost.shared.activity(for: recording.id)
+        }
+        if let active, active.stage != .ready,
+           active.fraction != nil || active.isMoving {
+            activityBar.isHidden = false
+            activityTop.constant = 3
+            activityHeight.constant = 2
+            activityBar.setAccessibilityLabel(active.title)
+            activityBar.setAccessibilityValue(active.percentage ?? "In progress")
+            if let fraction = active.fraction {
+                activityBar.fraction = fraction
+            } else {
+                activityBar.fraction = nil
+            }
+        } else {
+            activityBar.fraction = nil
+            activityBar.isHidden = true
+            activityTop.constant = 0
+            activityHeight.constant = 0
+        }
     }
 }
 

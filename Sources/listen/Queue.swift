@@ -144,6 +144,8 @@ final class Queue {
         }
 
         waiting.append(id)
+        CloudSyncHost.shared.setActivity(
+            CloudActivity(recordingID: id, stage: .queued))
         onChange?(id)
         // The row before the transcript. A meeting recorded here is worth
         // sending as soon as it exists, so the phone shows it as waiting to be
@@ -175,6 +177,8 @@ final class Queue {
         // saying `transcribing` on every other device.
         running = id
         progress = TranscriptionProgress()
+        CloudSyncHost.shared.setActivity(
+            CloudActivity(recordingID: id, stage: .startingTranscription))
         onChange?(id)
         Task { await self.start(recording) }
     }
@@ -199,6 +203,9 @@ final class Queue {
         if let lease = outcome.holder {
             let who = CloudSyncHost.deviceName(for: lease.device) ?? "another device"
             elsewhere[id] = lease.expires
+            CloudSyncHost.shared.setActivity(CloudActivity(
+                recordingID: id, stage: .transcribingElsewhere,
+                detail: "Transcribing on \(who)"))
             trace("not transcribing \(id): \(who) is")
             return decline(id)
         }
@@ -223,6 +230,9 @@ final class Queue {
             // died mid-run cannot park a recording for ever.
             elsewhere[id] = (recording.transcribeStarted ?? Date())
                 .addingTimeInterval(CloudSyncCore.offlineGrace)
+            CloudSyncHost.shared.setActivity(CloudActivity(
+                recordingID: id, stage: .transcribingElsewhere,
+                detail: "Transcribing on \(who)"))
             trace("not transcribing \(id): \(who) started it and iCloud is unreachable")
             return decline(id)
         }
@@ -244,6 +254,9 @@ final class Queue {
         // recording carrying its own model is the case a resumed job gets wrong
         // if anything reads the app default instead.
         let choice = recording.asrModel
+        CloudSyncHost.shared.setActivity(CloudActivity(
+            recordingID: id, stage: .transcribing, fraction: 0,
+            detail: "Transcribing with \(choice.title)"))
         trace("transcribing \(id) with \(choice.title)")
 
         // A meeting outlives any window short enough to be useful after a
@@ -264,6 +277,9 @@ final class Queue {
             let transcript = try await pipeline.run(recording, using: choice) { [weak self] step in
                 Task { @MainActor in
                     self?.progress = step
+                    CloudSyncHost.shared.setActivity(CloudActivity(
+                        recordingID: id, stage: .transcribing,
+                        fraction: step.overall, detail: step.message))
                     self?.onProgress?(id)
                 }
             }
@@ -279,8 +295,13 @@ final class Queue {
         switch result {
         case .success(let transcript):
             finished.markTranscribed(transcript)
+            CloudSyncHost.shared.setActivity(CloudActivity(
+                recordingID: id, stage: .sendingTranscript))
         case .failure(let error):
             finished.metadata.state = Metadata.State.failed.rawValue
+            CloudSyncHost.shared.setActivity(CloudActivity(
+                recordingID: id, stage: .failed,
+                detail: error.localizedDescription))
             log("transcription failed for \(id): \(error.localizedDescription)")
         }
         finished.markTranscribeFinished()

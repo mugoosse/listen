@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import ListenKit
 
 /// The right-hand pane: player on top, transcript below as speaker-grouped
 /// turns.
@@ -25,6 +26,9 @@ final class DetailView: NSView {
     private let playButton = NSButton()
     private let waveform = WaveformView()
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
+    private let activityLabel = NSTextField(labelWithString: "")
+    private let activityValue = NSTextField(labelWithString: "")
+    private let activityBar = BrandProgressBar()
 
     /// Which speaker the pane is asking about, or nil for none.
     ///
@@ -432,6 +436,16 @@ final class DetailView: NSView {
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
 
+        activityLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        activityLabel.textColor = .secondaryLabelColor
+        activityLabel.lineBreakMode = .byTruncatingTail
+        activityValue.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        activityValue.textColor = .secondaryLabelColor
+        activityValue.alignment = .right
+        for view in [activityLabel, activityValue, activityBar] as [NSView] {
+            view.isHidden = true
+        }
+
         // A card, so the player reads as one control rather than three that
         // happen to share a line. The transcript below is the page; this is the
         // instrument on top of it.
@@ -495,7 +509,8 @@ final class DetailView: NSView {
         playerNote.lineBreakMode = .byTruncatingTail
         playerNote.isHidden = true
 
-        for v in [playButton, timeLabel, waveform, playerNote] {
+        for v in [playButton, timeLabel, waveform, playerNote,
+                  activityLabel, activityValue, activityBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
@@ -641,21 +656,37 @@ final class DetailView: NSView {
             playerNote.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 14),
             playerNote.trailingAnchor.constraint(lessThanOrEqualTo: playerCard.trailingAnchor,
                                                  constant: -14),
-            playerNote.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
+            playerNote.centerYAnchor.constraint(equalTo: playerCard.topAnchor, constant: 29),
 
             playButton.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 10),
-            playButton.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
+            playButton.centerYAnchor.constraint(equalTo: playerCard.topAnchor, constant: 29),
             playButton.widthAnchor.constraint(equalToConstant: 30),
             playButton.heightAnchor.constraint(equalToConstant: 30),
             timeLabel.leadingAnchor.constraint(equalTo: playButton.trailingAnchor, constant: 10),
-            timeLabel.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
+            timeLabel.centerYAnchor.constraint(equalTo: playerCard.topAnchor, constant: 29),
             // Fixed rather than hugging, so the waveform does not shift sideways
             // when the clock ticks past ten minutes.
             timeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 92),
             waveform.leadingAnchor.constraint(equalTo: timeLabel.trailingAnchor, constant: 12),
             waveform.trailingAnchor.constraint(equalTo: playerCard.trailingAnchor, constant: -14),
-            waveform.centerYAnchor.constraint(equalTo: playerCard.centerYAnchor),
+            waveform.centerYAnchor.constraint(equalTo: playerCard.topAnchor, constant: 29),
             waveform.heightAnchor.constraint(equalToConstant: 36),
+
+            activityLabel.topAnchor.constraint(equalTo: playerCard.topAnchor, constant: 57),
+            activityLabel.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor,
+                                                   constant: 14),
+            activityLabel.trailingAnchor.constraint(lessThanOrEqualTo:
+                                                     activityValue.leadingAnchor,
+                                                     constant: -8),
+            activityValue.centerYAnchor.constraint(equalTo: activityLabel.centerYAnchor),
+            activityValue.trailingAnchor.constraint(equalTo: playerCard.trailingAnchor,
+                                                     constant: -14),
+            activityValue.widthAnchor.constraint(greaterThanOrEqualToConstant: 34),
+            activityBar.topAnchor.constraint(equalTo: activityLabel.bottomAnchor, constant: 4),
+            activityBar.leadingAnchor.constraint(equalTo: playerCard.leadingAnchor, constant: 14),
+            activityBar.trailingAnchor.constraint(equalTo: playerCard.trailingAnchor,
+                                                   constant: -14),
+            activityBar.heightAnchor.constraint(equalToConstant: 2),
 
             modeTop,
             modeHeight,
@@ -985,7 +1016,10 @@ final class DetailView: NSView {
     private func setPlayerCollapsed(_ collapsed: Bool) {
         playerCard.isHidden = collapsed
         playerTop.constant = collapsed ? 0 : 10
-        playerHeight.constant = collapsed ? 0 : 58
+        let expanded: CGFloat
+        if activityLabel.isHidden { expanded = 58 }
+        else { expanded = activityBar.isHidden ? 78 : 86 }
+        playerHeight.constant = collapsed ? 0 : expanded
     }
 
     /// The player area has three states, and only two of them were ever built.
@@ -1575,6 +1609,82 @@ final class DetailView: NSView {
         return Queue.shared.running == recording.id
     }
 
+    private var currentActivity: CloudActivity? {
+        if let previewActivity { return previewActivity }
+        guard let recording else { return nil }
+        if Queue.shared.running == recording.id {
+            return CloudActivity(
+                recordingID: recording.id, stage: .transcribing,
+                fraction: Queue.shared.progress?.overall,
+                detail: Queue.shared.progress?.message ?? "Starting transcription")
+        }
+        if Queue.shared.isQueued(recording.id) {
+            return CloudActivity(recordingID: recording.id, stage: .queued)
+        }
+        if let cloud = CloudSyncHost.shared.activity(for: recording.id) {
+            if cloud.stage == .ready, recording.hasTranscript { return nil }
+            return cloud
+        }
+        if recording.effectiveState == .transcribing, !recording.transcribedHere {
+            return CloudActivity(
+                recordingID: recording.id, stage: .transcribingElsewhere,
+                detail: "Transcribing on \(recording.transcriberName ?? "another Mac")")
+        }
+        if recording.effectiveState == .failed {
+            return CloudActivity(recordingID: recording.id, stage: .failed)
+        }
+        if !recording.hasAudio, recording.metadata.source == "iphone" {
+            return CloudActivity(
+                recordingID: recording.id, stage: .waitingForMac,
+                detail: "Waiting for audio from your iPhone")
+        }
+        return nil
+    }
+
+    private func updatePlayerActivity() {
+        guard let activity = currentActivity else {
+            activityBar.fraction = nil
+            for view in [activityLabel, activityValue, activityBar] as [NSView] {
+                view.isHidden = true
+            }
+            if !playerCard.isHidden { playerHeight.constant = 58 }
+            return
+        }
+
+        activityLabel.stringValue = activity.title
+        activityLabel.textColor = activity.isFailure ? .systemOrange : .secondaryLabelColor
+        activityLabel.toolTip = activity.detail
+        activityLabel.setAccessibilityLabel(activity.title)
+        activityValue.stringValue = activity.percentage ?? ""
+        activityLabel.isHidden = false
+        activityValue.isHidden = activity.percentage == nil
+
+        let usesWaveform = activity.stage == .startingTranscription
+            || activity.stage == .transcribing
+            || activity.stage == .transcribingElsewhere
+        if usesWaveform {
+            // The transcript area already carries Listen's two-lane waveform
+            // progress. Keep that visual language as the transcription meter
+            // instead of drawing a second, generic line directly above it.
+            activityBar.fraction = nil
+            activityBar.isHidden = true
+        } else if let fraction = activity.fraction {
+            activityBar.isHidden = false
+            activityBar.fraction = fraction
+            activityBar.setAccessibilityValue(activity.percentage)
+        } else if activity.isMoving {
+            activityBar.isHidden = false
+            activityBar.fraction = nil
+            activityBar.setAccessibilityValue("In progress")
+        } else {
+            activityBar.fraction = nil
+            activityBar.isHidden = true
+        }
+        if !playerCard.isHidden {
+            playerHeight.constant = activityBar.isHidden ? 78 : 86
+        }
+    }
+
     /// `LISTEN_PANEL=transcribing:<fraction>` is showing the picture on a
     /// recording the queue is not actually running.
     ///
@@ -1582,16 +1692,17 @@ final class DetailView: NSView {
     /// and note box included, which is a picture of a state the app is never in.
     /// The same reason `previewRecording` sets `showsComposer` by hand.
     private var previewingTranscription = false
+    private var previewActivity: CloudActivity?
 
     private func applyShowing() {
         modePicker.setSelected(showing == .ask, forSegment: 0)
+        updatePlayerActivity()
         // Collapsed while asking, and for a recording that is still running:
         // that one already says so in the transcript area, and it would be wrong
         // besides, since its audio is on *this* Mac and simply is not finished.
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
-                  hidden: showing == .ask || recording?.isLive == true
-                      || isLoadingTranscript)
+                  hidden: showing == .ask || recording?.isLive == true)
         // **Every piece of the page is gated on there being a page.** The
         // heading, the note and the transcript are furniture belonging to a
         // meeting, and with nothing selected the pane's whole content is one
@@ -1674,6 +1785,7 @@ final class DetailView: NSView {
     /// to the beginning. Somebody listening to yesterday's meeting while today's
     /// transcribes would have had it stopped from under them thirty times.
     func showProgress() {
+        updatePlayerActivity()
         guard let recording, Queue.shared.running == recording.id else {
             transcribing.progress = nil
             return
@@ -1682,6 +1794,13 @@ final class DetailView: NSView {
         // The sentence changes with the stage, so the label under the picture
         // has to be refreshed as well as the picture. Cheap: one string compare
         // per piece, against a pane that is already laid out.
+        updateEmpty()
+    }
+
+    /// A cloud transfer can move without the queue moving. Update the compact
+    /// player status and leave playback and the selected transcript untouched.
+    func showActivity() {
+        updatePlayerActivity()
         updateEmpty()
     }
 
@@ -1712,6 +1831,12 @@ final class DetailView: NSView {
     func previewTranscribing(_ fraction: Double) {
         showing = .page
         previewingTranscription = true
+        if let id = recording?.id {
+            previewActivity = CloudActivity(
+                recordingID: id, stage: .transcribing, fraction: fraction,
+                detail: fraction < 0.5 ? "Transcribing the other participants"
+                                       : "Transcribing you")
+        }
         applyShowing()
         transcribing.progress = TranscriptionProgress(
             message: fraction < 0.5 ? "transcribing the other participants"
@@ -1967,6 +2092,7 @@ final class DetailView: NSView {
         focused = nil
         waveform.focused = nil
         self.recording = recording
+        updatePlayerActivity()
 
         guard let recording else {
             setChromeHidden(true)
@@ -3826,6 +3952,11 @@ final class DetailViewController: NSViewController {
     func showProgress() {
         guard isViewLoaded else { return }
         detail.showProgress()
+    }
+
+    func showActivity() {
+        guard isViewLoaded else { return }
+        detail.showActivity()
     }
 
     func previewAsk() {

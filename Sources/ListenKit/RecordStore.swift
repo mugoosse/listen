@@ -80,6 +80,9 @@ public enum StoreError: Error, Sendable, Equatable {
     case unavailable(String)
 }
 
+/// Progress through one record transfer, from 0 to 1.
+public typealias StoreProgress = @Sendable (Double) -> Void
+
 /// The four things the sync core needs a container to do.
 ///
 /// Narrow on purpose. `spec/05-testing.md` promised a transport protocol with
@@ -95,8 +98,34 @@ public protocol RecordStore: Sendable {
     /// Save, refusing if the record moved since `record.changeTag` was read.
     /// A nil tag means "this is new, refuse if it exists".
     func save(_ record: StoredRecord) async throws -> StoredRecord
+    /// The same save, with transport progress when the store can report it.
+    func save(_ record: StoredRecord,
+              progress: StoreProgress?) async throws -> StoredRecord
     func delete(_ name: String, in zone: CloudNaming.Zone) async throws
     func changes(in zone: CloudNaming.Zone, since token: String?) async throws -> StoreChanges
     /// Fetch one, for the case where a claim has to be re-read before acting.
     func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord?
+    /// The same fetch, with transport progress when the store can report it.
+    func fetch(_ name: String, in zone: CloudNaming.Zone,
+               progress: StoreProgress?) async throws -> StoredRecord?
+}
+
+/// Stores without a byte-aware transport still expose honest endpoints. The
+/// real CloudKit store overrides these methods with operation progress.
+public extension RecordStore {
+    func save(_ record: StoredRecord,
+              progress: StoreProgress?) async throws -> StoredRecord {
+        progress?(0)
+        let saved = try await save(record)
+        progress?(1)
+        return saved
+    }
+
+    func fetch(_ name: String, in zone: CloudNaming.Zone,
+               progress: StoreProgress?) async throws -> StoredRecord? {
+        progress?(0)
+        let record = try await fetch(name, in: zone)
+        progress?(1)
+        return record
+    }
 }

@@ -11,8 +11,11 @@ Press record. Listen captures the call, writes it down, works out who said
 what, and remembers voices between meetings so the people you talk to every
 week name themselves after the first time.
 
-No meeting bot. No calendar invite. No account. Your audio never leaves the
-machine.
+Then ask it what was decided, and it answers out of your own recordings and
+cites the turns it read.
+
+No meeting bot. No calendar invite. No account. Your audio never leaves your own
+devices.
 
 Listen is the blue half of the Good Pair: a listening monkey with its hands
 behind its ears. In the menu bar, it uses the Good Pair's square listening
@@ -53,6 +56,17 @@ roots that remains clear at 16 points.
 - **Tags a recording** with what it is about, in your own words, so "the job
   hunt calls" is a thing you can ask for. Filterable in the window, at the
   command line and over MCP.
+- **Answers a question about the library.** "What did we decide about
+  pricing" reads across every meeting and comes back citing the turns it read,
+  in the window or at the command line, and the answer can be kept as a note.
+  The model is yours to pick: Claude Code or Codex if you already have them, or
+  any OpenAI-compatible endpoint, which includes one running on this Mac under
+  Ollama or LM Studio and therefore nothing leaving it.
+- **Reaches your other Macs through iCloud**, off until you turn it on.
+  Transcripts, notes, people, tags and your dictionary travel between devices,
+  sealed before they leave with a key Apple never holds. A lossless copy of the
+  audio can travel with them, so a second Mac can play a meeting and transcribe
+  it again rather than only read it.
 - **Answers to an agent** over MCP. Ask about your own meetings, and have the
   answer written back as a note, which can name several meetings at once. Notes
   and tags are the only things an agent can write: it cannot rename a speaker,
@@ -95,7 +109,8 @@ The sidebar holds three lists and a switch at the top of it: **Recordings**,
 **People** and **Notes**. Recordings is the library by day. People is everybody
 Listen has heard, with what they have been in. Notes is every note in the
 library, including the ones that are about several meetings at once. Search
-scopes to whichever you are in.
+scopes to whichever you are in, and while a conversation is open the sidebar
+becomes the list of conversations instead.
 
 Start a recording from the menu bar. When you stop, Listen asks whether to keep
 it.
@@ -374,28 +389,218 @@ Deleting a recording does not delete notes that mention it. A synthesis of four
 meetings must not vanish because one was tidied up, so the note stays and shows
 the missing meeting as an id it can no longer resolve.
 
+## Asking your library
+
+The composer sits at the bottom of whatever you are reading, so a question can
+be about the meeting on screen or about all of them. "What did we decide about
+pricing", "catch me up", "what is still open with Edgar". A conversation opens
+into the whole window and the sidebar becomes the list of conversations rather
+than going on listing recordings behind a page nobody can see, and an answer
+worth keeping is saved as a note that remembers which conversation it came out
+of.
+
+**Every claim carries a numbered reference.** Clicking one shows what is behind
+it, the recording with its date, length and speakers, or a note, or a person,
+and the card is what opens the page. Two clicks rather than one, deliberately: a
+citation is read in the middle of a sentence, and a number that swaps the page
+under you is one nobody presses twice. The identity is the agent's rather than a
+text match, so a library where most recordings are called "New recording" cannot
+send you to the wrong meeting, and a reference to something the library does not
+have is dropped rather than drawn.
+
+An answer with no tool call behind it and nothing earlier in the conversation to
+draw on is flagged rather than trusted. A model that advertises tool support
+will still answer from nothing if you let it.
+
+There are two shapes of backend, and choosing between them is the privacy
+decision:
+
+- **An agent CLI you already have.** Claude Code or Codex, whichever is
+  installed and signed in. Each brings its own tool loop and reads the library
+  through the same tools `listen mcp` serves, so a question costs nothing beyond
+  the subscription already paid for.
+- **Any OpenAI-compatible endpoint.** Twelve are set up in one press: Ollama, LM
+  Studio and llama.cpp on this Mac, and OpenRouter, OpenAI, Groq, Cerebras,
+  Together, Fireworks, Mistral, DeepInfra and xAI off it. Any other URL can be
+  typed in, several can be configured at once, and the composer switches between
+  them. A provider is one stateless request, so Listen runs the tool loop itself.
+
+**A model on this Mac is the case this app should be best at**, and it is the
+only one that costs nothing to try. Measured on four questions with checkable
+answers against a five-recording library: `qwen3.5:35b` at 23 GB answered all
+four in 7 to 18 seconds, and the 81 GB model matched it at roughly three times
+the wall clock, so the larger download buys nothing on this task.
+
+An endpoint that is not on this machine says in words that your transcripts go
+to it, before you save it. Keys live in the Keychain and never in preferences.
+Nothing is ever asked in the background: transcripts travel at the moment you
+press send and at no other time.
+
+Ask is read-only unless you say otherwise. `listen ask --write`, and the
+window's own equivalent, let it add notes and tags, which are the same two
+things MCP allows and for the same reason.
+
+At the command line, `listen ask` with no question reports what is set up, and
+`listen ask --to http://localhost:11434/v1 "..."` tries an endpoint for one run
+without changing a preference.
+
+## Your devices
+
+Off until you turn it on, in Settings, Sync. With it on, Listen keeps your
+library in step through **your own private CloudKit database**. There is no
+Listen account, no Listen server, no LAN listener and no shared folder.
+
+Every payload is sealed on the device before it is uploaded, with a 256-bit key
+that lives in iCloud Keychain, so CloudKit holds opaque record names and
+encrypted bytes. Settings, Sync can show that key, so a copy can go in a
+password manager: lose every device and that copy is the only thing that opens
+what iCloud is holding.
+
+There is nothing to pair, no QR code and no network address. Both devices on the
+same Apple Account with iCloud Keychain on is the entire setup, because the key
+arrives by itself.
+
+### What travels
+
+Transcripts, turns, waveforms, metadata, notes, people, contacts, tags and your
+dictionary, to every device. Voiceprints travel between Macs only, and so does
+forgetting one: `listen forget <name>` writes a sealed tombstone that every
+device applies on every pass, so a stale Mac cannot push a forgotten voice back
+into the bank.
+
+### The audio, on every device
+
+Until 0.16.0 only the Mac that recorded a meeting had its audio, and every other
+device held a transcript it could not play or re-run. Listen can now publish a
+lossless master: the microphone and the system track kept apart as the two
+channels of one stereo FLAC, so a re-transcribe on another device still
+separates the two sides.
+
+Measured on a 1.07 hour meeting, 494 MB of raw tracks becomes a 61 MB master in
+3.8 seconds, about an eighth of the size.
+
+**Keep audio**, in Settings, Sync, decides whether this device holds a copy, and
+the same pane lists every device with what it keeps and what it is actually
+holding. A device frees its own copy only once another live device that is
+keeping audio reports **holding** the bytes, never on the strength of the
+network alone. `listen audio` says the same at the command line, and `listen
+audio <id> --build` makes one master here and reports what it cost.
+
+### Who is transcribing
+
+A recording being worked on names the Mac doing it and when it started, so two
+devices never race for the same one, and a claim that goes nowhere expires after
+six hours rather than parking the recording forever. `listen transcribe <id>`
+takes the same lease as the background queue, so running it by hand is not a
+second way in.
+
+A finished recording says how long it took, on every Mac, because that is the
+same fact whether the library has one device in it or three. The machine is
+named only when it was not the one you are looking at: "transcribed on Studio in
+21 s" on the laptop, and "transcribed in 21 s" on the Studio itself.
+
+`listen sync inspect --recording <id>` is what to reach for when a recording is
+stuck waiting on audio: it says who holds it, whether a transfer is in flight,
+and what the manifest actually names, across every zone.
+
+### Undo
+
+A recording or note removed by a sync from another device is kept for fourteen
+days before it is really gone. `listen sync trash` lists what is being held, and
+putting something back is a matter of moving the folder into `recordings/` or
+`notes/`. Listen also refuses to tell iCloud that everything has gone: a library
+that is suddenly empty is far more likely to be a disk that did not mount, or a
+restore in progress, than a decision to delete every meeting at once.
+
+[`SYNC.md`](SYNC.md) is the reference, including what a fork has to do to run
+sync on a CloudKit container of its own.
+
+### The iPhone
+
+The other half of Listen, for the conversations that happen in a room rather
+than on a call, is being built for iPhone. It is not out yet.
+
+## Deploying it somewhere regulated
+
+Listen gets used where the recording itself is the reason a cloud product is
+disqualified: therapy, medicine, law, HR, journalism. Three pages answer what a
+security questionnaire asks and where it lands against HIPAA and GDPR:
+[security](https://mugoosse.github.io/listen/security.html),
+[privacy](https://mugoosse.github.io/listen/privacy.html) and
+[HIPAA](https://mugoosse.github.io/listen/hipaa.html).
+
+An organisation can force Listen's settings with an ordinary MDM configuration
+profile for the `com.mgo.listen` domain. There is no schema of Listen's own: the
+keys are the app's own preference keys, pushed through the standard
+managed-preferences payload, so any MDM that can force a plist key can manage
+Listen. A forced setting beats both the panes and the CLI, and the control that
+would have changed it is disabled with a sentence saying the profile decided.
+
+| key | forced to | what it does |
+|---|---|---|
+| `cloudSync` | `false` | the library never reaches iCloud. Apple signs no Business Associate Agreement for iCloud, so a library holding regulated data must not sync through it. |
+| `agentLoopbackOnly` | `true` | Ask is restricted to endpoints on this Mac. Hosted providers cannot be added, ones added earlier are refused at run time, and the Claude and Codex backends are refused outright. |
+| `dictationHistoryDisabled` | `true` | `dictations.jsonl` is not written. Dictation itself keeps working. |
+| `backupsDisabled` | `true` | no daily copies under `~/Backups/Listen`. |
+| `backupsPath` | a path | the daily copies move, onto an encrypted volume for instance. |
+
+[`docs/listen-managed.mobileconfig`](docs/listen-managed.mobileconfig) is a
+complete sample and [`docs/MANAGED.md`](docs/MANAGED.md) explains it, including
+how to check that a profile took.
+
+`listen activity` is the audit trail: every tool call, agent run, export,
+deletion and backup, by name and id only and never by content.
+`./verify_compliance.sh` asserts that claim, and the rest of this section,
+against a built app.
+
 ## The command line
 
 Install it from Settings, Developers. It is the same binary as the app,
 symlinked rather than copied, so it never falls behind the app it came from.
 
+`listen help` prints the whole thing. The shape of it:
+
 ```
+listen record [--seconds N]       capture until stopped, or for N seconds
 listen transcribe <file|id>       transcribe a file, or a whole recording
+listen list [--limit N] [--tag T] recordings as a table
+listen show <id>                  metadata and transcript
+listen export <id> [--format]     write a transcript out
+listen title <id> [<text>]        what one recording is called
+
+listen label <id> <speaker> ...   name, merge, discard or move a speaker
+listen edit <id> <old> <new>      correct one sentence of a transcript
+listen people [<name>]            who is in the library, or where one person is
+listen rename / merge / unname    one person, across every recording
+listen forget <name>              strip their voiceprints from every bank, on
+                                  every Mac. Transcripts are untouched.
+listen me [<name> | --clear]      what the microphone track is called on screen
+listen enroll [<id>...]           re-derive voiceprints for named speakers
+listen voices <id> [--apply]      who the bank thinks each unnamed speaker is
+listen calibrate                  voiceprint threshold report
+
 listen dictate <file>             run the dictation pipeline over a file
 listen polish [text|-]            polish and correct text, as a dictation would
 listen dictations [--limit N]     what you have dictated
-listen record [--seconds N]       capture until stopped, or for N seconds
-listen list [--limit N] [--tag T]  recordings as a table
-listen show <id>                  metadata and transcript
-listen export <id> [--format]     write a transcript out
-listen label <id> <speaker> ...   name, merge, discard or move a speaker
-listen dictionary <sub>           your own terms and corrections
+
+listen ask [<question>]           put a question to Claude Code, Codex or an
+                                  endpoint, all reading through `listen mcp`
+listen provider <sub>             the OpenAI-compatible backends
+listen mcp                        stdio MCP server
+
 listen notes <sub>                the notes, one or many recordings each
 listen tags <sub>                 what the recordings are about, in your words
+listen dictionary <sub>           your own terms and corrections
 listen calendar <sub>             the calendars on this Mac, and what they name
 listen contacts <sub>             which address belongs to which person
-listen calibrate                  voiceprint threshold report
-listen mcp                        stdio MCP server
+
+listen sync <sub>                 status, inspect, trash, key, enable
+listen audio [<id>] [--build]     what audio exists and which devices keep it
+listen backup [--now]             the local copies of the library
+listen activity [--limit N]       what has touched the library. Ids, never
+                                  content.
+listen import <path>              bring in a meet_transcriptions library
+listen sources                    what meeting detection sees, during a call
 ```
 
 `listen calendar match <id>` is the one worth knowing about. Naming happens
@@ -454,6 +659,34 @@ existing: there is no separate list to keep tidy. That is the opposite of a
 note, which lives in the library and can outlive any one meeting, and both are
 on purpose.
 
+```
+listen ask                        what is set up, and nothing else
+listen ask "<question>"           through whichever backend is configured
+listen ask --to <url> "<q>"       one run against a URL, changing no preference
+listen ask --write "<q>"          let it write notes and tags. Read-only without.
+listen ask --print-request        the POST body it would send, minus the key
+listen provider list              the endpoints this Mac knows about
+listen provider add <id>          one of the twelve, or a URL of your own
+```
+
+`--print-request` and `--print-command` are the honest way to find out what an
+Ask actually sends before it sends it. Neither runs anything.
+
+```
+listen sync status                what this build can reach, and as whom
+listen sync inspect               what is in the container, by zone
+listen sync inspect --recording <id>
+                                  one recording across every zone: who holds
+                                  the audio, and what is in flight
+listen sync trash                 deletions received in the last fortnight
+listen sync key [--show]          the key that seals what iCloud holds
+listen sync enable [--on|--off]   sync this Mac's real library
+listen sync --fake                every seam of the sync, offline
+
+listen audio                      what this Mac holds, and what each device keeps
+listen audio <id> --build         make one master here, and say what it cost
+```
+
 ## MCP
 
 ```json
@@ -495,15 +728,25 @@ without reading it whole.
 
 ```
 metadata.json      title, recorded_at, duration, source, state, your tags,
-                   and the calendar event it was matched to
+                   which device transcribed it, and the calendar event it was
+                   matched to
 mic.wav            your track
 system.wav         everyone else
+master.flac        both tracks losslessly in one stereo file, which is what
+                   travels between devices and what a Mac splits back apart
 mix.m4a            generated on demand for playback
 waveform.json      the scrubber's envelope, also on demand
 transcript.json    segments with speakers
 turns.json         condensed per-speaker turns
 embeddings.json    one voiceprint per speaker
+source-icon.png    the icon of the app the call was in
+<id>.raw.json.bak  the pipeline's own output, written once, before your first
+                   correction to this recording
 ```
+
+A Mac that was given a master and never had the tracks is the ordinary state of
+a second machine. Both playback and `listen transcribe <id>` split the master
+back into `mic.wav` and `system.wav`, use them, and remove what they wrote.
 
 ```
 ~/Library/Application Support/Listen/notes/<slug>.md
@@ -535,10 +778,9 @@ folder is readable by your account alone. A recording you delete stays in
 those copies until they age out, which is the point of a backup and worth
 knowing when a delete has to be final: `listen backup` says what is there.
 
-Because it is only folders, a file sync tool is all it takes to read the same
-library on a second Mac. [`SYNC.md`](SYNC.md) is the guide, and the short version
-is that the transcripts are 6.5 MB and the audio is 8.3 GB, so the audio stays on
-the machine that recorded it.
+Because it is only folders, a file sync tool is enough to read the same library
+on a second Mac, and it is what people did before iCloud sync existed. Listen's
+own sync is the supported route now, and [`SYNC.md`](SYNC.md) is the guide.
 
 ## What leaves your Mac
 
@@ -559,8 +801,13 @@ Two more exist only if you turn them on, and are in the same policy file:
   at the moment you ask and never in the background. An endpoint on this Mac,
   which is what Ollama gives you, sends nothing anywhere.
 
-Audio never leaves except as sealed phone-to-Mac transfer during sync, and
-there is no telemetry. Reading your calendar adds nothing to this list: it is
+A managed deployment can force both of them off. See
+[Deploying it somewhere regulated](#deploying-it-somewhere-regulated).
+
+Audio leaves only through sync, sealed, and only to your own devices: as a
+lossless master when Keep audio is on, and as a phone-to-Mac transfer when a
+memo recorded on the iPhone comes over to be transcribed. There is no
+telemetry. Reading your calendar adds nothing to this list: it is
 the local calendar store, not a network call, which is the reason the feature
 needs no account.
 
@@ -571,7 +818,7 @@ runs. Listen cannot know and does not decide; connecting an agent is a choice
 you make, and the notes it writes come back and stay local. Nothing connects on
 its own.
 
-## Screenshots
+## Screenshots and demo clips
 
 `./make_demo_library.sh` writes a library of invented meetings to
 `/tmp/listen-demo`: made-up people, made-up companies, and speech synthesised
@@ -586,6 +833,14 @@ LISTEN_LIBRARY=/tmp/listen-demo LISTEN_DEMO_NAME=Alex \
 `LISTEN_LIBRARY` points the app at another library and touches nothing in
 `~/Library/Application Support/Listen`. A Finder launch inherits no shell
 environment, so the app has to be started from a terminal for it to be seen.
+
+The site at [mugoosse.github.io/listen](https://mugoosse.github.io/listen/) is
+built from `docs/`. Its seven features are a switcher rather than seven
+sections, each with a slot for a short screen recording, and it looks for
+`docs/shots/<name>.mp4` the first time a feature is opened. So a clip is added
+by dropping the file in and pushing, with no edit to the page.
+[`docs/SHOTS.md`](docs/SHOTS.md) is the shot list: what each clip has to show,
+against which meeting in the demo library, and what to export.
 
 ## Building it
 

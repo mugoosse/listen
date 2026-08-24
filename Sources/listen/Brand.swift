@@ -83,3 +83,62 @@ enum Brand {
                 blue: CGFloat(value & 0xFF) / 255, alpha: 1)
     }
 }
+
+/// Listen-coloured progress for the two thin inline bars.
+/// `NSProgressIndicator` exposes no arbitrary content tint on macOS, so a
+/// native layer-backed view is the small honest way to keep the product accent
+/// instead of silently falling back to the system blue.
+@MainActor
+final class BrandProgressBar: NSView {
+    private let track = CALayer()
+    private let fill = CALayer()
+
+    /// A measured value, or nil for an indeterminate moving segment.
+    var fraction: Double? {
+        didSet { needsLayout = true }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.addSublayer(track)
+        layer?.addSublayer(fill)
+        setAccessibilityRole(.progressIndicator)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let radius = bounds.height / 2
+        track.frame = bounds
+        track.cornerRadius = radius
+        fill.cornerRadius = radius
+        track.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
+        fill.backgroundColor = Brand.accent.cgColor
+
+        fill.removeAnimation(forKey: "slide")
+        if let fraction {
+            let value = min(1, max(0, fraction))
+            fill.frame = NSRect(x: 0, y: 0,
+                                width: bounds.width * value, height: bounds.height)
+        } else {
+            let width = max(18, bounds.width * 0.28)
+            fill.frame = NSRect(x: -width, y: 0, width: width, height: bounds.height)
+            guard !isHidden, bounds.width > 0 else { return }
+            let animation = CABasicAnimation(keyPath: "transform.translation.x")
+            animation.fromValue = 0
+            animation.toValue = bounds.width + width
+            animation.duration = 1.1
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            fill.add(animation, forKey: "slide")
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsLayout = true
+    }
+}

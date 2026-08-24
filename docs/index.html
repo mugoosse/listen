@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Listen, remember your meetings</title>
-<meta name="description" content="Record your meetings on your Mac. Find what was said later.">
+<meta name="description" content="Record meetings on your Mac, transcribe them locally, know who said what, and ask your own library. No bot, no account, nothing uploaded.">
 <link rel="icon" href="icon.png">
 <meta property="og:title" content="Listen">
-<meta property="og:description" content="Record your meetings on your Mac. Find what was said later.">
+<meta property="og:description" content="Record meetings on your Mac, transcribe them locally, know who said what, and ask your own library. No bot, no account, nothing uploaded.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mugoosse.github.io/listen/">
 <meta property="og:image" content="https://mugoosse.github.io/listen/social-preview.png">
@@ -15,266 +15,1261 @@
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Listen, remember your meetings">
-<meta name="twitter:description" content="Record your meetings on your Mac. Find what was said later.">
+<meta name="twitter:description" content="Record meetings on your Mac, transcribe them locally, know who said what, and ask your own library.">
 <meta name="twitter:image" content="https://mugoosse.github.io/listen/social-preview.png">
 <style>
+/* Listen, on paper.
+ *
+ * The palette is warm off-white rather than white, because every screenshot on
+ * this page is of a dark macOS window and a pure white ground turns each one
+ * into a hole. On paper, with a soft shadow under it, the same screenshot reads
+ * as a window sitting on a desk.
+ *
+ * Headings are `ui-serif`, which is New York on Apple platforms and Georgia
+ * almost everywhere else. Both are real text faces rather than interface faces,
+ * and this page is aimed at people who record conversations for a living rather
+ * than at people who read terminals. No web font is loaded: an app whose whole
+ * claim is that it talks to two hosts should not have a site that hands the
+ * visitor's address to a third one for the sake of a typeface.
+ */
 :root {
-  --ink:        #0d0d0c;
-  --ink-raised: #161615;
-  --line:       #262624;
-  --text:       #f2f2f0;
-  --grey:       #a0a09d;
-  --grey-dim:   #6d6d6a;
-  --blue:       #5c7cff;
+  --paper:       #faf9f6;
+  --paper-warm:  #f3f1ea;
+  --paper-sunk:  #edeae1;
+  --rule:        #e3dfd3;
+  --rule-soft:   #eceae0;
+
+  --ink:         #23221f;
+  --ink-soft:    #56534b;
+  /* Measured rather than picked. At #7a766c this cleared 4.3 against the page
+     and 3.77 against the deepest of the three grounds it is used on, and it
+     carries captions, footnotes, the inactive tab titles and every bullet, all
+     of which are normal-size text and so want 4.5. This clears it on all
+     three: 5.36 on the page, 4.99 on a card, 4.69 in a media frame. */
+  --ink-faint:   #6b675d;
+
+  --blue:        #3f52d9;
+  --blue-deep:   #2f3fae;
+  --blue-wash:   #edeffc;
+
+  --serif: ui-serif, "New York", Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui,
+           "Helvetica Neue", Arial, sans-serif;
+  --mono:  ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --page: 1080px;
+  --col:  660px;
 }
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
 body {
   margin: 0;
-  background: var(--ink);
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  line-height: 1.65;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
-header { padding: 84px 0 64px; }
-.icon { width: 104px; height: 104px; margin: 0 0 22px; }
-h1 { font-size: 40px; margin: 0 0 12px; letter-spacing: -0.02em; }
-.tagline { color: var(--grey); font-size: 17px; margin: 0 0 8px; }
-.claim { color: var(--blue); margin: 0 0 36px; }
-.buttons { display: flex; gap: 12px; flex-wrap: wrap; }
-a.button {
-  display: inline-block; padding: 10px 18px; border: 1px solid var(--line);
-  border-radius: 8px; color: var(--text); text-decoration: none;
-  background: var(--ink-raised);
+
+/* ---------- shell ---------------------------------------------------- */
+
+.page { max-width: var(--page); margin: 0 auto; padding: 0 28px; }
+.col > p, .col > h2, .col > h3, .col > pre,
+.col > .eyebrow, .col > ul, .col > .note { max-width: var(--col); }
+
+section { padding: 96px 0; }
+section + section { border-top: 1px solid var(--rule-soft); }
+
+/* ---------- top bar ---------------------------------------------------- */
+
+.bar { padding: 22px 0 0; }
+.bar-inner { display: flex; align-items: center; gap: 12px; }
+.bar-mark { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.bar-mark img { width: 34px; height: 34px; display: block; border-radius: 8px; }
+.bar-name {
+  font-family: var(--serif); font-size: 21px; letter-spacing: -0.01em;
+  color: var(--ink);
 }
-a.button:hover { border-color: var(--grey-dim); }
-a.button.primary { background: var(--blue); color: var(--ink); border-color: var(--blue); }
-.under-button { font-size: 13px; margin: 14px 0 0; color: var(--grey); }
-/* Shown only when the page is confident this is an Intel Mac, so it starts
-   hidden and stays hidden for everybody else, including anyone with
-   JavaScript off. The line under the button is the fallback and says the same
-   thing quietly. */
-.chipcheck {
-  max-width: 460px; margin: 28px 0 0; padding: 18px 20px;
-  background: var(--ink-raised); border: 1px solid var(--line);
-  border-radius: 8px;
+.bar-spacer { flex: 1; }
+
+/* ---------- type ------------------------------------------------------ */
+
+h1 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(42px, 6.4vw, 74px);
+  line-height: 1.02;
+  letter-spacing: -0.022em;
+  color: var(--ink);
+  margin: 0 0 22px;
 }
-/* The `hidden` attribute is a user-agent style, so any author rule setting
-   `display` beats it, and `.buttons` is a flex container. Stated explicitly
-   rather than relying on that not being true. */
-.chipcheck[hidden], .buttons[hidden], .under-button[hidden] { display: none; }
-.chipcheck p { font-size: 13.5px; line-height: 1.6; margin: 0 0 10px; }
-.chipcheck p:last-child { margin-bottom: 0; }
-.chipcheck b { color: var(--text); font-weight: 600; }
-.chipcheck a { color: var(--blue); }
-section { padding: 40px 0; border-top: 1px solid var(--line); }
-h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
-p { margin: 0 0 16px; color: var(--grey); }
-p.lead { color: var(--text); }
+h2 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(28px, 3.8vw, 40px);
+  line-height: 1.12;
+  letter-spacing: -0.016em;
+  color: var(--ink);
+  margin: 0 0 18px;
+}
+h3 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 25px;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+p { margin: 0 0 18px; }
+p:last-child { margin-bottom: 0; }
+p.lead {
+  color: var(--ink);
+  font-size: clamp(18px, 2.1vw, 21px);
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+strong { color: var(--ink); font-weight: 600; }
+a { color: var(--blue); text-underline-offset: 3px; }
+a:hover { color: var(--blue-deep); }
+
+/* Quiet, sentence case, and in the text face. The tracked-out monospace label
+   this replaced was the single loudest "developer tool" signal on the page. */
+.eyebrow {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink-faint);
+  margin: 0 0 12px;
+}
+
 code, pre {
-  font-family: inherit; background: var(--ink-raised);
-  border: 1px solid var(--line); border-radius: 6px;
+  font-family: var(--mono);
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--ink);
 }
-code { padding: 2px 6px; font-size: 13px; }
-pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; margin: 0 0 16px; }
-pre code { border: 0; padding: 0; background: none; }
-ul { padding-left: 20px; color: var(--grey); }
-li { margin-bottom: 8px; }
-strong { color: var(--text); font-weight: 600; }
-footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
-footer a { color: var(--grey); }
-.shot {
-  display: block; width: 100%; height: auto; margin: 0 0 8px;
-  border: 0; border-radius: 10px;
+code { padding: 2px 6px; font-size: 0.84em; }
+pre {
+  padding: 16px 18px; overflow-x: auto; font-size: 13.5px;
+  line-height: 1.75; margin: 0 0 18px;
 }
-.demo-media { display: block; margin: 0 0 24px; }
-.caption { font-size: 13px; color: var(--grey-dim); margin: 0 0 16px; }
+pre code { border: 0; padding: 0; background: none; font-size: inherit; }
+
+/* ---------- hero ------------------------------------------------------- */
+
+header.hero { padding: 64px 0 0; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 14px 6px 8px; margin: 0 0 28px;
+  background: var(--blue-wash); border-radius: 999px;
+  font-size: 14px; color: var(--ink); text-decoration: none;
+}
+.chip:hover { color: var(--ink); }
+.chip b {
+  background: var(--blue); color: #fff; font-weight: 600;
+  font-size: 12px; letter-spacing: .02em;
+  padding: 2px 9px; border-radius: 999px;
+}
+.chip span { color: var(--ink-soft); }
+
+.hero-sub { max-width: 46ch; font-size: 19px; line-height: 1.55; margin: 0 0 32px; }
+
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+a.button {
+  display: inline-block; padding: 14px 26px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  color: var(--ink); text-decoration: none;
+  background: transparent; font-size: 16px; font-weight: 500;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+a.button:hover { border-color: var(--ink-faint); color: var(--ink); background: var(--paper-warm); }
+a.button.primary {
+  background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 600;
+}
+a.button.primary:hover { background: var(--blue-deep); border-color: var(--blue-deep); color: #fff; }
+a.button.small { padding: 9px 18px; font-size: 15px; }
+
+.under-button { font-size: 14.5px; margin: 18px 0 0; color: var(--ink-faint); }
+
+.chipcheck {
+  max-width: 500px; margin: 30px 0 0; padding: 20px 22px;
+  background: var(--paper-warm); border: 1px solid var(--rule); border-radius: 14px;
+}
+.chipcheck[hidden], .buttons[hidden], .under-button[hidden] { display: none; }
+.chipcheck p { font-size: 14.5px; line-height: 1.6; margin: 0 0 10px; }
+.chipcheck p:last-child { margin-bottom: 0; }
+.chipcheck b { color: var(--ink); font-weight: 600; }
+
+/* ---------- media ------------------------------------------------------ */
+
+figure.demo { margin: 0; }
+header.hero figure.demo { margin: 52px 0 0; }
+
+/* The shadow is the whole trick. A dark window laid flat on paper reads as a
+   hole cut in the page; the same window with something under it reads as an
+   object on a desk. */
+.frame {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--paper-sunk);
+  overflow: hidden;
+  box-shadow: 0 24px 50px -28px rgba(35, 34, 31, .34),
+              0 3px 10px -4px rgba(35, 34, 31, .10);
+}
+.frame.empty { aspect-ratio: 16 / 10; }
+.frame > video, .frame > img { display: block; width: 100%; height: auto; }
+
+figcaption {
+  font-size: 14px; color: var(--ink-faint);
+  margin: 16px 0 0; line-height: 1.5;
+}
+
+/* What a frame shows until its clip is recorded and dropped into docs/shots/. */
+.slot {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; text-align: center; padding: 24px;
+  background: var(--paper-sunk);
+}
+.slot::after {
+  content: ""; position: absolute; inset: 14px;
+  border: 1px dashed var(--rule); border-radius: 8px; pointer-events: none;
+}
+.slot-glyph {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 1px solid var(--rule); background: var(--paper);
+  display: grid; place-items: center;
+  color: var(--ink-faint); padding-left: 3px;
+}
+.slot-name { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); }
+.slot-note { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+
+/* The hero is watched rather than glanced at, so it gets a button and its own
+   sound instead of running silently behind the copy like the loops do. */
+.frame.playable { cursor: pointer; }
+.play {
+  position: absolute; inset: 0; border: 0; padding: 0; margin: 0;
+  background: rgba(35, 34, 31, .22);
+  display: grid; place-items: center; cursor: pointer;
+  color: #fff; font: inherit;
+  transition: background .18s ease;
+}
+.frame.playable:hover .play { background: rgba(35, 34, 31, .12); }
+.play-disc {
+  width: 76px; height: 76px; border-radius: 50%;
+  background: var(--paper); color: var(--ink);
+  display: grid; place-items: center; font-size: 24px; line-height: 1;
+  padding-left: 5px;
+  box-shadow: 0 12px 30px rgba(35, 34, 31, .3);
+  transition: transform .18s ease;
+}
+.frame.playable:hover .play-disc { transform: scale(1.06); }
+.play-label {
+  position: absolute; bottom: 20px; left: 0; right: 0; text-align: center;
+  font-size: 14px; font-weight: 500; color: #fff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .55);
+}
+
+/* ---------- the feature switcher --------------------------------------- */
+
+/* Shipped as a stack of sections, one per feature, and folded into a switcher
+   by the script at the foot. That way the document is complete and readable
+   with no JavaScript at all, and the tab list, which is furniture rather than
+   content, only exists when there is something to drive it. */
+.switcher { margin: 44px 0 0; }
+.switcher-grid {
+  display: grid; gap: 48px;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.tablist { display: flex; flex-direction: column; margin-left: -15px; }
+
+/* A list of rules rather than a stack of cards. The bar that fills along the
+   rule is the same object as the one counting down to the next feature, so the
+   timer needs no separate furniture of its own. */
+.tab {
+  position: relative;
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; border-top: 1px solid var(--rule);
+  padding: 16px 14px 17px 15px; cursor: pointer;
+  color: inherit; font: inherit;
+  transition: background .18s ease;
+}
+.tablist .tab:last-child { border-bottom: 1px solid var(--rule); }
+/* Lighter than the chosen row's ground, never darker: hovering something you
+   have not picked must not look more picked than the thing you have. */
+.tab:hover { background: rgba(35, 34, 31, .035); }
+.tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 4px; }
+
+/* The chosen one: its own ground, and a bar down the side of it. */
+.tab[aria-selected="true"] { background: var(--paper-warm); }
+.tab[aria-selected="true"]::before {
+  content: ""; position: absolute; left: 0; top: -1px; bottom: 0;
+  width: 3px; background: var(--blue);
+}
+
+.tab-title {
+  display: block;
+  font-family: var(--serif); font-size: 19px; line-height: 1.3;
+  letter-spacing: -0.01em; color: var(--ink-faint);
+  transition: color .2s ease;
+}
+.tab:hover .tab-title { color: var(--ink-soft); }
+.tab[aria-selected="true"] .tab-title { color: var(--ink); }
+
+.tab-note {
+  display: block; font-size: 14.5px; line-height: 1.45; margin-top: 4px;
+  color: var(--ink-faint);
+  transition: color .2s ease;
+}
+.tab[aria-selected="true"] .tab-note { color: var(--ink-soft); }
+
+.tab-bar {
+  position: absolute; left: 0; right: 0; top: -1px; height: 2px;
+  background: transparent;
+}
+.tab[aria-selected="true"] .tab-bar { background: rgba(63, 82, 217, .22); }
+.tab-bar i { display: block; height: 100%; width: 0; background: var(--blue); }
+
+.switcher-controls { display: flex; align-items: center; gap: 10px; margin: 20px 0 0; }
+.ctl {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--rule); background: transparent;
+  color: var(--ink-faint); cursor: pointer;
+  display: grid; place-items: center; font-size: 11px; line-height: 1;
+  padding: 0; transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.ctl:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--paper-warm); }
+.ctl:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.panel-copy { margin: 30px 0 0; }
+.panel-copy p { font-size: 16.5px; max-width: 60ch; }
+
+ul.points {
+  list-style: none; padding: 0; margin: 24px 0 0;
+  display: grid; gap: 12px 32px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+ul.points li {
+  font-size: 15px; color: var(--ink-faint); line-height: 1.5;
+  padding-left: 17px; position: relative;
+}
+ul.points li::before {
+  content: ""; position: absolute; left: 0; top: 9px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--blue);
+}
+
+/* With the script running, only the chosen panel is on screen. The floor is
+   for the moment before a frame has anything to take a height from, not for
+   evening the panels out: measured across the seven, they run within about 25
+   points of each other, and that is not worth pinning a number down for. */
+.js .switcher .panel[hidden] { display: none; }
+.js .switcher .panels { min-height: 520px; }
+
+/* Without it, every panel is a section of its own and says so. */
+.panel + .panel { margin-top: 72px; }
+.js .panel + .panel { margin-top: 0; }
+.panel > .panel-heading { margin: 0 0 18px; }
+.js .panel > .panel-heading { display: none; }
+
+/* ---------- misc ------------------------------------------------------- */
+
+ul.plain { padding-left: 20px; margin: 0 0 18px; }
+ul.plain li { margin-bottom: 12px; }
+
+.note {
+  background: var(--paper-warm);
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin: 32px 0 0;
+}
+.note p { font-size: 15.5px; margin: 0; }
+
+.cards {
+  display: grid; gap: 18px; margin: 34px 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+.card {
+  border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--paper-warm); padding: 22px 24px;
+}
+.card p { font-size: 15px; margin: 0; line-height: 1.55; }
+
+footer {
+  padding: 56px 0 96px; border-top: 1px solid var(--rule-soft);
+  color: var(--ink-faint); font-size: 15px;
+}
+footer a { color: var(--ink-soft); }
+footer p { color: var(--ink-faint); font-size: 15px; }
+
+/* ---------- narrow ------------------------------------------------------ */
+
+/* The list becomes a row of titles that scrolls sideways. Seven items with a
+   line of description each is most of a phone screen before the clip they are
+   about has been reached, and the clip is the point. */
+@media (max-width: 860px) {
+  .switcher-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .tablist {
+    flex-direction: row; gap: 8px;
+    overflow-x: auto; scrollbar-width: none;
+    margin: 0 -28px; padding: 0 28px 4px;
+  }
+  .tab { padding: 9px 17px 10px; }
+  .tablist::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: 0 0 auto; padding: 9px 17px 10px;
+    border: 1px solid var(--rule); border-radius: 999px;
+  }
+  .tablist .tab:last-child { border-bottom: 1px solid var(--rule); }
+  .tab[aria-selected="true"] { background: var(--paper-warm); border-color: var(--ink-faint); }
+  .tab[aria-selected="true"]::before { display: none; }
+  .tab:hover { background: none; }
+  .tab-note { display: none; }
+  .tab-title { font-size: 15px; font-family: var(--sans); }
+  .tab-bar { top: auto; bottom: -1px; left: 8px; right: 8px; }
+  .js .switcher .panels { min-height: 0; }
+}
+
+@media (max-width: 640px) {
+  section { padding: 72px 0; }
+  header.hero { padding-top: 44px; }
+  .frame.empty { aspect-ratio: 4 / 3; }
+  .bar-name { font-size: 19px; }
+}
 </style>
 </head>
 <body>
-<div class="wrap">
 
-<header>
-  <img class="icon" src="icon.png" alt="Listen app icon">
-  <h1>Listen</h1>
-  <p class="tagline">Remember what was said.</p>
-  <p class="claim">No bot joins your call. Your recordings stay on your Mac.</p>
-  <div class="buttons" id="buttons">
-    <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+<div class="bar">
+  <div class="page">
+    <div class="bar-inner">
+      <a class="bar-mark" href="#top">
+        <img src="icon.png" alt="">
+        <span class="bar-name">Listen</span>
+      </a>
+      <span class="bar-spacer"></span>
+      <a class="button small" href="https://github.com/mugoosse/listen">Source</a>
+      <a class="button small primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download</a>
+    </div>
   </div>
-  <p class="under-button" id="under-button">For Apple silicon Macs (M1 or later).</p>
+</div>
 
-  <div class="chipcheck" id="chipcheck" hidden>
-    <p><b>This looks like an Intel Mac, and Listen will not run on it.</b></p>
-    <p>Listen transcribes on your own machine, and that needs the Neural
-    Engine Apple introduced with the M1 in late 2020. There is no Intel
-    version, and there is no version that would work.</p>
-    <p>Open the Apple menu and choose About This Mac. If it says <b>Chip</b>
-    rather than <b>Processor</b>, this guess is wrong and you can
-    <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">download
-    Listen</a> as normal.</p>
+<header class="hero" id="top">
+  <div class="page">
+    <a class="chip" href="#features"><b>New</b><span>Your whole library, on every Mac</span></a>
+
+    <h1>Remember what<br>was said.</h1>
+
+    <p class="hero-sub">Listen records your meetings, writes them down and
+    works out who spoke, then answers questions about any of it. No bot joins
+    your call. No account. Everything stays on your Mac.</p>
+
+    <div class="buttons" id="buttons">
+      <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+      <a class="button" href="#features">See how it works</a>
+    </div>
+    <p class="under-button" id="under-button">Free and open source · Apple silicon · macOS 14 or later</p>
+
+    <div class="chipcheck" id="chipcheck" hidden>
+      <p><b>This looks like an Intel Mac, and Listen will not run on it.</b></p>
+      <p>Listen transcribes on your own machine, and that needs the Neural
+      Engine Apple introduced with the M1 in late 2020. There is no Intel
+      version, and there is no version that would work.</p>
+      <p>Open the Apple menu and choose About This Mac. If it says <b>Chip</b>
+      rather than <b>Processor</b>, this guess is wrong and you can
+      <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">download
+      Listen</a> as normal.</p>
+    </div>
+
+    <figure class="demo">
+      <div class="frame" data-shot="hero" data-player>
+        <img src="screenshot.png" alt="Listen replaying a meeting, with the speaker-coloured waveform above a transcript where each turn carries a name.">
+      </div>
+      <figcaption>Two minutes, sound on. A demo library: the people, the companies and the voices are invented.</figcaption>
+    </figure>
   </div>
 </header>
 
-<section>
-  <picture class="demo-media">
-    <source media="(prefers-reduced-motion: no-preference)" srcset="playback.gif">
-    <img class="shot" src="screenshot.png"
-         alt="Listen replaying a meeting, with the speaker-coloured waveform
-              and the sentence playing now highlighted in the transcript.">
-  </picture>
-  <p class="caption">A demo meeting. The people and voices are synthetic.</p>
+<section id="features">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">What it does</p>
+      <h2>Seven things, one at a time.</h2>
+      <p class="lead">Pick one, or let it run.</p>
+    </div>
 
-  <h2>Stay in the meeting</h2>
-  <p class="lead">Listen records both sides of the call. When you need
-  something later, play it back and read along.</p>
+    <div class="switcher" id="switcher">
+      <div class="panels">
+
+        <article class="panel" id="f-record"
+                 data-tab-title="Record the call"
+                 data-tab-note="Both sides of the call, without a bot in it.">
+          <p class="eyebrow panel-heading">Record</p>
+          <figure class="demo">
+            <div class="frame empty" data-shot="record" data-seconds="14"
+                 data-note="menu bar → Start → meters → Stop → Keep"></div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Both sides of the call, and no bot in it.</h3>
+            <p>Your microphone on one track, everything your Mac plays on the
+            other. <strong>Nothing joins the call</strong>, so it works on
+            WhatsApp and FaceTime as well as it does on Zoom, Meet and Teams.
+            Press record when the call starts, and decide whether to keep it when
+            you stop.</p>
+            <ul class="points">
+              <li>Recording starts the moment you press it, so you don't lose the first minute</li>
+              <li>Walk away without deciding and the audio deletes itself after 24 hours</li>
+              <li>Asks to record audio, not your screen</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-transcribe"
+                 data-tab-title="Read it back"
+                 data-tab-note="An hour of meeting, written up in under a minute.">
+          <p class="eyebrow panel-heading">Transcribe</p>
+          <figure class="demo">
+            <div class="frame" data-shot="playback" data-seconds="14"
+                 data-note="scrub the waveform, sentence highlight follows">
+              <img src="playback.gif" alt="Scrubbing a meeting on the waveform while the sentence being spoken lights up in the transcript.">
+            </div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Written up before you've made coffee.</h3>
+            <p>Transcribing happens on your Mac's own chip, about 240 times
+            faster than real time on an M4 Max. Play a meeting back and the
+            transcript follows along, sentence by sentence, so you can find the
+            bit you half remember without listening to the rest.</p>
+            <ul class="points">
+              <li>Fix one sentence without touching the paragraph around it</li>
+              <li>Reads 25 languages, and works out which one it's hearing</li>
+              <li>Teach it the names and jargon it keeps getting wrong</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-speakers"
+                 data-tab-title="Who said what"
+                 data-tab-note="Name someone once. The next meeting knows them.">
+          <p class="eyebrow panel-heading">Speakers</p>
+          <figure class="demo">
+            <div class="frame empty" data-shot="speakers" data-seconds="16"
+                 data-note="Who Is This? → pick → the same voice named in a later meeting"></div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Name someone once. Listen knows them next time.</h3>
+            <p>Listen works out who spoke and puts names on the turns. Tell it
+            who someone is once, and it recognises them in the next meeting they
+            turn up in. On a call it never has to guess at your own voice.</p>
+            <ul class="points">
+              <li>Works for a room too, with the laptop on the table</li>
+              <li>Fix a whole speaker, one paragraph, or one sentence</li>
+              <li>Voiceprints are biometric data, and yours never leave your Mac</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-ask"
+                 data-tab-title="Ask your library"
+                 data-tab-note="Answers you can click through to the recording.">
+          <p class="eyebrow panel-heading">Ask</p>
+          <figure class="demo">
+            <div class="frame empty" data-shot="ask" data-seconds="18"
+                 data-note="type a question → answer streams → click a citation → save as note"></div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Ask anything. Check every answer.</h3>
+            <p>“What did we decide about pricing?” “Catch me up.” Ask one
+            meeting or all of them. <strong>Every claim comes with a numbered
+            reference</strong>, and clicking it takes you to the recording it
+            came from. If a model answers without reading anything, Listen says
+            so.</p>
+            <ul class="points">
+              <li>Runs on a model on your own Mac, if you'd rather it did</li>
+              <li>Or through Claude Code, Codex, and twelve services set up for you</li>
+              <li>Nothing is ever asked in the background</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-notes"
+                 data-tab-title="Keep notes"
+                 data-tab-note="Write your own. An agent can read them, not change them.">
+          <p class="eyebrow panel-heading">Notes</p>
+          <figure class="demo">
+            <div class="frame" data-shot="notes" data-seconds="12"
+                 data-note="type a note during a recording, then open a note spanning two meetings">
+              <img src="notes-screenshot.png" alt="A note written by an agent that links two meetings, open beside the recording it came from.">
+            </div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Your notes stay yours.</h3>
+            <p>Write your own notes while the meeting is still running, which is
+            when they're worth the most: “we should upsell them” is the kind of
+            thing no transcript will ever hold. Ask an agent for a summary and it
+            writes a separate one. <strong>It can read yours. It cannot change
+            them.</strong></p>
+            <ul class="points">
+              <li>No New Note button. Open a recording, click Notes, start typing</li>
+              <li>One note can cover four meetings, and outlive any of them</li>
+              <li>Tag a meeting in your own words, and ask for that tag later</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-dictate"
+                 data-tab-title="Dictate anywhere"
+                 data-tab-note="fn + left shift, in any app on the Mac.">
+          <p class="eyebrow panel-heading">Dictate</p>
+          <figure class="demo">
+            <div class="frame empty" data-shot="dictate" data-seconds="12"
+                 data-note="fn+shift in a mail compose window → speak → text lands"></div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Talk anywhere on the Mac, and it types.</h3>
+            <p>Press <strong>fn + left shift</strong> wherever you're typing,
+            say what you want written, and press it again. The words land where
+            the cursor is, in an email, in Slack, in a search bar, and on the
+            clipboard as well.</p>
+            <ul class="points">
+              <li>The same model, and the same vocabulary, your meetings use</li>
+              <li>On macOS 26, an optional pass that drops the ums</li>
+              <li>Needs Accessibility. Recording meetings never does, so it never asks</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="panel" id="f-devices"
+                 data-tab-title="On every device"
+                 data-tab-note="Start on one Mac, pick up on the other.">
+          <p class="eyebrow panel-heading">Your devices</p>
+          <figure class="demo">
+            <div class="frame empty" data-shot="sync" data-seconds="14"
+                 data-note="Settings → Sync: devices, Keep audio; a correction landing on the second Mac"></div>
+          </figure>
+          <div class="panel-copy">
+            <h3>Start on one Mac, pick up on the other.</h3>
+            <p>Turn on sync and your transcripts, notes, people and tags follow
+            you between Macs, through <strong>your own private iCloud</strong>
+            rather than anybody's server. Listen seals all of it on the device
+            first, with a key Apple never holds. There's nothing to pair and no
+            code to scan.</p>
+            <ul class="points">
+              <li>The audio travels too. An hour of meeting is about 61 MB</li>
+              <li>No device deletes its copy until another one has it</li>
+              <li>Anything a sync removes is kept for fourteen days</li>
+            </ul>
+          </div>
+        </article>
+
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="note">
+        <p>An iPhone app, for the conversations that happen in a room rather
+        than on a call, is on the way.</p>
+      </div>
+    </div>
+  </div>
 </section>
 
-<section>
-  <h2>Keep your own notes</h2>
-  <p class="lead">Write down what matters while you listen. When you want a
-  summary, your assistant can make one from the meetings you choose.</p>
-
-  <picture class="demo-media">
-    <source media="(prefers-reduced-motion: no-preference)" srcset="notes.gif">
-    <img class="shot" src="notes-screenshot.png"
-         alt="Listen opening an agent-written summary that links two meetings.">
-  </picture>
-  <p class="caption">A demo of personal notes and a summary across two meetings.</p>
+<section id="agents">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Agents</p>
+      <h2>Use your meetings anywhere.</h2>
+      <p class="lead">No more pasting transcripts into a chat window. Connect
+      Claude, or anything else that speaks MCP, and it can read your library
+      directly.</p>
+      <pre><code>claude mcp add listen -- /usr/local/bin/listen mcp</code></pre>
+      <p><strong>It can write notes and tags. That's all.</strong> It cannot
+      rename a speaker, correct a transcript, retitle a recording or delete one.
+      A wrong note sits harmlessly beside the recording that disproves it. A
+      wrong transcript edit is a fact that's simply gone, so those edits stay
+      with you.</p>
+      <p>Listen doesn't need to be running for any of it, and there's a full
+      command line with the same boundary.</p>
+    </div>
+  </div>
 </section>
 
-<section>
-  <h2>Dictate into anything</h2>
-  <p class="lead">Press <strong>fn + left shift</strong> wherever you are
-  typing, say what you want written, and press it again. The words are typed
-  in where the cursor is: an email, Slack, a search bar, a code comment.</p>
-  <p>They go on the clipboard every time as well, so <code>&#8984;V</code>
-  still gets you the words when the app in front will not accept a keystroke
-  from Listen. Escape cancels, and so does the trash button on the floating
-  pill.</p>
-  <p>It is the same speech model that transcribes your meetings, running on
-  the same Mac, so there is nothing extra to download and nothing you dictate
-  is uploaded.</p>
-  <p>Dictating needs Accessibility, which is what lets Listen see the shortcut
-  and type for you. Recording meetings never uses it, so if you only want the
-  recorder you can ignore this and Listen will not ask.</p>
+<section id="privacy">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Privacy</p>
+      <h2>There is no Listen server.</h2>
+      <p class="lead">Nothing to hold your meetings, nothing to breach, nothing
+      to hand over. They are saved on your own computer, and the recording, the
+      transcript and the names on it are all made there. No account, and nothing
+      reports back.</p>
+
+      <ul class="plain">
+        <li><strong>It works with the Wi-Fi off.</strong> None of it waits on
+        a connection, so losing the network does not cost you the meeting.</li>
+        <li><strong>Your recordings are ordinary files.</strong> A folder you
+        own, that you can move, back up or delete. There is nothing to export,
+        because nothing was ever taken.</li>
+        <li><strong>Keep everything, for as long as you like.</strong> Storing
+        your own meetings on your own disk costs nothing, so nothing is ever
+        deleted to make you pay.</li>
+      </ul>
+
+      <p>A couple of things can send anything out, and each is off until you
+      turn it on: keeping your library in step across your own devices, and
+      putting a question to a hosted model. Listen seals anything that travels
+      before it leaves the device, with a key we never hold, so there is nothing
+      readable at the far end. Point the questions at a model running on your
+      own Mac and even those stay put.</p>
+
+      <p><strong>None of which has to be taken on trust.</strong> Listen is open
+      source, so the code is the claim. <a href="security.html">What runs
+      where</a> sets out every connection it can make and how to check each one
+      yourself, and there are answers ready for a
+      <a href="privacy.html">privacy</a> or <a href="hipaa.html">HIPAA</a>
+      review.</p>
+
+      <div class="note">
+        <p><strong>Somewhere with rules about this?</strong> Listen can be
+        locked down centrally through the same device profiles an IT team
+        already uses: sync off, questions answered only by a model on the
+        machine, no dictation history, backups pointed wherever policy says.
+        <a href="hipaa.html">Deploying under HIPAA or GDPR</a> has the detail.</p>
+      </div>
+    </div>
+  </div>
 </section>
 
-<section>
-  <h2>Your meetings stay on your Mac</h2>
-  <p class="lead">There is no meeting bot and no account. Transcription runs
-  on your Mac, and nothing is uploaded unless you turn it on.</p>
-  <p>Listen downloads its speech model once and checks for updates. It does
-  not collect telemetry. If you enable iCloud sync, your devices exchange
-  data sealed with a key Apple never holds; if you point Ask at a hosted
-  model, the meetings you ask about are sent there, and only then.
-  <a href="security.html">The security page</a> says exactly what runs where,
-  and how to check it.</p>
-</section>
-
-<section>
-  <h2>Catch the start</h2>
-  <p>Press Record when the meeting begins. Decide whether to keep it when you
-  are done.</p>
-</section>
-
-<section>
-  <h2>Coming from Speak</h2>
-  <p class="lead">Dictation used to be
-  <a href="https://mugoosse.github.io/speak/">Speak</a>, a separate app. It is
-  part of Listen from 0.12.0, and Speak 1.6.0 is its last release.</p>
-  <p>The speech model carries over on its own: both apps always used the same
-  download, so there is nothing to fetch again. The configuration does not.
-  Set the shortcut again in Settings, Dictation, and bring your Speak
-  dictionary across in one press from Settings, Dictionary.</p>
-  <p>Your copy of Speak keeps working. It will not be updated again.</p>
-</section>
-
-<section id="install">
-  <h2>Install with Homebrew</h2>
-  <pre><code>brew trust --cask mugoosse/tap/listen
-brew install --cask mugoosse/tap/listen</code></pre>
-  <p>Apple Silicon, macOS 14 or later. System audio capture needs macOS 14.2;
-  below that Listen records your microphone only.</p>
-  <p>The speech model is about 2.5 GB and downloads on first run. If you use
-  Speak already, Listen uses the copy on your Mac.</p>
+<section id="get">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Get Listen</p>
+      <h2>Try it on your next call.</h2>
+      <p class="lead">Free, and it stays free. Apple silicon, macOS 14 or
+      later. The speech model is about 2.5 GB and downloads once, the first time
+      you run it.</p>
+      <div class="buttons">
+        <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+        <a class="button" href="https://github.com/mugoosse/listen">Read the source</a>
+      </div>
+      <p class="under-button">Prefer Homebrew, or want to build it yourself?
+      That is all in the
+      <a href="https://github.com/mugoosse/listen#readme">README</a>.</p>
+    </div>
+  </div>
 </section>
 
 <footer>
-  <p>Made by <a href="https://maxgoespublic.com/">Maxime Goossens</a>.
-  <a href="https://github.com/mugoosse/listen">Source</a> ·
-  <a href="https://github.com/mugoosse/listen/blob/main/LICENSE">AGPL 3.0</a> ·
-  <a href="#install">Homebrew</a> ·
-  <a href="security.html">Security</a> ·
-  <a href="privacy.html">Privacy</a> ·
-  <a href="hipaa.html">HIPAA</a></p>
-  <p>Built on Parakeet by NVIDIA, MLX by Apple, FluidAudio and Sparkle.</p>
+  <div class="page">
+    <p>Made by <a href="https://maxgoespublic.com/">Maxime Goossens</a>.
+    <a href="https://github.com/mugoosse/listen">Source</a> ·
+    <a href="https://github.com/mugoosse/listen/blob/main/LICENSE">AGPL 3.0</a> ·
+    <a href="security.html">Security</a> ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="hipaa.html">HIPAA</a></p>
+    <p>Built on Parakeet by NVIDIA, MLX by Apple, FluidAudio and Sparkle.</p>
+  </div>
 </footer>
 
-</div>
-
 <script>
-  // Tell an Intel visitor here, because nothing downstream can.
-  //
-  // The binary is arm64 only, so an Intel Mac fails at launch with a system
-  // error, after the download and, for anyone who got that far in setup,
-  // 2.5 GB of weights. The app cannot start far enough to explain itself, so
-  // this page is the last place the sentence can be said.
-  //
-  // Every branch fails open. Anything unavailable, unreadable or unrecognised
-  // leaves the page exactly as it shipped, because the two errors do not cost
-  // the same: missing an Intel Mac costs what this page already cost, while a
-  // wrong guess turns away somebody whose Mac works perfectly. That is also
-  // why the download link survives inside the notice rather than the notice
-  // replacing it.
-  (function () {
-    var notice = document.getElementById('chipcheck');
-    if (!notice) return;
+document.documentElement.className += ' js';
 
-    // Safari reports "MacIntel" on every Mac, Apple silicon included, so this
-    // establishes "a Mac" and says nothing at all about the chip. It is here
-    // so a Windows visitor with an Intel GPU is not told about their Intel Mac.
-    if (!/Mac/.test(navigator.platform || '') &&
-        !/Mac OS X/.test(navigator.userAgent || '')) return;
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+//
+// Every frame carries `data-shot="<name>"`. The clip is `shots/<name>.mp4` and
+// its poster, if there is one, is `shots/<name>.jpg`. A frame whose clip is not
+// on disk yet keeps whatever it already holds: the still it was written with,
+// its poster, or a labelled placeholder naming the file that is missing. So the
+// page is deployable before the shoot and fills itself in afterwards, one file
+// at a time, with no edit to this document.
+//
+// Fails open in both directions. No JavaScript leaves the stills in place,
+// which is the honest frame of the same thing; a clip that 404s or will not
+// decode leaves the frame exactly as it was.
+//
+// **A video has to be in the document to load.** Measured in Chrome: a detached
+// element told to `load()` sits at `networkState` 2 and `readyState` 0 for as
+// long as you wait, so `loadeddata` never arrives and nothing is ever swapped
+// in. Every element here is therefore attached first, invisibly, and only
+// revealed once it has frames.
+var Media = (function () {
+  var reduced = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    var renderer;
-    try {
-      var gl = document.createElement('canvas').getContext('webgl');
-      if (!gl) return;
-      var info = gl.getExtension('WEBGL_debug_renderer_info');
-      if (!info) return;
-      renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || '');
-    } catch (e) {
-      return;
+  function hide(el) {
+    el.style.position = 'absolute';
+    el.style.inset = '0';
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+  }
+  function show(el) {
+    el.style.position = '';
+    el.style.inset = '';
+    el.style.opacity = '';
+    el.style.pointerEvents = '';
+  }
+  function clearAround(frame, keep) {
+    Array.prototype.slice.call(frame.children).forEach(function (child) {
+      if (child !== keep) { frame.removeChild(child); }
+    });
+  }
+
+  // The still a frame falls back to, best first: its poster, then a labelled
+  // placeholder. The placeholder is drawn straight away and the poster replaces
+  // it when it arrives, because the alternative is a frame that is blank for as
+  // long as the request takes and then blank for ever if no poster was ever
+  // exported.
+  //
+  // This is also what a browser that will not play video at all is left
+  // holding, so it is worth having: a frame of the thing being described,
+  // rather than a filename that is a note to whoever is recording.
+  function fallback(frame, name, src) {
+    if (frame.querySelector('img')) { return; }
+
+    var slot = document.createElement('div');
+    slot.className = 'slot';
+
+    var glyph = document.createElement('div');
+    glyph.className = 'slot-glyph';
+    glyph.textContent = '▶';
+    slot.appendChild(glyph);
+
+    var file = document.createElement('span');
+    file.className = 'slot-name';
+    file.textContent = src;
+    slot.appendChild(file);
+
+    var note = frame.getAttribute('data-note');
+    var secs = frame.getAttribute('data-seconds');
+    if (note || secs) {
+      var hint = document.createElement('span');
+      hint.className = 'slot-note';
+      hint.textContent = (secs ? secs + 's · ' : '') + (note || '');
+      slot.appendChild(hint);
+    }
+    frame.appendChild(slot);
+
+    var poster = document.createElement('img');
+    poster.alt = '';
+    poster.addEventListener('load', function () {
+      // The clip, if one is on its way, is not the poster's to remove.
+      var placeholder = frame.querySelector('.slot');
+      if (placeholder) { frame.removeChild(placeholder); }
+      frame.classList.remove('empty');
+      show(poster);
+    });
+    poster.addEventListener('error', function () {
+      if (poster.parentNode) { poster.parentNode.removeChild(poster); }
+    });
+    hide(poster);
+    frame.appendChild(poster);
+    poster.src = 'shots/' + name + '.jpg';
+  }
+
+  // The one frame that is a film rather than a loop. It keeps its still until
+  // somebody presses play, then plays once, with sound, with the controls a
+  // two-minute video needs. The probe fetches metadata only, so the page still
+  // costs a page until the press.
+  function film(frame, name, src) {
+    var probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.muted = true;
+    probe.setAttribute('muted', '');
+    probe.setAttribute('aria-hidden', 'true');
+    hide(probe);
+    frame.appendChild(probe);
+    probe.src = src;
+
+    probe.addEventListener('loadedmetadata', function () {
+      if (probe.parentNode) { frame.removeChild(probe); }
+      frame.classList.add('playable');
+
+      var button = document.createElement('button');
+      button.className = 'play';
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Play the Listen demo');
+      button.innerHTML = '<span class="play-disc">▶</span>' +
+                         '<span class="play-label">Watch the demo</span>';
+      frame.appendChild(button);
+
+      button.addEventListener('click', function () {
+        var reel = document.createElement('video');
+        reel.src = src;
+        reel.controls = true;
+        reel.autoplay = true;
+        reel.playsInline = true;
+        reel.setAttribute('playsinline', '');
+        frame.textContent = '';
+        frame.classList.remove('empty', 'playable');
+        frame.appendChild(reel);
+        var playing = reel.play();
+        if (playing && playing.catch) { playing.catch(function () {}); }
+      });
+    });
+    probe.addEventListener('error', function () {
+      if (probe.parentNode) { probe.parentNode.removeChild(probe); }
+    });
+  }
+
+  function loop(frame, name, src) {
+    var video = document.createElement('video');
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('aria-hidden', 'true');
+    video.preload = 'metadata';
+    video.poster = 'shots/' + name + '.jpg';
+    hide(video);
+    frame.appendChild(video);
+    video.src = src;
+
+    video.addEventListener('loadeddata', function () {
+      clearAround(frame, video);
+      frame.classList.remove('empty');
+      show(video);
+      var playing = video.play();
+      if (playing && playing.catch) { playing.catch(function () {}); }
+    });
+    video.addEventListener('error', function () {
+      if (video.parentNode) { video.parentNode.removeChild(video); }
+    });
+  }
+
+  // Called once per frame, and only when that frame is about to be looked at.
+  // A tabbed page has seven clips on it and shows one, so fetching all seven on
+  // load would spend the whole page's weight on six nobody asked for.
+  function hydrate(frame) {
+    if (!frame || frame.hasAttribute('data-hydrated')) { return; }
+    frame.setAttribute('data-hydrated', '');
+
+    var name = frame.getAttribute('data-shot');
+    var src = 'shots/' + name + '.mp4';
+
+    if (frame.hasAttribute('data-player')) { film(frame, name, src); return; }
+
+    fallback(frame, name, src);
+
+    // A moving clip is the point of the frame, so a visitor who has asked for
+    // less motion is left with the still. `autoplay` is the only way one ever
+    // plays: there are no controls, because these are loops rather than things
+    // to sit through.
+    if (reduced) { return; }
+    loop(frame, name, src);
+  }
+
+  // Nothing off screen should be decoding. Called on every switch.
+  function suspend(scope) {
+    if (!scope) { return; }
+    Array.prototype.forEach.call(scope.querySelectorAll('video'), function (v) {
+      if (v.loop && !v.paused) { v.pause(); }
+    });
+  }
+  function resume(scope) {
+    if (!scope) { return; }
+    Array.prototype.forEach.call(scope.querySelectorAll('video'), function (v) {
+      if (v.loop && v.paused && v.readyState > 1) {
+        var playing = v.play();
+        if (playing && playing.catch) { playing.catch(function () {}); }
+      }
+    });
+  }
+
+  return { hydrate: hydrate, suspend: suspend, resume: resume, reduced: reduced };
+})();
+
+// ---------------------------------------------------------------------------
+// The feature switcher
+// ---------------------------------------------------------------------------
+//
+// The document ships as one section per feature, which is what somebody with
+// no JavaScript reads and what a search engine indexes. This folds that stack
+// into a tab list and one visible panel, because seven full-height sections is
+// a long scroll for a page whose job is to show seven short clips.
+//
+// The tab titles live on the panels as `data-tab-title` and `data-tab-note`,
+// so the list is derived rather than a second copy of the same words kept in
+// step by hand.
+(function () {
+  var root = document.getElementById('switcher');
+  if (!root) { return; }
+
+  var panels = Array.prototype.slice.call(root.querySelectorAll('.panel'));
+  if (panels.length < 2) { return; }
+
+  var DWELL = 9000;          // how long a tab holds before the rotation moves on
+  var index = -1;
+  var timer = null;
+  var rotating = !Media.reduced;
+  var seen = false;          // has the switcher been on screen yet
+
+  var grid = document.createElement('div');
+  grid.className = 'switcher-grid';
+
+  var rail = document.createElement('div');
+  var list = document.createElement('div');
+  list.className = 'tablist';
+  list.setAttribute('role', 'tablist');
+  list.setAttribute('aria-label', 'What Listen does');
+
+  var tabs = panels.map(function (panel, i) {
+    var tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'tab';
+    tab.id = panel.id + '-tab';
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', panel.id);
+
+    var title = document.createElement('span');
+    title.className = 'tab-title';
+    title.textContent = panel.getAttribute('data-tab-title') || '';
+    tab.appendChild(title);
+
+    var note = panel.getAttribute('data-tab-note');
+    if (note) {
+      var sub = document.createElement('span');
+      sub.className = 'tab-note';
+      sub.textContent = note;
+      tab.appendChild(sub);
     }
 
-    // The renderer string is the only signal, and a second one was tried and
-    // deleted on measurement. `WEBGL_compressed_texture_s3tc` is widely
-    // described as a desktop-GPU format Apple's own GPUs do not implement,
-    // which would have corroborated this from a second direction. Measured on
-    // an M4 Max in Chrome, both it and `_srgb` are **present**, so it says
-    // "true" on the machines it was supposed to rule out. Requiring it bought
-    // no accuracy and could only ever suppress a correct warning, so it is
-    // gone. Do not add it back without measuring it again.
-    //
-    // Nothing else is available to cross-check with. `navigator.platform` is
-    // "MacIntel" and the user agent says "Intel Mac OS X 10_15_7" on that same
-    // M4 Max, which is why neither can be read as saying anything about a chip.
+    var bar = document.createElement('span');
+    bar.className = 'tab-bar';
+    bar.appendChild(document.createElement('i'));
+    tab.appendChild(bar);
 
-    // Any mention of Apple counts as Apple silicon: Safari reports "Apple GPU"
-    // and Chrome reports "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro,
-    // ...)". Reading this generously is the cheap direction to be wrong in.
-    if (!renderer || /apple/i.test(renderer)) return;
-    if (!/intel|iris|radeon|amd|nvidia|geforce/i.test(renderer)) return;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', tab.id);
+    panel.setAttribute('tabindex', '0');
 
-    notice.hidden = false;
-    var buttons = document.getElementById('buttons');
-    var under = document.getElementById('under-button');
-    if (buttons) buttons.hidden = true;
-    if (under) under.hidden = true;
-  })();
+    tab.addEventListener('click', function () { stop(); select(i); });
+    list.appendChild(tab);
+    return tab;
+  });
+
+  // Left and right walk the list without choosing, which is what a tab list is
+  // meant to do; Home and End jump to the ends. Enter and Space are the
+  // button's own and need nothing here.
+  list.addEventListener('keydown', function (event) {
+    var moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    var next = null;
+    if (moves[event.key]) {
+      next = (index + moves[event.key] + tabs.length) % tabs.length;
+    } else if (event.key === 'Home') {
+      next = 0;
+    } else if (event.key === 'End') {
+      next = tabs.length - 1;
+    }
+    if (next === null) { return; }
+    event.preventDefault();
+    stop();
+    select(next);
+    tabs[next].focus();
+  });
+
+  var controls = document.createElement('div');
+  controls.className = 'switcher-controls';
+  var toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'ctl';
+  controls.appendChild(toggle);
+  controls.hidden = Media.reduced;
+
+  rail.appendChild(list);
+  rail.appendChild(controls);
+
+  var pane = root.querySelector('.panels');
+  grid.appendChild(rail);
+  root.insertBefore(grid, pane);
+  grid.appendChild(pane);
+
+  function bar(i) { return tabs[i].querySelector('.tab-bar i'); }
+
+  function drawBar(i, running) {
+    var el = bar(i);
+    el.style.transition = 'none';
+    el.style.width = '0%';
+    // Read a layout property so the reset lands before the animation starts.
+    // Without it both writes are one style recalculation and nothing moves.
+    void el.offsetWidth;
+    if (!running) { return; }
+    el.style.transition = 'width ' + DWELL + 'ms linear';
+    el.style.width = '100%';
+  }
+
+  function select(next) {
+    if (next === index) { return; }
+    if (index >= 0) {
+      tabs[index].setAttribute('aria-selected', 'false');
+      tabs[index].setAttribute('tabindex', '-1');
+      panels[index].hidden = true;
+      Media.suspend(panels[index]);
+      drawBar(index, false);
+    }
+    index = next;
+    tabs[index].setAttribute('aria-selected', 'true');
+    tabs[index].setAttribute('tabindex', '0');
+    panels[index].hidden = false;
+    Media.hydrate(panels[index].querySelector('.frame[data-shot]'));
+    Media.resume(panels[index]);
+    drawBar(index, rotating && seen);
+    schedule();
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!rotating || !seen) { return; }
+    timer = setTimeout(function () {
+      select((index + 1) % panels.length);
+    }, DWELL);
+  }
+
+  function start() {
+    rotating = true;
+    toggle.innerHTML = '‖';
+    toggle.setAttribute('aria-label', 'Stop moving through the features');
+    toggle.title = 'Pause';
+    drawBar(index, seen);
+    schedule();
+  }
+
+  function stop() {
+    rotating = false;
+    clearTimeout(timer);
+    toggle.innerHTML = '▶';
+    toggle.setAttribute('aria-label', 'Move through the features by itself');
+    toggle.title = 'Play';
+    drawBar(index, false);
+  }
+
+  toggle.addEventListener('click', function () {
+    if (rotating) { stop(); } else { start(); }
+  });
+
+  // Hovering or tabbing into the list holds the current one, because reading a
+  // description that is replaced under the pointer is the whole complaint about
+  // carousels.
+  grid.addEventListener('mouseenter', function () {
+    if (rotating) { clearTimeout(timer); drawBar(index, false); }
+  });
+  grid.addEventListener('mouseleave', function () {
+    if (rotating) { drawBar(index, seen); schedule(); }
+  });
+  grid.addEventListener('focusin', function () {
+    if (rotating) { clearTimeout(timer); drawBar(index, false); }
+  });
+
+  // Everything shut, before anything is opened.
+  tabs.forEach(function (tab, i) {
+    tab.setAttribute('aria-selected', 'false');
+    tab.setAttribute('tabindex', '-1');
+    panels[i].hidden = true;
+  });
+
+  select(0);
+  if (Media.reduced) { stop(); } else { start(); }
+
+  // It must not rotate before anybody has seen it. Left to itself above the
+  // fold it would be four features in by the time the page is scrolled to it,
+  // and the first one is the one that explains the rest.
+  if (window.IntersectionObserver) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          if (!seen) { seen = true; if (rotating) { start(); } }
+        } else {
+          clearTimeout(timer);
+          drawBar(index, false);
+        }
+      });
+    }, { threshold: 0.25 }).observe(root);
+  } else {
+    seen = true;
+    if (rotating) { start(); }
+  }
+})();
+
+// Anything outside the switcher, which is the hero, is hydrated now.
+Array.prototype.forEach.call(
+  document.querySelectorAll('.frame[data-shot]'),
+  function (frame) {
+    if (!frame.closest('#switcher')) { Media.hydrate(frame); }
+  });
+
+// ---------------------------------------------------------------------------
+// Tell an Intel visitor here, because nothing downstream can.
+// ---------------------------------------------------------------------------
+//
+// The binary is arm64 only, so an Intel Mac fails at launch with a system
+// error, after the download and, for anyone who got that far in setup, 2.5 GB
+// of weights. The app cannot start far enough to explain itself, so this page
+// is the last place the sentence can be said.
+//
+// Every branch fails open. Anything unavailable, unreadable or unrecognised
+// leaves the page exactly as it shipped, because the two errors do not cost the
+// same: missing an Intel Mac costs what this page already cost, while a wrong
+// guess turns away somebody whose Mac works perfectly. That is also why the
+// download link survives inside the notice rather than the notice replacing it.
+(function () {
+  var notice = document.getElementById('chipcheck');
+  if (!notice) return;
+
+  // Safari reports "MacIntel" on every Mac, Apple silicon included, so this
+  // establishes "a Mac" and says nothing at all about the chip. It is here so a
+  // Windows visitor with an Intel GPU is not told about their Intel Mac.
+  if (!/Mac/.test(navigator.platform || '') &&
+      !/Mac OS X/.test(navigator.userAgent || '')) return;
+
+  var renderer;
+  try {
+    var gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return;
+    var info = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!info) return;
+    renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || '');
+  } catch (e) {
+    return;
+  }
+
+  // The renderer string is the only signal, and a second one was tried and
+  // deleted on measurement. `WEBGL_compressed_texture_s3tc` is widely described
+  // as a desktop-GPU format Apple's own GPUs do not implement, which would have
+  // corroborated this from a second direction. Measured on an M4 Max in Chrome,
+  // both it and `_srgb` are **present**, so it says "true" on the machines it
+  // was supposed to rule out. Requiring it bought no accuracy and could only
+  // ever suppress a correct warning, so it is gone. Do not add it back without
+  // measuring it again.
+  //
+  // Nothing else is available to cross-check with. `navigator.platform` is
+  // "MacIntel" and the user agent says "Intel Mac OS X 10_15_7" on that same
+  // M4 Max, which is why neither can be read as saying anything about a chip.
+
+  // Any mention of Apple counts as Apple silicon: Safari reports "Apple GPU"
+  // and Chrome reports "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro,
+  // ...)". Reading this generously is the cheap direction to be wrong in.
+  if (!renderer || /apple/i.test(renderer)) return;
+  if (!/intel|iris|radeon|amd|nvidia|geforce/i.test(renderer)) return;
+
+  notice.hidden = false;
+  var buttons = document.getElementById('buttons');
+  var under = document.getElementById('under-button');
+  if (buttons) buttons.hidden = true;
+  if (under) under.hidden = true;
+})();
 </script>
 
 </body>

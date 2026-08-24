@@ -116,6 +116,13 @@ extension Recording {
             return "\(Int((step.overall * 100).rounded()))% · \(step.message)"
         }
         if Queue.shared.isQueued(id) { return "waiting" }
+        if let activity = CloudSyncHost.shared.activity(for: id),
+           activity.stage != .ready {
+            let stage = activity.title.prefix(1).lowercased()
+                + String(activity.title.dropFirst())
+            if let percentage = activity.percentage { return "\(percentage) · \(stage)" }
+            return stage
+        }
         switch effectiveState {
         case .transcribing:  return "transcribing"
         case .failed:        return "could not transcribe"

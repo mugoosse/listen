@@ -16,7 +16,7 @@ is a complete sample.
 
 | key | type | when forced |
 |---|---|---|
-| `cloudSync` | boolean | `false` keeps the library off iCloud entirely. The Devices pane checkbox is disabled, `listen sync enable` is refused, and nothing is uploaded. The reason a regulated deployment wants this: Apple signs no Business Associate Agreement for iCloud, so a library holding regulated data must not sync through it. |
+| `cloudSync` | boolean | `false` keeps the library off iCloud entirely. The Sync pane checkbox is disabled, `listen sync enable` is refused, and nothing is uploaded. The reason a regulated deployment wants this: Apple signs no Business Associate Agreement for iCloud, so a library holding regulated data must not sync through it. |
 | `agentLoopbackOnly` | boolean | `true` restricts Ask to endpoints on the Mac itself, such as Ollama or LM Studio. Hosted providers cannot be added, ones added earlier are refused at run time, and the Claude and Codex backends are refused outright, because both send the meetings you ask about to their own service. |
 | `dictationHistoryDisabled` | boolean | `true` stops `dictations.jsonl` being written. Dictation itself keeps working; the plaintext history file is the part a managed deployment usually does not want. |
 | `backupsDisabled` | boolean | `true` stops the daily copies under `~/Backups/Listen`. |
@@ -36,7 +36,7 @@ profiles list
 defaults read "/Library/Managed Preferences/$USER/com.mgo.listen"
 ```
 
-Then, in Listen: the Devices pane shows the sync checkbox disabled with a
+Then, in Listen: the Sync pane shows the sync checkbox disabled with a
 note; `listen provider add openrouter` is refused with the reason;
 `listen ask` on a Claude or Codex backend is refused before the process
 starts; dictate something and confirm `dictations.jsonl` did not grow.

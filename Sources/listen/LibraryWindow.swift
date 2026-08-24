@@ -609,6 +609,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.sidebar.tickRow(id)
             self.detail.showProgress()
         }
+        CloudSyncHost.shared.onActivity = { [weak self] id in
+            guard let self else { return }
+            self.sidebar.tickRow(id)
+            self.detail.showActivity()
+        }
 
         // Somebody else may have written to the library since you last looked.
         NotificationCenter.default.addObserver(
@@ -1128,7 +1133,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     func previewTranscribing(_ fraction: Double) {
         show()
-        if let first = Recording.all().first { sidebar.select(first.id) }
+        let recordings = Recording.all()
+        if let first = recordings.first(where: \.hasAudio) ?? recordings.first {
+            sidebar.select(first.id)
+        }
         // After the selection: `select` re-shows the recording, which rebuilds
         // the empty area and would put the picture straight back away again.
         detail.previewTranscribing(fraction)

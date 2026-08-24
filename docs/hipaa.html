@@ -7,57 +7,110 @@
 <meta name="description" content="Deploying Listen where recordings are protected health information.">
 <link rel="icon" href="icon.png">
 <style>
+/* Same paper, same faces, as index.html. Kept as its own copy rather than a
+   shared file because four small pages that never change together are cheaper
+   to keep in step by hand than one more request on every one of them. */
 :root {
-  --ink:        #0d0d0c;
-  --ink-raised: #161615;
-  --line:       #262624;
-  --text:       #f2f2f0;
-  --grey:       #a0a09d;
-  --grey-dim:   #6d6d6a;
-  --blue:       #5c7cff;
+  --paper:       #faf9f6;
+  --paper-warm:  #f3f1ea;
+  --rule:        #e3dfd3;
+  --rule-soft:   #eceae0;
+
+  --ink:         #23221f;
+  --ink-soft:    #56534b;
+  --ink-faint:   #6b675d;
+
+  --blue:        #3f52d9;
+  --blue-deep:   #2f3fae;
+
+  --serif: ui-serif, "New York", Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui,
+           "Helvetica Neue", Arial, sans-serif;
+  --mono:  ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  background: var(--ink);
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  line-height: 1.65;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 16.5px;
+  line-height: 1.62;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-.wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
-header { padding: 64px 0 40px; }
-h1 { font-size: 32px; margin: 0 0 12px; letter-spacing: -0.02em; }
-.tagline { color: var(--grey); font-size: 16px; margin: 0; }
-section { padding: 40px 0; border-top: 1px solid var(--line); }
-h2 { font-size: 15px; margin: 0 0 20px; color: var(--grey); font-weight: 600; }
-p { margin: 0 0 16px; color: var(--grey); }
-p.lead { color: var(--text); }
-a { color: var(--blue); }
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 28px; }
+
+.home {
+  display: inline-block; margin: 0 0 34px;
+  font-size: 15px; color: var(--ink-faint); text-decoration: none;
+}
+.home:hover { color: var(--ink); }
+
+header { padding: 48px 0 36px; }
+h1 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(34px, 5vw, 46px); line-height: 1.08;
+  letter-spacing: -0.018em; color: var(--ink); margin: 0 0 14px;
+}
+.tagline { color: var(--ink-soft); font-size: 18.5px; line-height: 1.5; margin: 0; }
+
+section { padding: 44px 0; border-top: 1px solid var(--rule-soft); }
+h2 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: 27px; line-height: 1.2; letter-spacing: -0.014em;
+  color: var(--ink); margin: 0 0 18px;
+}
+h3 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: 21px; line-height: 1.25; color: var(--ink); margin: 26px 0 10px;
+}
+p { margin: 0 0 16px; }
+p.lead { color: var(--ink); font-size: 18.5px; line-height: 1.5; }
+a { color: var(--blue); text-underline-offset: 3px; }
+a:hover { color: var(--blue-deep); }
+strong { color: var(--ink); font-weight: 600; }
+
 code, pre {
-  font-family: inherit; background: var(--ink-raised);
-  border: 1px solid var(--line); border-radius: 6px;
+  font-family: var(--mono); background: var(--paper-warm);
+  border: 1px solid var(--rule); border-radius: 8px; color: var(--ink);
 }
-code { padding: 2px 6px; font-size: 13px; }
-pre { padding: 14px 16px; overflow-x: auto; font-size: 13px; margin: 0 0 16px; }
-pre code { border: 0; padding: 0; background: none; }
-ul, ol { padding-left: 20px; color: var(--grey); }
+code { padding: 2px 6px; font-size: 0.84em; }
+pre {
+  padding: 16px 18px; overflow-x: auto; font-size: 13.5px;
+  line-height: 1.75; margin: 0 0 16px;
+}
+pre code { border: 0; padding: 0; background: none; font-size: inherit; }
+
+ul, ol { padding-left: 22px; margin: 0 0 16px; }
 li { margin-bottom: 10px; }
-strong { color: var(--text); font-weight: 600; }
-.note {
-  background: var(--ink-raised); border: 1px solid var(--line);
-  border-radius: 8px; padding: 14px 18px; margin: 0 0 16px;
+
+.tablewrap { overflow-x: auto; margin: 0 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td {
+  text-align: left; padding: 10px 14px;
+  border: 1px solid var(--rule); color: var(--ink-soft); vertical-align: top;
 }
-.note p { margin: 0; font-size: 13.5px; }
-footer { padding: 40px 0 80px; border-top: 1px solid var(--line); color: var(--grey-dim); }
-footer a { color: var(--grey); }
+th { color: var(--ink); background: var(--paper-warm); font-weight: 600; }
+
+.note {
+  background: var(--paper-warm); border-radius: 12px;
+  padding: 16px 20px; margin: 0 0 18px;
+}
+.note p { margin: 0; font-size: 15px; }
+
+footer {
+  padding: 44px 0 84px; border-top: 1px solid var(--rule-soft);
+  color: var(--ink-faint); font-size: 15px;
+}
+footer a { color: var(--ink-soft); }
 </style>
 </head>
 <body>
 <div class="wrap">
 
 <header>
+  <a class="home" href="index.html">← Listen</a>
   <h1>Deploying under HIPAA</h1>
   <p class="tagline">How to run Listen where recordings are protected health
   information, and why its architecture makes that unusually simple.</p>

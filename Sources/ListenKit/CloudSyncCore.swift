@@ -47,6 +47,73 @@ public struct CloudReport: Sendable, Equatable {
     public init() {}
 }
 
+/// What is happening to one recording right now.
+///
+/// Shared by both apps so a phone upload and a Mac transcription use the same
+/// state vocabulary. `fraction` is present only when the device observing the
+/// work has a real measured value. A remote Mac's chunk progress is not
+/// invented on the iPhone.
+public struct CloudActivity: Sendable, Equatable {
+    public enum Stage: String, Sendable, Equatable {
+        case uploadingAudio
+        case waitingForMac
+        case downloadingAudio
+        case queued
+        case startingTranscription
+        case transcribing
+        case sendingTranscript
+        case transcribingElsewhere
+        case retrying
+        case ready
+        case failed
+    }
+
+    public var recordingID: String
+    public var stage: Stage
+    public var fraction: Double?
+    public var detail: String?
+
+    public init(recordingID: String, stage: Stage,
+                fraction: Double? = nil, detail: String? = nil) {
+        self.recordingID = recordingID
+        self.stage = stage
+        self.fraction = fraction.map { min(1, max(0, $0)) }
+        self.detail = detail
+    }
+
+    public var title: String {
+        switch stage {
+        case .uploadingAudio: return "Uploading audio"
+        case .waitingForMac: return detail ?? "Waiting for your Mac"
+        case .downloadingAudio: return "Downloading audio"
+        case .queued: return "Queued for transcription"
+        case .startingTranscription: return "Starting transcription"
+        case .transcribing: return detail ?? "Transcribing"
+        case .sendingTranscript: return "Syncing transcript"
+        case .transcribingElsewhere: return detail ?? "Transcribing on another Mac"
+        case .retrying: return "Retrying sync"
+        case .ready: return "Ready"
+        case .failed: return "Could not finish"
+        }
+    }
+
+    public var percentage: String? {
+        fraction.map { "\(Int(($0 * 100).rounded()))%" }
+    }
+
+    public var isFailure: Bool { stage == .failed }
+
+    public var isMoving: Bool {
+        switch stage {
+        case .uploadingAudio, .downloadingAudio, .startingTranscription,
+             .transcribing, .sendingTranscript, .transcribingElsewhere, .retrying:
+            return true
+        case .waitingForMac, .queued, .ready, .failed:
+            return false
+        }
+    }
+}
+
 /// The sync, as plain logic over a `RecordStore`.
 ///
 /// Everything here runs identically against `MemoryStore` and against
@@ -80,16 +147,26 @@ public struct CloudSyncCore: Sendable {
     /// That is indistinguishable from stuck, and a person watching it has no
     /// way to tell whether to wait or to give up.
     let progress: (@Sendable (String) -> Void)?
+    /// Per-recording progress for the library row and recording page.
+    let activity: (@Sendable (CloudActivity) -> Void)?
 
     public init(library: Library, state: EngineState, store: any RecordStore,
                 key: PairingKey, policy: DevicePolicy, device: String,
                 ingests: Bool, keepAudio: Bool = false,
-                progress: (@Sendable (String) -> Void)? = nil) {
+                progress: (@Sendable (String) -> Void)? = nil,
+                activity: (@Sendable (CloudActivity) -> Void)? = nil) {
         state.repairSuppressedRecordingPushesOnce()
         self.library = library; self.state = state; self.store = store
         self.key = key; self.policy = policy; self.device = device
         self.ingests = ingests; self.keepAudio = keepAudio
         self.progress = progress
+        self.activity = activity
+    }
+
+    private func reportActivity(_ id: String, _ stage: CloudActivity.Stage,
+                                fraction: Double? = nil, detail: String? = nil) {
+        activity?(CloudActivity(recordingID: id, stage: stage,
+                                fraction: fraction, detail: detail))
     }
 
     // MARK: - Down
@@ -308,6 +385,7 @@ public struct CloudSyncCore: Sendable {
         let finished: Set<Metadata.State> = [.needs_labelling, .done, .failed]
         let delivered = blob.digests["transcript.json"] != nil
             || state.map(finished.contains) == true
+        if delivered { reportActivity(blob.id, .ready, fraction: 1) }
         return Pulled(id: blob.id, delivered: delivered)
     }
 
@@ -651,7 +729,16 @@ public struct CloudSyncCore: Sendable {
             let name = CloudRecords.masterName(recording.id, key: key)
             // Absent is ordinary: the device that holds the tracks has not
             // published this one yet, and it publishes three a pass.
-            guard let record = try await store.fetch(name, in: .masters) else { return false }
+            reportActivity(recording.id, .downloadingAudio, fraction: 0)
+            guard let record = try await store.fetch(name, in: .masters, progress: { value in
+                activity?(CloudActivity(recordingID: recording.id,
+                                        stage: .downloadingAudio,
+                                        fraction: value))
+            }) else {
+                reportActivity(recording.id, .retrying,
+                               detail: "Audio is not available in iCloud yet")
+                return false
+            }
             let blob = try CloudRecords.openMaster(record, key: key)
             guard blob.id == recording.id,
                   let audio = try CloudRecords.openMasterAudio(record, blob, key: key)
@@ -663,9 +750,12 @@ public struct CloudSyncCore: Sendable {
                             options: .atomic)
             base[master: recording.id] = blob.digest
             report.pulledMasters += 1
+            reportActivity(recording.id, recording.hasTranscript ? .ready : .queued,
+                           fraction: 1)
             return true
         } catch {
             report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            reportActivity(recording.id, .retrying, detail: error.localizedDescription)
             return false
         }
     }
@@ -708,6 +798,10 @@ public struct CloudSyncCore: Sendable {
         if mine.count > 4 { progress?("Checking \(mine.count) recordings") }
         for (index, pair) in mine.enumerated() {
             let (recording, stamp) = pair
+            let storedState = recording.metadata.state.flatMap(Metadata.State.init(rawValue:))
+            let finishedStates: Set<Metadata.State> = [.done, .needs_labelling, .failed]
+            let sendingTranscript = recording.hasTranscript
+                || storedState.map(finishedStates.contains) == true
             if mine.count > 4, index % 5 == 0 {
                 progress?("Sending \(index + 1) of \(mine.count)")
             }
@@ -736,16 +830,36 @@ public struct CloudSyncCore: Sendable {
                 // leaves no stamp, so the next pass tries again.
                 if let existing, try sameRecording(existing, as: record) {
                     base[sent: recording.id] = stamp
+                    if sendingTranscript {
+                        reportActivity(recording.id, .ready, fraction: 1)
+                    }
                     continue
                 }
-                _ = try await store.save(record)
+                if sendingTranscript {
+                    reportActivity(recording.id, .sendingTranscript, fraction: 0)
+                }
+                _ = try await store.save(record, progress: { value in
+                    guard sendingTranscript else { return }
+                    activity?(CloudActivity(recordingID: recording.id,
+                                            stage: .sendingTranscript,
+                                            fraction: value))
+                })
                 base[sent: recording.id] = stamp
                 report.pushedRecordings += 1
+                if sendingTranscript {
+                    reportActivity(recording.id, .ready, fraction: 1)
+                }
             } catch let error as StoreError {
                 if case .changedOnServer = error { report.conflicts.append(recording.id) }
                 else { report.errors.append("\(recording.id): \(error)") }
+                if sendingTranscript {
+                    reportActivity(recording.id, .retrying, detail: String(describing: error))
+                }
             } catch {
                 report.errors.append("\(recording.id): \(error.localizedDescription)")
+                if sendingTranscript {
+                    reportActivity(recording.id, .retrying, detail: error.localizedDescription)
+                }
             }
         }
 
@@ -1275,12 +1389,18 @@ public struct CloudSyncCore: Sendable {
         let sentKey = "audio:" + recording.id
         switch base[sent: sentKey] {
         case CloudSyncCore.acknowledged:
+            reportActivity(recording.id,
+                           recording.hasTranscript ? .ready : .waitingForMac,
+                           fraction: recording.hasTranscript ? 1 : nil)
             return
         case let marker? where marker.hasPrefix("claimed:"):
             let stamp = String(marker.dropFirst("claimed:".count))
             guard let when = Metadata.parser.date(from: stamp),
                   now.timeIntervalSince(when) >= CloudSyncCore.claimGrace
-            else { return }
+            else {
+                reportActivity(recording.id, .waitingForMac)
+                return
+            }
         default:
             break
         }
@@ -1289,15 +1409,25 @@ public struct CloudSyncCore: Sendable {
         guard let metadata = try? Data(contentsOf: metadataURL) else { return }
         let name = CloudNaming.recordName(.audioTransfer, recording.id, key: key)
         do {
-            if try await store.fetch(name, in: .transfer) != nil { return }
+            if try await store.fetch(name, in: .transfer) != nil {
+                reportActivity(recording.id, .waitingForMac)
+                return
+            }
+            reportActivity(recording.id, .uploadingAudio, fraction: 0)
             _ = try await store.save(try CloudRecords.transfer(
                 id: recording.id, from: device, metadata: metadata,
-                audio: audio, key: key))
+                audio: audio, key: key), progress: { value in
+                    activity?(CloudActivity(recordingID: recording.id,
+                                            stage: .uploadingAudio,
+                                            fraction: value))
+                })
             base[sent: sentKey] = "1"
             state.base = base
             report.pushedRecordings += 1
+            reportActivity(recording.id, .waitingForMac, fraction: 1)
         } catch {
             report.errors.append("upload \(recording.id): \(error.localizedDescription)")
+            reportActivity(recording.id, .retrying, detail: error.localizedDescription)
         }
     }
 
@@ -1319,6 +1449,7 @@ public struct CloudSyncCore: Sendable {
             do {
                 let blob = try CloudRecords.openTransfer(record, key: key)
                 guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
+                reportActivity(blob.id, .downloadingAudio)
                 guard let sealed = record.assets["mic.wav"] else {
                     throw StoreError.unavailable("no audio on the transfer")
                 }
@@ -1349,10 +1480,15 @@ public struct CloudSyncCore: Sendable {
                     _ = try await store.save(published)
                 }
 
+                reportActivity(blob.id, .queued, fraction: 1)
+
                 // The pipe is emptied only once the library holds it.
                 try await store.delete(record.name, in: .transfer)
             } catch {
                 report.errors.append("ingest: \(error.localizedDescription)")
+                if let blob = try? CloudRecords.openTransfer(record, key: key) {
+                    reportActivity(blob.id, .retrying, detail: error.localizedDescription)
+                }
             }
         }
     }
@@ -1496,19 +1632,45 @@ public struct CloudSyncCore: Sendable {
         record.claimExpires = now.addingTimeInterval(window)
         // The compare-and-swap is the whole mechanism: two Macs waking
         // together both read no holder, and exactly one save lands.
-        guard (try? await store.save(record)) != nil else {
-            // Somebody landed first. Read back who, so the caller can say so
-            // rather than reporting a failure it cannot explain.
-            if let theirs = try? await store.fetch(name, in: .library),
-               let holder = theirs.claimedBy, holder != device,
-               let expires = theirs.claimExpires {
+        do {
+            _ = try await store.save(record)
+            return .taken
+        } catch StoreError.changedOnServer(var theirs) {
+            // A concurrent write is not necessarily a competing claim. A title
+            // edit or another metadata update may have moved the record while
+            // leaving it unclaimed. Retry the compare-and-swap once with the
+            // server copy instead of parking the recording behind a fiction.
+            if let holder = theirs.claimedBy, holder != device,
+               let expires = theirs.claimExpires, expires > now {
                 return .held(TranscriptionLease(device: holder, expires: expires, mine: false))
             }
-            return .held(TranscriptionLease(device: "another device",
-                                            expires: now.addingTimeInterval(window),
-                                            mine: false))
+            theirs.claimedBy = device
+            theirs.claimExpires = now.addingTimeInterval(window)
+            do {
+                _ = try await store.save(theirs)
+                return .taken
+            } catch {
+                return await leaseAfterFailedSave(name, now: now)
+            }
+        } catch {
+            return await leaseAfterFailedSave(name, now: now)
         }
-        return .taken
+    }
+
+    /// Resolve an ambiguous failed save without inventing a holder.
+    ///
+    /// CloudKit may fail the request after the server accepted it, so a
+    /// read-back can still prove this device owns the lease. It may also show a
+    /// real competing device. If it shows neither, the container did not grant
+    /// a lease and did not refuse one. That is `.unreachable`, the existing
+    /// offline-safe answer, rather than a made-up 15 minute refusal.
+    private func leaseAfterFailedSave(_ name: String, now: Date) async -> LeaseOutcome {
+        guard let record = try? await store.fetch(name, in: .library),
+              let holder = record.claimedBy,
+              let expires = record.claimExpires,
+              expires > now else { return .unreachable }
+        if holder == device { return .taken }
+        return .held(TranscriptionLease(device: holder, expires: expires, mine: false))
     }
 
     /// Hold it for another window. A job that outlives its lease invites a

@@ -83,6 +83,11 @@ public actor CloudKitStore: RecordStore {
     // MARK: - Save
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
+        try await save(record, progress: nil)
+    }
+
+    public func save(_ record: StoredRecord,
+                     progress: StoreProgress?) async throws -> StoredRecord {
         // The record's own zone rather than its type's, because the audio
         // master is an `r5` that lives in `z5`. See `StoredRecord.zone`.
         try await prepare(record.zone)
@@ -138,12 +143,9 @@ public actor CloudKitStore: RecordStore {
         }
 
         do {
-            let (saved, _) = try await database.modifyRecords(
-                saving: [subject], deleting: [], savePolicy: .ifServerRecordUnchanged,
-                atomically: true)
-            guard let result = saved[id] else { throw StoreError.unavailable("no result") }
-            let stored = try translate(try result.get())
-            lastKnown[record.name] = try result.get()
+            let saved = try await saveRecord(subject, progress: progress)
+            let stored = try translate(saved)
+            lastKnown[record.name] = saved
             return stored
         } catch let error as CKError where error.code == .serverRecordChanged {
             // Both copies in hand, which is the whole point of this error and
@@ -156,6 +158,31 @@ public actor CloudKitStore: RecordStore {
             throw StoreError.changedOnServer(record)
         } catch let error as CKError {
             throw StoreError.unavailable(error.localizedDescription)
+        }
+    }
+
+    /// Use the operation API because the convenience async save does not
+    /// expose `perRecordProgressBlock`, which is CloudKit's measured asset
+    /// upload progress.
+    private func saveRecord(_ record: CKRecord,
+                            progress: StoreProgress?) async throws -> CKRecord {
+        try await withCheckedThrowingContinuation { continuation in
+            let operation = CKModifyRecordsOperation(recordsToSave: [record],
+                                                     recordIDsToDelete: nil)
+            operation.savePolicy = .ifServerRecordUnchanged
+            operation.isAtomic = true
+            operation.perRecordProgressBlock = { _, value in progress?(value) }
+            operation.modifyRecordsCompletionBlock = { saved, _, error in
+                if let error { continuation.resume(throwing: error); return }
+                guard let saved = saved?.first else {
+                    continuation.resume(throwing: StoreError.unavailable("no result"))
+                    return
+                }
+                progress?(1)
+                continuation.resume(returning: saved)
+            }
+            progress?(0)
+            database.add(operation)
         }
     }
 
@@ -217,11 +244,54 @@ public actor CloudKitStore: RecordStore {
     }
 
     public func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
+        try await fetch(name, in: zone, progress: nil)
+    }
+
+    public func fetch(_ name: String, in zone: CloudNaming.Zone,
+                      progress: StoreProgress?) async throws -> StoredRecord? {
         try await prepare(zone)
         let id = CKRecord.ID(recordName: name, zoneID: zoneID(zone))
-        guard let record = try? await database.record(for: id) else { return nil }
-        lastKnown[name] = record
-        return try translate(record)
+        do {
+            let record = try await fetchRecord(id, progress: progress)
+            lastKnown[name] = record
+            return try translate(record)
+        } catch let error as CKError where Self.isUnknownItem(error, for: id) {
+            return nil
+        } catch let error as CKError {
+            throw StoreError.unavailable(error.localizedDescription)
+        }
+    }
+
+    /// `CKFetchRecordsOperation` wraps even a one-record miss in
+    /// `.partialFailure` on some accounts. The item-level error is the real
+    /// answer; only an `unknownItem` for the id we asked for means "not there".
+    /// Network, permission, and another record's failure remain failures.
+    static func isUnknownItem(_ error: CKError, for id: CKRecord.ID) -> Bool {
+        if error.code == .unknownItem { return true }
+        guard error.code == .partialFailure,
+              let nested = error.partialErrorsByItemID?[id]
+        else { return false }
+        return CKError(_nsError: nested as NSError).code == .unknownItem
+    }
+
+    /// Use the operation API for the matching measured asset download.
+    private func fetchRecord(_ id: CKRecord.ID,
+                             progress: StoreProgress?) async throws -> CKRecord {
+        try await withCheckedThrowingContinuation { continuation in
+            let operation = CKFetchRecordsOperation(recordIDs: [id])
+            operation.perRecordProgressBlock = { _, value in progress?(value) }
+            operation.fetchRecordsCompletionBlock = { records, error in
+                if let error { continuation.resume(throwing: error); return }
+                guard let record = records?[id] else {
+                    continuation.resume(throwing: CKError(.unknownItem))
+                    return
+                }
+                progress?(1)
+                continuation.resume(returning: record)
+            }
+            progress?(0)
+            database.add(operation)
+        }
     }
 
     /// A CloudKit field name for one asset.

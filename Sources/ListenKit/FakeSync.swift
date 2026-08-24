@@ -1,4 +1,5 @@
 import AVFoundation
+import CloudKit
 import Foundation
 
 /// The whole sync, against a store in a dictionary, in about a second.
@@ -43,6 +44,26 @@ public enum FakeSync {
         // removal above does not touch it. `scratchLibrary` clears it, which
         // is what makes a second run of this suite start from nothing.
         let store = MemoryStore()
+
+        // `CKFetchRecordsOperation` can wrap a single absent record in an
+        // operation-level partial failure. The item-level unknown-item is still
+        // an ordinary cache miss, while any other nested error must stay fatal.
+        let missingID = CKRecord.ID(recordName: "missing")
+        let unknown = NSError(domain: CKErrorDomain,
+                              code: CKError.Code.unknownItem.rawValue)
+        let missingPartial = CKError(_nsError: NSError(
+            domain: CKErrorDomain, code: CKError.Code.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: [missingID: unknown]]))
+        try check(CloudKitStore.isUnknownItem(missingPartial, for: missingID),
+                  "a partial-failure cache miss was treated as a hard failure")
+        let offlineError = NSError(domain: CKErrorDomain,
+                                   code: CKError.Code.networkUnavailable.rawValue)
+        let offlinePartial = CKError(_nsError: NSError(
+            domain: CKErrorDomain, code: CKError.Code.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: [missingID: offlineError]]))
+        try check(!CloudKitStore.isUnknownItem(offlinePartial, for: missingID),
+                  "a network failure was mistaken for a missing record")
+        ok("CloudKit partial failures distinguish a missing record from an outage")
 
         // A shipped build can already hold the poisoned stamp. Constructing
         // the repaired core must invalidate recording checks exactly once,
@@ -885,6 +906,21 @@ public enum FakeSync {
         await mac.releaseTranscriptionLease(jobID)
         ok("releasing frees it at once, rather than after the window")
 
+        // Reading the record can succeed while the claim write itself fails.
+        // That is not proof that another device won. The old fallback invented
+        // a holder named "another device" for the full lease window, removed
+        // the job from the queue, and repeated the same stall after relaunch.
+        // When a read-back still shows no holder, this is the same safe offline
+        // answer as an unreachable container: proceed locally, with the caller
+        // retaining the caveat that no lease was recorded.
+        let writeFailure = CloudSyncCore(
+            library: macLib, state: EngineState(library: macLib),
+            store: SaveFailureStore(base: store), key: key, policy: .mac,
+            device: "mac-write-failure", ingests: true, keepAudio: true)
+        try check(await writeFailure.takeTranscriptionLease(jobID) == .unreachable,
+                  "a failed claim write with no real holder invented one")
+        ok("a failed claim write cannot invent another transcriber")
+
         // MARK: the offline window, which nothing could refuse in
 
         // A Mac with no container still transcribes its own recording, because
@@ -1337,6 +1373,29 @@ public enum FakeSync {
         }
         func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
             throw StoreError.unavailable("the network is off")
+        }
+    }
+
+    /// A store that can read the shared container but cannot land a write.
+    /// This is distinct from `UnreachableStore`: it reproduces the partial
+    /// CloudKit failure that used to fabricate a foreign lease.
+    actor SaveFailureStore: RecordStore {
+        let base: MemoryStore
+
+        init(base: MemoryStore) { self.base = base }
+
+        func save(_ record: StoredRecord) async throws -> StoredRecord {
+            throw StoreError.unavailable("the claim write failed")
+        }
+        func delete(_ name: String, in zone: CloudNaming.Zone) async throws {
+            try await base.delete(name, in: zone)
+        }
+        func changes(in zone: CloudNaming.Zone,
+                     since token: String?) async throws -> StoreChanges {
+            try await base.changes(in: zone, since: token)
+        }
+        func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
+            try await base.fetch(name, in: zone)
         }
     }
 

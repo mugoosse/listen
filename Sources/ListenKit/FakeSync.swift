@@ -45,6 +45,45 @@ public enum FakeSync {
         // is what makes a second run of this suite start from nothing.
         let store = MemoryStore()
 
+        // The key bootstrap, which is the seam behind the first real outside
+        // install: turning sync on used to set a flag, nothing anywhere
+        // created the key it then looked for, and a fresh Mac and its phone
+        // each waited for the other for ever. See "Nothing ever created the
+        // key" in `.agents/notes/cloud-sync.md`. Proved here: the first Mac
+        // creates, a phone never does, and a device that can see somebody
+        // else in the container waits for iCloud Keychain rather than minting
+        // a rival key. A scratch keychain account, cleared both ways, so the
+        // suite can never touch a real pairing key.
+        let fakeKeys = KeyStore(service: "eu.jacarandalabs.listen",
+                                account: "fake-suite-key")
+        fakeKeys.clear()
+        defer { fakeKeys.clear() }
+        let emptyContainer = MemoryStore()
+        guard case .noDeviceSyncingYet =
+            await fakeKeys.provision(store: emptyContainer, mayCreate: false) else {
+            throw Failure(description: "a phone minted a key, or misread an empty container")
+        }
+        guard case .created(let minted) =
+            await fakeKeys.provision(store: emptyContainer, mayCreate: true) else {
+            throw Failure(description: "the first Mac did not create the key")
+        }
+        guard case .existing(let reloaded) =
+            await fakeKeys.provision(store: emptyContainer, mayCreate: true),
+            reloaded == minted else {
+            throw Failure(description: "the created key was not the one loaded back")
+        }
+        ok("the first Mac creates the key, a phone never does")
+        fakeKeys.clear()
+        let occupiedContainer = MemoryStore()
+        _ = try await occupiedContainer.save(StoredRecord(
+            name: CloudNaming.recordName(.device, "seam-device", key: key),
+            type: .device, payload: Data([1])))
+        guard case .keyOnItsWay =
+            await fakeKeys.provision(store: occupiedContainer, mayCreate: true) else {
+            throw Failure(description: "a keyless Mac minted a rival key over a syncing account")
+        }
+        ok("a keyless device that can see another one waits for its key")
+
         // `CKFetchRecordsOperation` can wrap a single absent record in an
         // operation-level partial failure. The item-level unknown-item is still
         // an ordinary cache miss, while any other nested error must stay fatal.

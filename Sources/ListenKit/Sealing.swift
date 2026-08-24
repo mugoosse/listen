@@ -155,3 +155,58 @@ public struct KeyStore: Sendable {
         SecItemDelete(query as CFDictionary)
     }
 }
+
+/// How the shared key came to be on this device, or why it has not yet.
+public enum KeyProvision: Sendable {
+    /// The keychain already held it.
+    case existing(PairingKey)
+    /// This device just created it, because nothing else syncs this account.
+    case created(PairingKey)
+    /// Nothing syncs this account yet and this device may not go first. The
+    /// repair is on the other machine: turn sync on there.
+    case noDeviceSyncingYet
+    /// Another device already syncs this account, so its key is on the way
+    /// through iCloud Keychain. Making a second one here would seal new
+    /// records under a rival key, and whichever key iCloud Keychain kept,
+    /// the other's records would be ciphertext nobody can open.
+    case keyOnItsWay
+    /// The container could not be asked, so nothing was decided. Asking again
+    /// later is the whole recovery.
+    case unreachable(String)
+}
+
+extension KeyStore {
+    /// The shared key, created here when this device is genuinely first.
+    ///
+    /// This is the only place a key is ever made outside the test suite.
+    /// Turning sync on used to set a flag and nothing else, so a fresh
+    /// install's every pass ended at "No sync key yet" while the phone showed
+    /// "Waiting for the key from your Mac": each device waiting for the
+    /// other, for ever. The developer's own Macs never saw it, because their
+    /// key predated the keychain store by way of the legacy file migration.
+    ///
+    /// `mayCreate` is the Mac. The phone records and waits for a Mac to
+    /// transcribe, so the Mac is the natural author, and one author is what
+    /// keeps two devices first-enabling minutes apart from minting rival
+    /// keys: the phone never creates, and a second Mac only creates after
+    /// the container has said nobody else is syncing.
+    public func provision(store: some RecordStore, mayCreate: Bool) async -> KeyProvision {
+        if let key = load() { return .existing(key) }
+        // The container is asked before every creation, never remembered. The
+        // devices zone lists whoever syncs this account, so records there
+        // mean a key exists somewhere and this device must receive it rather
+        // than replace it.
+        do {
+            let devices = try await store.changes(in: .devices, since: nil)
+            guard devices.changed.isEmpty else { return .keyOnItsWay }
+        } catch {
+            return .unreachable((error as NSError).localizedDescription)
+        }
+        guard mayCreate else { return .noDeviceSyncingYet }
+        let key = PairingKey.generate()
+        guard save(key) else {
+            return .unreachable("this Mac's keychain refused the new key")
+        }
+        return .created(key)
+    }
+}

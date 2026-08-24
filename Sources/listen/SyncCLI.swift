@@ -28,7 +28,7 @@ enum SyncCLI {
         case "inspect":  await inspect(&rest)
         case "trash":    trash()
         case "key":      key(&rest)
-        case "enable":   enable(&rest)
+        case "enable":   await enable(&rest)
         default:         help()
         }
     }
@@ -449,7 +449,7 @@ enum SyncCLI {
     /// verbose about what it is about to do. Every other command in this file
     /// operates on a scratch library; this one is the first thing that points
     /// the container at four years of recordings.
-    private static func enable(_ args: inout [String]) -> Never {
+    private static func enable(_ args: inout [String]) async -> Never {
         if flag("--off", &args) {
             Settings.cloudSync = false
             ActivityLog.append("sync_disabled")
@@ -491,6 +491,26 @@ enum SyncCLI {
         Settings.cloudSync = true
         ActivityLog.append("sync_enabled")
         print("CloudKit sync is on for \(library.root.path).")
+        // The key, here as well as in the app's pass, because a CLI enable
+        // may be the only thing that ever runs: a Mac driven over ssh has no
+        // settings pane, and "on" with no key is the state where every pass
+        // ends at "waiting" for ever.
+        switch await KeyStore.shared.provision(
+            store: CloudKitStore(containerID: CloudAccount.containerID),
+            mayCreate: true) {
+        case .existing:
+            break
+        case .created:
+            ActivityLog.append("sync_key_created")
+            print("Created the sync key, this account's first. Print it with "
+                  + "`listen sync key --show` and keep a copy somewhere safe.")
+        case .keyOnItsWay, .noDeviceSyncingYet:
+            print("Another device already syncs this account. Its key arrives "
+                  + "here through iCloud Keychain by itself.")
+        case .unreachable(let why):
+            print("No key yet, and iCloud could not be reached to make one "
+                  + "(\(why)). The app tries again on every pass.")
+        }
         print("It runs while Listen is open. `listen sync inspect` says what is up there.")
         done()
     }

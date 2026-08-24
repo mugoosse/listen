@@ -518,6 +518,37 @@ can be pushed as a deletion, which is the failure the "library that has lost
 everything" guard in `pushDeletions` exists to catch and should not be relied
 on to catch twice.
 
+## Nothing ever created the key, and both sides said "waiting"
+
+Turning sync on set `Settings.cloudSync` and nothing else. `KeyStore.shared
+.load()` was the only production read of the key, and `PairingKey.generate()`
+was called from `FakeSync` and nowhere else, so on a fresh install every pass
+ended at "No sync key yet" while the phone showed "Waiting for the key from
+your Mac": each device waiting for the other, for ever. The Sync pane made it
+worse by printing that report twice, as the status and as the last error, over
+a "Save your key" button that silently did nothing without a key.
+
+It shipped that way because no machine that mattered ever ran keyless. The
+developer's Macs got their key from the legacy file migration, which copied it
+into iCloud Keychain before the file fallback was removed, so the missing
+generation was invisible on every dogfooding device and cost the first real
+outside install its whole first day. Found on a friend's fresh 0.17.0 and
+build 57.
+
+`KeyStore.provision` in `Sealing.swift` is now the one place a key is made,
+and it asks the container before every creation. Records in the devices zone
+mean a key exists somewhere, so this device must receive it rather than mint
+a rival: two keys sealing one container is ciphertext each side half cannot
+open, and iCloud Keychain keeping whichever was written last does not heal the
+records already sealed under the loser. `mayCreate` is the Mac alone, which
+is what keeps a Mac and a phone first-enabling minutes apart from racing to
+be first author; the phone's waiting states name the repair instead
+(`CloudSync.KeyStatus`). The typed-code fallback that `Sealing.swift` had
+always promised finally has a surface on both platforms: "Enter key" on the
+Mac's Sync pane and on the phone, validated as 32 Base32 bytes before it is
+kept, because an almost-right key in the keychain fails every later open with
+no hint that the key is the reason.
+
 ## The activity log is one line, appended with O_APPEND
 
 `activity.jsonl` is written by two processes (the app and a spawned

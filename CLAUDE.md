@@ -348,6 +348,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A forgotten voiceprint needs a tombstone, or the sync resurrects it
 - `LISTEN_LIBRARY` scopes the library, and never the container
 - The activity log is one line, appended with O_APPEND
+- Nothing ever created the key, and both sides said "waiting"
 
 ### `.agents/notes/agent.md` (144k)
 

@@ -33,6 +33,13 @@ final class CloudSyncHost {
     /// reports nothing is indistinguishable from one that silently failed.
     private(set) var lastReport: CloudReport?
     private(set) var lastRun: Date?
+    /// Where the key stands, so the pane can say what to do rather than
+    /// printing the same sentence as both status and error. `.unknown` until
+    /// a pass has asked; a keyless pass sets one of the other answers.
+    enum KeyState: Equatable {
+        case unknown, present, onItsWay, unreachable(String)
+    }
+    private(set) var keyState: KeyState = .unknown
     private(set) var devices: [CloudRecords.DeviceBlob] = []
     /// Live work keyed by recording, shared by the sidebar and detail pane.
     private(set) var activities: [String: CloudActivity] = [:]
@@ -147,12 +154,37 @@ final class CloudSyncHost {
 
         let library = ListenKit.Library.mac()
 
-        guard let key = KeyStore.shared.load() else {
+        // The key, made here when this Mac is the first device to sync. This
+        // used to be a bare `KeyStore.shared.load()`, and nothing anywhere
+        // created what it looked for: a fresh install's every pass ended at
+        // "No sync key yet" while its iPhone waited for a key that did not
+        // exist. See `KeyStore.provision`.
+        let key: PairingKey
+        switch await KeyStore.shared.provision(store: sharedStore(), mayCreate: true) {
+        case .existing(let held):
+            key = held
+        case .created(let made):
+            key = made
+            ActivityLog.append("sync_key_created")
+            trace("cloud sync: created the sync key, this account's first")
+        case .keyOnItsWay, .noDeviceSyncingYet:
+            // Another device is already syncing, so its key travels here by
+            // iCloud Keychain. Said as state rather than as an error: nothing
+            // failed, and the next pass asks again.
+            keyState = .onItsWay
             var report = CloudReport()
-            report.errors.append("No sync key yet.")
+            report.errors.append("Waiting for your sync key to arrive from "
+                                 + "your other device through iCloud Keychain.")
+            lastReport = report
+            return report
+        case .unreachable(let why):
+            keyState = .unreachable(why)
+            var report = CloudReport()
+            report.errors.append("iCloud could not be reached: \(why)")
             lastReport = report
             return report
         }
+        keyState = .present
 
         let state = EngineState(library: library)
         // Adopt whatever the LAN transport agreed last, once, then remove the

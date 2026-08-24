@@ -34,7 +34,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// and the feature is silently off for them. Its buttons say so: the way
     /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, calendar, model, dictation, done
+        case welcome, microphone, systemAudio, calendar, model, dictation, sync, done
     }
 
     private var window: NSWindow?
@@ -202,6 +202,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
             String(Permissions.accessibility),
             Settings.modelChosen ? Settings.model.id : "none",
             String(Settings.model.isDownloaded),
+            // The sync step's tick, which the button on that step changes.
+            String(Settings.cloudSyncApplies),
             // The phase, never the byte count. Starting, finishing and failing
             // each change what the pane contains; a percentage only changes
             // what one label says, and rule 2 is why that distinction matters.
@@ -346,6 +348,27 @@ final class Onboarding: NSObject, NSWindowDelegate {
             status(Permissions.accessibility, "Accessibility granted",
                    "Not granted yet. This opens System Settings, where Listen can be "
                    + "switched on under Accessibility.")
+
+        case .sync:
+            titleLabel.stringValue = "Your other devices"
+            paragraph("With iCloud sync on, meetings recorded on your iPhone arrive "
+                      + "here to be written down, and every transcript and note stays "
+                      + "in step across your devices. Listen for iPhone connects by "
+                      + "itself once this is on.")
+            // The trade-off, before the button that accepts it. Sync is the
+            // one feature here that sends anything anywhere, so the sentence
+            // has to say what travels and what does not.
+            paragraph("Everything it sends is sealed with a key only your devices "
+                      + "hold, so Apple stores it and cannot read it. Audio stays "
+                      + "on the Mac that recorded it.")
+            if Settings.isForced("cloudSync") {
+                status(Settings.cloudSyncApplies, "iCloud sync is on",
+                       "iCloud sync is off, set by your organisation's device profile.")
+            } else {
+                status(Settings.cloudSyncApplies, "iCloud sync is on",
+                       "Not on yet. Everything else works without it, on this "
+                       + "Mac alone, and Settings, Sync can turn it on later.")
+            }
 
         case .done:
             titleLabel.stringValue = "You are set"
@@ -504,6 +527,16 @@ final class Onboarding: NSObject, NSWindowDelegate {
             primary.isEnabled = true
             secondary.isHidden = Permissions.accessibility
             secondary.title = "Skip"
+        case .sync:
+            // One label whichever way it goes, like the calendar step: the
+            // promise is sync, and pressing it is the consent. Forced values
+            // get Continue alone, because the button could not keep it.
+            let on = Settings.cloudSyncApplies
+            primary.title = on || Settings.isForced("cloudSync")
+                ? "Continue" : "Turn on iCloud sync"
+            primary.isEnabled = true
+            secondary.isHidden = on || Settings.isForced("cloudSync")
+            secondary.title = "Not now"
         case .done:
             primary.title = "Start using Listen"
             primary.isEnabled = true
@@ -595,6 +628,18 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // Armed the moment the grant lands, without a relaunch. The window
             // stays on this step so the tick can appear where it was promised.
             Dictation.shared.activate()
+            return
+
+        case .sync where !Settings.cloudSyncApplies && !Settings.isForced("cloudSync"):
+            // The press is the consent, exactly as the Sync pane's checkbox
+            // is, and it does the same things that checkbox does. The first
+            // pass creates the shared key when this account has never synced;
+            // see `KeyStore.provision`. The window stays on this step so the
+            // tick can appear where it was promised.
+            Settings.cloudSync = true
+            ActivityLog.append("sync_enabled")
+            CloudSyncHost.shared.startIfEnabled()
+            render()
             return
 
         case .done:

@@ -1,17 +1,27 @@
 import AppKit
 import ListenKit
 
-/// Settings, Devices: the CloudKit account and the devices seen in its zone.
+/// Settings, Sync: one switch, one status line, and the devices on the account.
 ///
-/// There is no pairing surface here. The shared key arrives through iCloud
-/// Keychain and every device exchanges sealed records through CloudKit, so a
-/// QR code, a network address and a second connected-device registry would all
-/// describe a transport that no longer exists.
+/// There is no pairing surface here. The shared key is created by the first
+/// Mac that turns sync on and arrives everywhere else through iCloud Keychain,
+/// so a QR code, a network address and a second connected-device registry
+/// would all describe a transport that does not exist. The one fallback is
+/// typing the key, for an account whose iCloud Keychain is off, and it lives
+/// behind a button that only appears while the key is what is missing.
+///
+/// The pane used to open with two status paragraphs, two buttons and a key
+/// warning before the switch itself, and a tester's honest report was that
+/// they could not find how to turn sync on. The switch comes first now, and
+/// everything below it appears only in the states where it can do something.
 final class DevicesPane: Pane {
     private var cloudStatus: NSTextField?
     private var cloudDevices: NSTextField?
     private var audioStatus: NSTextField?
     private var poll: Timer?
+    /// What the pane was built for, so the poll can tell a value change (update
+    /// a label) from a state change (rebuild the pane).
+    private var builtShape = ""
 
     override func viewDidAppear() {
         super.viewDidAppear()
@@ -27,31 +37,31 @@ final class DevicesPane: Pane {
         poll = nil
     }
 
+    /// Everything that decides which controls exist. Compared by the poll:
+    /// a change here is a rebuild, anything else is a label update.
+    ///
+    /// The key has three phases here, not two. Between the toggle going on
+    /// and the first pass answering, this Mac may be about to *create* the
+    /// key, and an Enter key button in that window would ask somebody to go
+    /// hunting for a code that is seconds from existing.
+    private func keyPhase() -> String {
+        if KeyStore.shared.load() != nil { return "have" }
+        switch CloudSyncHost.shared.keyState {
+        case .unknown, .present: return "settingUp"
+        case .onItsWay, .unreachable: return "missing"
+        }
+    }
+
+    private func shape() -> String {
+        [String(Settings.cloudSyncApplies), keyPhase()].joined(separator: "|")
+    }
+
     override func build() {
+        builtShape = shape()
         heading("iCloud")
 
-        let host = CloudSyncHost.shared
-        cloudStatus = note(cloudStatusText(host))
-        cloudDevices = note(deviceListText(host))
-
-        if Settings.cloudSyncApplies {
-            let syncNow = NSButton(title: "Sync now", target: self,
-                                   action: #selector(syncNowPressed(_:)))
-            syncNow.bezelStyle = .rounded
-            let saveKey = NSButton(title: "Save your key\u{2026}", target: self,
-                                   action: #selector(showKey(_:)))
-            saveKey.bezelStyle = .rounded
-            stack.addArrangedSubview(row([syncNow, saveKey]))
-
-            // Here rather than beside the copies in Storage, although it is a
-            // thing to write down. What the key opens is what iCloud holds, so
-            // it belongs with iCloud: the copies on this Mac need no key at all
-            // and never will.
-            note("What iCloud holds is sealed with a key that only your devices "
-                 + "have. Keep a copy somewhere safe, like a password manager, "
-                 + "so you can still open it if you ever lose them all.")
-        }
-
+        // The switch first. It is the one control this pane exists for, and
+        // everything else on the pane is a consequence of its position.
         let toggle = NSButton(checkboxWithTitle: "Sync this library through iCloud",
                               target: self, action: #selector(toggleCloud(_:)))
         // Ticked for the library on screen, not for the install. With sync on
@@ -70,6 +80,45 @@ final class DevicesPane: Pane {
         } else {
             stack.addArrangedSubview(toggle)
         }
+
+        let host = CloudSyncHost.shared
+        cloudStatus = note(cloudStatusText(host))
+
+        if Settings.cloudSyncApplies {
+            switch keyPhase() {
+            case "have":
+                let syncNow = NSButton(title: "Sync now", target: self,
+                                       action: #selector(syncNowPressed(_:)))
+                syncNow.bezelStyle = .rounded
+                let saveKey = NSButton(title: "Back up key\u{2026}", target: self,
+                                       action: #selector(showKey(_:)))
+                saveKey.bezelStyle = .rounded
+                stack.addArrangedSubview(row([syncNow, saveKey]))
+                // One sentence, not a paragraph: the fuller warning is inside
+                // the Back up key dialog, beside the key it is about.
+                note("iCloud holds only what your key seals, so Apple cannot read "
+                     + "it. Keep a copy of the key in a password manager.")
+            case "missing":
+                // The key is what is missing, so the way to supply it by hand
+                // is offered here and nowhere else. iCloud Keychain is the
+                // ordinary route and needs no button.
+                let enter = NSButton(title: "Enter key\u{2026}", target: self,
+                                     action: #selector(enterKey(_:)))
+                enter.bezelStyle = .rounded
+                stack.addArrangedSubview(row([enter]))
+                note("The key normally arrives by itself through iCloud Keychain. "
+                     + "Enter it only if that is off, or if the device that has "
+                     + "the key is gone: it is the code behind Back up key on "
+                     + "your other device, or the copy in your password manager.")
+            default:
+                // Setting up: the first pass is deciding whether this Mac
+                // creates the key or receives it, and nothing here can help
+                // until it has.
+                break
+            }
+
+            cloudDevices = note(deviceListText(host))
+        }
         separator()
 
         // Audio, and the switch that decides whether this Mac keeps any.
@@ -79,11 +128,6 @@ final class DevicesPane: Pane {
         // makes "do not keep audio" safe is another device saying it is
         // keeping it, and that sentence is a few lines up. A switch in Storage
         // would be a delete button with its reason on another screen.
-        //
-        // **After the sync checkbox and not before it.** Between the key
-        // sentence and that checkbox, the checkbox read as part of this
-        // section: "Sync this library through iCloud" appeared to be one of
-        // the audio settings. Seen on screen rather than reasoned about.
         if Settings.cloudSyncApplies {
             heading("Audio")
             let keep = NSButton(checkboxWithTitle: "Keep a copy of every recording's audio "
@@ -99,11 +143,10 @@ final class DevicesPane: Pane {
                 stack.addArrangedSubview(keep)
             }
             audioStatus = note(audioStatusText())
-            note("On, this Mac fetches the audio for every recording, so any meeting "
-                 + "can be played back and transcribed again here. Off, it frees its "
-                 + "copy as soon as another device that is keeping audio says it has "
-                 + "those bytes, and never before: the last copy of a recording is "
-                 + "never deleted to save space.")
+            note("On, this Mac fetches every recording's audio, so any meeting "
+                 + "can be played back and transcribed again here. Off, it frees "
+                 + "its copy once another device that is keeping audio has those "
+                 + "bytes: the last copy is never deleted to save space.")
             separator()
         }
     }
@@ -111,6 +154,15 @@ final class DevicesPane: Pane {
     override func refresh() { refreshCloud() }
 
     private func refreshCloud() {
+        // A state change replaces the controls; a value change updates them.
+        // Without the split, either the pane never grew a Sync now button
+        // after the key arrived, or it rebuilt every two seconds under the
+        // cursor of somebody about to click one.
+        guard shape() == builtShape else {
+            cloudStatus = nil; cloudDevices = nil; audioStatus = nil
+            rebuild()
+            return
+        }
         let host = CloudSyncHost.shared
         let status = cloudStatusText(host)
         if cloudStatus?.stringValue != status { cloudStatus?.stringValue = status }
@@ -168,10 +220,14 @@ final class DevicesPane: Pane {
         path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
+    /// One short answer per state, directly under the switch. What went wrong
+    /// before was not that the pane said too little: it printed the keyless
+    /// report as "Last synced just now: No sync key yet." and again as "Last
+    /// error: No sync key yet.", which reads as a malfunction, above two
+    /// buttons that silently did nothing without the key.
     private func cloudStatusText(_ host: CloudSyncHost) -> String {
         guard Settings.cloudSync else {
-            return "Off. This Mac keeps its local library, but no other device can "
-                + "learn about changes until iCloud sync is turned on."
+            return "Off. Recordings, transcripts and notes stay on this Mac."
         }
         // Said as its own sentence rather than folded into "Off", because the
         // two have different repairs and this one is usually a surprise: the
@@ -181,7 +237,22 @@ final class DevicesPane: Pane {
         guard Settings.cloudSyncApplies else {
             return "Off for this library. iCloud sync is on for \(short(Settings.cloudSyncLibrary)), "
                 + "and the library open now is \(short(ListenKit.Library.mac().root.path)). "
-                + "Nothing here is sent anywhere. Tick the box below to sync this one instead."
+                + "Nothing here is sent anywhere. Tick the box above to sync this one instead."
+        }
+
+        if KeyStore.shared.load() == nil {
+            // Which sentence depends on why, and the host knows. Before the
+            // first pass answers, the honest line is that it is being set up.
+            switch host.keyState {
+            case .onItsWay:
+                return "Waiting for your sync key. It arrives by itself through "
+                    + "iCloud Keychain from the device already syncing this "
+                    + "account, usually within a minute or two."
+            case .unreachable(let why):
+                return "Could not reach iCloud: \(why)"
+            case .unknown, .present:
+                return "Setting up\u{2026}"
+            }
         }
 
         var lines: [String] = []
@@ -194,29 +265,25 @@ final class DevicesPane: Pane {
             else if ago < 3600 { when = "\(Int(ago / 60)) minutes ago" }
             else if ago < 86_400 { when = "\(Int(ago / 3600)) hours ago" }
             else { when = "\(Int(ago / 86_400)) days ago" }
-            lines.append("Last synced \(when): \(host.lastReport?.summary ?? "nothing to do")")
+            lines.append("On. Last synced \(when): \(host.lastReport?.summary ?? "nothing to do").")
         } else {
-            lines.append("Waiting for the first sync.")
+            lines.append("On. Waiting for the first sync.")
         }
 
         if let error = host.lastReport?.errors.first {
-            lines.append("")
-            lines.append("Last error: \(error)")
+            lines.append("The last pass hit a problem: \(error)")
         }
         if let conflicts = host.lastReport?.conflicts, !conflicts.isEmpty {
-            lines.append("")
             lines.append("Both sides edited, so neither was touched: "
                          + conflicts.joined(separator: ", "))
         }
-
-        lines.append("")
-        lines.append("Your recordings stay on the Mac that made them. Everything "
-                     + "else is sealed with a key that never leaves your devices, "
-                     + "so Apple stores it and cannot read it.")
         return lines.joined(separator: "\n")
     }
 
     private func deviceListText(_ host: CloudSyncHost) -> String {
+        guard KeyStore.shared.load() != nil else {
+            return "No devices have checked in yet."
+        }
         guard !host.devices.isEmpty else { return "No devices have checked in yet." }
         var rows = ["On this account:"]
         for device in host.devices {
@@ -273,6 +340,39 @@ final class DevicesPane: Pane {
                 }
             }
         }
+    }
+
+    /// Type the key, for the account whose iCloud Keychain cannot carry it.
+    ///
+    /// Validated before it is kept: 32 bytes of Base32 or nothing. Writing an
+    /// almost-right code into the keychain would have every later pass fail
+    /// to open records with no hint that the key is the reason.
+    @objc private func enterKey(_ sender: NSButton) {
+        let alert = NSAlert()
+        alert.messageText = "Enter your sync key"
+        alert.informativeText = "The code behind Back up key on your other "
+            + "device, or the copy in your password manager."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "XXXX-XXXX-XXXX-\u{2026}"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "Use this key")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let key = PairingKey(code: field.stringValue) else {
+            let wrong = NSAlert()
+            wrong.messageText = "That is not a complete key"
+            wrong.informativeText = "A key is 52 letters and digits, usually "
+                + "written in groups of four. Copy it whole and try again."
+            wrong.runModal()
+            return
+        }
+        KeyStore.shared.save(key)
+        Task { @MainActor in
+            await CloudSyncHost.shared.syncNow()
+            self.refreshCloud()
+        }
+        refreshCloud()
     }
 
     @objc private func syncNowPressed(_ sender: NSButton) {

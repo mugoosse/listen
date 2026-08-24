@@ -242,6 +242,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LibraryWindow.shared.previewRecording(silent: want.hasSuffix("silent"))
         case "ask":
             LibraryWindow.shared.previewAsk()
+        // The About window, which is otherwise two clicks into a menu and is
+        // the one screen whose whole job is being looked at.
+        case "about":
+            AboutWindow.show()
         case let want where want.hasPrefix("dictation-demo"):
             // Every meter style at once, on one microphone. `:fake` drives it
             // from a synthetic envelope, which is the only way to watch the
@@ -304,8 +308,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var previewingPanel: Bool {
         guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
         return !want.hasPrefix("transcribing") && !want.hasPrefix("live")
-            && !want.hasPrefix("settings") && want != "ask"
+            && !want.hasPrefix("settings") && want != "ask" && want != "about"
             && !want.hasPrefix("dictation")
+    }
+
+    /// About is a window of its own, so it needs its own answer for the same
+    /// reason the dictation pill does: photographing the library would produce
+    /// a picture of a window nobody opened.
+    private var previewingAbout: Bool {
+        ProcessInfo.processInfo.environment["LISTEN_PANEL"] == "about"
     }
 
     /// The dictation pill is a third window, so it needs a third answer. The
@@ -358,9 +369,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // showing and none of the state being previewed.
                 let wrote = self.previewingDictation
                     ? self.dictationHUD?.writeShot(to: path) ?? false
-                    : self.previewingPanel
-                        ? self.indicator.writeShot(to: path)
-                        : LibraryWindow.shared.writeShot(to: path)
+                    : self.previewingAbout
+                        ? AboutWindow.shared.writeShot(to: path)
+                        : self.previewingPanel
+                            ? self.indicator.writeShot(to: path)
+                            : LibraryWindow.shared.writeShot(to: path)
                 log(wrote ? "shot \(path)" : "shot failed: \(path)")
                 guard taken >= count else { return }
                 timer.invalidate()
@@ -567,6 +580,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         about.target = self
         about.image = symbol("info.circle")
         menu.addItem(about)
+
+        // Sharing the app from the menu that is always there, so passing it on
+        // does not start with opening a window. The sheet is anchored on the
+        // status item's own button, which is the only view this route has and
+        // is where somebody just clicked.
+        let share = NSMenuItem(title: "Share Listen…", action: #selector(shareListen),
+                               keyEquivalent: "")
+        share.target = self
+        share.image = symbol("square.and.arrow.up")
+        menu.addItem(share)
 
         // Not `NSApplication.terminate`, unlike Speak: capture has to stop
         // cleanly first so the WAV headers are finalised. `QuitConfirm` does not
@@ -987,7 +1010,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openAbout() {
-        LibraryWindow.shared.showSettings(.about)
+        AboutWindow.show()
+    }
+
+    @objc private func shareListen() {
+        Sharing.presentFromMenu(anchor: status?.button)
     }
 
     @objc private func revealLibrary() {

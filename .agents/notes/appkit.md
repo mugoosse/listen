@@ -287,6 +287,31 @@ Worth knowing for the next form: this is not specific to these two panes. Any
 programmatically built stack of fields in this app has the same gap until
 somebody says otherwise.
 
+### An app with no nib has no Help menu either, and nothing had Cmd-W
+
+The same absence again, and this one was reported from outside: somebody trying
+to find a link to Listen's website looked under Help, which is where a Mac user
+looks, and there was no Help menu. `MainMenu.install()` built Listen, File, Edit,
+View, Window and stopped, so the app shipped for months with the one menu whose
+whole purpose is pointing outwards missing entirely.
+
+Two details make it a real Help menu rather than a submenu called Help:
+
+- **`NSApp.helpMenu = menu`.** That is what puts macOS's own search field at the
+  top of it and what makes Help > Search reach the items. Adding the submenu
+  alone gets the word in the menu bar and none of the behaviour.
+- **The last item is not a page.** Documentation, Website, GitHub and Report an
+  Issue all open a URL; Share Listen… opens the share sheet, which is the point
+  of the menu existing. `NSSharingServicePicker` needs a view to point a popover
+  at and a menu item has none, so `Sharing.presentFromMenu` takes an anchor: the
+  status item's own button from the status menu, the key window otherwise, and
+  the About window as a last resort, opened for the purpose.
+
+`Close Window` (Cmd-W, `performClose:`, target nil) went in at the same time.
+Nothing in this app had it. That was survivable while the library window was the
+only one; About is a second window, and a window that can only be closed by
+aiming at a corner is a window people leave open.
+
 ## Cmd-Q is intercepted ahead of the menu, not rebound in it
 
 `QuitConfirm` asks once before quitting, ported from Anarlog because Cmd-Q sits

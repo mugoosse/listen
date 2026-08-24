@@ -15,7 +15,7 @@ enum SettingsTab: CaseIterable {
     case dictation
     case agent
     case devices
-    case developers, about
+    case developers, updates
 
     var title: String {
         switch self {
@@ -38,7 +38,12 @@ enum SettingsTab: CaseIterable {
         // on it. The old name is what the pairing screen was called.
         case .devices:     return "Sync"
         case .developers:  return "Developers"
-        case .about:       return "About"
+        // "Updates", not "About". The identity of the app, the credits and
+        // every link out of it moved to `AboutWindow`, and what is left here is
+        // the version check and the way back into setup. A section called About
+        // holding neither would send somebody looking for the website into a
+        // page that no longer has one.
+        case .updates:     return "Updates"
         }
     }
 
@@ -57,7 +62,7 @@ enum SettingsTab: CaseIterable {
         // phone, which is what the arrow meant when this was pairing.
         case .devices:     return "arrow.triangle.2.circlepath"
         case .developers:  return "terminal"
-        case .about:       return "info.circle"
+        case .updates:     return "arrow.down.circle"
         }
     }
 
@@ -76,7 +81,7 @@ enum SettingsTab: CaseIterable {
         case .agent:       pane = AgentPane()
         case .devices:     pane = DevicesPane()
         case .developers:  pane = DevelopersPane()
-        case .about:       pane = AboutPane()
+        case .updates:     pane = UpdatesPane()
         }
         // Here rather than at the call site, so a pane and the heading it draws
         // cannot disagree about which section it is.
@@ -113,7 +118,12 @@ enum SettingsGroup: CaseIterable {
         // once. There is no pairing any more. What the pane says now is whether
         // this library is reaching your other machines, which is the product's
         // whole claim and the first thing to look at when it seems not to be.
-        case .app:           return [.general, .storage, .permissions, .devices]
+        // Updates sits here rather than in Advanced, where it was while this
+        // section was About. Whether the app is current is not an advanced
+        // question, and Advanced is where things go that most people never
+        // open.
+        case .app:           return [.general, .storage, .permissions, .devices,
+                                     .updates]
         case .recording:     return [.meetings, .audio]
         case .transcription: return [.models, .dictionary]
         // A group of one, and worth the header. Dictation is a second thing the
@@ -134,7 +144,7 @@ enum SettingsGroup: CaseIterable {
         // It sits after Transcription and Dictation because that is the order
         // things happen in: record it, transcribe it, then ask about it.
         case .ask:           return [.agent]
-        case .advanced:      return [.developers, .about]
+        case .advanced:      return [.developers]
         }
     }
 }
@@ -1099,10 +1109,14 @@ final class PermissionsPane: Pane {
 
 // ---------------------------------------------------------------------------
 
-final class AboutPane: Pane {
-    private static let websiteURL = "https://maxgoespublic.com/"
-    private static let sourceURL = "https://github.com/mugoosse/listen"
-
+/// Is this copy current, and the way back into setup.
+///
+/// This was `AboutPane` and carried the app's identity, its credits and every
+/// link out of it as well. All of that is `AboutWindow` now, for the reason
+/// recorded there: a person looking for the website was never going to open
+/// Settings, Advanced, About and scroll. What is left is two questions that
+/// really are preferences.
+final class UpdatesPane: Pane {
     private var checkButton: NSButton?
     private var autoCheck: NSButton?
     private var result: NSTextField?
@@ -1123,10 +1137,11 @@ final class AboutPane: Pane {
     }
 
     override func build() {
-        header()
-
-        separator()
-        heading("Updates")
+        // Straight into the controls. There is no "Updates" heading because the
+        // pane already draws that word in 22 point immediately above, and the
+        // heading only existed while this section was called About and the
+        // block needed naming.
+        //
         // A button and a checkbox on one row, the way Speak has them: the
         // checkbox is about the button beside it, and a second line for it read
         // as a preference belonging to whatever came next.
@@ -1177,85 +1192,15 @@ final class AboutPane: Pane {
              + "part has stopped working.")
 
         separator()
-        heading("Made by")
-        // A plain label rather than `note`, which is 11pt and secondary: a
-        // person's name is not a footnote to the credits below it. Same shape
-        // as Speak's About pane.
-        let author = NSTextField(labelWithString: "Maxime Goossens")
-        author.font = .systemFont(ofSize: 13)
-        stack.addArrangedSubview(author)
-        let site = button(Self.websiteURL) {
-            if let url = URL(string: Self.websiteURL) { NSWorkspace.shared.open(url) }
-        }
-        site.bezelStyle = .inline
-        site.controlSize = .small
-
-        separator()
-        heading("Built on")
-        note("Parakeet by NVIDIA, through mlx-audio-swift and MLX by Apple. "
-             + "Diarization and speaker embeddings by FluidAudio. "
-             + "Updates by Sparkle.")
-
-        separator()
-        note("Listen is free software under the AGPL 3.0. It has no account and no "
-             + "telemetry. On its own it uses the network twice: to download a model "
-             + "you chose, and to ask whether a newer version of Listen exists. Two "
-             + "features add a connection only if you turn them on: iCloud sync, "
-             + "which stores sealed data Apple cannot read, and a hosted Ask "
-             + "provider, which receives the meetings you ask about.")
-        // The AGPL is a source-availability licence, so the About box is the
-        // honest place to say where that source is.
-        let source = button(Self.sourceURL) {
-            if let url = URL(string: Self.sourceURL) { NSWorkspace.shared.open(url) }
-        }
-        source.bezelStyle = .inline
-        source.controlSize = .small
-    }
-
-    /// Icon, name, version and what the app is, laid out the way an About box
-    /// usually is.
-    ///
-    /// The name is 17pt and not Speak's 22: this pane draws its own section
-    /// title at 22 immediately above, and two 22pt words one line apart read as
-    /// a mistake rather than as a title. The icon is what makes this an identity
-    /// block rather than a repeated heading.
-    private func header() {
-        let text = NSStackView()
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 4
-
-        let name = NSTextField(labelWithString: "Listen")
-        name.font = .systemFont(ofSize: 17, weight: .semibold)
-        text.addArrangedSubview(name)
-
-        let version = NSTextField(labelWithString: Self.versionString)
-        version.font = .systemFont(ofSize: 12)
-        version.textColor = .secondaryLabelColor
-        text.addArrangedSubview(version)
-
-        let tagline = NSTextField(wrappingLabelWithString:
-            "A meeting recorder, transcriber and speaker labeller that runs "
-            + "entirely on your Mac.")
-        tagline.font = .systemFont(ofSize: 12)
-        tagline.textColor = .secondaryLabelColor
-        tagline.preferredMaxLayoutWidth = 340
-        text.addArrangedSubview(tagline)
-
-        let icon = NSApp.applicationIconImage.map { image -> NSView in
-            let view = NSImageView(image: image)
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.imageScaling = .scaleProportionallyUpOrDown
-            NSLayoutConstraint.activate([
-                view.widthAnchor.constraint(equalToConstant: 72),
-                view.heightAnchor.constraint(equalToConstant: 72),
-            ])
-            return view
-        }
-
-        let line = row(icon.map { [$0, text] } ?? [text])
-        line.alignment = .top
-        line.spacing = 16
+        heading("About")
+        // The version is here as well as in the window, because it is the thing
+        // people come to a settings screen to read out to somebody. The button
+        // is the bridge: this pane is where About used to live, so anybody who
+        // learned that route still lands one press away from it.
+        note(Self.versionString)
+        button("About Listen…") { AboutWindow.show() }
+        note("What Listen is, who made it, and the links to the website, the "
+             + "documentation and the source.")
     }
 
     /// Read from the bundle rather than hardcoded, so bumping `VERSION` is

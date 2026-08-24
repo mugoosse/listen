@@ -228,7 +228,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The notes pane re-reads on activation, and only redraws when something changed
 - Settings is a mode of the library window, not a second window
 - A settings pane is as wide as the window, up to 620 points
-- The About pane is Speak's, and the app name is one size down
+- About is a window, and the website was in neither of them
+- The Updates pane follows the updater, not its own button
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
 - Turns overlap, so the first one spanning the playhead is the wrong one
@@ -269,6 +270,7 @@ this app, so read them before building any new window, menu or popover.
 - `NSAttributedString(markdown:)` parses the structure and then throws it away
 - An app with no nib has no menu bar, and it is not obvious
 - An app with no nib has no key view loop either, and that one is quieter
+- An app with no nib has no Help menu either, and nothing had Cmd-W
 - Cmd-Q is intercepted ahead of the menu, not rebound in it
 - The sidebar width fought the split view
 - `intrinsicContentSize` is four points narrower than the text

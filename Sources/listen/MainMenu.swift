@@ -22,6 +22,7 @@ enum MainMenu {
         main.addItem(editMenu())
         main.addItem(viewMenu())
         main.addItem(windowMenu())
+        main.addItem(helpMenu())
 
         NSApp.mainMenu = main
     }
@@ -64,6 +65,12 @@ enum MainMenu {
         let (item, menu) = submenu("File")
         add(menu, "New Recording", #selector(MenuActions.newRecording), "n")
             .target = MenuActions.shared
+        menu.addItem(.separator())
+        // Cmd-W, which nothing in this app had. It was survivable while the
+        // library window was the only one; About is a second window, and a
+        // window that can only be closed by aiming at its corner is a window
+        // people leave open. Targets nil so it lands on whatever is key.
+        add(menu, "Close Window", #selector(NSWindow.performClose(_:)), "w")
         menu.addItem(.separator())
         add(menu, "Export…", #selector(LibraryWindow.exportSelected), "e")
             .target = LibraryWindow.shared
@@ -147,6 +154,34 @@ enum MainMenu {
         NSApp.windowsMenu = menu
         return item
     }
+
+    /// Where a Mac user looks for the website, and where there was nothing.
+    ///
+    /// The report that produced this menu was somebody unable to find a link to
+    /// send to a friend. Help is the first place they looked, and Listen had no
+    /// Help menu at all: the menu bar went Listen, File, Edit, View, Window and
+    /// stopped. Every item here opens a page except the last, which is the
+    /// share sheet, and that is the point of the menu.
+    ///
+    /// `NSApp.helpMenu` is set so macOS treats it as the Help menu proper,
+    /// which is what puts the search field at the top of it.
+    private static func helpMenu() -> NSMenuItem {
+        let (item, menu) = submenu("Help")
+        add(menu, "Listen Documentation", #selector(MenuActions.openDocs))
+            .target = MenuActions.shared
+        add(menu, "Listen Website", #selector(MenuActions.openWebsite))
+            .target = MenuActions.shared
+        menu.addItem(.separator())
+        add(menu, "Listen on GitHub", #selector(MenuActions.openSource))
+            .target = MenuActions.shared
+        add(menu, "Report an Issue", #selector(MenuActions.reportIssue))
+            .target = MenuActions.shared
+        menu.addItem(.separator())
+        add(menu, "Share Listen…", #selector(MenuActions.shareListen))
+            .target = MenuActions.shared
+        NSApp.helpMenu = menu
+        return item
+    }
 }
 
 /// Menu targets that are not the library window's own.
@@ -157,7 +192,14 @@ final class MenuActions: NSObject {
     @objc func openSettings() { LibraryWindow.shared.showSettings() }
     @objc func openLibrary() { LibraryWindow.shared.show() }
     @objc func openChats() { LibraryWindow.shared.openChats() }
-    @objc func showAbout() { LibraryWindow.shared.showSettings(.about) }
+    /// The window, not the settings section. See `AboutWindow`.
+    @objc func showAbout() { AboutWindow.show() }
+
+    @objc func openDocs() { Links.open(Links.docs) }
+    @objc func openWebsite() { Links.open(Links.website) }
+    @objc func openSource() { Links.open(Links.source) }
+    @objc func reportIssue() { Links.open(Links.issues) }
+    @objc func shareListen() { Sharing.presentFromMenu() }
 
     @objc func newRecording() {
         if Capture.shared.isRecording {

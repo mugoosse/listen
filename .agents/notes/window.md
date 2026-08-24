@@ -605,39 +605,113 @@ Two traps around it:
 the constraint is against the pane's stack and two views with no common ancestor
 yet is an exception rather than a layout that sorts itself out.
 
-## The About pane is Speak's, and the app name is one size down
+## About is a window, and the website was in neither of them
 
-`AboutPane` follows Speak's section for section: identity header, Updates, Setup,
-Made by, Built on, then the licence and the source link. The Updates block is the
-part that was missing rather than merely differently worded, and the argument for
-it is Speak's own: Sparkle answers a check in a window that is then dismissed,
-taking the answer with it, and a scheduled check that finds nothing says nothing
-at all, so "am I on the latest version" had no answer that survived closing a
-dialog. Before this, About offered one `Check for Updates` button and reported
-none of what came back.
+`AboutPane` followed Speak's section for section: identity header, Updates,
+Setup, Made by, Built on, then the licence and the source link. It was a
+**settings section**, reached by "About Listen" switching the library window into
+settings mode and selecting the last row of Advanced.
 
-Three things are Listen's own:
+The report that ended that arrangement was somebody trying to pass the app on to
+a friend and giving up. Two separate faults, and the second is the expensive one:
 
-1. **The name is 17pt, not Speak's 22.** The pane draws its own section title at
-   22 immediately above, and the previous version of this file records why there
-   is no `Listen` heading here: two 22pt words one line apart read as a mistake
-   rather than as a title. The 72 point app icon beside it is what makes this an
-   identity block instead of a repeated heading, so the header came back and the
-   size did not.
-2. **`refreshUpdates` does not call `resizeDocument`.** The result line appearing
+1. **"About Listen" did not open an About box.** Every Mac app answers that menu
+   item with a small window carrying the icon, so a page appearing inside the
+   main window behind a sidebar reads as the wrong thing having happened.
+2. **The landing page was not in the app at all.** `AboutPane.websiteURL` was
+   `maxgoespublic.com`, the author's site, and the only other link was the
+   repository. The one page that says what Listen is and how to install it,
+   `https://mugoosse.github.io/listen/`, was reachable from the README, the DMG
+   and nowhere a user could click.
+
+So `AboutWindow` is a window: 400 points wide, not resizable, closable, its title
+bar transparent and empty. What is in it is the identity, the three links out
+(Website, Docs, GitHub), one honest ask, and the credits. Every URL in the app
+now comes from `Links`, which exists so the next place that needs the site
+cannot invent a different answer, and `Sharing` is beside it.
+
+Six things, each of which was got wrong or nearly missed:
+
+- **The pane became Updates, and moved out of Advanced.** Leaving a section
+  called About that no longer holds the website or the credits would send the
+  next person looking exactly where the last one failed. `UpdatesPane` keeps the
+  version check and Run setup again, which really are preferences, and sits in
+  the App group: whether this copy is current is not an advanced question. It
+  ends with an `About Listen…` button, so the route people already learned still
+  arrives one press away.
+- **No `Updates` heading inside the Updates pane.** The pane draws its title at
+  22 points immediately above, and a 13 point repeat one line down reads as a
+  mistake. The heading was correct while the section was called About.
+- **The height is measured once, after a layout pass.** `stack.fittingSize` on a
+  column of wrapping labels is only right once they have been given the width
+  they wrap at, so `layoutSubtreeIfNeeded()` comes first and `setContentSize`
+  second. Sized before that, the window opens several lines short and the
+  licence paragraph is cut off.
+- **`.inline` is a grey capsule, not a link.** The author's site was an inline
+  small button, inherited from the pane, and under a person's name it reads as a
+  disabled control. It is borderless with an accent-coloured attributed title
+  now, which is also the only colour that sticks: `appkit.md` records that an
+  attributed title's colour wins over `contentTintColor`.
+- **The star glyph needs `imageHugsTitle`.** Without it the star sits against the
+  leading edge of the button and the words centre in what is left. Third time
+  this app has paid for that one.
+- **`LISTEN_PANEL=about` shows it, and `LISTEN_SHOT` photographs it.** It is a
+  third window, like the dictation pill, so `shootIfAsked` needed a third answer:
+  without `previewingAbout` it photographs the library window, which nothing has
+  opened. Note that `writeShot` flattens onto `windowBackgroundColor` under the
+  *view's* appearance while the views draw under the *system's*, so a dark-mode
+  shot comes out white on white and looks like a window that rendered nothing at
+  all. It has not; `magick -level 92%,100% -negate` shows the layout, and a real
+  `screencapture` shows the colours.
+
+Two more, both reported the moment the window existed:
+
+- **The settings sidebar needed a way back to it, and it is a button under the
+  list rather than a row in it.** Moving About out of Advanced left the settings
+  screen with no route to the window at all, and the menu bar cannot be the only
+  one: somebody looking for what the app is looks in the app. It is not a table
+  row because it is not a section. There is no pane behind it, a selected row
+  would leave the list pointing at a page nobody is on, and a row that refuses
+  selection cannot be reached by the keyboard or by accessibility at all.
+  `SettingsNavViewController` pins an `NSButton` to the bottom of its container,
+  the scroll view stops 8 points above it, and it is verified by `AXPress`:
+  press, and a second window titled "About Listen" appears. That verification
+  matters more than usual here, because a **synthetic click does not land in
+  this app** and proved nothing either way, which is the whole of
+  [[synthetic-pointer-events-do-not-verify-ui]] again.
+- **One product, one site.** The author's own site was in the About box and in
+  the iPhone's Settings because neither had a product page to point at. Both now
+  do, at the top, and two sites on one card is the reader choosing between them,
+  so `maxgoespublic.com` is a credit line and no longer a link. Speak went the
+  same way for a stronger reason: its dictation is *inside* Listen, so "Speak,
+  the other half of the pair" sent people to a download for something they
+  already had. What is left of Speak in the product is the dictionary import,
+  which is a migration, and the note file for it says so.
+
+The Help menu and Cmd-W arrived with this, and both are in `appkit.md`: there was
+no Help menu at all, which is the first place somebody looks for a website.
+
+## The Updates pane follows the updater, not its own button
+
+Sparkle answers a check in a window that is then dismissed, taking the answer
+with it, and a scheduled check that finds nothing says nothing at all, so "am I
+on the latest version" had no answer that survived closing a dialog. Two things
+keep that answer on screen, and both were got wrong once:
+
+1. **`refreshUpdates` does not call `resizeDocument`.** The result line appearing
    does change the pane's height, but `sizeDocument` already runs on every layout
    pass and a text field whose string changed schedules one. The public one also
    scrolls the pane back to its first control, and a scheduled check finishing
-   while somebody is reading the credits is not a reason to move the page.
-3. **`Updater.onChange` is claimed in `viewWillAppear` and released in
+   while somebody is reading is not a reason to move the page.
+2. **`Updater.onChange` is claimed in `viewWillAppear` and released in
    `viewWillDisappear`.** A check can be started from the menu bar or by the
    scheduler, so following the button alone would leave the pane showing the
    previous answer.
 
 Verified end to end against the real feed by pressing Check Now through
-accessibility on a `LISTEN_PANEL=settings:about` launch, which touches nothing in
-the library: Sparkle's "You're up to date" window, then the green result line and
-`Last checked Today at 15:30` in the pane behind it.
+accessibility on a `LISTEN_PANEL=settings:updates` launch, which touches nothing
+in the library: Sparkle's "You're up to date" window, then the green result line
+and `Last checked Today at 15:30` in the pane behind it.
 
 ## The transcript opened near the end of the meeting
 

@@ -58,13 +58,44 @@ final class SettingsNavViewController: NSViewController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
+        // About, under the list rather than in it.
+        //
+        // About was the last row of Advanced, and turning it into a window of
+        // its own left the settings screen with no route to it at all: the menu
+        // bar was the only way in, and somebody looking for what the app is
+        // looks in the app first. It is not a table row because it is not a
+        // section: there is no pane behind it, a selected row would leave the
+        // list pointing at a page nobody is on, and a row that refuses
+        // selection cannot be pressed by the keyboard or by accessibility. A
+        // button is all three of those things for free.
+        let about = NSButton(title: "About Listen", target: self,
+                             action: #selector(openAbout))
+        about.bezelStyle = .inline
+        about.isBordered = false
+        about.image = NSImage(systemSymbolName: "info.circle",
+                              accessibilityDescription: nil)
+        about.imagePosition = .imageLeading
+        // Or the glyph sits against the button's leading edge with the title
+        // centred in what is left. `appkit.md` records it twice over.
+        about.imageHugsTitle = true
+        about.contentTintColor = .secondaryLabelColor
+        about.font = .systemFont(ofSize: 13)
+        about.translatesAutoresizingMaskIntoConstraints = false
+
         container.addSubview(scroll)
+        container.addSubview(about)
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: container.topAnchor,
                                         constant: Self.listTop),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: about.topAnchor, constant: -8),
+            // 14 rather than the rows' 6: the rows are inset by the table's
+            // `.inset` style and this is not in the table.
+            about.leadingAnchor.constraint(equalTo: container.leadingAnchor,
+                                           constant: 14),
+            about.bottomAnchor.constraint(equalTo: container.bottomAnchor,
+                                          constant: -12),
         ])
         view = container
         select(selectedTab)
@@ -132,6 +163,11 @@ final class SettingsNavViewController: NSViewController {
     /// first `refreshBadges` after launch does not redraw a table that already
     /// drew the right thing.
     private var lastBadge: Bool?
+
+    @objc private func openAbout() {
+        trace("settings: About opened from the sidebar")
+        AboutWindow.show()
+    }
 
     /// Put the keyboard on the list, so the arrow keys move between sections
     /// rather than doing nothing.

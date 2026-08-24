@@ -8,6 +8,34 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.17.0 (2026-08-24)
+
+### A phone recording shows its whole trip
+
+An iPhone recording now reports when its audio is syncing, how far it has
+travelled and which Mac is transcribing it. The Mac keeps its full waveform
+while the compact iPhone row uses a percentage, and both replace vague idle
+states with the work that is actually happening.
+
+The same path now completes rather than only looking active. A new recording
+is offered to iCloud, received by a Mac, transcribed there and returned to the
+iPhone without a restart or a second recording to wake it up. A missing
+CloudKit record was being reported as a batch failure and treated like an
+outage, which left the audio safe on the phone but prevented the first record
+from being created. Listen now distinguishes that normal first-sync case from
+a real connection failure.
+
+If a retry is necessary, one rotating sync icon sits beside the explanation
+instead of a static retry icon and a second unrelated spinner. The recording
+continues to say that its audio is safe while no Mac has accepted it.
+
+### Transcription gives memory back when it is done
+
+The MLX buffer pool is capped and released after a track finishes. This keeps
+one completed transcription from reserving accelerator memory that the next
+recording or another application needs. The model remains cached, so the next
+transcription does not pay the full model-loading cost again.
+
 ## 0.16.0 (2026-08-18)
 
 ### Every device keeps a copy of the audio

@@ -8,6 +8,64 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.18.0 (2026-08-24)
+
+### A first Mac now makes the sync key
+
+Turning sync on set a flag and nothing else: no production path ever created
+the key, so a fresh install reported "No sync key yet" on every pass while its
+iPhone waited for a key that did not exist. Macs already running Listen never
+saw this, because they inherited a key from the older file.
+
+There is now one place a key is made. The first Mac creates it, and a Mac that
+can see another device in the container waits for iCloud Keychain instead of
+minting a rival key, which would have split a library in two silently. The Sync
+pane leads with the switch, says one thing per state, and shows a button only
+when it can act; it also gains the typed-key fallback for a Mac where iCloud
+Keychain never delivers. Setup asks about sync as its own step, so a new Mac
+holds the key before an iPhone ever asks for it.
+
+### About is a window, with the links in it
+
+"About Listen" opened a page inside the library window, behind the settings
+sidebar. It opens a window now: the icon, the version and build, and buttons
+for the website, the documentation and the source. It also carries a share
+sheet, a Copy Link button and a request to star the repository.
+
+The website was missing rather than merely hard to reach. Until now the app
+linked the author's site and the source repository and never Listen's own page,
+so somebody trying to pass Listen on to a friend had nothing to send. That is
+exactly how it was reported.
+
+Listen also had no Help menu at all, which is the first place a Mac user looks
+for a website. There is one now, holding the documentation, the website, the
+source, a way to report an issue and Share Listen. Cmd-W closes a window, which
+nothing in the app did before.
+
+The settings section that used to be About keeps the version check and Run
+setup again, is called Updates, and sits with the other app settings rather
+than under Advanced. A button under the section list opens the About window, so
+the menu bar is not the only way to it.
+
+The documentation button opens the README on GitHub. That is where Listen's
+documentation actually is today, and the button will point at a documentation
+site when there is one.
+
+### Fewer places pointing somewhere else
+
+The author's personal site is a credit line rather than a link, now that Listen
+has a page of its own for the app to point at.
+
+Speak, the dictation app Listen grew out of, is no longer recommended anywhere
+in the app: its dictation is part of Listen, so every route out to it offered a
+download for something this app already does. Importing a dictionary from Speak
+still works, and that section now appears only on a Mac that actually has the
+file, which is the migration it always was.
+
+One of those was not cosmetic. Requests to a hosted Ask provider carried
+Speak's address in their attribution header, so Listen's traffic was credited
+to a different app on OpenRouter's dashboards.
+
 ## 0.17.0 (2026-08-24)
 
 ### A phone recording shows its whole trip

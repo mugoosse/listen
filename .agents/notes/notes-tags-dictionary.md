@@ -69,6 +69,15 @@ other's exports and the trip works in both directions. `listen dictionary import
 Measured: importing Speak's real dictionary brought over 5 terms and 35
 corrections and skipped 3 already present.
 
+**It is a migration now, not an integration.** Speak's dictation is part of
+Listen, so a Mac with that file has a list left behind rather than a companion
+app to stay in step with. The section is therefore shown **only when the file is
+actually there**: the "Get Speak" button, the paragraph explaining what Speak
+was, and the empty-state that offered both are gone, because a pane that
+advertises another download for a feature this app already has sends people away
+for nothing. The import itself stays, and so does `encode` writing Speak's
+shape: somebody who has that file still wants their terms.
+
 A term too short to be matched by sound is stored and does nothing, which from
 the outside is indistinguishable from the feature being broken. `eligible` is
 therefore public, the pane greys those rows, and `listen dictionary add` says so

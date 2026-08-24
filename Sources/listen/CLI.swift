@@ -1044,9 +1044,8 @@ enum CLI {
                 // The path and the link together: the file may be missing
                 // because Speak is not installed, or because it is and has no
                 // dictionary yet, and those are different things to do next.
-                fail("Speak has no dictionary on this Mac "
-                     + "(\(CustomDictionary.speakFile.path)). "
-                     + "Speak is at https://mugoosse.github.io/speak/")
+                fail("no Speak dictionary on this Mac "
+                     + "(\(CustomDictionary.speakFile.path)).")
             }
             url = CustomDictionary.speakFile
             source = "Speak's dictionary"

@@ -978,7 +978,10 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
         // network is data they did not ask to send, however harmless.
         if provider.isOpenRouter {
             request.setValue("Listen", forHTTPHeaderField: "X-Title")
-            request.setValue("https://mugoosse.github.io/speak/", forHTTPHeaderField: "HTTP-Referer")
+            // Listen's own page. It was Speak's, copied along with the rest of
+            // this header pair, so OpenRouter's dashboard attributed Listen's
+            // traffic to a different app.
+            request.setValue(Links.website.absoluteString, forHTTPHeaderField: "HTTP-Referer")
         }
         // Always streamed on the wire, whatever the caller asked for. The
         // `streaming` flag decides whether the *events* are deltas or blocks,

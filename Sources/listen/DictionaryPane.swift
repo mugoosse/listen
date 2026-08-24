@@ -328,44 +328,27 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
     /// A button that is always there and usually does nothing would be worse
     /// than no button: the whole reason to offer this is that the list already
     /// exists, and there is no way to tell that from a disabled control.
+    ///
+    /// **This is a migration and no longer an integration.** Speak's dictation
+    /// is part of Listen now, so a Mac with that file has a list left behind
+    /// rather than a companion app to stay in step with. What went with that:
+    /// the "Get Speak" button, the paragraph explaining what Speak was, and the
+    /// section itself on a Mac that never ran it. A pane that advertises
+    /// another download for a feature this app already has is a pane that sends
+    /// people away for nothing.
     private func buildSpeak() {
+        guard CustomDictionary.speakDictionaryExists else { return }
         separator()
-        heading("Speak")
-        guard CustomDictionary.speakDictionaryExists else {
-            note("Speak is the dictation app Listen is built from, and it keeps a "
-                 + "dictionary of the same shape. There is none on this Mac. Import… "
-                 + "reads its exports if you have one from another machine.")
-            row([link()])
-            return
-        }
-        note("Speak keeps its own list. Listen does not share the file, deliberately: two "
-             + "apps rewriting one document whole means the loser of a race loses entries. "
-             + "Copying is the same convenience without that.")
+        heading("Imported from Speak")
+        note("This Mac has a dictionary from Speak, the dictation app Listen grew "
+             + "out of. Copying brings those terms across. The file is not shared, "
+             + "deliberately: two apps rewriting one document whole means the loser "
+             + "of a race loses entries.")
         row([
             NSButton(title: "Import from Speak", target: self,
                      action: #selector(importFromSpeak)),
-            link(),
         ])
-        note("Export… writes the file Speak's own Import reads, so the list travels back "
-             + "the other way too.")
     }
-
-    /// Where to get Speak, for a Mac that does not have it.
-    ///
-    /// A recessed button rather than a blue underline in a paragraph: the pane
-    /// has no other links, and a lone hyperlink inside body text reads as
-    /// something that went wrong in the copy.
-    private func link() -> NSButton {
-        let button = NSButton(title: "Get Speak", target: self, action: #selector(openSpeak))
-        button.bezelStyle = .recessed
-        button.showsBorderOnlyWhileMouseInside = false
-        button.toolTip = Self.speakURL.absoluteString
-        return button
-    }
-
-    private static let speakURL = URL(string: "https://mugoosse.github.io/speak/")!
-
-    @objc private func openSpeak() { NSWorkspace.shared.open(Self.speakURL) }
 
     private func count(_ n: Int, _ noun: String, plural: String? = nil) -> String {
         "\(n) \(n == 1 ? noun : plural ?? noun + "s")"

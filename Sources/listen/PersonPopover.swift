@@ -259,7 +259,7 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
         more.image = NSImage(systemSymbolName: "ellipsis",
                              accessibilityDescription: "More")?
             .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-        more.toolTip = "Open in People, or edit"
+        more.toolTip = "Edit this person"
         more.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             more.widthAnchor.constraint(equalToConstant: 28),
@@ -299,13 +299,17 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
         stack.addArrangedSubview(recordingList())
         stack.addArrangedSubview(separator())
 
-        // "Show Recordings" and not "Only Ryan": the second says what the app
-        // does to its own list, and the first says what the person clicking it
-        // wants. The rest goes behind the same ellipsis the person page uses,
-        // so one card does not carry three buttons of equal weight.
-        let show = button("Show Recordings", #selector(filterLibrary))
-        show.toolTip = "Narrow the library to the recordings \(person.display) is in"
-        stack.addArrangedSubview(show)
+        // The foot of the card is the way through to the person, and it used to
+        // be the way to narrow the library instead. Filtering the sidebar is a
+        // thing done *to* the list you were reading, and it left the card's one
+        // plain verb pointing away from the person whose card it is; the page
+        // that holds everything about them was two levels down, behind an
+        // ellipsis. So the verb leads there, and the filter stays on the chip's
+        // own menu as "Show Only ...", which is where somebody who wants the
+        // list narrowed is already asking for it.
+        let open = button("Open in People", #selector(openInPeople))
+        open.toolTip = "See everything about \(person.display) in People"
+        stack.addArrangedSubview(open)
     }
 
     /// The initials disc, which stands in for a photo.
@@ -599,19 +603,11 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
         // popped up directly shows everything it is given, so the placeholder
         // arrived on screen as a row reading "NSMenuItem".
         let menu = NSMenu()
-        menu.addItem(Action("Open in People", "person.2") { [weak self] in
-            self?.openInPeople()
-        })
         menu.addItem(Action("Edit", "pencil") { [weak self] in
             self?.startEditing()
         })
         menu.popUp(positioning: nil,
                    at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
-    }
-
-    @objc private func filterLibrary() {
-        PersonPopover.close()
-        LibraryWindow.shared.filter(bySpeaker: person.label)
     }
 
     @objc private func openInPeople() {

@@ -139,6 +139,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Both buttons on a pill open the same menu, and the popover is its first item
 - The skipping belongs to the button that names it, and there is no bar
 - A person is a name string, and that is the whole identity model
+- The card's one verb goes to the person, not to the list behind it
 - Renaming somebody everywhere is the first edit that touches many recordings
 - `Me` stays `Me` on disk, whatever you call yourself
 - The window refused a label the CLI had always accepted

@@ -321,6 +321,29 @@ re-reads `turns.json`, which is what the sidebar's transcript search already did
 on every keystroke. If a library ever grows big enough for that to hurt, the fix
 is a cache keyed on the file's modification date, not a database.
 
+### The card's one verb goes to the person, not to the list behind it
+
+The foot of `PersonPopover` used to read "Show Recordings", and pressing it ran
+`LibraryWindow.filter(bySpeaker:)`: the sidebar narrowed to that person and the
+card closed. Two things were wrong with it as the card's only plain verb. It
+acts on the list you were reading rather than on the person whose card is open,
+so the popover's most prominent control pointed away from its own subject; and
+the page that actually holds everything about them, People, was two levels down
+behind the ellipsis, under an item worded the same way as the card's own "and N
+more in People".
+
+So the verb is `openInPeople` and the ellipsis is left holding Edit alone. The
+filter is not gone: it is `Show Only <name>` on the chip's own menu
+(`PersonPopover.menu`), which is where somebody who wants the library narrowed
+is already asking for it, and it is one right-click from the same chip that
+opens the card.
+
+Verified against the built app with AX, on a scratch `LISTEN_LIBRARY` of three
+copied recordings: pressing the chip gives a popover whose last button is
+`Open in People` / "See everything about Céline in People", pressing that leaves
+zero popovers on screen and the split view showing the People roster with
+Céline's page beside it.
+
 ## Renaming somebody everywhere is the first edit that touches many recordings
 
 `People.rename` loops and calls `TranscriptEditor.apply(.rename:)` per

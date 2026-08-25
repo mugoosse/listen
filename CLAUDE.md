@@ -231,6 +231,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A settings pane is as wide as the window, up to 620 points
 - About is a window, and the website was in neither of them
 - The Updates pane follows the updater, not its own button
+- A toolbar item will not draw an image you hand it, and accessibility says it did
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
 - Turns overlap, so the first one spanning the playhead is the wrong one
@@ -469,6 +470,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 
 - Signing decides whether permissions survive a rebuild
 - Sparkle's key is not in the default keychain account
+- How fast a new version is noticed is four settings, and three of them are defaults
 - The changelog is the only place release notes are written
 - Sparkle needs the notes embedded, not linked
 - `/release` is the shortcut, and it publishes nothing itself
@@ -599,6 +601,16 @@ minutes: a claim about a released binary is not something to make from a diff.
 Do not press "Allow microphone" in that copy. A new bundle identifier is a new
 TCC subject, so it raises a real system prompt; "Skip" reaches the model step
 just as well.
+
+**That copy also asks the user for the Keychain, on every launch, and the
+prompt names the real app.** Ad-hoc signing gives the copy a different code
+identity, and the ACL on `com.mgo.listen.endpoint` trusts the identity that
+created it, so macOS puts up "Listen wants to use your confidential information
+stored in com.mgo.listen.endpoint" for each run. It is the harness, not the
+build, and Deny is the right answer: the endpoint key is only the Ask settings,
+nothing else reads it at launch, and allowing it would add an ad-hoc copy to a
+real ACL. Expect one prompt per launch, warn whoever is at the keyboard, and
+delete the copy when finished rather than leaving it around to prompt again.
 
 Context menus are reachable and worth using: `AXUIElementPerformAction(el,
 "AXShowMenu")` on an `NSButton` opens its menu, the whole tree including submenus

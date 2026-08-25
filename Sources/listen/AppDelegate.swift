@@ -174,6 +174,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Dictation.shared.activate()
         }
         _ = Updater.shared
+        // Ask the feed on every launch, showing nothing. Sparkle's own
+        // scheduler will not check again until its interval has elapsed, so
+        // without this a copy launched and quit inside that window never
+        // learns it is stale. See `Updater.checkQuietly`.
+        Updater.shared.checkQuietly()
 
         // Last, so a series of shots catches a launch that has already queued
         // whatever was pending.

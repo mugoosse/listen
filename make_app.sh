@@ -99,10 +99,40 @@ if [ -n "$SPARKLE_PUBLIC_KEY" ]; then
     <string>https://github.com/mugoosse/listen/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>${SPARKLE_PUBLIC_KEY}</string>
-    <!-- Two days. Sparkle defaults to one, which is more attention than this
-         deserves. -->
+    <!-- Six hours. This was two days, on the reasoning that Sparkle's default
+         of one day is more attention than the app deserves. That conflated two
+         different things: how often Listen asks GitHub, and how often it
+         interrupts anybody. A check that finds nothing shows no UI at all, so
+         the frequency here costs the user nothing, and the interval is only a
+         floor on how stale a copy can be. Measured against the actual release
+         cadence, two days was far too coarse: 0.17.0, 0.18.0 and 0.18.1 all
+         shipped on 2026-08-24, and 0.14.0 to 0.18.1 was twelve days, so a
+         two-day floor left a typical copy one to three versions behind. -->
     <key>SUScheduledCheckInterval</key>
-    <integer>172800</integer>"
+    <integer>21600</integer>
+    <!-- Answer Sparkle's first-run permission prompt in the build, so it is
+         never asked. Without this key Sparkle asks each user whether it may
+         check, stores the answer per-user, and a copy that was told no never
+         checks again and never says so: the only way back is a checkbox in
+         Settings, which nobody opens unless they already suspect they are
+         stale. That is an unbounded staleness path and it is invisible from
+         here, because Listen has no telemetry to notice it with. Checking is
+         a GET of a signed feed over HTTPS that sends no profile information
+         (SUSendProfileInfo is off and never turned on), so there is nothing
+         in the check itself that warrants a consent prompt. Whether updates
+         then install is still the user's, in the Updates pane. -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <!-- Download in the background and install on the next quit, rather than
+         holding the new version behind a dialog somebody has to notice and
+         click. This is a default and not a decision: SUHost reads user
+         defaults first and only falls back to here, so the checkbox in the
+         Updates pane still wins, and a copy that already has an answer stored
+         keeps it. Anyone who ran a build before this key existed answered
+         Sparkle's first-run prompt instead, which is what wrote their stored
+         value, so for them the pane is the only way in. -->
+    <key>SUAutomaticallyUpdate</key>
+    <true/>"
 else
     SPARKLE_KEYS="    <!-- No SUPublicEDKey yet: see make_app.sh. Sparkle will not update. -->"
 fi

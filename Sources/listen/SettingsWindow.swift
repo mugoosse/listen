@@ -1119,6 +1119,7 @@ final class PermissionsPane: Pane {
 final class UpdatesPane: Pane {
     private var checkButton: NSButton?
     private var autoCheck: NSButton?
+    private var autoDownload: NSButton?
     private var result: NSTextField?
     private var lastChecked: NSTextField?
 
@@ -1127,14 +1128,19 @@ final class UpdatesPane: Pane {
     /// pane's own button.
     override func viewWillAppear() {
         super.viewWillAppear()
-        Updater.shared.onChange = { [weak self] in self?.refreshUpdates() }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(outcomeChanged),
+            name: Updater.outcomeChanged, object: nil)
         refreshUpdates()
     }
 
     override func viewWillDisappear() {
         super.viewWillDisappear()
-        Updater.shared.onChange = nil
+        NotificationCenter.default.removeObserver(
+            self, name: Updater.outcomeChanged, object: nil)
     }
+
+    @objc private func outcomeChanged() { refreshUpdates() }
 
     override func build() {
         // Straight into the controls. There is no "Updates" heading because the
@@ -1161,8 +1167,12 @@ final class UpdatesPane: Pane {
         let auto = NSButton(checkboxWithTitle: "Check automatically",
                             target: nil, action: nil)
         auto.state = Updater.shared.automaticallyChecks ? .on : .off
-        let autoHandler = ActionHandler { sender in
+        let autoHandler = ActionHandler { [weak self] sender in
             Updater.shared.automaticallyChecks = (sender as? NSButton)?.state == .on
+            // Turning checking off also takes installing automatically with it,
+            // and that has to show on the checkbox below in the same click
+            // rather than the next time the pane is opened.
+            self?.refreshUpdates()
         }
         auto.target = autoHandler
         auto.action = #selector(ActionHandler.fire(_:))
@@ -1179,6 +1189,25 @@ final class UpdatesPane: Pane {
         result = outcome
 
         lastChecked = note("")
+
+        // Below the result rather than beside the button: the row above is the
+        // check and the checkbox that governs it, and this is about what
+        // happens after a check rather than about checking.
+        let down = NSButton(checkboxWithTitle: "Install updates automatically",
+                            target: nil, action: nil)
+        down.state = Updater.shared.automaticallyDownloads ? .on : .off
+        let downHandler = ActionHandler { sender in
+            Updater.shared.automaticallyDownloads = (sender as? NSButton)?.state == .on
+        }
+        down.target = downHandler
+        down.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(down, "handler", downHandler, .OBJC_ASSOCIATION_RETAIN)
+        stack.addArrangedSubview(down)
+        autoDownload = down
+
+        note("With this on, a new version is downloaded in the background and put "
+             + "in place the next time you quit, so you never see a prompt. With it "
+             + "off, Listen asks first and waits.")
 
         note("Updates come from this project's GitHub releases. Each one is checked "
              + "against Listen's signing key before it is installed, and the check "
@@ -1213,7 +1242,7 @@ final class UpdatesPane: Pane {
         return "Version \(short)"
     }
 
-    /// Mirror the updater into the four controls, in place. Rebuilding the pane
+    /// Mirror the updater into the five controls, in place. Rebuilding the pane
     /// instead would replace the button under the cursor of somebody who has
     /// just clicked it.
     private func refreshUpdates() {
@@ -1221,6 +1250,11 @@ final class UpdatesPane: Pane {
 
         checkButton.isEnabled = Updater.shared.canCheck
         autoCheck?.state = Updater.shared.automaticallyChecks ? .on : .off
+        // Sparkle will not install automatically while it is not allowed to
+        // check, and refuses the write silently rather than reporting it, so
+        // the checkbox is disabled instead of being left to look settable.
+        autoDownload?.isEnabled = Updater.shared.automaticallyChecks
+        autoDownload?.state = Updater.shared.automaticallyDownloads ? .on : .off
 
         switch Updater.shared.outcome {
         case .unknown:

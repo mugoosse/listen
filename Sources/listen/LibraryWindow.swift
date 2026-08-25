@@ -621,6 +621,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             name: NSApplication.didBecomeActiveNotification, object: nil)
         libraryStamps = Self.libraryStamps()
 
+        // A check can finish long after launch, and the gear has to pick up a
+        // dot without the toolbar being rebuilt for some other reason.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updaterOutcomeChanged),
+            name: Updater.outcomeChanged, object: nil)
+
         // And they may write to it while you are looking straight at it.
         //
         // Activation was enough when the only other writer was a second Mac
@@ -1414,6 +1420,76 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// re-inserts them. Assigning a second `NSToolbar` to the window is the
     /// other way and it re-runs the whole title bar layout to change two
     /// buttons.
+    /// Put the dot on the gear, or take it off.
+    ///
+    /// **A rebuild, because assigning `image` to an item already in the toolbar
+    /// does not redraw it.** Setting `toolTip` and `image` together on the live
+    /// item was the first attempt, and it half worked in a way that is easy to
+    /// believe: the tool tip changed, accessibility reported "an update is
+    /// available", and the gear on screen stayed plain. So an AX check passes
+    /// while nobody can see the thing it is checking, and only a screenshot
+    /// says otherwise. The item has to be made again with the image it should
+    /// have been built with.
+    ///
+    /// The flicker the comment on `syncToolbarWithHome` warns about is not a
+    /// concern here: that one was a rebuild per click in the list, and this is
+    /// at most two or three in the life of a launch.
+    @objc private func updaterOutcomeChanged() {
+        rebuildToolbar()
+    }
+
+    /// The gear, with a dot on it when an update is waiting.
+    ///
+    /// This is the only place in the window that says a new version exists.
+    /// Sparkle does put up its own window, but only when its scheduler happens
+    /// to run and only once, and the answer is gone as soon as that window is
+    /// dismissed. A dot is the standing version of the same fact, and it costs
+    /// no attention: whoever wants it goes to Settings, where the pane already
+    /// names the version.
+    private static func dressSettingsItem(_ item: NSToolbarItem) {
+        let waiting: Bool
+        if case .available = Updater.shared.outcome { waiting = true } else { waiting = false }
+
+        item.toolTip = waiting ? "An update is available. Settings (⌘,)" : "Settings (⌘,)"
+        let described = waiting ? "Settings, an update is available" : "Settings"
+
+        guard waiting else {
+            item.image = NSImage(systemSymbolName: "gearshape",
+                                 accessibilityDescription: described)
+            return
+        }
+
+        // `gear.badge`, rather than a dot composited onto `gearshape`.
+        //
+        // The hand-drawn version was written first and it renders correctly on
+        // its own: gear tinted to `labelColor`, a ring punched out with
+        // `destinationOut`, an accent dot in the hole. Written to a PNG it is
+        // exactly the wanted image. In the toolbar it does not appear at all,
+        // and the gear draws plain, whether the image is assigned to a live
+        // item or to a freshly built one. A toolbar item does not render an
+        // arbitrary `NSImage` the way it renders a symbol.
+        //
+        // So this is a real symbol, which AppKit tints, scales and lays out
+        // itself. The cost is that `gear.badge` is the toothed gear and the
+        // resting icon is `gearshape`, so the outline changes along with the
+        // badge appearing. That reads as deliberate rather than broken, and it
+        // is the half of the trade that is worth paying: an indicator nobody
+        // can see is worth nothing.
+        let badged = NSImage(systemSymbolName: "gear.badge",
+                             accessibilityDescription: described)
+        // Two layers, so the badge takes the accent colour while the gear stays
+        // the title bar's own.
+        //
+        // The badge is layer **zero** and the gear is layer one, which is the
+        // opposite of the reading order and was measured rather than assumed:
+        // `[.labelColor, .controlAccentColor]` produced a bright blue gear with
+        // a white dot, which is the loudest possible version of this and looks
+        // nothing like a badge.
+        let palette = NSImage.SymbolConfiguration(
+            paletteColors: [.controlAccentColor, .labelColor])
+        item.image = badged?.withSymbolConfiguration(palette) ?? badged
+    }
+
     private func rebuildToolbar() {
         guard let toolbar = window?.toolbar else { return }
         while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
@@ -1475,11 +1551,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         case Self.settingsItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Settings"
-            item.toolTip = "Settings (⌘,)"
-            item.image = NSImage(systemSymbolName: "gearshape",
-                                 accessibilityDescription: "Settings")
             item.target = self
             item.action = #selector(openSettings)
+            // The badge is decided here rather than applied afterwards: an
+            // item already in the toolbar ignores a new image, so a rebuild is
+            // the only thing that changes it. See `updaterOutcomeChanged`.
+            Self.dressSettingsItem(item)
             return item
 
         case Self.personActionsItem:

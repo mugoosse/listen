@@ -703,10 +703,56 @@ keep that answer on screen, and both were got wrong once:
    pass and a text field whose string changed schedules one. The public one also
    scrolls the pane back to its first control, and a scheduled check finishing
    while somebody is reading is not a reason to move the page.
-2. **`Updater.onChange` is claimed in `viewWillAppear` and released in
+2. **The pane observes `Updater.outcomeChanged` in `viewWillAppear` and stops in
    `viewWillDisappear`.** A check can be started from the menu bar or by the
    scheduler, so following the button alone would leave the pane showing the
    previous answer.
+
+That second one was a single `onChange` closure until the gear grew a badge and
+there were two followers. One closure means the second claimant silently
+unhooks the first, and the symptom would have been the pane going dead exactly
+when the toolbar started working, so it is a `NotificationCenter` post now.
+
+## A toolbar item will not draw an image you hand it, and accessibility says it did
+
+The gear in the library's title bar carries a badge when an update is waiting,
+and getting it there took two wrong turns worth recording, because the first
+one passes every test that is not a screenshot.
+
+**A hand-composited `NSImage` does not render in an `NSToolbarItem`.** The first
+version drew the badge: `gearshape` tinted to `labelColor` with a `sourceAtop`
+fill, a ring punched out with `destinationOut` so the dot would not merge with a
+tooth, an accent dot filled into the hole. Written to a PNG it is exactly the
+wanted image, and that was checked. Assigned to `item.image` it does not appear:
+the gear draws plain. It makes no difference whether the image goes onto a live
+item or onto one built fresh by `rebuildToolbar`, nor whether `cacheMode` is
+`.never`, nor whether `alignmentRect` is copied from the symbol.
+
+**The trap is that the tool tip set two lines above it does take.** So the item
+reported "An update is available. Settings (⌘,)" through accessibility, an AX
+assertion on the badge passed, and the gear on screen was plain the whole time.
+An indicator nobody can see is worth nothing, and only `screencapture` said so.
+Anything about how a toolbar item *looks* has to be verified from pixels.
+
+So it is `gear.badge`, a real SF Symbol, which AppKit tints, scales and lays out
+itself. Two costs, both accepted. The resting icon is `gearshape` and this is
+the toothed `gear`, so the outline changes along with the badge appearing, which
+reads as deliberate rather than broken. And there is no `gearshape.badge`:
+measured on this SDK, `gearshape.badge` and `gearshape.badge.checkmark` do not
+exist, while `gear.badge` does.
+
+**The badge is layer zero and the gear is layer one**, which is the opposite of
+the reading order and was measured rather than assumed. A palette of
+`[.labelColor, .controlAccentColor]` produced a bright blue gear with a white
+dot, which is the loudest possible version of this. The right way round is
+`[.controlAccentColor, .labelColor]`, checked in both appearances by rendering
+the symbol inside `performAsCurrentDrawingAppearance` rather than by launching
+anything.
+
+One thing that is not a bug: captured while the window is not frontmost, both
+layers come out grey, because AppKit dims a background window's toolbar and the
+accent colour greys with it. Activate the app by pid before the shot, or read a
+dim badge as inactive rather than as wrong.
 
 Verified end to end against the real feed by pressing Check Now through
 accessibility on a `LISTEN_PANEL=settings:updates` launch, which touches nothing

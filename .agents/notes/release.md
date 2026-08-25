@@ -53,6 +53,52 @@ The framework is still linked, embedded and signed from milestone 0 so that the
 rpath and the inside-out nested signing are exercised from the start. Both are
 things you want to discover early, not during a release.
 
+## How fast a new version is noticed is four settings, and three of them are defaults
+
+All four are written by `make_app.sh` into `Info.plist`, and they are worth
+reading together because each one is a different way for a copy to sit stale.
+
+**`SUScheduledCheckInterval` is six hours, and was two days.** The comment
+behind the old number said Sparkle's default of one day "is more attention than
+this deserves", which conflated how often Listen asks GitHub with how often it
+interrupts anybody. A scheduled check that finds nothing shows no UI at all, so
+the interval costs the user nothing and is only a floor on staleness. Measured
+against what actually ships: 0.17.0, 0.18.0 and 0.18.1 all published on
+2026-08-24, and 0.14.0 to 0.18.1 spanned twelve days, so a two-day floor left a
+typical copy one to three versions behind.
+
+**`SUEnableAutomaticChecks` is now set, so Sparkle's permission prompt never
+appears.** Without the key Sparkle asks each user for permission and stores the
+answer per-user. The important half is what happens to somebody who declines:
+`SPUUpdater.m` suppresses the prompt whenever `boolNumberForKey:` is non-nil,
+so a stored `NO` means that copy never checks again and never says so, and the
+only way back is a checkbox in a settings pane nobody opens unless they already
+suspect they are stale. Unbounded staleness, invisible from here because Listen
+has no telemetry. The check is a GET of a signed feed that sends no profile
+information, so there is nothing in it that needed consent.
+
+**`SUAutomaticallyUpdate` is now set, so a found update installs on the next
+quit** instead of waiting behind a dialog somebody has to notice and click.
+
+**Both of those are defaults rather than decisions, and that was verified in
+Sparkle's source rather than assumed.** `SUHost.boolNumberForKey:` reads user
+defaults first and falls back to the info dictionary, so the checkboxes in the
+Updates pane still win. The corollary is the awkward one: anyone running a build
+from before these keys existed answered the first-run prompt instead, and
+`updatePermissionRequestFinishedWithResponse:` wrote their answer into user
+defaults, where it keeps beating the new default forever. For them the pane is
+the only way in, which is why "Install updates automatically" is now a control
+there rather than only a plist key.
+
+**A launch also asks quietly, because the interval is a floor and not a
+period.** Sparkle's scheduler will not check again until the interval has
+elapsed, so a copy launched and quit inside that window learns nothing at all.
+`Updater.checkQuietly` calls `checkForUpdateInformation()` on every launch,
+which shows no window; the answer arrives through the same delegate callbacks
+as any other check and is what puts the badge on the gear. It is guarded on
+`automaticallyChecks`, because somebody who turned checking off meant the
+network too, not just the dialog.
+
 ## The changelog is the only place release notes are written
 
 `CHANGELOG.md`, newest first, each section starting `##` followed by a version

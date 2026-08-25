@@ -8,6 +8,32 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.18.2 (2026-08-25)
+
+### Listen notices a new version sooner
+
+Four separate settings decided how far behind a copy of Listen could fall, and
+each of them was its own way to sit on an old version. The scheduled check ran
+every two days, and 0.17.0, 0.18.0 and 0.18.1 all shipped inside a single day,
+so two days was not a floor anybody would have chosen. It is six hours now, and
+Listen asks the feed quietly at every launch as well, because Sparkle's own
+scheduler will not look again until its interval has run out however often you
+open the app.
+
+Declining Sparkle's question the first time it appeared used to turn checking
+off for good, with nothing on screen saying so. Whether automatic checks are on
+is answered in the build now, so a copy cannot end up silently never looking
+again.
+
+An update that has been found installs the next time you quit, instead of
+waiting behind a dialog for you to agree to it. That is a default rather than a
+rule, and the Updates pane has a checkbox that turns it off.
+
+### The gear says when an update is waiting
+
+The gear in the library's title bar carries a dot once there is a new version,
+so the answer is where you already are rather than two panes into Settings.
+
 ## 0.18.1 (2026-08-24)
 
 ### The person card opens their page

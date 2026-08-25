@@ -60,6 +60,13 @@ enum TranscriptEditor {
     /// since, and it also catches the segments `Merge.sentences` could not place
     /// in the paragraph, which an index list built from the screen would leave
     /// behind under the old speaker with nothing saying so.
+    ///
+    /// **The window names the turn; it does not select the segments.** It is
+    /// resolved back through `Merge.fold`, the same fold that produced the
+    /// paragraph, and only that paragraph's segments move. Applying the window
+    /// to the segments directly moved the next turn as well whenever two turns
+    /// by one speaker touched, which on a two-track recording is most of them.
+    /// See `Merge.fold` for the measurement.
     enum Scope {
         case sentence(index: Int, text: String)
         case turn(start: Double, end: Double)
@@ -150,21 +157,27 @@ enum TranscriptEditor {
                     return true
 
                 case .turn(let start, let end):
-                    var moved = 0
-                    // A segment belongs to the paragraph when it *starts* inside
-                    // it, which is the same test `Merge.turns` folded it in on.
-                    // Testing the end as well would drop the last segment of any
-                    // turn whose final sentence overruns the turn's own end,
-                    // which happens whenever the timings disagree by a
-                    // rounding's worth.
-                    for i in segments.indices
-                    where segments[i].speaker == speaker
-                        && segments[i].start >= start - 0.001
-                        && segments[i].start <= end + 0.001 {
-                        segments[i].speaker = to
-                        moved += 1
+                    // **Through the fold, not over the window.** A window in the
+                    // transcript's own units is how the paragraph is named, and
+                    // it is not how the segments are found: two turns by one
+                    // speaker with somebody else's interjection between them
+                    // touch or overlap, so a sweep by start time moves the
+                    // paragraph after this one as well. Measured, on a real
+                    // call, in `Merge.fold`, which is where the rest of it is.
+                    //
+                    // Matched on all three, and refused unless exactly one turn
+                    // answers. The pane was drawn before this ran; a window that
+                    // names no turn, or two, is a transcript that has moved
+                    // underneath, and that is the case the caller reports rather
+                    // than the case it guesses at.
+                    let folded = Merge.fold(segments).filter {
+                        $0.turn.speaker == speaker
+                            && abs($0.turn.start - start) <= 0.001
+                            && abs($0.turn.end - end) <= 0.001
                     }
-                    return moved > 0
+                    guard folded.count == 1 else { return false }
+                    for i in folded[0].segments { segments[i].speaker = to }
+                    return true
                 }
             }) else { return false }
 

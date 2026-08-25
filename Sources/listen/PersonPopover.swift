@@ -28,7 +28,7 @@ enum PersonPopover {
     /// `SpeakerPreview`, which carries the same hook for the unnamed side, so
     /// both kinds of chip follow one rule.
     static func show(_ label: String, from view: NSView, rect: NSRect,
-                     editing: Bool = false, closed: (() -> Void)? = nil,
+                     closed: (() -> Void)? = nil,
                      done: @escaping () -> Void) {
         guard let person = People.find(label) else { return }
         current?.performClose(nil)
@@ -36,7 +36,7 @@ enum PersonPopover {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = ContactCard(
-            person: person, editing: editing, closed: closed) {
+            person: person, editing: false, closed: closed) {
             current?.performClose(nil)
             done()
         }
@@ -92,6 +92,7 @@ enum PersonPopover {
     static func menu(for label: String, in recording: Recording,
                      anchor: @escaping () -> (NSView, NSRect)?,
                      open: ((NSView, NSRect) -> Void)? = nil,
+                     identify: ((NSView, NSRect) -> Void)? = nil,
                      done: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         let named = !VoiceBank.isPlaceholder(label)
@@ -115,15 +116,16 @@ enum PersonPopover {
                 LibraryWindow.shared.filter(bySpeaker: label)
             })
             menu.addItem(.separator())
-            menu.addItem(Action("Edit \(shown)…", "pencil") {
-                guard let (view, rect) = anchor() else { return }
-                show(label, from: view, rect: rect, editing: true, done: done)
-            })
             // The picker, not `SpeakerSheet`. This is the item somebody takes
             // when a name is wrong, so it has to lead somewhere that can say
             // "leave them unnamed" as well as "they are somebody else". The
             // sheet led to Merge and Discard, and Discard is how the last person
             // to walk this path deleted half a transcript.
+            //
+            // `identify` is here for the same reason `open` is: from a
+            // transcript this item is also how one paragraph is handed to
+            // somebody else, and the picker it opens carries the choice between
+            // the two sizes. See `SpeakerPicker.TurnChoice`.
             //
             // The sheet is still the answer when there is no anchor to point a
             // popover at, because a menu must not depend on a popover appearing.
@@ -133,8 +135,12 @@ enum PersonPopover {
                                          in: NSApp.keyWindow, done: done)
                     return
                 }
-                SpeakerPicker.show(for: recording, speaker: label,
-                                   from: view, rect: rect, done: done)
+                guard let identify else {
+                    SpeakerPicker.show(for: recording, speaker: label,
+                                       from: view, rect: rect, done: done)
+                    return
+                }
+                identify(view, rect)
             })
         } else {
             menu.addItem(Action("Who Is This?…", "person.crop.circle.badge.questionmark") {

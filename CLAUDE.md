@@ -136,6 +136,8 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Discard is a delete, and the undo it was mistaken for did not exist
 - Merge stopped being a button and became the first section of the list
 - Who said it is corrected at three sizes, and the middle two are new
+- The two sizes are one menu item and a checkbox, because two items were a guess
+- The window names the turn, and it must not select the segments
 - Both buttons on a pill open the same menu, and the popover is its first item
 - The skipping belongs to the button that names it, and there is no bar
 - A person is a name string, and that is the whole identity model
@@ -256,6 +258,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The transcript's scroller is at the window's edge, and its margin is the document's
 - The room the composer needs is the transcript's, not the scroll view's
 - Open at the top is the clip view's origin, not a point in the stack
+- A reload that does not scroll still loses the reader's place
 
 ### `.agents/notes/appkit.md` (35k)
 
@@ -268,6 +271,7 @@ this app, so read them before building any new window, menu or popover.
 - An `NSMenuToolbarItem` eats the first item of its menu
 - The status menu is Speak's, refilled in place
 - Listen is not `LSUIElement`, and Speak is
+- `NSTextField(string:)` fires its action on losing focus, and `NSTextField()` does not
 - A text field does not stop editing because you clicked away
 - `NSAttributedString(markdown:)` parses the structure and then throws it away
 - An app with no nib has no menu bar, and it is not obvious
@@ -511,6 +515,8 @@ One script stands in for one, over the app built in the working directory:
 ./verify_title.sh       # every claim in .agents/notes/titles.md, as assertions
 ./verify_compliance.sh  # the CLI's redaction, endpoint, managed-preference,
                         # backup-permission and activity-log claims
+./verify_speakers.sh    # every size of speaker edit, and the turn window that
+                        # used to move two paragraphs when asked for one
 ```
 
 It builds a scratch `LISTEN_LIBRARY` out of copies of five real recordings and

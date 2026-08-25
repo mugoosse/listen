@@ -207,8 +207,8 @@ So there are three sizes now, and each is where the thing it acts on is:
 | size | where | writes |
 |---|---|---|
 | one sentence | right-click the sentence → Speaker for This Sentence | `.reassign(.sentence(index:text:))` |
-| one turn | click the pill → Speaker for This Turn | `.reassign(.turn(start:end:))` |
-| every turn they have | the pill or chip's Not X…, Merge, or a rename | `.rename` / `.merge` |
+| one turn | the pill's Not X… → the picker, with the box unticked | `.reassign(.turn(start:end:))` |
+| every turn they have | the same item with the box ticked, or Merge, or a rename | `.rename` / `.merge` |
 
 **The submenu offers the recording's own speakers first, and they are one
 click.** The mistake is nearly always one person's words landing on another
@@ -219,7 +219,69 @@ the reader work out which one is absent. Anybody else is one click further,
 through `SpeakerPicker.choose`, which is the same controller that names a
 speaker: same ranked candidates, same invitation rows, same roster, same "New
 person" row. A second, smaller chooser built for this menu would be the first
-place somebody stopped being suggested.
+place somebody stopped being suggested. That submenu is now the *sentence's*,
+for the reason the next section gives.
+
+### The two sizes are one menu item and a checkbox, because two items were a guess
+
+The pill's menu carried both of them, one under the other:
+
+    Not Nick…
+    Speaker for This Turn  ▸
+
+The first renames every turn Nick has and the second moves one paragraph, and
+nothing on either says so. Reported as confusing, and then reported again from
+the other end by the same person: a name put on one turn was gone by the time
+they looked back at it. Two items whose difference is their *scope*, worded as
+though their difference were their manner, is a coin toss dressed as a menu, and
+the way anybody finds out which one they took is by reading the transcript
+afterwards.
+
+There is one item now, "Not Nick…", and it opens `SpeakerPicker` with the
+paragraph it was pressed over in hand. The size is a checkbox above the list:
+
+    Who is this really?
+    Spoke for 15:44 of this recording
+    ☑ Change every turn by Nick
+    All 63 turns by Nick change.
+
+Untick it and the line under it reads "Only this turn changes. Nick keeps the
+other 62." **The count is the point.** A checkbox that only names itself leaves
+the reader to work out how much of the transcript is about to move, which is
+exactly what the two menu items never said.
+
+Everything else follows from the box:
+
+- **Ticked is the default**, because a speaker being wrong throughout is the
+  commoner mistake and the narrow one is a repair to a diarizer boundary.
+- **Leave Unnamed and Discard are hidden while it is unticked.** They act on
+  everything the speaker ever said, which is the size that has just been turned
+  off, and a footer contradicting the line above it is how a destructive button
+  gets pressed by somebody who was reading the line.
+- **`check` refuses less while it is unticked**, exactly as `.pick` does, because
+  it *is* the `.pick` edit. `Me` is the one that matters: at speaker scope it is a
+  merge and `People.checkSpeaker` refuses it, at turn scope it is the repair for
+  the far end coming back in through the microphone.
+- **No box at all when the speaker has one turn.** Both sizes then mean the same
+  thing, which is a control that cannot be wrong and cannot be useful.
+- **The chips row passes no `TurnChoice`**, so it behaves exactly as it did: a
+  chip is about a speaker and has no paragraph in mind.
+
+**Nothing is written until somebody says so.** Confirming is a row in the list,
+the "New person" row, or Return. Clicking away abandons what was typed, and
+clicking the checkbox changes the size of the edit and nothing else. Both of
+those used to write a name: see "`NSTextField(string:)` fires its action on
+losing focus" in `appkit.md`, which is one line to fix and was reported twice in
+one session, once as a transcript with a speaker called "dd" in it.
+
+`TranscriptEditor` did not change for any of this. The narrow path is the same
+`.reassign` the submenu called, and `listen label --move-turn` still drives it.
+
+**"Edit Nick…" went at the same time.** It opened the contact card already in
+its editing state, which is a second route to a button that is on the card
+anyway, and it sat between "Show Only Nick" and "Not Nick…" adding a third
+similar-looking verb to the two that were already being confused. Editing a
+person is People's job, and the card has its own Edit.
 
 ### Both buttons on a pill open the same menu, and the popover is its first item
 
@@ -263,9 +325,50 @@ skips any segment whose text it cannot locate in the turn, so an index list buil
 from the screen would silently leave those behind under the old speaker. A window
 is stated in the transcript's own units and catches them.
 
-The window tests `start` only. The last segment of a turn can end after the turn
-does when the timings disagree by a rounding, and testing both ends would drop
-exactly the sentence a reader is most likely to be complaining about.
+### The window names the turn, and it must not select the segments
+
+This is the half that was wrong, and it cost somebody a name.
+
+The window was applied to the segments directly: every segment of that speaker's
+whose `start` fell inside it moved. Testing `start` only, because the last
+segment of a turn can end after the turn does when the timings disagree by a
+rounding, and testing both ends would drop exactly the sentence a reader is most
+likely to be complaining about. All of that is true and none of it is enough,
+because **two turns by one speaker can touch**. A turn ends where its segments
+stop reaching; the next one begins wherever the interruption between them left
+off; on a two-track recording, where the microphone and the system tracks
+interleave, those two numbers are routinely the same instant or the wrong way
+round.
+
+Measured on a real 1h29m call, moving the paragraph at 88.32-98.40 to a new
+name:
+
+    4  Me    88.32   98.40   It's a 5k monitor. But I'll just ...
+    5  Nick  92.40  102.64   Yeah, I guess.
+    6  Me    98.40  106.16   It's gonna be better anyway.
+
+Rows 4 **and** 6 moved. Row 6 starts at 98.40, 98.40 is inside `[88.32, 98.40]`,
+and Nick's row 5 between them is what made them two paragraphs rather than one.
+Nobody had selected row 6, nothing said it had gone, and the repair anybody would
+reach for on finding a stray paragraph under a name they had just made is a
+whole-speaker edit on that name, which takes the one they did mean with it. That
+is the report: a name put on one turn, gone by the time its author looked back.
+
+So the window is resolved back through `Merge.fold`, the same fold that produced
+the paragraph, and only that paragraph's segments move. It keeps both properties
+the window was chosen for: a fold over what is on disk now *is* the paragraph on
+screen, whatever has happened to the numbering, and a segment `Merge.sentences`
+could not place inside its turn is still in that turn here, so it moves with the
+rest instead of being left behind under the old speaker.
+
+Matched on speaker, start and end, and refused unless **exactly one** turn
+answers. A window that names no turn, or two, is a transcript that has moved
+under the pane, which is the case to report rather than the case to guess at.
+`verify_speakers.sh` is that assertion and four more around it.
+
+`listen label --move-turn` is the same edit and is now the same strict: a window
+that is not exactly one of the speaker's turns is refused, and the failure prints
+the turns that would work rather than leaving somebody to guess at the decimals.
 
 ### The voiceprint is left alone unless the label goes
 

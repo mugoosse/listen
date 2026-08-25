@@ -368,6 +368,17 @@ final class DetailView: NSView {
     private var follows = true
     private var scrollingProgrammatically = false
 
+    /// Where the reader is in the transcript, kept so a rebuild can put them
+    /// back.
+    ///
+    /// **Remembered rather than read off the clip view when it is wanted.** A
+    /// rebuild empties the stack, the document collapses to nothing for a pass,
+    /// and a clip view whose document is shorter than its own bounds clamps its
+    /// origin to zero, so by the time anything asks the clip view where the
+    /// reader was, the answer is the top. `userScrolled` is what keeps this
+    /// honest, and it deliberately ignores exactly that one bounds change.
+    private var readingOrigin: NSPoint = .zero
+
     /// The turn with a sentence open for editing, if any.
     ///
     /// Held weakly and cleared on every re-render, because the view it points at
@@ -2095,6 +2106,7 @@ final class DetailView: NSView {
         updatePlayerActivity()
 
         guard let recording else {
+            readingOrigin = .zero
             setChromeHidden(true)
             empty.isHidden = drawerCovering
             greeting.stringValue = Self.greetingText()
@@ -2213,7 +2225,15 @@ final class DetailView: NSView {
         // transcript on screen is still exactly the one the CLI and the MCP
         // server serve.
         sentences = Merge.sentences(in: turns, from: stored?.segments ?? [])
-        renderTurns()
+        // **Opening a recording opens at the top; re-showing the one already on
+        // screen keeps the reader's place.** `show` is not only how a selection
+        // is answered: a speaker edit goes through it because a rename changes
+        // the title and the chips as well as the paragraphs, and the sidebar
+        // reload that follows calls it again. Both of those used to throw away
+        // an hour of scrolling, and the second one is why fixing it at the call
+        // site did not work. See "A sidebar reload is not somebody choosing a
+        // recording".
+        renderTurns(scrollToTop: recording.id != previous)
 
         // No player while it is being recorded. The tracks exist and are
         // growing, so a mixdown made now would be of half a meeting and the
@@ -2388,6 +2408,9 @@ final class DetailView: NSView {
     }
 
     private func renderTurns(scrollToTop: Bool = true) {
+        // Taken before the stack is emptied, because emptying it is what makes
+        // the clip view forget. See `readingOrigin`.
+        let keeping = readingOrigin
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         turnViews = []
         editingTurn = nil
@@ -2469,8 +2492,41 @@ final class DetailView: NSView {
 
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
-        guard scrollToTop else { return }
+        guard scrollToTop else {
+            restoreTranscriptScroll(to: keeping)
+            return
+        }
+        readingOrigin = .zero
         scrollTranscriptToTop()
+    }
+
+    /// Put the reader back where they were before a rebuild.
+    ///
+    /// Deferred for the same reason `scrollTranscriptToTop` is: the turns are
+    /// added to the stack in the pass that calls this, so the document is still
+    /// the wrong height here and a scroll measured against it lands somewhere
+    /// else.
+    ///
+    /// Clamped, because an edit can make the transcript shorter than the offset
+    /// it was read at. `.discard` removes paragraphs, and a stale offset past the
+    /// new end is a blank pane with a scroller that says there is something above
+    /// it.
+    private func restoreTranscriptScroll(to origin: NSPoint) {
+        DispatchQueue.main.async { [self] in
+            stack.layoutSubtreeIfNeeded()
+            let visible = scroll.contentView.bounds.height
+            let document = scroll.documentView?.bounds.height ?? 0
+            let limit = max(0, document - visible)
+            scrollingProgrammatically = true
+            let put = NSPoint(x: origin.x, y: min(max(0, origin.y), limit))
+            // Written back, because the clamp can have moved it and the next
+            // rebuild has to agree with what is on screen rather than with what
+            // was asked for.
+            readingOrigin = put
+            scroll.contentView.scroll(to: put)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            DispatchQueue.main.async { self.scrollingProgrammatically = false }
+        }
     }
 
     /// Open at the beginning.
@@ -2819,6 +2875,20 @@ final class DetailView: NSView {
     }
 
     @objc private func userScrolled() {
+        // Where the transcript is, for the next rebuild to put back. Every
+        // bounds change and not only the ones a hand made, because the playhead
+        // scrolls this too and a reload after that has to land where the reader
+        // is actually looking.
+        //
+        // **Except while the document is shorter than the clip view**, which is
+        // the one bounds change that must not be believed: `renderTurns` removes
+        // every turn before it adds them again, and a clip view clamps its
+        // origin to zero for that pass. Believing it is how the remembered place
+        // became the top a moment after being restored to.
+        if let document = scroll.documentView,
+           document.bounds.height > scroll.contentView.bounds.height {
+            readingOrigin = scroll.contentView.bounds.origin
+        }
         guard !scrollingProgrammatically else { return }
         follows = false
     }
@@ -2967,7 +3037,8 @@ final class DetailView: NSView {
     /// screen for as long as the transcript is. `SpeakerChips` already hands
     /// out its row rather than a chip for the same reason; this makes the rule
     /// hold for every caller instead of each one remembering it.
-    private func editSpeaker(_ speaker: String, from view: NSView, rect: NSRect) {
+    private func editSpeaker(_ speaker: String, from view: NSView, rect: NSRect,
+                             turn: TurnChoice? = nil) {
         guard let recording else { return }
         let anchor = convert(rect, from: view)
         endEditing()
@@ -2995,6 +3066,12 @@ final class DetailView: NSView {
         if VoiceBank.isPlaceholder(speaker) {
             SpeakerPicker.show(
                 for: recording, speaker: speaker, from: self, rect: anchor,
+                // The paragraph this was opened over, when it was opened over
+                // one. Naming a placeholder from its pill is still nearly always
+                // about the whole speaker, and the checkbox says so; what it adds
+                // is the other size, in the one place the reader can see which
+                // paragraph it means.
+                turn: turn,
                 preview: SpeakerPreview(
                     play: { [weak self] in self?.playFocused() },
                     pause: { [weak self] in self?.pausePlayback() },
@@ -3016,6 +3093,8 @@ final class DetailView: NSView {
     /// made here.
     private func reloadAfterSpeakerChange() {
         guard let id = recording?.id, let updated = Recording.find(id) else { return }
+        // The reader's place survives it: `show` renders at the top only for a
+        // recording that was not already on screen. See `readingOrigin`.
         show(updated)
         LibraryWindow.shared.reload()
     }
@@ -3028,15 +3107,29 @@ final class DetailView: NSView {
     /// The pill had no menu at all until the transcript could correct who said
     /// something, which left the chip under the title carrying verbs the pill
     /// standing for the same person did not. `PersonPopover.menu` is called
-    /// rather than copied so the two can never come apart, and the one thing
-    /// only a transcript can ask is added underneath: *this paragraph* is
-    /// somebody else.
+    /// rather than copied so the two can never come apart.
+    ///
+    /// **The two sizes are one item now.** This menu used to carry both "Not
+    /// Nick…", which renames every turn Nick has, and "Speaker for This Turn ▸",
+    /// which moves one paragraph, sitting one above the other with nothing on
+    /// either saying that was the difference. Reported as confusing, and then
+    /// reported again from the other end, as a name made on one turn that had
+    /// gone by the time its author looked back. Both go through the picker now,
+    /// and the size is a checkbox in it that counts what it is about to change:
+    /// see `TurnChoice`.
     ///
     /// Built when the menu opens rather than when the turn is drawn. An hour of
     /// meeting is hundreds of turns, and a menu apiece, held for the life of the
     /// pane, to be opened on perhaps one of them.
     private func turnMenu(_ turn: Turn, anchor: NSView, rect: NSRect) -> NSMenu? {
         guard let recording else { return nil }
+        let choice = TurnChoice(noun: "turn") { [weak self] label in
+            // No reload: the picker closes on the next line and closing is what
+            // runs `reloadAfterSpeakerChange`, which is also what keeps the
+            // reader's place. See `reassign(reload:)`.
+            self?.reassign(.turn(start: turn.start, end: turn.end),
+                           from: turn.speaker, to: label, reload: false)
+        }
         let menu = PersonPopover.menu(
             for: turn.speaker, in: recording,
             // The pane, not the pill, and the rect converted when the popover
@@ -3053,14 +3146,19 @@ final class DetailView: NSView {
             // transcript to naming a voice would be the alert the picker was
             // built to replace.
             open: { [weak self] view, rect in
-                self?.editSpeaker(turn.speaker, from: view, rect: rect)
+                self?.editSpeaker(turn.speaker, from: view, rect: rect, turn: choice)
+            },
+            // "Not Nick…", carrying the paragraph it was opened over. The picker
+            // is the same one the chips row opens; the checkbox is what only a
+            // transcript can offer, because only here is there one turn in mind.
+            identify: { [weak self] view, rect in
+                guard let self, let recording = self.recording else { return }
+                SpeakerPicker.show(for: recording, speaker: turn.speaker,
+                                   from: view, rect: rect, turn: choice) {
+                    [weak self] in self?.reloadAfterSpeakerChange()
+                }
             },
             done: { [weak self] in self?.reloadAfterSpeakerChange() })
-        menu.addItem(.separator())
-        menu.addItem(reassignItem(
-            "Speaker for This Turn",
-            scope: .turn(start: turn.start, end: turn.end), from: turn.speaker,
-            asking: "Who said this turn?", anchor: anchor, rect: rect))
         return menu
     }
 
@@ -3142,8 +3240,15 @@ final class DetailView: NSView {
     /// way back is the same menu on the paragraph it just moved to. What would
     /// need a confirmation is a question this cannot ask usefully, since the
     /// only way to see whether it was right is to look at the result.
+    /// `reload` is false for the one caller that is about to reload anyway.
+    ///
+    /// The picker calls this and then closes, and closing is what runs
+    /// `reloadAfterSpeakerChange`. Reloading here as well rebuilt the transcript
+    /// twice for one edit, and the second rebuild read the reader's place out of
+    /// a clip view the first had just emptied, so it was zero: the pane kept its
+    /// place and then jumped to the top a moment later.
     private func reassign(_ scope: TranscriptEditor.Scope, from speaker: String,
-                          to target: String) {
+                          to target: String, reload: Bool = true) {
         guard let recording else { return }
         endEditing()
         guard TranscriptEditor.apply(.reassign(scope, from: speaker, to: target),
@@ -3155,7 +3260,7 @@ final class DetailView: NSView {
             log("that has changed since the pane was drawn; nothing was written.")
             return
         }
-        reloadTranscript()
+        if reload { reloadTranscript() }
     }
 
     // MARK: - Correcting the transcript

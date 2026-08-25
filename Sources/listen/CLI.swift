@@ -1558,8 +1558,10 @@ enum CLI {
       --move <n> <name>          hand segment n to somebody else, leaving the
                                  rest of this speaker alone
       --move-turn <from> <to> <name>
-                                 hand every segment of theirs that starts
-                                 between those two seconds to somebody else
+                                 hand one of their paragraphs to somebody else.
+                                 The two numbers are that turn's own start and
+                                 end; a window that is not exactly one turn of
+                                 theirs is refused, and prints the ones that are
 
     transcribe options:
       --format md|json|txt       default md. json carries the timings.
@@ -2133,6 +2135,20 @@ enum CLI {
             guard rest.count >= 4, let start = Double(rest[1]),
                   let end = Double(rest[2]) else {
                 fail("--move-turn needs a start, an end and a name.")
+            }
+            // Named here rather than left to the generic refusal below, because
+            // a window is a thing somebody types and the numbers that would work
+            // are already in hand. `.turn` resolves the window back through the
+            // fold that produced the paragraph and refuses anything that is not
+            // exactly one of them: see `Merge.fold`.
+            let theirs = recording.storedTurns.filter { $0.speaker == speaker }
+            if !theirs.contains(where: { abs($0.start - start) <= 0.001
+                                      && abs($0.end - end) <= 0.001 }) {
+                let listed = theirs.prefix(12)
+                    .map { String(format: "%.2f %.2f", $0.start, $0.end) }
+                    .joined(separator: "\n  ")
+                fail("no turn of \(speaker)'s runs \(rest[1])-\(rest[2]). "
+                     + "Theirs\(theirs.count > 12 ? ", first 12" : ""):\n  " + listed)
             }
             edit = .reassign(.turn(start: start, end: end), from: speaker, to: rest[3])
         case .some(let name) where !name.hasPrefix("-"):

@@ -350,6 +350,11 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         field.delegate = self
         field.target = self
         field.action = #selector(commitTyped)
+        // Not on losing focus. Same trap as `SpeakerPicker`, and the same one
+        // line: `NSTextField(string:)` turns `sendsActionOnEndEditing` on, so
+        // clicking away from a half-typed tag filed it. See the longer note
+        // there.
+        field.cell?.sendsActionOnEndEditing = false
         stack.addArrangedSubview(field)
         field.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
 

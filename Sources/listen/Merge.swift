@@ -371,21 +371,60 @@ enum Merge {
     /// was still there, and it read exactly like the transcript having been
     /// destroyed. See `paragraphGap` for the number.
     static func turns(from segments: [LabelledSegment]) -> [Turn] {
-        var out: [Turn] = []
-        for segment in segments {
+        fold(segments).map(\.turn)
+    }
+
+    /// The same fold, saying which segments each paragraph is made of.
+    ///
+    /// `turns(from:)` is for everything that *reads* a transcript. This is for
+    /// the one thing that writes to a paragraph, `TranscriptEditor`'s
+    /// reassignment at turn scope, and it exists because **a time window does
+    /// not name a turn**.
+    ///
+    /// It looks as though it does. A turn runs from its first segment's start to
+    /// its last one's end, so a window in the transcript's own units survives
+    /// any renumbering, which is why the reassignment was written that way. What
+    /// it does not survive is two turns by one speaker that touch: a turn ends
+    /// where its segments stop reaching, the next one begins wherever the
+    /// interruption between them left off, and on a two-track recording those
+    /// two numbers are routinely the same instant or the wrong way round.
+    ///
+    /// Measured on a real 1h29m call, moving the paragraph at 88.32-98.40 to a
+    /// new name:
+    ///
+    ///     4  Me  88.32  98.40   It's a 5k monitor. But I'll just ...
+    ///     5  Nick 92.40 102.64  Yeah, I guess.
+    ///     6  Me  98.40  106.16  It's gonna be better anyway.
+    ///
+    /// Rows 4 **and** 6 moved, because row 6's segment starts at 98.40 and 98.40
+    /// is inside `[88.32, 98.40]`. Nobody had selected row 6, nothing said it had
+    /// gone, and the way anyone would fix it is a whole-speaker repair on the
+    /// name they had just made.
+    ///
+    /// So the window is resolved back through the fold that produced it rather
+    /// than applied to the segments directly. That keeps the property the window
+    /// was chosen for, since a fold over what is on disk now is exactly the
+    /// paragraph on screen, and it keeps the other one the note about this made:
+    /// a segment `sentences(in:from:)` could not place inside its turn is still
+    /// in that turn here, so it moves with the rest instead of being left behind
+    /// under the old speaker.
+    static func fold(_ segments: [LabelledSegment]) -> [(turn: Turn, segments: [Int])] {
+        var out: [(turn: Turn, segments: [Int])] = []
+        for (index, segment) in segments.enumerated() {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             // Overlaps come out negative here, which is smaller than the gap and
             // joins, as it should: two segments that overlap are one stretch of
             // speech the diarizer cut in the middle.
-            if var last = out.last, last.speaker == segment.speaker,
+            if var last = out.last?.turn, last.speaker == segment.speaker,
                segment.start - last.end <= paragraphGap {
                 last.text = (last.text + " " + text).trimmingCharacters(in: .whitespaces)
                 last.end = max(last.end, segment.end)
-                out[out.count - 1] = last
+                out[out.count - 1].turn = last
+                out[out.count - 1].segments.append(index)
             } else {
-                out.append(Turn(start: segment.start, end: segment.end,
-                                speaker: segment.speaker, text: text))
+                out.append((Turn(start: segment.start, end: segment.end,
+                                 speaker: segment.speaker, text: text), [index]))
             }
         }
         return out

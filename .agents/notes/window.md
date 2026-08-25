@@ -1567,6 +1567,36 @@ note already said. `scroll.contentView.scroll(to: .zero)` with a
 `reflectScrolledClipView` after it opens at the top on four runs out of four, and
 does not depend on layout having settled at all.
 
+## A reload that does not scroll still loses the reader's place
+
+`renderTurns(scrollToTop: false)` was written for exactly this and did not do it.
+It meant "do not scroll to the top **again**", and that is not the same as
+staying put: the first line of it empties the stack, the document collapses to
+nothing for a pass, and a clip view whose document is shorter than its own bounds
+clamps its origin to zero. Putting the turns back does not undo that.
+
+So every correction made an hour into a meeting answered by jumping to the top of
+it, which reads as the app having lost the transcript rather than as a scroll
+position. `renderTurns` takes the origin before it empties anything and
+`restoreTranscriptScroll` puts it back, deferred for the same reason
+`scrollTranscriptToTop` is deferred and clamped to the new document height,
+because `.discard` can make the transcript shorter than the offset it was read
+at.
+
+**A speaker change goes through `show`, and `show` is right to open at the top.**
+`reloadAfterSpeakerChange` uses it because a rename changes the title, the chips
+and the sidebar row, not only the paragraphs. So the place is handed forward in
+`keepingScroll` rather than taken out of either: the reload that means to open at
+the top still does, and the one that is really an edit does not.
+
+**One edit, one reload, and the second one was reading a clip view the first had
+just emptied.** The picker's narrow path called `reassign`, which reloaded, and
+then closed, and closing runs `reloadAfterSpeakerChange`, which reloaded again.
+The second read the reader's place out of a clip view that had been clamped to
+zero a moment earlier, so the pane kept its place and then jumped to the top
+anyway. Measured through the window with the first paragraph's AX position: -6817
+before the edit, 383 after. `reassign(reload:)` is false for that one caller.
+
 **Three constants had to agree and only one of them said so.** The stack was
 `scroll.width - 20`, every turn row was `stack.width - 20`, and the stack's own
 `edgeInsets` were a fourth number. The row width is the stack's width less its

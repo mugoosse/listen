@@ -38,16 +38,41 @@ struct SpeakerPreview {
     var end: () -> Void
 }
 
+/// Naming the speaker, or naming only the words the picker was opened over.
+///
+/// **What this replaces was two menu items that read as one question asked
+/// twice.** A pill in the transcript carried "Not Nick…", which renamed every
+/// turn Nick has, and "Speaker for This Turn ▸", which moved one paragraph, and
+/// nothing on either said which was which. Reported after a name made on one
+/// turn went missing: the two sizes are not something a reader should have to
+/// infer from a menu item's wording, and the one they reach for first is
+/// whichever is worded more like what they want to say.
+///
+/// So there is one item now, it opens this list, and the size is a checkbox
+/// above it that says what it is about to change. Every turn is the default,
+/// because a speaker being wrong throughout is the commoner mistake and the
+/// narrower one is the correction to a diarizer boundary.
+@MainActor
+struct TurnChoice {
+    /// What the narrow option acts on, in the checkbox's own words: "turn" or
+    /// "sentence".
+    var noun: String
+    /// Hand those words to `label`, leaving the rest of what the speaker said
+    /// alone. `TranscriptEditor.reassign` at the caller's own scope.
+    var apply: (String) -> Void
+}
+
 @MainActor
 enum SpeakerPicker {
     private static var current: NSPopover?
 
     static func show(for recording: Recording, speaker: String,
                      from view: NSView, rect: NSRect,
+                     turn: TurnChoice? = nil,
                      preview: SpeakerPreview? = nil,
                      done: @escaping () -> Void) {
         present(PickerController(recording: recording, speaker: speaker,
-                                 preview: preview, purpose: .name) {
+                                 preview: preview, purpose: .name(turn)) {
                                      current?.performClose(nil)
                                      done()
                                  },
@@ -132,7 +157,10 @@ private struct Candidate {
 @MainActor
 private enum Purpose {
     /// Name this speaker, everywhere they appear in this recording.
-    case name
+    ///
+    /// With a `TurnChoice`, the popover was opened over one paragraph and can
+    /// also name just that: the checkbox chooses, and every turn is the default.
+    case name(TurnChoice?)
     /// Name whoever said one sentence or one turn, leaving the speaker
     /// otherwise as it was. The closure is handed the label to write.
     case pick(asking: String, apply: (String) -> Void)
@@ -157,6 +185,26 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     /// `viewDidAppear`.
     private var poll: Timer?
 
+    /// The two sizes this popover can write at, and which one is armed.
+    ///
+    /// Nil when there is nothing narrower to offer: the chips row under the
+    /// title is about a speaker and has no paragraph in mind, and a recording
+    /// where this speaker has a single turn has two sizes that mean the same
+    /// thing, which is a checkbox that cannot be wrong and cannot be useful.
+    private let choice: TurnChoice?
+    private let scopeBox = NSButton()
+    /// Wrapping, because it carries a name somebody chose. "Only this turn
+    /// changes. Christopher Alexander keeps the other 62." does not fit one line
+    /// at this width, and a truncated sentence about what is about to be written
+    /// is worse than no sentence.
+    private let scopeDetail = NSTextField(wrappingLabelWithString: "")
+    /// The whole-speaker repairs, hidden while the narrow scope is armed: they
+    /// act on everything the speaker ever said, which is the size the checkbox
+    /// has just been turned off.
+    private var repairs: [NSView] = []
+    /// How many turns this speaker has, for what the checkbox says it will do.
+    private let turnCount: Int
+
     private static let width: CGFloat = 320
 
     /// Whether this popover is putting a name on the speaker itself, rather than
@@ -166,6 +214,14 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         return false
     }
 
+    /// Whether picking a name changes every turn this speaker has.
+    ///
+    /// True whenever there is no narrower choice on offer, so the callers that
+    /// never had one behave exactly as they did.
+    private var wholeSpeaker: Bool {
+        choice == nil || scopeBox.state == .on
+    }
+
     init(recording: Recording, speaker: String, preview: SpeakerPreview?,
          purpose: Purpose, done: @escaping () -> Void) {
         self.recording = recording
@@ -173,6 +229,13 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         self.preview = preview
         self.purpose = purpose
         self.done = done
+        let count = recording.storedTurns.filter { $0.speaker == speaker }.count
+        self.turnCount = count
+        if case .name(let offered) = purpose, count > 1 {
+            self.choice = offered
+        } else {
+            self.choice = nil
+        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -259,11 +322,50 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             stack.addArrangedSubview(detail)
         }
 
+        // **The size of the edit, stated before the answer is chosen.** It goes
+        // above the field rather than beside the list, because it changes what
+        // every row below it means and a control that qualifies a list belongs
+        // in front of it.
+        if let choice {
+            scopeBox.setButtonType(.switch)
+            scopeBox.state = .on
+            scopeBox.title = "Change every \(choice.noun) by \(SpeakerName.display(speaker))"
+            scopeBox.font = .systemFont(ofSize: 12)
+            scopeBox.target = self
+            scopeBox.action = #selector(scopeChanged)
+            stack.addArrangedSubview(scopeBox)
+
+            // What each state costs, in the recording's own numbers. A checkbox
+            // that only names itself leaves the reader to work out how much of
+            // the transcript is about to move, which is exactly the thing the
+            // two menu items this replaced never said.
+            scopeDetail.font = .systemFont(ofSize: 11)
+            scopeDetail.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(scopeDetail)
+            scopeDetail.widthAnchor.constraint(
+                equalToConstant: Self.width - 28).isActive = true
+            drawScope()
+        }
+
         field.placeholderString = "Name, or search people"
         field.font = .systemFont(ofSize: 13)
         field.delegate = self
         field.target = self
         field.action = #selector(commitTyped)
+        // **Giving up focus is not somebody saying yes.** `NSTextField(string:)`
+        // turns `sendsActionOnEndEditing` on and the bare `NSTextField()` does
+        // not, which is not written down anywhere and was measured; with it on,
+        // the field editor resigning sends the action, and the action here names
+        // a speaker. Two ways to trip it, both reported: type half a name and
+        // click outside the popover, and the transcript is renamed to whatever
+        // was in the field as it closed; click the checkbox above the list, and
+        // the same thing happens *and* takes the popover with it, so the control
+        // that chooses the size of the edit performed the edit instead.
+        //
+        // Confirming is a row in the list, the "New person" row, or Return.
+        // Return still works: `NSTextField` sends its action on
+        // `NSReturnTextMovement` whatever this is set to.
+        field.cell?.sendsActionOnEndEditing = false
         stack.addArrangedSubview(field)
         field.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
 
@@ -290,6 +392,10 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // narrower question, and Merge and Discard would answer a wider one than
         // was asked: they act on everything that speaker ever said.
         if case .name = purpose { addRepairs(to: stack) }
+        // Hidden rather than absent while the narrow scope is armed, so the
+        // popover does not change what it offers between two openings of the
+        // same menu item.
+        drawRepairs()
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView()
@@ -338,6 +444,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         separator.boxType = .separator
         stack.addArrangedSubview(separator)
         separator.widthAnchor.constraint(equalToConstant: Self.width - 28).isActive = true
+        repairs.append(separator)
 
         var buttons: [NSButton] = []
         if VoiceBank.isPlaceholder(speaker) {
@@ -356,6 +463,38 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         footer.orientation = .horizontal
         footer.spacing = 8
         stack.addArrangedSubview(footer)
+        repairs.append(footer)
+    }
+
+    @objc private func scopeChanged() {
+        drawScope()
+        drawRepairs()
+        // The caret goes back where it was, not to a selection of everything
+        // typed so far. `makeFirstResponder` on a text field selects its whole
+        // contents, so half a name typed before the box was ticked would be
+        // replaced by the next keystroke rather than continued.
+        //
+        // The rules on what may be written differ between the two sizes, and
+        // `check` reads `wholeSpeaker` when a row is picked rather than now, so
+        // nothing else has to be rebuilt here.
+        let typed = field.stringValue.count
+        view.window?.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: typed, length: 0)
+    }
+
+    private func drawScope() {
+        guard choice != nil else { return }
+        let shown = SpeakerName.display(speaker)
+        scopeDetail.stringValue = scopeBox.state == .on
+            ? "All \(turnCount) turns by \(shown) change."
+            : "Only this turn changes. \(shown) keeps the other \(turnCount - 1)."
+    }
+
+    /// Leave Unnamed and Discard are whole-speaker repairs, so they belong to
+    /// the whole-speaker size. Offering them under an unticked box would be the
+    /// popover contradicting the line above them.
+    private func drawRepairs() {
+        for view in repairs { view.isHidden = !wholeSpeaker }
     }
 
     override func viewDidAppear() {
@@ -624,8 +763,16 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             return
         }
         switch purpose {
-        case .name:
-            TranscriptEditor.apply(.rename(speaker, to: label), to: recording)
+        case .name(let offered):
+            // The checkbox decides which of the two edits this is. `choice` is
+            // nil when there was never a narrower one to make, and `wholeSpeaker`
+            // is then always true, so the callers that predate this write exactly
+            // what they wrote before.
+            if let offered, !wholeSpeaker {
+                offered.apply(label)
+            } else {
+                TranscriptEditor.apply(.rename(speaker, to: label), to: recording)
+            }
         case .pick(_, let write):
             write(label)
         }
@@ -661,19 +808,21 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     /// split it off as a stranger.
     private func check(_ label: String) -> People.RenameProblem? {
         if recording.speakers.contains(label) { return nil }
-        switch purpose {
-        case .name:
-            return People.checkSpeaker(label, in: recording)
-        case .pick:
+        // The narrower size checks less, whichever purpose asked for it: an
+        // unticked box is the same edit `.pick` makes, so it has to be allowed
+        // the same answers. `Me` is the one that matters. See the paragraph
+        // above about the far end coming back in through the microphone.
+        guard wholeSpeaker, case .name = purpose else {
             let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { return .empty }
             // A letter is still refused. Every placeholder in this recording is
-            // already an item in the menu this popover was opened from, so
-            // typing one here can only mean a person called "B", which is the
-            // name that reads as a speaker nobody has labelled yet.
+            // already a row in the list above, so typing one here can only mean a
+            // person called "B", which is the name that reads as a speaker nobody
+            // has labelled yet.
             if VoiceBank.isPlaceholder(trimmed) { return .looksLikePlaceholder(trimmed) }
             return nil
         }
+        return People.checkSpeaker(label, in: recording)
     }
 
     func controlTextDidChange(_ note: Notification) { render() }

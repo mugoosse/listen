@@ -205,6 +205,40 @@ The onboarding rule this reverses one reason for still holds. Windows must
 float and re-activate after each permission prompt: a window behind a system
 dialog is unrecoverable either way.
 
+## `NSTextField(string:)` fires its action on losing focus, and `NSTextField()` does not
+
+Measured, because nothing says so and the two initialisers look interchangeable:
+
+    NSTextField(string: "")  sendsActionOnEndEditing = true
+    NSTextField()            sendsActionOnEndEditing = false
+
+With it on, the field sends its target/action every time the field editor
+resigns, not only on Return. So a field whose action *does* something is a
+field that does that thing when the user clicks anywhere else.
+
+Both ways of tripping it were reported on `SpeakerPicker` on the same day. Type
+half a name into "Who is this really?" and click outside the popover: the
+speaker is renamed to whatever was in the field as it closed, and the transcript
+comes back with a person called "dd" in it. Click the checkbox *inside* the same
+popover: focus leaves the field, the action fires, the name is written **and**
+the popover closes, so the control that chooses the size of the edit performed
+the edit instead and the size it chose was the old one.
+
+`field.cell?.sendsActionOnEndEditing = false` is the fix, and Return is
+unaffected: `NSTextField` sends its action on `NSReturnTextMovement` whatever
+this is set to. Tab does not, which is what you want too.
+
+Every field in this app that types into a popover has it off now, which is
+`SpeakerPicker` and `TagChips`. The rule to carry: **a field whose action
+commits something must not send that action on end editing.** Clicking away is
+how people abandon what they were typing.
+
+One consequence worth handling with it. `makeFirstResponder` on a text field
+selects its whole contents, so giving focus back after a click on some other
+control in the same popover means the next keystroke replaces the half-typed
+name rather than continuing it. `selectedRange` on the field editor puts the
+caret back at the end.
+
 ## A text field does not stop editing because you clicked away
 
 Clicking the title, then clicking the transcript, left the caret blinking in the

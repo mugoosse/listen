@@ -113,7 +113,16 @@ final class AboutWindow: NSObject, NSWindowDelegate {
 
         let versions = versionGrid()
         stack.addArrangedSubview(versions)
-        stack.setCustomSpacing(20, after: versions)
+        stack.setCustomSpacing(10, after: versions)
+
+        // Directly under the version number, because that is the question it
+        // answers: somebody reading "0.18.2" off this window is usually asking
+        // what 0.18.2 was. Not in the row of links below it, which are three
+        // ways out to the web, while this opens the notes that shipped inside
+        // this copy.
+        let notes = action("Release Notes") { ChangelogWindow.show() }
+        stack.addArrangedSubview(notes)
+        stack.setCustomSpacing(20, after: notes)
 
         // The three places somebody goes from here, in the order they would
         // want them: what it is, how to use it, and what it is made of.
@@ -265,9 +274,13 @@ final class AboutWindow: NSObject, NSWindowDelegate {
     }
 
     private func link(_ title: String, _ url: URL) -> NSButton {
+        action(title) { Links.open(url) }
+    }
+
+    private func action(_ title: String, _ run: @escaping () -> Void) -> NSButton {
         let button = NSButton(title: title, target: nil, action: nil)
         button.bezelStyle = .rounded
-        attach(button) { Links.open(url) }
+        attach(button, run)
         return button
     }
 

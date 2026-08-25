@@ -15,7 +15,7 @@ enum CLI {
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts", "notes", "tags", "ask", "sync", "backup", "activity", "forget",
-        "audio",
+        "audio", "changelog",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -144,6 +144,8 @@ enum CLI {
         case "--version", "-v":
             print(version)
             exit(0)
+        case "changelog":
+            changelog(rest)
         case "calibrate":
             calibrate()
         case "voices":
@@ -1344,6 +1346,56 @@ enum CLI {
         return String(data: data, encoding: .utf8)
     }
 
+    /// `listen changelog [<version>] [--list]`
+    ///
+    /// The notes the Release Notes window draws, out of the same bundled file,
+    /// which is what makes this the way to check that parser without the GUI:
+    /// a section the window splits wrong is a section this prints wrong.
+    ///
+    /// Markdown as written. It is what the file holds and what anything piping
+    /// this expects, and reformatting it here would be a third rendering of one
+    /// document.
+    private static func changelog(_ args: [String]) -> Never {
+        let releases = Changelog.releases
+        if releases.isEmpty {
+            fail("no release notes in this build. They ship in the app bundle, "
+                 + "and every version's are at \(Links.changelog.absoluteString)")
+        }
+
+        if let wanted = args.first(where: { !$0.hasPrefix("-") }) {
+            guard let release = Changelog.release(wanted) else {
+                fail("no section for \(wanted). `listen changelog --list` has the versions.")
+            }
+            print(headline(release))
+            print("")
+            print(release.body)
+            exit(0)
+        }
+
+        if args.contains("--list") {
+            for release in releases { print(headline(release)) }
+            exit(0)
+        }
+
+        for (index, release) in releases.enumerated() {
+            if index > 0 { print("") }
+            print(headline(release))
+            print("")
+            print(release.body)
+        }
+        exit(0)
+    }
+
+    /// `0.18.2  2026-08-25  (installed)`. One line, which both the listing and
+    /// each printed section open with, so the two cannot describe a release
+    /// differently.
+    private static func headline(_ release: Changelog.Release) -> String {
+        var line = release.version
+        if let date = release.date { line += "  \(date)" }
+        if release.version == Changelog.running { line += "  (installed)" }
+        return line
+    }
+
     private static var version: String {
         // Resolved through AppInfo rather than Bundle.main, because the
         // installed command is a symlink and Bundle.main follows the path it
@@ -1396,6 +1448,8 @@ enum CLI {
                                  says what that cost.
       mcp                        stdio MCP server. Notes and tags are the only
                                  things an agent can write.
+      changelog [<version>]      what changed, from the notes that shipped in
+                                 this copy. --list for the versions alone.
       activity [--limit N]       what has touched the library: tool calls,
                                  agent runs, exports, deletions, backups.
                                  Ids only, never content. --json for jq.

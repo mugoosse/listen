@@ -251,6 +251,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the one screen whose whole job is being looked at.
         case "about":
             AboutWindow.show()
+        // The release notes, for the same reason, and with one more: what it
+        // draws is 65 KB of somebody else's markdown through `MarkdownText`,
+        // so it is the one window whose layout is decided by a file rather
+        // than by this code.
+        case "changelog":
+            ChangelogWindow.show()
         case let want where want.hasPrefix("dictation-demo"):
             // Every meter style at once, on one microphone. `:fake` drives it
             // from a synthetic envelope, which is the only way to watch the
@@ -324,6 +330,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ProcessInfo.processInfo.environment["LISTEN_PANEL"] == "about"
     }
 
+    private var previewingChangelog: Bool {
+        ProcessInfo.processInfo.environment["LISTEN_PANEL"] == "changelog"
+    }
+
     /// The dictation pill is a third window, so it needs a third answer. The
     /// demo stacks several and photographing one of them would be arbitrary, so
     /// it is deliberately not shootable: it is for watching, not for stills.
@@ -369,16 +379,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 taken += 1
                 let path = String(format: "%@-%02d.png", prefix, taken)
-                // The panel is its own window, so photographing the library
-                // would produce a picture of whatever the library happened to be
-                // showing and none of the state being previewed.
-                let wrote = self.previewingDictation
-                    ? self.dictationHUD?.writeShot(to: path) ?? false
-                    : self.previewingAbout
-                        ? AboutWindow.shared.writeShot(to: path)
-                        : self.previewingPanel
-                            ? self.indicator.writeShot(to: path)
-                            : LibraryWindow.shared.writeShot(to: path)
+                let wrote = self.writeShot(to: path)
                 log(wrote ? "shot \(path)" : "shot failed: \(path)")
                 guard taken >= count else { return }
                 timer.invalidate()
@@ -386,6 +387,22 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Which window a `LISTEN_SHOT` frame is a picture of.
+    ///
+    /// The pill, the floating panel, About and the release notes are each their
+    /// own window, so photographing the library would give a picture of
+    /// whatever the library happened to be showing and none of the state being
+    /// previewed. Written out rather than nested as one conditional: it was
+    /// four deep at three windows, and the next reader has to be able to add a
+    /// fifth without re-deriving the order.
+    private func writeShot(to path: String) -> Bool {
+        if previewingDictation { return dictationHUD?.writeShot(to: path) ?? false }
+        if previewingAbout { return AboutWindow.shared.writeShot(to: path) }
+        if previewingChangelog { return ChangelogWindow.shared.writeShot(to: path) }
+        if previewingPanel { return indicator.writeShot(to: path) }
+        return LibraryWindow.shared.writeShot(to: path)
     }
 
     // MARK: - Menu

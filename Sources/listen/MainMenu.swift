@@ -167,6 +167,12 @@ enum MainMenu {
     /// which is what puts the search field at the top of it.
     private static func helpMenu() -> NSMenuItem {
         let (item, menu) = submenu("Help")
+        // First, and on its own. The other five items are about Listen in
+        // general; this one is about the copy in front of you, and it is the
+        // only answer in the app to what the last update changed.
+        add(menu, "Release Notes", #selector(MenuActions.showChangelog))
+            .target = MenuActions.shared
+        menu.addItem(.separator())
         add(menu, "Listen Documentation", #selector(MenuActions.openDocs))
             .target = MenuActions.shared
         add(menu, "Listen Website", #selector(MenuActions.openWebsite))
@@ -194,6 +200,9 @@ final class MenuActions: NSObject {
     @objc func openChats() { LibraryWindow.shared.openChats() }
     /// The window, not the settings section. See `AboutWindow`.
     @objc func showAbout() { AboutWindow.show() }
+    /// The notes that shipped with this build, not the ones on GitHub. See
+    /// `Changelog`.
+    @objc func showChangelog() { ChangelogWindow.show() }
 
     @objc func openDocs() { Links.open(Links.docs) }
     @objc func openWebsite() { Links.open(Links.website) }

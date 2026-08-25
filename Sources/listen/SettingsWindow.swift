@@ -1227,6 +1227,13 @@ final class UpdatesPane: Pane {
         // is the bridge: this pane is where About used to live, so anybody who
         // learned that route still lands one press away from it.
         note(Self.versionString)
+        // Under the version, because it is what the version means. This pane
+        // says whether a copy is current; the notes say what being current got
+        // you, and nothing else in the app could answer that.
+        button("Release Notes…") { ChangelogWindow.show() }
+        note("What changed in this version and in every one before it. Sparkle "
+             + "shows the newest section before an update, and with updates "
+             + "installing on quit that is a pane most people never see.")
         button("About Listen…") { AboutWindow.show() }
         note("What Listen is, who made it, and the links to the website, the "
              + "documentation and the source.")

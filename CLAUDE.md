@@ -257,7 +257,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The room the composer needs is the transcript's, not the scroll view's
 - Open at the top is the clip view's origin, not a point in the stack
 
-### `.agents/notes/appkit.md` (29k)
+### `.agents/notes/appkit.md` (35k)
 
 Things AppKit does that no documentation warns about. These generalise past
 this app, so read them before building any new window, menu or popover.
@@ -285,6 +285,8 @@ this app, so read them before building any new window, menu or popover.
 - An `NSToolbarItem` lays out its own image and title, and has no gap to give
 - A content inset is a scroll offset, and it will not hold a view in place
 - Scroller insets are added to content insets, not instead of them
+- A shot has to paint its own background, and drawing the cache over one wipes it
+- Liquid Glass photographs as a white block, and nothing inside it draws
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -464,15 +466,17 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - An empty page needs the greeting the home page has
 - The toolbar's History is gone, and the menu under the card is the one that stays
 
-### `.agents/notes/release.md` (5k)
+### `.agents/notes/release.md` (10k)
 
-`make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`.
+`make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`, `Changelog`,
+`ChangelogWindow`.
 
 - Signing decides whether permissions survive a rebuild
 - Sparkle's key is not in the default keychain account
 - How fast a new version is noticed is four settings, and three of them are defaults
 - The changelog is the only place release notes are written
 - Sparkle needs the notes embedded, not linked
+- The notes are in the app now, and they stop at the version you have
 - `/release` is the shortcut, and it publishes nothing itself
 
 ## Conventions

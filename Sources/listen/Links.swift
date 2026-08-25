@@ -23,6 +23,20 @@ enum Links {
     static let source = URL(string: "https://github.com/mugoosse/listen")!
     static let issues = URL(string: "https://github.com/mugoosse/listen/issues")!
 
+    /// The changelog on GitHub.
+    ///
+    /// Listen ships its own copy of this file and draws it in
+    /// `ChangelogWindow`, so this is not how a user reads the notes for the
+    /// version they have. It is the one that carries the versions they do not:
+    /// a bundled changelog stops at the build it came in, and a reader who
+    /// wants what came after has to be sent somewhere.
+    ///
+    /// `release.sh` hands the same address to `generate_appcast
+    /// --full-release-notes-url`, which is where Sparkle's update pane links.
+    /// Two writers of one URL, and they have to agree.
+    static let changelog = URL(
+        string: "https://github.com/mugoosse/listen/blob/main/CHANGELOG.md")!
+
     /// The sentence that travels with the link.
     ///
     /// One line, because it is going into a message somebody else is writing.

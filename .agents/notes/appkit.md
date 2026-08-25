@@ -610,3 +610,73 @@ area. Listen ends up with neither inset on the transcript and a spacer at the en
 of the stack instead, which is `.agents/notes/window.md`. A content inset limits
 how far a document may travel; it does not decide what may be drawn over it, so
 either way the text passes behind the drawer while scrolling.
+
+## A shot has to paint its own background, and drawing the cache over one wipes it
+
+A `LISTEN_SHOT` of the About window came back as the app icon on an empty page,
+and one of the Release Notes window as an empty page. Both windows were correct
+on screen at that moment, which is what `AXUIElementCreateApplication(pid)`
+said about them: every label, every button, and 15730 points of laid-out
+document.
+
+**The pictures had no background at all.** Measured on 0.18.2 (build 233),
+macOS 26.5: 91% of the sampled pixels in that About shot are alpha 0.
+`cacheDisplay` asks *views* to draw, and a window's background is not one of
+its views, so what comes back is a transparent sheet with the labels sitting on
+nothing. The viewer is what disguises it as a colour bug: everything that opens
+a PNG composites transparency on white, so light mode's dark text reads
+perfectly and dark mode's white text vanishes into the paper. Nobody had
+photographed a mostly-text window in dark mode before.
+
+`writeShot` had a flatten step written for exactly this, and it had never once
+worked. It filled an `NSImage` with `windowBackgroundColor` and then drew the
+cached rep over the top, and that rep is the whole rectangle, alpha included:
+it replaced the fill rather than sitting on it. Sampled behind the glyphs on a
+scratch window holding one label and one button: alpha 0 with the fill, alpha 0
+without it, in both appearances.
+
+The fix is one surface rather than two. An `NSBitmapImageRep`, its `size` set
+in points, an `NSGraphicsContext` over it, and inside
+`performAsCurrentDrawingAppearance` the background fill followed by
+`displayIgnoringOpacity(_:in:)`, which draws over the fill instead of
+compositing a sheet onto it. Measured after, on the same windows: 0%
+transparent, and the recording panel's clock, About's buttons and every line of
+the release notes are legible.
+
+Two smaller traps inside that, both silent:
+
+- **`rep.size` has to be set before the context is built from it.** A context
+  made from a rep still carrying its pixel count draws the view at half scale
+  into one corner and leaves the rest of the sheet empty.
+- **The appearance has to be current for the drawing and not only for the
+  fill.** Every dynamic colour in the window resolves inside that block.
+
+### Liquid Glass photographs as a white block, and nothing inside it draws
+
+`NSGlassEffectView`, and the `NSContainerConcentricGlassEffectView` AppKit
+wraps an `NSSplitViewItem(sidebarWithViewController:)` in on macOS 26, both
+paint **opaque white** when they are drawn offscreen, and **nothing inside
+them draws at all**. Measured at brightness 1.00, alpha 1.00 in a scratch
+window in dark mode, beside a detail area drawing correctly at 0.12, and then
+on the real library window with four recordings in it: the sidebar's rows and
+the Ask composer's field are absent from the picture in dark mode and in light
+mode alike. So a shot of the library window is its detail area, correctly,
+beside two white rectangles.
+
+**There is no way round it from here, and the obvious one was tried and
+removed.** The first attempt read that white as an appearance fault and added
+`LISTEN_SHOT_APPEARANCE=light|dark` to draw the window in the other appearance,
+on the theory that dark text on white glass would be legible. It is not: the
+content is not being drawn in the wrong colour, it is not being drawn. The flag
+went out again rather than shipping an affordance that answers a question
+nobody can act on. `writeShot` says the sentence instead, on stderr, next to the
+line naming the file.
+
+Those two surfaces are read through `AXUIElementCreateApplication(pid)`, which
+has no opinion about drawing: the sidebar's table, its rows and the composer's
+field are all in the tree with their frames.
+
+And the general one, which is the expensive half: **a blank shot is also what a
+window that failed to lay out looks like.** The first reading of those two
+pictures was that the new window had not laid out at all. When a shot disagrees
+with what you expected, read the window through AX before believing the picture.

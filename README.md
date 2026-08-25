@@ -601,6 +601,7 @@ listen activity [--limit N]       what has touched the library. Ids, never
                                   content.
 listen import <path>              bring in a meet_transcriptions library
 listen sources                    what meeting detection sees, during a call
+listen changelog [<version>]      what changed, from the notes in this copy
 ```
 
 `listen calendar match <id>` is the one worth knowing about. Naming happens
@@ -788,7 +789,7 @@ With everything at its defaults, two things, both declared in
 `InternetAccessPolicy.plist` for firewall tools like Little Snitch:
 
 - **huggingface.co**, once, to download the speech model.
-- **github.com**, every two days, to check for an update.
+- **github.com**, at launch and every six hours after, to check for an update.
 
 Two more exist only if you turn them on, and are in the same policy file:
 

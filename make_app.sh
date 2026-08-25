@@ -73,6 +73,18 @@ if [ -f "$ROOT/InternetAccessPolicy.plist" ]; then
     cp "$ROOT/InternetAccessPolicy.plist" "$APP/Contents/Resources/"
 fi
 
+# The release notes, drawn by the Release Notes window and printed by `listen
+# changelog`. The same file release.sh publishes, copied rather than rewritten:
+# a second copy cut for the app would be a second place for the notes to be
+# wrong, and nothing would report the disagreement. 65 KB.
+#
+# A build without it is a build whose window says so, so this is not a hard
+# failure: `swift build` produces no bundle at all and is a supported way to
+# compile this package.
+if [ -f "$ROOT/CHANGELOG.md" ]; then
+    cp "$ROOT/CHANGELOG.md" "$APP/Contents/Resources/CHANGELOG.md"
+fi
+
 # Sparkle ships as a binary framework. SwiftPM links it but does not embed it,
 # so a bare executable built from this package dies at launch with a dyld
 # "Library not loaded: @rpath/Sparkle.framework" error. Package.swift adds the

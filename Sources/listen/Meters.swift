@@ -41,14 +41,49 @@ enum FakeSpeech {
 /// Lifted out of `LibraryWindow.writeShot` when the panel needed the same thing,
 /// with its reasoning: `screencapture` and ScreenCaptureKit both photograph the
 /// *screen*, so neither can see these windows when the Mac is locked, over SSH,
-/// or with the lid shut. `cacheDisplay` asks the view to draw itself into a
-/// bitmap, which needs no display, no session and no Screen Recording grant.
+/// or with the lid shut. Asking the view to draw itself into a bitmap needs no
+/// display, no session and no Screen Recording grant.
 ///
-/// The flattening is not cosmetic. `cacheDisplay` draws views and not windows,
-/// and an `NSVisualEffectView`'s material is the window server's work, so
-/// without a background painted underneath a dark panel comes out as white text
-/// on white. This is not what the thing looks like to the pixel and is not meant
-/// to be: it is legible, and the colours and the layout are the app's own.
+/// The background is not cosmetic. A view draws itself and not its window, and
+/// a window's background is not one of its views, so nothing paints behind the
+/// text and what comes back is a transparent sheet with the labels sitting on
+/// it. In light mode that is invisible as a fault: dark text on transparency
+/// reads correctly against the white every image viewer puts behind it. In dark
+/// mode the same picture is white text on nothing, which the same viewer shows
+/// as white on white.
+///
+/// Not the materials, which was the old reading here and is wrong: an
+/// `NSVisualEffectView` set to `.sidebar` draws its own fallback offscreen, and
+/// measured 0.23 against a 0.12 background. Glass is the exception, below.
+///
+/// **The first version of this knew that and still did not do it.** It filled
+/// an `NSImage` with `windowBackgroundColor` and then drew the cached rep over
+/// the top, and that rep is the whole rectangle: it replaced the fill it was
+/// meant to sit on, alpha included. Measured on macOS 26.5, one window holding
+/// a label and a button, sampling the pixels behind the glyphs: alpha 0 with
+/// the fill and alpha 0 without it, in both appearances. So the fill had never
+/// once survived, and in dark mode About photographed as an icon on nothing and
+/// the Release Notes window as an empty page while both were perfect on screen.
+/// A blank picture of a window is also what a window that failed to lay out
+/// looks like, which is the expensive half of the fault.
+///
+/// So the background and the view go into one context of our own, in that
+/// order, with the appearance made current for both: `displayIgnoringOpacity`
+/// draws over the fill instead of replacing it. Same measurement after: opaque
+/// background, legible text, both appearances.
+///
+/// It is still not what the thing looks like to the pixel and is not meant to
+/// be. What it is for is the layout and the copy.
+///
+/// **Liquid Glass is the one thing this cannot photograph, and there is no way
+/// round it from here.** `NSGlassEffectView`, and the
+/// `NSContainerConcentricGlassEffectView` AppKit wraps a sidebar split item in
+/// on macOS 26, both paint an opaque white block offscreen and **nothing
+/// inside them draws at all**, in either appearance: measured with the library
+/// window's sidebar and Ask composer, both blank in dark and in light. So a
+/// picture of the library window is the detail area, correctly, beside two
+/// white rectangles. Those are read through
+/// `AXUIElementCreateApplication(pid)`, which has no opinion about drawing.
 extension NSView {
     @discardableResult
     func writeShot(to path: String) -> Bool {
@@ -56,21 +91,46 @@ extension NSView {
         // layout pass, and the bitmap would show the frames the views were
         // created with rather than the ones they are drawn at.
         layoutSubtreeIfNeeded()
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return false }
-        cacheDisplay(in: bounds, to: rep)
 
-        let flattened = NSImage(size: bounds.size)
-        flattened.lockFocus()
+        // Said at the moment it bites, because a white block where the sidebar
+        // should be reads as a window that failed to lay out rather than as a
+        // limit of the camera.
+        if holdsGlass {
+            log("shot: Liquid Glass draws as an opaque white block offscreen and "
+                + "nothing inside it draws at all, so the sidebar and any glass "
+                + "capsule will be blank. Read those through AX.")
+        }
+
+        // At the screen's own scale, or 2 for a window that has never been on
+        // one. A shot at 1x is a picture nobody can read 11 point copy in, and
+        // reading the copy is what these are for.
+        let scale = window?.backingScaleFactor ?? 2
+        guard bounds.width > 0, bounds.height > 0,
+              let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(bounds.width * scale),
+                pixelsHigh: Int(bounds.height * scale),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return false }
+        // Points, and before the context is built from it. A context made from
+        // a rep still sized in pixels draws the view at half scale in one
+        // corner and leaves the rest of the sheet empty.
+        rep.size = bounds.size
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return false }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        // The appearance is made current for the drawing as well as for the
+        // fill, because every dynamic colour in the window resolves in here.
         effectiveAppearance.performAsCurrentDrawingAppearance {
             NSColor.windowBackgroundColor.setFill()
-            NSRect(origin: .zero, size: bounds.size).fill()
+            bounds.fill()
+            displayIgnoringOpacity(bounds, in: context)
         }
-        rep.draw(in: NSRect(origin: .zero, size: bounds.size))
-        flattened.unlockFocus()
+        NSGraphicsContext.restoreGraphicsState()
 
-        guard let tiff = flattened.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let data = bitmap.representation(using: .png, properties: [:]) else { return false }
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         do {
             try data.write(to: URL(fileURLWithPath: path))
             return true
@@ -78,6 +138,16 @@ extension NSView {
             log("could not write \(path): \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// Whether anything in this subtree is a glass surface.
+    ///
+    /// By class name, which is only ever allowed to decide a log line. One of
+    /// the two classes involved is private, so there is nothing to test against
+    /// but the name, and nothing this answers may change what is drawn.
+    private var holdsGlass: Bool {
+        if String(describing: type(of: self)).contains("Glass") { return true }
+        return subviews.contains { $0.holdsGlass }
     }
 }
 

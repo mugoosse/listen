@@ -132,6 +132,46 @@ second file to keep published.
 0.1.0's feed shipped with no description at all, so the only thing an updater
 was given to decide on was a version number.
 
+## The notes are in the app now, and they stop at the version you have
+
+Until this window existed, nothing inside Listen could show a changelog. The
+notes reached a user through exactly one surface, the pane Sparkle draws in
+front of an update, and that pane is dismissed and gone. `SUAutomaticallyUpdate`
+makes that worse rather than better: the default path is now a version arriving
+on the next quit with its notes never having been on screen at all, so the more
+reliably Listen updates itself the less anybody sees what it changed. Settings
+could say "up to date" and About could say `0.18.2`, and neither could say what
+0.18.2 was.
+
+`Changelog` parses the file, `ChangelogWindow` draws it, and `make_app.sh`
+copies `CHANGELOG.md` into `Contents/Resources` so there is something to parse.
+Three ways in, because three different questions land here: Help › Release
+Notes for somebody looking for it by name, a button under the version number in
+About, and one under the version line in Settings › Updates.
+
+**The bundled copy stops at the build it shipped in, so it can never show notes
+for a version nobody has installed.** That is the whole trade-off, and the
+footer states it rather than leaving it to be discovered. Fetching the newest
+changelog instead would put a request on the wire every time somebody reads
+their own release notes, on an app whose claim is that it talks to two hosts,
+and `raw.githubusercontent.com` is not one of the entries in
+`InternetAccessPolicy.plist`. The footer links to the file on GitHub for the
+versions this copy cannot know about, at the same URL `release.sh` hands to
+`--full-release-notes-url`.
+
+**Two parsers now split one file, and they have to agree.** `release.sh`'s awk
+keys on `^## [0-9]+\.[0-9]+\.[0-9]+`, and `Changelog.parse` keys on the same
+shape for the same reason given above: an entry's own sub-headings must not end
+a section. A disagreement would be silent on both sides, because each half
+produces a well-formed result on its own, and the symptom would be a release
+whose published notes and whose in-app notes are different halves of one entry.
+
+`listen changelog` is what makes that checkable without the GUI: it reads the
+same bundled file through the same parser, so a section the window would split
+wrong is a section it prints wrong. `listen changelog --list` against
+`grep '^## ' CHANGELOG.md` is the whole test, and `listen changelog <version>`
+prints one section.
+
 ## `/release` is the shortcut, and it publishes nothing itself
 
 `.claude/skills/release/SKILL.md`. It commits and pushes what is outstanding,

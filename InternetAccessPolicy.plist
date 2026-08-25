@@ -25,7 +25,7 @@
             <key>Port</key>
             <string>443</string>
             <key>Purpose</key>
-            <string>Listen checks for new versions every two days.</string>
+            <string>Listen checks for new versions at launch and every six hours after.</string>
             <key>DenyConsequences</key>
             <string>You will not be told when a new version is released. Everything else keeps working.</string>
         </dict>

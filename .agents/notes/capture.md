@@ -546,6 +546,12 @@ listen record --seconds 10                                           # the real 
 all of this works with the lid shut, which is the condition the bug happens
 under and the one `screencapture` cannot see.
 
+One thing it cannot photograph: Liquid Glass paints an opaque white block when
+it is drawn offscreen and nothing inside it draws, so the library window's
+sidebar and the Ask composer are blank rectangles in every shot. The panel and
+the pill above are unaffected, being neither. `.agents/notes/appkit.md` has the
+measurement and why there is no flag for it.
+
 `recording:3725:silent` sets the clock **and** the silence, and that is not
 convenience. The clock decides the panel's width and the warning line decides
 its height, so a preview that shows one at a time leaves the combination nobody

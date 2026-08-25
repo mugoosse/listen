@@ -8,6 +8,19 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.18.1 (2026-08-24)
+
+### The person card opens their page
+
+The button along the foot of a person's card said Show Recordings, and it
+narrowed the library behind the card rather than doing anything with the person
+whose card was open. Their page, which is where everything Listen knows about
+them lives, was two levels down behind the ellipsis.
+
+The button is Open in People now, and it goes there. Narrowing the library is
+still on the speaker chip's own menu, as Show Only followed by the name, which
+is where somebody who wants the list narrowed is already asking for it.
+
 ## 0.18.0 (2026-08-24)
 
 ### A first Mac now makes the sync key

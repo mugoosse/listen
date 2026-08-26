@@ -117,9 +117,11 @@ Show the user, in one message, before anything is published:
 - that notarization is Apple's queue and has taken over an hour
 
 Then ask whether to publish. This is the only confirmation in the skill, and it
-covers steps 6 and 7, so do not ask again inside them. The one exception is
-pushing the Homebrew tap, which is a different public repository and is asked
-for separately in step 7.
+covers steps 6 and 7, so do not ask again inside them, including the
+workflow's cask PR: merging it is gated by the diff and hash check in step 7,
+not by asking. The one exception left is the hand-edit fallback in step 7,
+which pushes straight to the tap with no PR and no CI to check it, and is
+asked for separately there.
 
 ## 6. Publish
 
@@ -169,7 +171,25 @@ gh pr list --repo mugoosse/homebrew-tap
 ```
 
 It opens a pull request, so **the cask is not updated until that is merged**.
-Say so in step 8 with the link. Do not merge it without asking.
+Merge it yourself once you have checked it, without asking:
+
+```sh
+gh pr diff <n> --repo mugoosse/homebrew-tap
+```
+
+Merge only if the diff touches exactly the `version` line and the `sha256`
+line, and the hash it introduces matches the `Listen-<version>.dmg` line in
+`dist/SHA256SUMS.txt`. That is what makes the merge safe to do unattended: the
+diff shape is fixed and the hash is checked against the same file step 6
+produced, not just trusted from the PR body. Anything wider than those two
+lines, or a hash that does not match, is a reason to stop and say so rather
+than merge.
+
+```sh
+gh pr merge <n> --repo mugoosse/homebrew-tap --merge --delete-branch
+```
+
+Say what happened in step 8 with the link either way.
 
 If the token has expired, or the run fails, edit the cask directly instead. The
 tap is cloned at `../homebrew-tap`, and `Casks/listen.rb` is the file:

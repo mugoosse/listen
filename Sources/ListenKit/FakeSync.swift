@@ -1230,6 +1230,59 @@ public enum FakeSync {
                   "the edit itself did not cross")
         ok("an edit that only knows title and body keeps the filing")
 
+        // MARK: a note lost locally, and the only thing that brings it back
+
+        // **An ordinary pass never re-offers a record that has not changed**,
+        // so a note missing from one device while the container still holds it
+        // stays missing for ever. This is not hypothetical: a real library lost
+        // fourteen notes, the container kept every record, and neither Mac ever
+        // saw them again. Restoring from a backup on one Mac did not propagate
+        // either, because the restored files matched the records exactly and
+        // the push had nothing to send.
+        //
+        // Dropping the change token is the way back, and it is safe in a way
+        // an expired token is not. `refetchedEverything` is set only when the
+        // *server* could not resume, which is the case where absence has to be
+        // read as deletion. A token this device dropped on purpose asks from
+        // the beginning, gets every record, and is told of no deletions, so
+        // `gone` is empty and the pass can only add.
+        let orphan = "note-the-container-still-has"
+        try macLib.writeNote(Note(slug: orphan, title: "Still in the container",
+                                  created: "", updated: "", source: "you",
+                                  recordings: [id], body: "Worth getting back."),
+                             expecting: nil)
+        var orphanPush = CloudReport()
+        await mac.push(into: &orphanPush)
+        var orphanPull = CloudReport()
+        await phone.pull(into: &orphanPull)
+        try check(phoneLib.note(orphan) != nil, "the note never reached the phone")
+
+        // Lost here and nowhere else: the file goes, and the baseline with it,
+        // exactly as the deletion paths leave things. The container is not told.
+        phoneLib.deleteNote(orphan)
+        let phoneState = EngineState(library: phoneLib)
+        var forgotten = phoneState.base
+        forgotten[note: orphan] = nil
+        phoneState.base = forgotten
+
+        var uselessPull = CloudReport()
+        await phone.pull(into: &uselessPull)
+        try check(phoneLib.note(orphan) == nil,
+                  "an ordinary pass restored it, so this seam is testing nothing")
+        ok("an ordinary pass cannot bring back a note the container still holds")
+
+        var dropped = phoneState.base
+        dropped[file: "token"] = nil
+        phoneState.base = dropped
+        var refetch = CloudReport()
+        await phone.pull(into: &refetch)
+        let recovered = try checkNote(phoneLib.note(orphan), named: orphan)
+        try check(recovered.body.contains("Worth getting back."),
+                  "the refetch wrote something other than the note")
+        try check(phoneLib.note(filedSlug) != nil && macLib.note(orphan) != nil,
+                  "the refetch deleted something it should only have added to")
+        ok("and dropping the change token does, without deleting anything")
+
         // A second pass sends nothing. This is the churn check: with the two
         // devices computing the same formula it is zero, and the day it is not,
         // the digest has moved on one side only.

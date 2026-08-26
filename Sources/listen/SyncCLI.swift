@@ -27,6 +27,7 @@ enum SyncCLI {
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
         case "trash":    trash()
+        case "refetch":  refetch()
         case "key":      key(&rest)
         case "enable":   await enable(&rest)
         default:         help()
@@ -250,6 +251,42 @@ enum SyncCLI {
             for item in items.prefix(20) { print("    \(item.lastPathComponent)") }
         }
         print("\nPut one back by moving it into recordings/ or notes/.")
+        done()
+    }
+
+    /// Ask the container for everything again on the next pass.
+    ///
+    /// **The only way back for something this device lost and the container
+    /// still holds.** A pass asks for changes since a token, so a record that
+    /// has not changed is never mentioned again: a note deleted here while its
+    /// record survived in iCloud stays gone for ever, and restoring the file on
+    /// another device does not help, because that copy matches the record and
+    /// there is nothing to push. Measured on a real library, which lost
+    /// fourteen notes with every record still in the container.
+    ///
+    /// **It can only add.** `refetchedEverything` is set when the *server*
+    /// could not resume, and that is the case where a record's absence has to
+    /// be read as a deletion. A token dropped here is not that: the fetch runs
+    /// from the beginning, every record arrives as a change, and the store
+    /// reports no deletions, so the pass has nothing it could remove. The
+    /// ids-ever-seen set is left alone for the same reason, since it is what
+    /// tells a genuine expiry from a device that never held a record.
+    ///
+    /// Only the token goes. The stamps stay, so this does not turn into a
+    /// re-upload of the library.
+    private static func refetch() -> Never {
+        let library = SyncCLI.library
+        let state = EngineState(library: library)
+        var base = state.base
+        guard base[file: "token"] != nil else {
+            log("no change token, so the next pass already asks for everything.")
+            done()
+        }
+        base[file: "token"] = nil
+        state.base = base
+        log("change token dropped for \(library.root.path).")
+        log("the next sync fetches every record in the container and deletes nothing.")
+        log("open Listen, or wait for its next pass, then check `listen notes list`.")
         done()
     }
 
@@ -525,6 +562,9 @@ enum SyncCLI {
           inspect [--forget ID]           what is in the container, by zone
           inspect --recording ID          one recording's row, across the zones
           trash                           deletions received in the last fortnight
+          refetch                         ask the container for everything next
+                                          pass, for anything lost here that
+                                          iCloud still holds
           key [--show]                    the key that seals what iCloud holds
           enable [--on|--off]             sync this Mac's real library
 

@@ -696,3 +696,35 @@ added next year is then carried by a line nobody has to remember to write.
 `FakeSync` asserts the invariant from the sync's side, as "an edit that only
 knows title and body keeps the filing", and checks the body really crossed so
 the case cannot pass by moving nothing.
+
+## A pass never re-offers an unchanged record, so `listen sync refetch` exists
+
+`pull` asks `store.changes(in:since:)` with the token from the last pass, so a
+record that has not changed since is never mentioned again. That is the whole
+point of a change token and it is also a one-way door: **something lost locally
+while its record survived in the container is gone for ever from that device.**
+
+Measured on the real library. Fourteen notes vanished from the Mac, every note
+record was still in the container (`r2×14` in `listen sync inspect`), and no
+number of passes brought one back. Restoring the files from a backup on one Mac
+did not propagate either: the restored copies matched the records exactly, so
+`decideNote` said `.nothing` for thirteen of the fourteen and the push had
+nothing to send. Only the one note whose record was genuinely absent travelled,
+and it arrived as a new record, taking the container from 14 to 15.
+
+Dropping the change token is the way back, and it can only add. The distinction
+that makes it safe is `refetchedEverything`, which is set when the **server**
+could not resume: that is the case where a record's absence has to be read as a
+deletion, and `everSeen` is what tells a genuine expiry from a record this device
+never held. A token dropped on purpose is not that. The fetch runs from the
+beginning, every record arrives in `changed`, and the store reports no deletions,
+so `gone` is empty and the pass has nothing it could remove.
+
+Only the token goes. The `sent:` stamps stay, or this would turn into a re-upload
+of the whole library, and `everSeen` stays because it is the deletion guard.
+
+`FakeSync` proves both halves, which is what makes this a claim rather than a
+hope: "an ordinary pass cannot bring back a note the container still holds", then
+"and dropping the change token does, without deleting anything". The first of
+those is the one that would quietly rot, so it asserts the note is **still
+missing** after a normal pass.

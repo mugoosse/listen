@@ -61,26 +61,30 @@ is beside its recordings. Sharing one file would save maintaining two lists of
 the same people's names, and it would mean two apps rewriting a document that is
 written whole every time, where the loser of a race loses entries rather than
 getting a merge. Import and export carry the list across instead: `encode`
-deliberately writes **Speak's** shape, and `decode` is deliberately liberal
-(Speak's, a bare array, TypeWhisper's key names), so the two apps read each
-other's exports and the trip works in both directions. `listen dictionary import
---from-speak` is the one-press version.
+writes the shape Speak wrote, and `decode` is deliberately liberal (that shape,
+a bare array, TypeWhisper's key names), so a file from either app imports and an
+export is exactly what an import reads.
 
-Measured: importing Speak's real dictionary brought over 5 terms and 35
-corrections and skipped 3 already present.
+Measured, when the one-press copy still existed: importing Speak's real
+dictionary brought over 5 terms and 35 corrections and skipped 3 already
+present.
 
-**The pane no longer mentions Speak at all.** It went in stages, and the last
-one is the one to remember. First the integration became a migration: Speak's
-dictation is part of Listen, so a Mac with that file has a list left behind
-rather than a companion app to stay in step with, and the "Get Speak" button,
-the paragraph explaining what Speak was, and the empty-state that offered both
-went. Then the section itself went, shown-only-when-the-file-exists and all,
-because Speak is not a project anybody works on now and a settings pane naming a
-dead app makes the reader ask what it is. `listen dictionary import
---from-speak` is what is left, and it is enough: the file is not going anywhere,
-the migration is a thing somebody does once, and a CLI flag costs no screen
-space. `encode` still writes Speak's shape, and `decode` still reads it, because
-somebody who has that file still wants their terms.
+**Nothing in the product names Speak any more, and that went in three stages.**
+First the integration became a migration: Speak's dictation is part of Listen,
+so a Mac with that file has a list left behind rather than a companion app to
+stay in step with, and the "Get Speak" button, the paragraph explaining what
+Speak was, and the empty-state that offered both went. Then the pane's
+"Imported from Speak" section went, shown-only-when-the-file-exists and all,
+because a settings pane naming an app nobody works on makes the reader stop and
+ask what it is. Then `--from-speak` went too, with the same argument applied to
+`listen dictionary --help`.
+
+**What is deliberately kept is the format, not the name.** `encode` writes the
+document `decode` reads, and that document is the one Speak wrote, so anybody
+with the old file still gets their terms: `listen dictionary import
+~/Library/Application\ Support/speak/dictionary.json` does exactly what the
+flag did. Losing a convenience flag is cheap; losing years of somebody's
+corrections is not, which is why the reader is liberal and always will be.
 
 A term too short to be matched by sound is stored and does nothing, which from
 the outside is indistinguishable from the feature being broken. `eligible` is

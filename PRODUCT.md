@@ -14,7 +14,7 @@ Listen records meetings locally, transcribes them, and helps identify speakers w
 
 ## Brand Personality
 
-Calm, attentive, crafted. Listen is the blue half of the Good Pair shared with Speak: a friendly monkey whose hands sit behind its ears.
+Calm, attentive, crafted. Listen is blue, and its mascot is a friendly monkey whose hands sit behind its ears.
 
 ## Anti-references
 

@@ -419,10 +419,12 @@ their voice, which may be a message to somebody else or half a thought. Meetings
 are recorded knowingly; this is a keyboard. `listen dictations` reads the file
 for the user, and nothing reads it for the agent.
 
-**No automatic import from Speak.** Settings, the shortcut and the history all
-start fresh. The one exception is the Dictionary pane's import button, which is
-user-initiated and predates this. The Parakeet weights carry over on their own,
-because both apps always resolved the same Hugging Face cache.
+**No import from Speak at all.** Settings, the shortcut and the history all
+start fresh, and the Dictionary pane's one-press copy, which used to be the
+exception, is gone with every other mention of that app. A dictionary file from
+it still imports by path, because `decode` reads the shape it wrote. The
+Parakeet weights carry over on their own, because both apps always resolved the
+same Hugging Face cache.
 
 **No dictation history in the library.** A dictation has no audio kept, no
 speakers, no transcript sidecar and nothing to play back, so filing it as a

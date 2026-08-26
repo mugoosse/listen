@@ -1072,30 +1072,16 @@ enum CLI {
     /// Merging rather than replacing, because replacing is one mistyped path
     /// away from destroying a list somebody built up over months.
     private static func dictionaryImport(_ args: [String]) -> Never {
-        let url: URL
-        var source = ""
-        if args.first == "--from-speak" {
-            guard CustomDictionary.speakDictionaryExists else {
-                // The path and the link together: the file may be missing
-                // because Speak is not installed, or because it is and has no
-                // dictionary yet, and those are different things to do next.
-                fail("no Speak dictionary on this Mac "
-                     + "(\(CustomDictionary.speakFile.path)).")
-            }
-            url = CustomDictionary.speakFile
-            source = "Speak's dictionary"
-        } else {
-            guard let path = args.first, !path.hasPrefix("-") else {
-                fail("import needs a path, or --from-speak.")
-            }
-            url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-            source = url.lastPathComponent
+        guard let path = args.first, !path.hasPrefix("-") else {
+            fail("import needs a path.")
         }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let source = url.lastPathComponent
 
         guard let data = try? Data(contentsOf: url),
               let incoming = CustomDictionary.decode(data) else {
             fail("\(source) is not a dictionary file Listen understands. It reads its own "
-                 + "exports, Speak's, and TypeWhisper's.")
+                 + "exports and TypeWhisper's.")
         }
 
         var entries = CustomDictionary.load()
@@ -1110,8 +1096,8 @@ enum CLI {
         exit(0)
     }
 
-    /// Write the list out in the shape Speak's own import reads, so the
-    /// dictionary travels both ways.
+    /// Write the list out in the shape `decode` reads, so an export is also an
+    /// import and the list travels between Macs.
     private static func dictionaryExport(_ args: [String]) -> Never {
         let entries = CustomDictionary.load()
         guard let data = CustomDictionary.encode(entries) else {
@@ -1538,7 +1524,6 @@ enum CLI {
       remove <text>              drop the entry matching that text
       test <sentence>            what the dictionary would do to a line
       import <path>              merge a file in, keeping what is here
-      import --from-speak        merge Speak's dictionary in
       export [<path>]            write the list out, stdout by default
 
     notes subcommands:

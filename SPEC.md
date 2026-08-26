@@ -111,12 +111,11 @@ local ML tooling has `HF_HOME` set, and a Finder launch inherits no shell
 environment, so it does not reproduce from the GUI. Read speak's `Config.swift`
 and copy the resolution rules rather than re-inventing them.
 
-Detect and report shared models honestly in Settings: "Parakeet v2, 2.47 GB,
-already on disk (shared with Speak)".
+Report what is on disk honestly in Settings: "Parakeet v2, 2.47 GB on disk".
 
-FluidAudio's diarization and embedding models are separate CoreML bundles and
-are *not* shared with speak. They are small (tens to low hundreds of MB) and
-download on first use with their own consent step.
+FluidAudio's diarization and embedding models are separate CoreML bundles from
+the speech model, so deleting one leaves the other alone. They are small (tens
+to low hundreds of MB) and download on first use with their own consent step.
 
 ### 4.2 ASR
 
@@ -329,7 +328,7 @@ rather than scan:
 | | Permissions | Microphone and system audio recording, with TCC checks and deep links to System Settings. Copy speak's `Permissions.swift`. |
 | Recording | Meetings | Auto-detection on/off, and the never-ask list. |
 | | Audio | Input device. |
-| Transcription | Models | Parakeet v2 / v3 choice, download and delete with size and shared-with-Speak status, diarization model status. |
+| Transcription | Models | Parakeet v2 / v3 choice, download and delete with size on disk, diarization model status. |
 | | Dictionary | Terms and corrections, and what they changed. |
 | Advanced | Developers | CLI install, MCP configuration. See §6 and §7. |
 | | About | Version, author, credits, licence, update check. |

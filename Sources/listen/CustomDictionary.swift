@@ -93,19 +93,6 @@ enum CustomDictionary {
     /// shared-mutable-state half.
     static let file = Library.root.appendingPathComponent("dictionary.json")
 
-    /// Where Speak keeps its own, for `listen dictionary import --from-speak`.
-    ///
-    /// Read, never written, and no longer offered anywhere in the window: Speak
-    /// is not a companion app being kept in step with, it is a list left behind
-    /// on a Mac that once ran it. The CLI keeps the one-off migration because a
-    /// path somebody used once a year costs nothing to leave in place.
-    static let speakFile = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/Application Support/speak/dictionary.json")
-
-    static var speakDictionaryExists: Bool {
-        FileManager.default.fileExists(atPath: speakFile.path)
-    }
-
     private struct Document: Codable {
         var version: Int
         var entries: [Entry]
@@ -149,14 +136,14 @@ enum CustomDictionary {
     /// refusing a file over a key name would defeat the point. Three shapes are
     /// understood:
     ///
-    /// - Speak's `{"version": 1, "entries": [...]}`, which is also what Listen
-    ///   writes.
+    /// - `{"version": 1, "entries": [...]}`, which is what Listen writes and
+    ///   also what Speak wrote, so an old file from that app still imports.
     /// - A bare array of entries, which is what TypeWhisper exports.
     /// - Either of those with any of the three apps' key names, per entry.
     ///
     /// TypeWhisper calls the fields `type`, `original` and `isEnabled` where
-    /// Speak and Listen call them `kind`, `text` and `enabled`, and its term
-    /// entries carry a `ctcMinSimilarity` that neither has a use for and drops.
+    /// Listen calls them `kind`, `text` and `enabled`, and its term entries
+    /// carry a `ctcMinSimilarity` that Listen has no use for and drops.
     ///
     /// Returns nil only when the file is not JSON in either shape. Entries that
     /// cannot mean anything, having no text to match, are skipped rather than
@@ -195,13 +182,12 @@ enum CustomDictionary {
                      enabled: (json["enabled"] ?? json["isEnabled"]) as? Bool ?? true)
     }
 
-    /// Pretty-printed, stably ordered, and in **Speak's** shape on purpose.
+    /// Pretty-printed, stably ordered, and the same document `decode` reads.
     ///
-    /// The two apps read each other's exports because they write the same
-    /// document, which is what makes "export here, import there" a complete
-    /// answer in both directions rather than a one-way trip. Hand-editing the
-    /// stored file is also a supported way to use it, and a diff of one changed
-    /// word should be one changed line.
+    /// One shape both ways is what makes "export here, import there" a complete
+    /// answer rather than a one-way trip, between two Macs and out of the app
+    /// entirely. Hand-editing the stored file is also a supported way to use
+    /// it, and a diff of one changed word should be one changed line.
     static func encode(_ entries: [Entry]) -> Data? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

@@ -796,8 +796,8 @@ Two more, both reported the moment the window existed:
   so `maxgoespublic.com` is a credit line and no longer a link. Speak went the
   same way for a stronger reason: its dictation is *inside* Listen, so "Speak,
   the other half of the pair" sent people to a download for something they
-  already had. What is left of Speak in the product is the dictionary import,
-  which is a migration, and the note file for it says so.
+  already had. Nothing in the product names Speak any more, which
+  `notes-tags-dictionary.md` records under the dictionary.
 
 The Help menu and Cmd-W arrived with this, and both are in `appkit.md`: there was
 no Help menu at all, which is the first place somebody looks for a website.

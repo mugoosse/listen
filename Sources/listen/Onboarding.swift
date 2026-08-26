@@ -297,10 +297,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 radio.isEnabled = !ModelDownload.shared.isDownloading
                 body.addArrangedSubview(radio)
                 let detail = NSTextField(labelWithString:
-                    choice.isSharedWithSpeak
-                        ? choice.blurb + " · already on disk, shared with Speak"
-                        : (choice.isDownloaded ? choice.blurb + " · already on disk"
-                                               : choice.detail))
+                    choice.isDownloaded ? choice.blurb + " · already on disk"
+                                        : choice.detail)
                 detail.font = .systemFont(ofSize: 11)
                 detail.textColor = .secondaryLabelColor
                 body.addArrangedSubview(detail)

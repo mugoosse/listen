@@ -49,8 +49,7 @@ roots that remains clear at 16 points.
   subscription and no server in the middle.
 - **Dictates, anywhere on the Mac.** Press a shortcut in any app, talk, press
   it again, and what you said is typed in. The same speech model, still on this
-  machine, and the same custom vocabulary the meetings use. This was
-  [Speak](https://mugoosse.github.io/speak/), which is now part of Listen.
+  machine, and the same custom vocabulary the meetings use.
 - **Keeps your own notes**, typed during the call or after it, one per
   recording. An agent can read them and cannot change them.
 - **Tags a recording** with what it is about, in your own words, so "the job
@@ -98,10 +97,9 @@ worth knowing about rather than meeting as an error. Install without it and
 Homebrew stops and tells you the same thing.
 
 The speech model is about 2.5 GB and downloads on first run, after you press
-the button that says so. **If you already use
-[Speak](https://mugoosse.github.io/speak/), it is already on your disk** and
-Listen will find it: both resolve the same Hugging Face cache, so whichever
-downloaded first paid for both.
+the button that says so. It lands in the standard Hugging Face cache, so if
+another tool on this Mac has already fetched the same weights, Listen finds
+them and downloads nothing.
 
 ## Using it
 
@@ -279,11 +277,9 @@ that across the library under **What it changed**. **Try it** runs your rules
 over a line you type, which is the way to find out what a term does before it
 does it to a meeting.
 
-If you use [Speak](https://mugoosse.github.io/speak/), it keeps its own list and
-one press copies it over. The file is not shared, deliberately: two apps
-rewriting one document whole means the loser of a race loses entries. Export
-writes the file Speak's own import reads, so the list travels back the other way
-too, and imports from TypeWhisper are understood as well.
+**Import** and **Export** move the list between Macs, or out of the app
+entirely: an export is exactly what an import reads, and it is plain JSON you
+can edit by hand. Dictionaries exported by TypeWhisper are understood too.
 
 ### Your calendar
 
@@ -346,17 +342,6 @@ There is a second pass for false starts, the case where you begin a phrase,
 break off and say it again: "send me the notes the meeting notes" becomes "send
 me the meeting notes". It only runs on sentences that look like that, which
 over a real history is about one dictation in ten.
-
-### Coming from Speak
-
-Speak's dictation is here, and Speak itself is retired. The speech model
-carries over on its own, because both apps always used the same download, so
-there is nothing to fetch again.
-
-What does not carry over is the configuration: the shortcut, the sounds and the
-polishing settings all start at their defaults, and the dictation history stays
-in Speak's folder. Set the shortcut again in Settings, Dictation. Your Speak
-dictionary can be brought across in one press from Settings, Dictionary.
 
 ## Notes
 
@@ -634,7 +619,7 @@ listen dictionary list            every entry, and what each has changed
 listen dictionary add <term>      a word to spell right, matched by sound
 listen dictionary add <a> <b>     an exact replacement
 listen dictionary test "<line>"   what your rules would do to a sentence
-listen dictionary import --from-speak
+listen dictionary import <path>   merge a dictionary file in
 listen dictionary export [<path>]
 ```
 

@@ -287,7 +287,7 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
               let incoming = CustomDictionary.decode(data) else {
             report("Nothing imported",
                    "\(source) is not a dictionary file Listen understands. It reads its "
-                   + "own exports, Speak's, and TypeWhisper's.",
+                   + "own exports and TypeWhisper's.",
                    style: .warning)
             return
         }

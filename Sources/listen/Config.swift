@@ -295,17 +295,6 @@ struct ModelChoice {
     /// cache and once in mlx-audio's copy.
     var bytesUsed: Int64 { size(of: downloadDirectory) + size(of: cacheDirectory) }
 
-    /// True when Speak is installed and would use these same weights.
-    ///
-    /// Reported rather than inferred, because "2.47 GB, already on disk" and
-    /// "2.47 GB, already on disk (shared with Speak)" answer different
-    /// questions: the second one tells you that deleting it here takes
-    /// dictation away too.
-    var isSharedWithSpeak: Bool {
-        guard isDownloaded else { return false }
-        return FileManager.default.fileExists(atPath: "/Applications/Speak.app")
-    }
-
     /// "2.3 GB", written the way the rest of macOS writes it.
     static func humanBytes(_ n: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: n, countStyle: .file)

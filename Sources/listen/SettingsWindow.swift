@@ -796,14 +796,8 @@ final class ModelsPane: Pane {
 
     override func refresh() {
         for choice in ModelChoice.all {
-            // Say plainly when the weights are already here because Speak
-            // fetched them. "Already on disk" and "already on disk, shared with
-            // Speak" answer different questions: the second one tells you that
-            // deleting it takes dictation away too.
             let text: String
-            if choice.isSharedWithSpeak {
-                text = "\(ModelChoice.humanBytes(choice.bytesUsed)) on disk, shared with Speak"
-            } else if choice.isDownloaded {
+            if choice.isDownloaded {
                 text = "\(ModelChoice.humanBytes(choice.bytesUsed)) on disk"
             } else {
                 text = "not downloaded · \(ModelChoice.humanBytes(choice.approxBytes))"
@@ -835,8 +829,8 @@ final class ModelsPane: Pane {
         }
 
         diarizerNote?.stringValue = Diarizer.isDownloaded
-            ? "Diarization models are on disk. They are separate from Parakeet and are "
-              + "not shared with Speak."
+            ? "Diarization models are on disk. They are separate from Parakeet, and "
+              + "deleting the speech model leaves them alone."
             : "Diarization models download the first time you transcribe a meeting. "
               + "They are much smaller than the speech model."
     }

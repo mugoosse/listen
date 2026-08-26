@@ -75,8 +75,15 @@ struct TranscriptionProgress: Sendable {
     var split: Bool = true
 
     /// 0...1 across the whole job.
+    ///
+    /// A single-lane job fills exactly one of the two fields, and which one
+    /// depends on which track had speech: an import reports into `everyone`,
+    /// a room recording with a silent system track reports into `you`. This
+    /// used to read `everyone` alone, so a room recording's percentage held
+    /// at zero for the whole job and the transcript arrived out of nowhere.
+    /// `max` is whichever track is actually running, since the other stays 0.
     var overall: Double {
-        split ? (everyone + you) / 2 : everyone
+        split ? (everyone + you) / 2 : max(everyone, you)
     }
 }
 

@@ -135,6 +135,22 @@ the first pass ends reads as the first half having been wrong. That is also why
 `Pipeline.isSilent` moved up: an untouched microphone would otherwise draw a
 lane for the user that never fills.
 
+### The one lane is not always the everyone track
+
+`split == false` covers two different single-track jobs, and they report into
+different fields: an import's mixed track fills `everyone`, while a room
+recording with a silent (or absent) system track transcribes only the mic and
+fills `you`. `TranscriptionProgress.overall` used to read `everyone` alone
+when not split, and `TranscribingView` mirrored `drawnEveryone` into both
+halves of the single lane, so for a room recording the percentage, the sidebar
+activity bar and the picture all sat at zero for the whole job and the
+transcript arrived out of nowhere. Reported from a 48-minute solo room
+recording re-transcribed while somebody watched the pane. Both now take
+`max(everyone, you)`, which is whichever track is actually running, since the
+other stays 0 for the life of the job. `listen transcribe <id>` prints the
+same `overall` per piece, which is how the fix was verified without the
+window: the room job now logs 0% through 100% instead of 0% throughout.
+
 ### A job advancing is not a queue change
 
 `Queue.onProgress` is separate from `Queue.onChange`, and the split is required

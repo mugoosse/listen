@@ -195,8 +195,14 @@ final class TranscribingView: NSView {
         // track of an imported recording is everybody at once, so splitting it
         // into a side that is you and a side that is not would be a picture of
         // something that is not there.
-        let upper = drawnEveryone
-        let lower = split ? drawnYou : drawnEveryone
+        //
+        // The single lane is whichever track has speech, and that is not always
+        // the everyone track: an import fills `everyone`, while a room
+        // recording with a silent system track fills `you`. Mirroring only
+        // `everyone` left a room recording's picture empty for the whole job.
+        let single = max(drawnEveryone, drawnYou)
+        let upper = split ? drawnEveryone : single
+        let lower = split ? drawnYou : single
 
         var above: [NSRect] = []
         var below: [NSRect] = []

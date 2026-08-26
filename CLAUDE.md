@@ -104,6 +104,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - The chunk loop is Listen's, and it cuts at pauses
 - One chunk length for every Mac, and it is the short one
 - Progress is counted, and there is no estimate anywhere
+- The one lane is not always the everyone track
 - A job advancing is not a queue change
 - The head is a position, and it took three tries to say so
 - The microphone is a room or a person, and the pipeline has to ask which

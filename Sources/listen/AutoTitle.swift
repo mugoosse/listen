@@ -28,7 +28,9 @@ enum AutoTitle {
     enum Outcome: Equatable {
         /// The title would be written.
         case name(String)
-        /// A derived title whose speakers have gone, so the placeholder returns.
+        /// A derived title whose speakers have gone, so the title underneath
+        /// comes back: `DeviceTitle.floor`, which is the phone's own string
+        /// for a memo and the placeholder for everything else.
         case unname
         /// It already says what the speakers say.
         case nothingToDo
@@ -64,7 +66,12 @@ enum AutoTitle {
         if let derived = fromPeople(recording) {
             return derived == recording.metadata.title ? .nothingToDo : .name(derived)
         }
-        if recording.metadata.title != Metadata.untitled { return .unname }
+        // Nothing here can name it, so the question is whether it is still
+        // wearing a title this code wrote. `DeviceTitle.floor` is what it falls
+        // back to, and for everything the Mac recorded that is
+        // `Metadata.untitled`, which is the comparison this line has always
+        // made.
+        if recording.metadata.title != DeviceTitle.floor(for: recording) { return .unname }
         if letters > 0 { return .waitingOnSpeakers(letters) }
         return .nobodyToNameItAfter
     }
@@ -89,21 +96,31 @@ enum AutoTitle {
         guard var current = Recording.load(recording.folder) else { return nil }
 
         let title: String
+        let source: Metadata.TitleSource?
         switch outcome(for: current) {
-        case .name(let derived): title = derived
-        case .unname:            title = Metadata.untitled
-        default:                 return nil
+        case .name(let derived):
+            title = derived
+            source = .people
+        case .unname:
+            // Going back rather than keeping the last good name is the point: a
+            // title naming somebody the transcript no longer contains is the app
+            // asserting something false about its own files, and this is the
+            // same re-derivation rule `room_auto` states.
+            //
+            // Back to the floor rather than always to the placeholder, so a
+            // phone memo lands on the phone's own string and a recording that
+            // loses its last named speaker to a discard is exactly as titleable
+            // as it was before anybody was named. Nil for the placeholder, for
+            // the same reason: `mayTitle` lets anything name an untitled
+            // recording, and `device` ranks below every writer.
+            title = DeviceTitle.floor(for: current)
+            source = title == Metadata.untitled ? nil : .device
+        default:
+            return nil
         }
 
         current.metadata.title = title
-        // Nil for the placeholder, so a recording that loses its last named
-        // speaker to a discard is exactly as titleable as one that never had
-        // one. Going back to the placeholder rather than keeping the last good
-        // name is the point: a title naming somebody the transcript no longer
-        // contains is the app asserting something false about its own files,
-        // and this is the same re-derivation rule `room_auto` states.
-        current.metadata.title_source = title == Metadata.untitled
-            ? nil : Metadata.TitleSource.people.rawValue
+        current.metadata.title_source = source?.rawValue
         try? current.save()
         return current
     }

@@ -30,6 +30,19 @@ public struct Metadata: Codable, Sendable, Equatable {
     public var app_name: String?
     public var calendar_event_id: String?
 
+    /// Which of the app's titlers wrote `title`, absent when a person did.
+    ///
+    /// The phone writes exactly one value, `Metadata.deviceTitleSource`, and
+    /// only for a recording nobody named. The Mac owns the rest of the ladder
+    /// in `Metadata.TitleSource` and is the only side that reads this.
+    ///
+    /// It matters because the absence means something: the Mac reads a title
+    /// with no source as one a person typed and never writes over it, so a memo
+    /// that arrives without this field can never be named after its speakers or
+    /// matched to a calendar event. Measured before the field existed: six of
+    /// the eight phone recordings in the real library were frozen that way.
+    public var title_source: String?
+
     /// Which device made the transcript, and how long it took.
     ///
     /// Provenance rather than state. `state` says what stage the recording has
@@ -85,14 +98,28 @@ public struct Metadata: Codable, Sendable, Equatable {
         app_bundle_id = try? c.decodeIfPresent(String.self, forKey: .app_bundle_id)
         app_name = try? c.decodeIfPresent(String.self, forKey: .app_name)
         calendar_event_id = try? c.decodeIfPresent(String.self, forKey: .calendar_event_id)
+        title_source = try? c.decodeIfPresent(String.self, forKey: .title_source)
         transcribed_by = try? c.decodeIfPresent(String.self, forKey: .transcribed_by)
         transcribed_on = try? c.decodeIfPresent(String.self, forKey: .transcribed_on)
         transcribe_started = try? c.decodeIfPresent(String.self, forKey: .transcribe_started)
         transcribe_finished = try? c.decodeIfPresent(String.self, forKey: .transcribe_finished)
     }
 
+    /// The value `title_source` takes for a title the capturing device made up
+    /// rather than one a person typed.
+    ///
+    /// **The same string is `Metadata.TitleSource.device` on the Mac**, whose
+    /// enum this cannot see and which ranks it below every other titler. Two
+    /// literals, one value, and the comment on each names the other.
+    public static let deviceTitleSource = "device"
+
+    /// - Parameter titled: whether a person typed `title`. `false` stamps
+    ///   `title_source`, which is what lets the Mac name the recording after
+    ///   its speakers once it has some. Passing the wrong answer here freezes
+    ///   the title for good, so it is a parameter rather than a guess from the
+    ///   string.
     public init(id: String, recordedAt: Date, duration: Double, title: String,
-                room: Bool, source: String = "iphone") {
+                titled: Bool, room: Bool, source: String = "iphone") {
         self.id = id
         self.recorded_at = Metadata.stamp(recordedAt)
         self.duration = duration
@@ -105,6 +132,7 @@ public struct Metadata: Codable, Sendable, Equatable {
         // a peak test cannot tell a chime from a conversation, which is the
         // uncertainty this removes rather than improves on.
         self.room_auto = false
+        self.title_source = titled ? nil : Metadata.deviceTitleSource
     }
 
     public enum State: String, Sendable {

@@ -2572,9 +2572,23 @@ enum CLI {
 
         let library = Recording.all()
         var named = 0, unnamed = 0, waiting = 0, nobody = 0, notOurs = 0
-        var outranked = 0, alreadyRight = 0
+        var outranked = 0, alreadyRight = 0, adopted = 0
 
         for recording in library.sorted(by: { $0.id < $1.id }) {
+            // First, because everything below asks `mayTitle` and a phone memo
+            // is refused until this has run. On a copy so the dry run reports
+            // what `--apply` would actually do rather than what the file says
+            // today: without it every phone memo prints as "has a title
+            // already, left alone" and then gets named on the next line, which
+            // is the disagreement `AutoTitle.Outcome` exists to prevent.
+            var recording = recording
+            if DeviceTitle.isDefault(recording) {
+                adopted += 1
+                print(String(format: "  %@  %-30@ (named by the phone, now the app's to replace)",
+                             recording.id as NSString, recording.displayTitle as NSString))
+                recording.metadata.title_source = Metadata.TitleSource.device.rawValue
+                if apply { try? recording.save() }
+            }
             let outcome = AutoTitle.outcome(for: recording)
             switch outcome {
             case .name(let title):
@@ -2612,6 +2626,11 @@ enum CLI {
         // fact about its own library.
         if notOurs > 0 { print("  \(notOurs) have a title already, left alone") }
         if outranked > 0 { print("  \(outranked) named from the calendar, left alone") }
+        // Counted separately and not folded into `named`, because it is a
+        // different thing happening to the file: the recording keeps its string
+        // and stops being mistaken for one somebody typed. Most of them are
+        // then named on the same pass, so they appear in both numbers.
+        if adopted > 0 { print("  \(adopted) were carrying the name their phone gave them") }
         print(apply ? "\napplied." : "\nnothing was written. `--apply` does it.")
         exit(0)
     }

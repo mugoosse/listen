@@ -168,11 +168,105 @@ is not.
 
 **`Outcome.notOurs` must never be printed as "named by hand".** It means a title
 with no `title_source`, which is a typed title *and* every title written before
-the field existed: the legacy Python imports, the calendar names from before, and
-the iPhone's `Memo, 8 August, 12:08`. On the real library that case is 49 of 57
-recordings, and almost none of them were typed by anybody. It said "named by
-hand" for one build. The wording is now "have a title already, left alone",
-which is what is actually known.
+the field existed: the legacy Python imports and the calendar names from before.
+On the real library that case was 49 of 57 recordings, and almost none of them
+were typed by anybody. It said "named by hand" for one build. The wording is now
+"have a title already, left alone", which is what is actually known.
+
+The iPhone's `Memo, 8 August, 12:08` used to be in that count and is not any
+more: `DeviceTitle` recognises it and stamps `device` on it, which is the section
+below. Every other member of the set stays, because nothing can tell those from
+a title somebody typed and the day something claims it can is the day a meeting
+gets renamed out from under its owner.
+
+## The phone named every memo, and the guard read that as a person
+
+The phone writes `Memo, 26 August, 12:20` into `metadata.title` whenever nobody
+types anything, which is most of them. `mayTitle` reads a title with no
+`title_source` as one a person chose and refuses every automatic writer against
+it, so naming the last speaker on a phone memo rewrote the transcript and left
+the title alone, and the calendar could never reach one either. Measured on the
+real library the day this was written: six of the eight phone recordings were
+frozen that way, three of them still `needs_labelling`, so the failure was
+silent and getting worse.
+
+`Metadata.TitleSource.device` is the fix, and it goes at the **bottom** of the
+rank: a device title is evidence of when a recording happened and nothing else,
+which every row already shows beside the title anyway. The phone stamps it at
+capture (`Recorder.stop`, in the iOS repo, from a `titled:` parameter on
+`ListenKit.Metadata`'s creating initialiser rather than a guess from the string
+later), and the raw value is duplicated as `ListenKit.Metadata.deviceTitleSource`
+because the phone does not compile the Mac's enum. Two literals, one string, and
+the comment on each names the other.
+
+That fixes every memo made from that build onwards and none of the ones already
+on disk, which is what `DeviceTitle` is for.
+
+## The id carries the phone's wall clock, and `recorded_at` does not
+
+`DeviceTitle` recognises a title the phone would have written, so a memo from an
+older build, or from a phone nobody has updated, gets the field stamped on its
+behalf. It rebuilds the string from the **recording id**, and that choice is the
+whole of why it works.
+
+`Metadata.makeID` stamps `yyyy-MM-dd-HHmmss` in the writing device's local time
+and so does the title, so the two are renderings of one wall clock and comparing
+them needs no timezone at all. `recorded_at` is UTC, so matching against it means
+guessing where the phone was. Measured over the eight phone recordings in the
+real library:
+
+| rule | defaults matched | typed titles wrongly claimed |
+|---|---|---|
+| rebuilt from the id | 6 of 6 | 0 of 2 |
+| `recorded_at` in this Mac's own zone | 5 of 6 | 0 of 2 |
+
+The miss is `2026-08-17-041112-0ADB`, whose id says 04:11 and whose `recorded_at`
+is 07:11Z: the phone was three hours from where the Mac is now, and that is not
+an exotic case, it is one trip.
+
+What is still a guess is the **month name**, because the phone formats it in its
+own locale and nothing on disk records which that was. `candidates(for:)` tries
+the current locale and then `en_US_POSIX`, which covers a Mac and a phone set the
+same way and a phone left in English. A pairing neither covers is not recognised
+and the recording stays exactly as frozen as it is today. That is the failure
+this is allowed to have: it never invents a fact, and the three narrowing
+conditions (`source` is `iphone`, `title_source` is absent, the string is one of
+the candidates) are what keep it from being the heuristic
+`Outcome.notOurs` exists to refuse.
+
+Two callers, and no third:
+
+- `Recording.markTranscribed`, before `AutoTitle.refresh`, because that is the
+  one call the queue and `listen transcribe` share and because the Mac holding
+  the audio is the device that authors an ingested recording's metadata (see
+  `cloud-sync.md`).
+- `listen title backfill`, which stamps **on a copy** for the dry run so the
+  preview reports what `--apply` would do. Skipping that is exactly the bug the
+  calendar's backfill shipped: it printed "has a title already, left alone" and
+  named the recording on the next line.
+
+## Unnaming goes back to the floor, not to the placeholder
+
+Adding a rank below `people` broke the discard path before it was finished.
+`refresh` used to write `Metadata.untitled` on `.unname`, so discarding the last
+named speaker from a phone memo would have replaced `Memo, 26 August, 12:20`
+with "New recording" and lost a string the device already knew. Today those
+titles are frozen, so that would have been a regression introduced by the fix.
+
+`DeviceTitle.floor(for:)` is the answer and it is deliberately the one
+computation `outcome` and `refresh` share, for the reason `Outcome` exists at
+all. It answers three things in order: a recording already at the placeholder
+stays there, because `Untitled` is a decision too and a phone recording somebody
+cleared by hand must not grow its memo title back on the next speaker edit; a
+recording already wearing one of the device's strings keeps **that exact one**,
+or a Mac and a phone set to different languages would rewrite each other's month
+names for ever; and anything else gets the device's string if there is one and
+the placeholder if there is not.
+
+For every recording the Mac made, `candidates` is empty and the floor is
+`Metadata.untitled`, so `outcome` asks the same question it always asked and
+`verify_title.sh` passes unchanged. That is the check worth making on any edit
+here: the phone is a case, not a new rule.
 
 ## What is deliberately not here
 

@@ -223,9 +223,10 @@ struct Metadata: Codable {
     /// The automatic titlers, worst evidence first.
     ///
     /// The order is the whole point, so it is declared once here rather than
-    /// left implicit in the order things happen to run. A calendar title is a
-    /// sentence somebody wrote in an invitation, a model title is a guess about
-    /// the subject, and a people title is a list of who spoke: each is better
+    /// left implicit in the order things happen to run. A device title is a
+    /// timestamp with a word in front of it, a calendar title is a sentence
+    /// somebody wrote in an invitation, a model title is a guess about the
+    /// subject, and a people title is a list of who spoke: each is better
     /// evidence of what a recording *is* than the one below it, and each may
     /// therefore write over the one below it.
     ///
@@ -235,6 +236,18 @@ struct Metadata: Codable {
     /// `metadata.json`, so they are the one thing here that may never be
     /// reordered or renamed.
     enum TitleSource: String, CaseIterable {
+        /// What the capturing device called it before anything had looked at
+        /// the contents: the phone's `Memo, 26 August, 12:20`. `DeviceTitle`.
+        ///
+        /// **The raw value is duplicated in `ListenKit.Metadata`**, as
+        /// `deviceTitleSource`, because the phone writes this field and does
+        /// not compile this file. Two literals, one string, and the comment on
+        /// each names the other.
+        ///
+        /// Bottom of the order because it is evidence of when a recording
+        /// happened and nothing else, which every row already shows beside the
+        /// title anyway.
+        case device
         /// Who spoke, once they all have names. `AutoTitle`.
         case people
         /// What was said, from a language model. Not yet written by anything.
@@ -251,6 +264,7 @@ struct Metadata: Codable {
         /// another in the window explains itself twice.
         var phrase: String {
             switch self {
+            case .device:   return "named by the device that recorded it"
             case .people:   return "named after the speakers"
             case .model:    return "named from what was said"
             case .calendar: return "named from the calendar"
@@ -617,6 +631,20 @@ struct Recording {
         // The copy in hand is a moment old once it has run.
         VoiceBank.autoAssign(in: self)
         if let fresh = Recording.find(id) { self = fresh }
+
+        // Say on disk that the phone's `Memo, 26 August, 12:20` is a guess the
+        // device made and not a name somebody typed, before anything asks
+        // whether the title may be written. Without it `mayTitle` reads that
+        // string as a person's decision and freezes the recording out of every
+        // automatic titler for good, which is what it did to six of the eight
+        // phone recordings in the real library.
+        //
+        // Here because this is the one call the queue and `listen transcribe`
+        // share, and because the Mac holding the audio is the device that
+        // authors an ingested recording's metadata: see `cloud-sync.md`. The
+        // phone stamps the field itself now, so this only ever fires for a memo
+        // made by a build that did not.
+        if let stamped = DeviceTitle.adopt(self) { self = stamped }
 
         // A transcript can arrive with every speaker already named, in which
         // case no rename ever happens and the hook in `TranscriptEditor` never

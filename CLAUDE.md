@@ -187,10 +187,10 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Onboarding has to ask, because nothing else will
 - `listen calendar` exists because matching leaves nothing behind
 
-### `.agents/notes/titles.md` (8k)
+### `.agents/notes/titles.md` (14k)
 
 What a recording is called, and which of the things that name it may write over
-which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`,
+which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`, `DeviceTitle`,
 `Recording.displayTitle`.
 
 - One bit could not hold two titlers
@@ -199,6 +199,9 @@ which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`,
 - It is a view over the speakers, not a decision taken once
 - "Call with" is a claim, and `app_bundle_id` is the evidence
 - The backfill exists because the deriver is driven by edits
+- The phone named every memo, and the guard read that as a person
+- The id carries the phone's wall clock, and `recorded_at` does not
+- Unnaming goes back to the floor, not to the placeholder
 - What is deliberately not here: no model title
 
 ### `.agents/notes/notes-tags-dictionary.md` (25k)

@@ -90,6 +90,10 @@ labelled placeholder until you record them.
 
 ### 1. `record.mp4` · 14s · has no still yet
 
+**Nine other pages use this one too.** Every channel page under
+`docs/whatsapp.html` and its siblings carries the same frame, so this single
+clip is the only moving thing on all of them. Worth the extra take.
+
 The menu bar, start to finish.
 
 1. Menu bar icon, click. (2s)

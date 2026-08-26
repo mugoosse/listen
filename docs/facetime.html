@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Record FaceTime calls on your Mac | Listen</title>
+<meta name="description" content="Record FaceTime calls on a Mac and get a transcript with names on it. No bot joins the call, no account, and nothing is uploaded.">
+<link rel="canonical" href="https://mugoosse.github.io/listen/facetime.html">
+<link rel="icon" href="icon.png">
+<meta property="og:title" content="Record FaceTime calls on your Mac | Listen">
+<meta property="og:description" content="Record FaceTime calls on a Mac and get a transcript with names on it. No bot joins the call, no account, and nothing is uploaded.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mugoosse.github.io/listen/facetime.html">
+<meta property="og:image" content="https://mugoosse.github.io/listen/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can you record a FaceTime call with audio on a Mac?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Listen records your microphone and everything your Mac plays, which includes the other side of a FaceTime call. macOS screen recording is not involved and is not needed."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does it record FaceTime video?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Listen is about what was said, so it keeps the audio and the transcript rather than a video file the size of the meeting."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does the other person get told?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "FaceTime has nothing to tell them, because Listen is not part of the call. Tell them yourself."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does it work with a FaceTime group call?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Everyone else arrives on one track and Listen separates the voices on it, so the transcript still says who said what."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does it work on iPhone FaceTime calls?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not from the phone. This records calls that happen on your Mac."
+      }
+    }
+  ]
+}
+</script>
+<style>
+/* Listen, on paper.
+ *
+ * The palette is warm off-white rather than white, because every screenshot on
+ * this page is of a dark macOS window and a pure white ground turns each one
+ * into a hole. On paper, with a soft shadow under it, the same screenshot reads
+ * as a window sitting on a desk.
+ *
+ * Headings are `ui-serif`, which is New York on Apple platforms and Georgia
+ * almost everywhere else. Both are real text faces rather than interface faces,
+ * and this page is aimed at people who record conversations for a living rather
+ * than at people who read terminals. No web font is loaded: an app whose whole
+ * claim is that it talks to two hosts should not have a site that hands the
+ * visitor's address to a third one for the sake of a typeface.
+ */
+:root {
+  --paper:       #faf9f6;
+  --paper-warm:  #f3f1ea;
+  --paper-sunk:  #edeae1;
+  --rule:        #e3dfd3;
+  --rule-soft:   #eceae0;
+
+  --ink:         #23221f;
+  --ink-soft:    #56534b;
+  /* Measured rather than picked. At #7a766c this cleared 4.3 against the page
+     and 3.77 against the deepest of the three grounds it is used on, and it
+     carries captions, footnotes, the inactive tab titles and every bullet, all
+     of which are normal-size text and so want 4.5. This clears it on all
+     three: 5.36 on the page, 4.99 on a card, 4.69 in a media frame. */
+  --ink-faint:   #6b675d;
+
+  --blue:        #3f52d9;
+  --blue-deep:   #2f3fae;
+  --blue-wash:   #edeffc;
+
+  --serif: ui-serif, "New York", Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui,
+           "Helvetica Neue", Arial, sans-serif;
+  --mono:  ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --page: 1080px;
+  --col:  660px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- shell ---------------------------------------------------- */
+
+.page { max-width: var(--page); margin: 0 auto; padding: 0 28px; }
+.col > p, .col > h2, .col > h3, .col > pre,
+.col > .eyebrow, .col > ul, .col > .note { max-width: var(--col); }
+
+section { padding: 96px 0; }
+section + section { border-top: 1px solid var(--rule-soft); }
+
+/* ---------- top bar ---------------------------------------------------- */
+
+.bar { padding: 22px 0 0; }
+.bar-inner { display: flex; align-items: center; gap: 12px; }
+.bar-mark { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.bar-mark img { width: 34px; height: 34px; display: block; border-radius: 8px; }
+.bar-name {
+  font-family: var(--serif); font-size: 21px; letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.bar-spacer { flex: 1; }
+
+/* ---------- type ------------------------------------------------------ */
+
+h1 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(42px, 6.4vw, 74px);
+  line-height: 1.02;
+  letter-spacing: -0.022em;
+  color: var(--ink);
+  margin: 0 0 22px;
+}
+h2 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(28px, 3.8vw, 40px);
+  line-height: 1.12;
+  letter-spacing: -0.016em;
+  color: var(--ink);
+  margin: 0 0 18px;
+}
+h3 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 25px;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+p { margin: 0 0 18px; }
+p:last-child { margin-bottom: 0; }
+p.lead {
+  color: var(--ink);
+  font-size: clamp(18px, 2.1vw, 21px);
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+strong { color: var(--ink); font-weight: 600; }
+a { color: var(--blue); text-underline-offset: 3px; }
+a:hover { color: var(--blue-deep); }
+
+/* Quiet, sentence case, and in the text face. The tracked-out monospace label
+   this replaced was the single loudest "developer tool" signal on the page. */
+.eyebrow {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink-faint);
+  margin: 0 0 12px;
+}
+
+code, pre {
+  font-family: var(--mono);
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--ink);
+}
+code { padding: 2px 6px; font-size: 0.84em; }
+pre {
+  padding: 16px 18px; overflow-x: auto; font-size: 13.5px;
+  line-height: 1.75; margin: 0 0 18px;
+}
+pre code { border: 0; padding: 0; background: none; font-size: inherit; }
+
+/* ---------- hero ------------------------------------------------------- */
+
+header.hero { padding: 64px 0 0; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 14px 6px 8px; margin: 0 0 28px;
+  background: var(--blue-wash); border-radius: 999px;
+  font-size: 14px; color: var(--ink); text-decoration: none;
+}
+.chip:hover { color: var(--ink); }
+.chip b {
+  background: var(--blue); color: #fff; font-weight: 600;
+  font-size: 12px; letter-spacing: .02em;
+  padding: 2px 9px; border-radius: 999px;
+}
+.chip span { color: var(--ink-soft); }
+
+.hero-sub { max-width: 46ch; font-size: 19px; line-height: 1.55; margin: 0 0 32px; }
+
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+a.button {
+  display: inline-block; padding: 14px 26px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  color: var(--ink); text-decoration: none;
+  background: transparent; font-size: 16px; font-weight: 500;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+a.button:hover { border-color: var(--ink-faint); color: var(--ink); background: var(--paper-warm); }
+a.button.primary {
+  background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 600;
+}
+a.button.primary:hover { background: var(--blue-deep); border-color: var(--blue-deep); color: #fff; }
+a.button.small { padding: 9px 18px; font-size: 15px; }
+
+.under-button { font-size: 14.5px; margin: 18px 0 0; color: var(--ink-faint); }
+
+.chipcheck {
+  max-width: 500px; margin: 30px 0 0; padding: 20px 22px;
+  background: var(--paper-warm); border: 1px solid var(--rule); border-radius: 14px;
+}
+.chipcheck[hidden], .buttons[hidden], .under-button[hidden] { display: none; }
+.chipcheck p { font-size: 14.5px; line-height: 1.6; margin: 0 0 10px; }
+.chipcheck p:last-child { margin-bottom: 0; }
+.chipcheck b { color: var(--ink); font-weight: 600; }
+
+/* ---------- media ------------------------------------------------------ */
+
+figure.demo { margin: 0; }
+header.hero figure.demo { margin: 52px 0 0; }
+
+/* The shadow is the whole trick. A dark window laid flat on paper reads as a
+   hole cut in the page; the same window with something under it reads as an
+   object on a desk. */
+.frame {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--paper-sunk);
+  overflow: hidden;
+  box-shadow: 0 24px 50px -28px rgba(35, 34, 31, .34),
+              0 3px 10px -4px rgba(35, 34, 31, .10);
+}
+.frame.empty { aspect-ratio: 16 / 10; }
+.frame > video, .frame > img { display: block; width: 100%; height: auto; }
+
+figcaption {
+  font-size: 14px; color: var(--ink-faint);
+  margin: 16px 0 0; line-height: 1.5;
+}
+
+/* What a frame shows until its clip is recorded and dropped into docs/shots/. */
+.slot {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; text-align: center; padding: 24px;
+  background: var(--paper-sunk);
+}
+.slot::after {
+  content: ""; position: absolute; inset: 14px;
+  border: 1px dashed var(--rule); border-radius: 8px; pointer-events: none;
+}
+.slot-glyph {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 1px solid var(--rule); background: var(--paper);
+  display: grid; place-items: center;
+  color: var(--ink-faint); padding-left: 3px;
+}
+.slot-name { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); }
+.slot-note { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+
+/* The hero is watched rather than glanced at, so it gets a button and its own
+   sound instead of running silently behind the copy like the loops do. */
+.frame.playable { cursor: pointer; }
+.play {
+  position: absolute; inset: 0; border: 0; padding: 0; margin: 0;
+  background: rgba(35, 34, 31, .22);
+  display: grid; place-items: center; cursor: pointer;
+  color: #fff; font: inherit;
+  transition: background .18s ease;
+}
+.frame.playable:hover .play { background: rgba(35, 34, 31, .12); }
+.play-disc {
+  width: 76px; height: 76px; border-radius: 50%;
+  background: var(--paper); color: var(--ink);
+  display: grid; place-items: center; font-size: 24px; line-height: 1;
+  padding-left: 5px;
+  box-shadow: 0 12px 30px rgba(35, 34, 31, .3);
+  transition: transform .18s ease;
+}
+.frame.playable:hover .play-disc { transform: scale(1.06); }
+.play-label {
+  position: absolute; bottom: 20px; left: 0; right: 0; text-align: center;
+  font-size: 14px; font-weight: 500; color: #fff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .55);
+}
+
+/* ---------- misc ------------------------------------------------------- */
+
+ul.plain { padding-left: 20px; margin: 0 0 18px; }
+ul.plain li { margin-bottom: 12px; }
+
+.note {
+  background: var(--paper-warm);
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin: 32px 0 0;
+}
+.note p { font-size: 15.5px; margin: 0; }
+
+.cards {
+  display: grid; gap: 18px; margin: 34px 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+.card {
+  border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--paper-warm); padding: 22px 24px;
+}
+.card p { font-size: 15px; margin: 0; line-height: 1.55; }
+
+/* ---------- channels and quotes ----------------------------------------- */
+
+.channel-nav { margin: 30px 0 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.channel-nav a {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px 8px 13px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  font-size: 15px; color: var(--ink-soft); text-decoration: none;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+.channel-nav a:hover {
+  border-color: var(--ink-faint); color: var(--ink); background: var(--paper-warm);
+}
+
+/* The glyphs are borrowed marks, so they sit back a little: one ink colour,
+   inheriting the label's, and never louder than the word beside them. */
+.chan-icon {
+  width: 16px; height: 16px; flex: 0 0 auto;
+  fill: currentColor; opacity: .62;
+  transition: opacity .15s ease;
+}
+.channel-nav a:hover .chan-icon { opacity: 1; }
+
+figure.quote {
+  margin: 0; border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--paper-warm); padding: 24px 26px;
+}
+figure.quote blockquote { margin: 0 0 16px; }
+figure.quote blockquote p {
+  font-family: var(--serif); font-size: 19px; line-height: 1.4;
+  color: var(--ink); margin: 0;
+}
+figure.quote figcaption { font-size: 14.5px; color: var(--ink-faint); margin: 0; }
+
+footer {
+  padding: 56px 0 96px; border-top: 1px solid var(--rule-soft);
+  color: var(--ink-faint); font-size: 15px;
+}
+footer a { color: var(--ink-soft); }
+footer p { color: var(--ink-faint); font-size: 15px; }
+
+/* ---------- narrow ------------------------------------------------------ */
+
+/* The list becomes a row of titles that scrolls sideways. Seven items with a
+   line of description each is most of a phone screen before the clip they are
+   about has been reached, and the clip is the point. */
+
+@media (max-width: 640px) {
+  section { padding: 72px 0; }
+  header.hero { padding-top: 44px; }
+  .frame.empty { aspect-ratio: 4 / 3; }
+  .bar-name { font-size: 19px; }
+}
+
+/* ---------- channel pages ---------------------------------------------- */
+
+.steps { counter-reset: step; margin: 34px 0 0; padding: 0; list-style: none; }
+.steps li {
+  counter-increment: step;
+  position: relative; padding: 0 0 0 46px; margin: 0 0 22px;
+  font-size: 16.5px; color: var(--ink-soft);
+}
+.steps li:last-child { margin-bottom: 0; }
+.steps li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: -2px;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--paper-warm); border: 1px solid var(--rule);
+  display: grid; place-items: center;
+  font-size: 14px; font-family: var(--serif); color: var(--ink);
+}
+.steps b { color: var(--ink); font-weight: 600; }
+
+.faq { margin: 30px 0 0; }
+.faq details {
+  border-top: 1px solid var(--rule);
+  padding: 0;
+}
+.faq details:last-of-type { border-bottom: 1px solid var(--rule); }
+.faq summary {
+  cursor: pointer; list-style: none;
+  padding: 18px 30px 18px 0; position: relative;
+  font-family: var(--serif); font-size: 19px; line-height: 1.3;
+  color: var(--ink);
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after {
+  content: "+"; position: absolute; right: 4px; top: 17px;
+  font-family: var(--sans); font-size: 19px; color: var(--ink-faint);
+}
+.faq details[open] summary::after { content: "\2212"; }
+.faq summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.faq .answer { padding: 0 30px 20px 0; }
+.faq .answer p { font-size: 16px; margin: 0; }
+
+/* .channel-nav itself comes from index.html with the rest of the design
+   system. Only the current-page state is needed here, because the home page
+   has no current channel. */
+.channel-nav a[aria-current="page"] {
+  background: var(--paper-warm); border-color: var(--ink-faint); color: var(--ink);
+}
+.channel-nav a[aria-current="page"] .chan-icon { opacity: 1; }
+
+.consent {
+  border-left: 2px solid var(--blue); background: var(--paper-warm);
+  border-radius: 0 12px 12px 0; padding: 20px 24px; margin: 34px 0 0;
+}
+.consent p { font-size: 15.5px; margin: 0; }
+.consent strong { color: var(--ink); }
+
+.legal { font-size: 13.5px; color: var(--ink-faint); margin: 30px 0 0; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="page">
+    <div class="bar-inner">
+      <a class="bar-mark" href="index.html">
+        <img src="icon.png" alt="">
+        <span class="bar-name">Listen</span>
+      </a>
+      <span class="bar-spacer"></span>
+      <a class="button small" href="index.html">How it works</a>
+      <a class="button small primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download</a>
+    </div>
+  </div>
+</div>
+
+<header class="hero" id="top">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Works with FaceTime</p>
+      <h1>Record a FaceTime call<br>on your Mac.</h1>
+      <p class="hero-sub">Listen records FaceTime calls on your Mac, writes them down and works out who spoke. No bot, no account, and nothing leaves the machine.</p>
+    </div>
+
+    <div class="buttons" id="buttons">
+      <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+      <a class="button" href="index.html">See everything it does</a>
+    </div>
+    <p class="under-button" id="under-button">Free and open source · Apple silicon · macOS 14 or later</p>
+
+    <div class="chipcheck" id="chipcheck" hidden>
+      <p><b>This looks like an Intel Mac, and Listen will not run on it.</b></p>
+      <p>Listen transcribes on your own machine, and that needs the Neural
+      Engine Apple introduced with the M1 in late 2020. There is no Intel
+      version, and there is no version that would work.</p>
+      <p>Open the Apple menu and choose About This Mac. If it says <b>Chip</b>
+      rather than <b>Processor</b>, this guess is wrong and you can
+      <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">download
+      Listen</a> as normal.</p>
+    </div>
+
+    <figure class="demo">
+      <div class="frame empty" data-shot="record" data-seconds="14"
+           data-note="menu bar → Start → meters → Stop → Keep"></div>
+      <figcaption>Starting and keeping a recording, entirely from the menu bar.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<section id="how">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">How it works</p>
+      <h2>Three steps, and none of them are in FaceTime.</h2>
+      <ol class="steps">
+        <li><b>Press record in the menu bar</b> when the call starts. Listen
+        writes to disk straight away, so you never lose the first minute.</li>
+        <li><b>Have the call.</b> Your microphone goes to one track and
+        everything FaceTime plays goes to another, which is what lets Listen
+        tell the voices apart afterwards.</li>
+        <li><b>Press stop, and keep it.</b> The transcript is written on your own
+        Mac, usually before you have finished closing the window.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section id="different">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Why this one is different</p>
+      <h2>No bot can join a FaceTime call.</h2>
+      <p class="lead">Meeting notetakers work by being invited into a call as a participant. A FaceTime call has no invitation to send, which is why most notetakers simply do not cover it. Listen never needed one: it records what your Mac is already playing, so the call is an ordinary sound on your machine and nothing has to let it in.</p>
+      <ul class="points">
+              <li>Works whether you use the FaceTime app or FaceTime in a browser tab</li>
+              <li>FaceTime needs nothing installed, configured or connected</li>
+              <li>Your call stays end to end encrypted; Listen records your own end of it</li>
+      </ul>
+      <p>FaceTime has no notetaker ecosystem at all, because there is nothing for a notetaker to join. That leaves anybody doing real work over FaceTime with a screen recording at best. Listen treats it as what it is: audio your Mac is playing, and therefore audio it can write down.</p>
+    </div>
+  </div>
+</section>
+
+<section id="after">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">After the call</p>
+      <h2>A transcript with names on it.</h2>
+      <p class="lead">Listen writes the call up on your Mac's own chip, works out
+      who spoke, and remembers the voices, so the regulars name themselves after
+      the first time.</p>
+      <ul class="points">
+        <li>Search every call you have ever had, instantly and offline</li>
+        <li>Ask a question across all of them and click through to the answer</li>
+        <li>Write your own notes during the call, when they are worth the most</li>
+        <li>Fix a name or a sentence without re-transcribing anything</li>
+      </ul>
+      <p><a href="index.html">See everything Listen does →</a></p>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Privacy</p>
+      <h2>There is no Listen server.</h2>
+      <p class="lead">The recording, the transcript and the names on it are all
+      made on your own computer. No account, and nothing reports back.</p>
+      <p>Listen is open source under the AGPL, so none of that has to be taken on
+      trust. <a href="security.html">What runs where</a> sets out every
+      connection it can make and how to check each one yourself, and there are
+      answers ready for a <a href="privacy.html">privacy</a> or
+      <a href="hipaa.html">HIPAA</a> review.</p>
+
+      <div class="consent">
+        <p><strong>Tell the other person.</strong> FaceTime has no way to know
+        that Listen is running, so saying so is on you. In many places it is also
+        the law, and it varies by country and by state. If the call is with a
+        client or a patient, get their agreement on the recording before you
+        start.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Questions</p>
+      <h2>Recording FaceTime on a Mac.</h2>
+      <div class="faq">
+        <details>
+          <summary>Can you record a FaceTime call with audio on a Mac?</summary>
+          <div class="answer"><p>Yes. Listen records your microphone and everything your Mac plays, which includes the other side of a FaceTime call. macOS screen recording is not involved and is not needed.</p></div>
+        </details>
+        <details>
+          <summary>Does it record FaceTime video?</summary>
+          <div class="answer"><p>No. Listen is about what was said, so it keeps the audio and the transcript rather than a video file the size of the meeting.</p></div>
+        </details>
+        <details>
+          <summary>Does the other person get told?</summary>
+          <div class="answer"><p>FaceTime has nothing to tell them, because Listen is not part of the call. Tell them yourself.</p></div>
+        </details>
+        <details>
+          <summary>Does it work with a FaceTime group call?</summary>
+          <div class="answer"><p>Yes. Everyone else arrives on one track and Listen separates the voices on it, so the transcript still says who said what.</p></div>
+        </details>
+        <details>
+          <summary>Does it work on iPhone FaceTime calls?</summary>
+          <div class="answer"><p>Not from the phone. This records calls that happen on your Mac.</p></div>
+        </details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="get">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Get Listen</p>
+      <h2>Try it on your next call.</h2>
+      <p class="lead">Free, and it stays free. Apple silicon, macOS 14 or later.
+      The speech model is about 2.5 GB and downloads once, the first time you run
+      it.</p>
+      <div class="buttons">
+        <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+        <a class="button" href="https://github.com/mugoosse/listen">Read the source</a>
+      </div>
+
+      <p class="eyebrow" style="margin-top:44px">Also works with</p>
+      <div class="channel-nav">
+      <a href="whatsapp.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg><span>WhatsApp</span></a>
+      <a href="telegram.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg><span>Telegram</span></a>
+      <a href="signal.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 0q-.934 0-1.83.139l.17 1.111a11 11 0 0 1 3.32 0l.172-1.111A12 12 0 0 0 12 0M9.152.34A12 12 0 0 0 5.77 1.742l.584.961a10.8 10.8 0 0 1 3.066-1.27zm5.696 0-.268 1.094a10.8 10.8 0 0 1 3.066 1.27l.584-.962A12 12 0 0 0 14.848.34M12 2.25a9.75 9.75 0 0 0-8.539 14.459c.074.134.1.292.064.441l-1.013 4.338 4.338-1.013a.62.62 0 0 1 .441.064A9.7 9.7 0 0 0 12 21.75c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25m-7.092.068a12 12 0 0 0-2.59 2.59l.909.664a11 11 0 0 1 2.345-2.345zm14.184 0-.664.909a11 11 0 0 1 2.345 2.345l.909-.664a12 12 0 0 0-2.59-2.59M1.742 5.77A12 12 0 0 0 .34 9.152l1.094.268a10.8 10.8 0 0 1 1.269-3.066zm20.516 0-.961.584a10.8 10.8 0 0 1 1.27 3.066l1.093-.268a12 12 0 0 0-1.402-3.383M.138 10.168A12 12 0 0 0 0 12q0 .934.139 1.83l1.111-.17A11 11 0 0 1 1.125 12q0-.848.125-1.66zm23.723.002-1.111.17q.125.812.125 1.66c0 .848-.042 1.12-.125 1.66l1.111.172a12.1 12.1 0 0 0 0-3.662M1.434 14.58l-1.094.268a12 12 0 0 0 .96 2.591l-.265 1.14 1.096.255.36-1.539-.188-.365a10.8 10.8 0 0 1-.87-2.35m21.133 0a10.8 10.8 0 0 1-1.27 3.067l.962.584a12 12 0 0 0 1.402-3.383zm-1.793 3.848a11 11 0 0 1-2.345 2.345l.664.909a12 12 0 0 0 2.59-2.59zm-19.959 1.1L.357 21.48a1.8 1.8 0 0 0 2.162 2.161l1.954-.455-.256-1.095-1.953.455a.675.675 0 0 1-.81-.81l.454-1.954zm16.832 1.769a10.8 10.8 0 0 1-3.066 1.27l.268 1.093a12 12 0 0 0 3.382-1.402zm-10.94.213-1.54.36.256 1.095 1.139-.266c.814.415 1.683.74 2.591.961l.268-1.094a10.8 10.8 0 0 1-2.35-.869zm3.634 1.24-.172 1.111a12.1 12.1 0 0 0 3.662 0l-.17-1.111q-.812.125-1.66.125a11 11 0 0 1-1.66-.125"/></svg><span>Signal</span></a>
+      <a href="facetime.html" aria-current="page"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 3.5V7l-4 3.5z"/></svg><span>FaceTime</span></a>
+      <a href="zoom.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z"/></svg><span>Zoom</span></a>
+      <a href="google-meet.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.53 2.13 0 7.75h5.53zm.398 0v5.62h7.608v3.65l5.47-4.45c-.014-1.22.031-2.25-.025-3.46-.148-1.09-1.287-1.47-2.236-1.36zM23.1 4.32c-.802.295-1.358.995-2.047 1.49-2.506 2.05-4.982 4.12-7.468 6.19 3.025 2.59 6.04 5.18 9.065 7.76 1.218.671 1.428-.814 1.328-1.64v-13a.828.828 0 0 0-.877-.825zM.038 8.15v7.7h5.53v-7.7zm13.577 8.1H6.008v5.62c3.864-.006 7.737.011 11.58-.009 1.02-.07 1.618-1.12 1.468-2.07v-2.51l-5.47-4.68v3.65zm-13.577 0c.02 1.44-.041 2.88.033 4.31.162.948 1.158 1.43 2.047 1.31h3.464v-5.62z"/></svg><span>Google Meet</span></a>
+      <a href="microsoft-teams.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.625 8.127q-.55 0-1.025-.205-.475-.205-.832-.563-.358-.357-.563-.832Q18 6.053 18 5.502q0-.54.205-1.02t.563-.837q.357-.358.832-.563.474-.205 1.025-.205.54 0 1.02.205t.837.563q.358.357.563.837.205.48.205 1.02 0 .55-.205 1.025-.205.475-.563.832-.357.358-.837.563-.48.205-1.02.205zm0-3.75q-.469 0-.797.328-.328.328-.328.797 0 .469.328.797.328.328.797.328.469 0 .797-.328.328-.328.328-.797 0-.469-.328-.797-.328-.328-.797-.328zM24 10.002v5.578q0 .774-.293 1.46-.293.685-.803 1.194-.51.51-1.195.803-.686.293-1.459.293-.445 0-.908-.105-.463-.106-.85-.329-.293.95-.855 1.729-.563.78-1.319 1.336-.756.557-1.67.861-.914.305-1.898.305-1.148 0-2.162-.398-1.014-.399-1.805-1.102-.79-.703-1.312-1.664t-.674-2.086h-5.8q-.411 0-.704-.293T0 16.881V6.873q0-.41.293-.703t.703-.293h8.59q-.34-.715-.34-1.5 0-.727.275-1.365.276-.639.75-1.114.475-.474 1.114-.75.638-.275 1.365-.275t1.365.275q.639.276 1.114.75.474.475.75 1.114.275.638.275 1.365t-.275 1.365q-.276.639-.75 1.113-.475.475-1.114.75-.638.276-1.365.276-.188 0-.375-.024-.188-.023-.375-.058v1.078h10.875q.469 0 .797.328.328.328.328.797zM12.75 2.373q-.41 0-.78.158-.368.158-.638.434-.27.275-.428.639-.158.363-.158.773 0 .41.158.78.159.368.428.638.27.27.639.428.369.158.779.158.41 0 .773-.158.364-.159.64-.428.274-.27.433-.639.158-.369.158-.779 0-.41-.158-.773-.159-.364-.434-.64-.275-.275-.639-.433-.363-.158-.773-.158zM6.937 9.814h2.25V7.94H2.814v1.875h2.25v6h1.875zm10.313 7.313v-6.75H12v6.504q0 .41-.293.703t-.703.293H8.309q.152.809.556 1.5.405.691.985 1.19.58.497 1.318.779.738.281 1.582.281.926 0 1.746-.352.82-.351 1.436-.966.615-.616.966-1.43.352-.815.352-1.752zm5.25-1.547v-5.203h-3.75v6.855q.305.305.691.452.387.146.809.146.469 0 .879-.176.41-.175.715-.48.304-.305.48-.715t.176-.879Z"/></svg><span>Microsoft Teams</span></a>
+      <a href="slack-huddles.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg><span>Slack huddles</span></a>
+      <a href="discord.html"><svg class="chan-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg><span>Discord</span></a>
+      </div>
+
+      <p class="legal">Listen is not affiliated with, endorsed by or connected to
+      FaceTime or its owner. FaceTime is named here only to describe what Listen
+      records.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="page">
+    <p>Made by <a href="https://maxgoespublic.com/">Maxime Goossens</a>.
+    <a href="index.html">Listen</a> ·
+    <a href="https://github.com/mugoosse/listen">Source</a> ·
+    <a href="https://github.com/mugoosse/listen/blob/main/LICENSE">AGPL 3.0</a> ·
+    <a href="security.html">Security</a> ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="hipaa.html">HIPAA</a></p>
+  </div>
+</footer>
+
+<script>
+document.documentElement.className += ' js';
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+//
+// Every frame carries `data-shot="<name>"`. The clip is `shots/<name>.mp4` and
+// its poster, if there is one, is `shots/<name>.jpg`. A frame whose clip is not
+// on disk yet keeps whatever it already holds: the still it was written with,
+// its poster, or a labelled placeholder naming the file that is missing. So the
+// page is deployable before the shoot and fills itself in afterwards, one file
+// at a time, with no edit to this document.
+//
+// Fails open in both directions. No JavaScript leaves the stills in place,
+// which is the honest frame of the same thing; a clip that 404s or will not
+// decode leaves the frame exactly as it was.
+//
+// **A video has to be in the document to load.** Measured in Chrome: a detached
+// element told to `load()` sits at `networkState` 2 and `readyState` 0 for as
+// long as you wait, so `loadeddata` never arrives and nothing is ever swapped
+// in. Every element here is therefore attached first, invisibly, and only
+// revealed once it has frames.
+var Media = (function () {
+  var reduced = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function hide(el) {
+    el.style.position = 'absolute';
+    el.style.inset = '0';
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+  }
+  function show(el) {
+    el.style.position = '';
+    el.style.inset = '';
+    el.style.opacity = '';
+    el.style.pointerEvents = '';
+  }
+  function clearAround(frame, keep) {
+    Array.prototype.slice.call(frame.children).forEach(function (child) {
+      if (child !== keep) { frame.removeChild(child); }
+    });
+  }
+
+  // The still a frame falls back to, best first: its poster, then a labelled
+  // placeholder. The placeholder is drawn straight away and the poster replaces
+  // it when it arrives, because the alternative is a frame that is blank for as
+  // long as the request takes and then blank for ever if no poster was ever
+  // exported.
+  //
+  // This is also what a browser that will not play video at all is left
+  // holding, so it is worth having: a frame of the thing being described,
+  // rather than a filename that is a note to whoever is recording.
+  function fallback(frame, name, src) {
+    if (frame.querySelector('img')) { return; }
+
+    var slot = document.createElement('div');
+    slot.className = 'slot';
+
+    var glyph = document.createElement('div');
+    glyph.className = 'slot-glyph';
+    glyph.textContent = '▶';
+    slot.appendChild(glyph);
+
+    var file = document.createElement('span');
+    file.className = 'slot-name';
+    file.textContent = src;
+    slot.appendChild(file);
+
+    var note = frame.getAttribute('data-note');
+    var secs = frame.getAttribute('data-seconds');
+    if (note || secs) {
+      var hint = document.createElement('span');
+      hint.className = 'slot-note';
+      hint.textContent = (secs ? secs + 's · ' : '') + (note || '');
+      slot.appendChild(hint);
+    }
+    frame.appendChild(slot);
+
+    var poster = document.createElement('img');
+    poster.alt = '';
+    poster.addEventListener('load', function () {
+      // The clip, if one is on its way, is not the poster's to remove.
+      var placeholder = frame.querySelector('.slot');
+      if (placeholder) { frame.removeChild(placeholder); }
+      frame.classList.remove('empty');
+      show(poster);
+    });
+    poster.addEventListener('error', function () {
+      if (poster.parentNode) { poster.parentNode.removeChild(poster); }
+    });
+    hide(poster);
+    frame.appendChild(poster);
+    poster.src = 'shots/' + name + '.jpg';
+  }
+
+  // The one frame that is a film rather than a loop. It keeps its still until
+  // somebody presses play, then plays once, with sound, with the controls a
+  // two-minute video needs. The probe fetches metadata only, so the page still
+  // costs a page until the press.
+  function film(frame, name, src) {
+    var probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.muted = true;
+    probe.setAttribute('muted', '');
+    probe.setAttribute('aria-hidden', 'true');
+    hide(probe);
+    frame.appendChild(probe);
+    probe.src = src;
+
+    probe.addEventListener('loadedmetadata', function () {
+      if (probe.parentNode) { frame.removeChild(probe); }
+      frame.classList.add('playable');
+
+      var button = document.createElement('button');
+      button.className = 'play';
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Play the Listen demo');
+      button.innerHTML = '<span class="play-disc">▶</span>' +
+                         '<span class="play-label">Watch the demo</span>';
+      frame.appendChild(button);
+
+      button.addEventListener('click', function () {
+        var reel = document.createElement('video');
+        reel.src = src;
+        reel.controls = true;
+        reel.autoplay = true;
+        reel.playsInline = true;
+        reel.setAttribute('playsinline', '');
+        frame.textContent = '';
+        frame.classList.remove('empty', 'playable');
+        frame.appendChild(reel);
+        var playing = reel.play();
+        if (playing && playing.catch) { playing.catch(function () {}); }
+      });
+    });
+    probe.addEventListener('error', function () {
+      if (probe.parentNode) { probe.parentNode.removeChild(probe); }
+    });
+  }
+
+  function loop(frame, name, src) {
+    var video = document.createElement('video');
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('aria-hidden', 'true');
+    video.preload = 'metadata';
+    video.poster = 'shots/' + name + '.jpg';
+    hide(video);
+    frame.appendChild(video);
+    video.src = src;
+
+    video.addEventListener('loadeddata', function () {
+      clearAround(frame, video);
+      frame.classList.remove('empty');
+      show(video);
+      var playing = video.play();
+      if (playing && playing.catch) { playing.catch(function () {}); }
+    });
+    video.addEventListener('error', function () {
+      if (video.parentNode) { video.parentNode.removeChild(video); }
+    });
+  }
+
+  // Called once per frame, and only when that frame is about to be looked at.
+  // A tabbed page has seven clips on it and shows one, so fetching all seven on
+  // load would spend the whole page's weight on six nobody asked for.
+  function hydrate(frame) {
+    if (!frame || frame.hasAttribute('data-hydrated')) { return; }
+    frame.setAttribute('data-hydrated', '');
+
+    var name = frame.getAttribute('data-shot');
+    var src = 'shots/' + name + '.mp4';
+
+    if (frame.hasAttribute('data-player')) { film(frame, name, src); return; }
+
+    fallback(frame, name, src);
+
+    // A moving clip is the point of the frame, so a visitor who has asked for
+    // less motion is left with the still. `autoplay` is the only way one ever
+    // plays: there are no controls, because these are loops rather than things
+    // to sit through.
+    if (reduced) { return; }
+    loop(frame, name, src);
+  }
+
+  // Nothing off screen should be decoding. Called on every switch.
+  function suspend(scope) {
+    if (!scope) { return; }
+    Array.prototype.forEach.call(scope.querySelectorAll('video'), function (v) {
+      if (v.loop && !v.paused) { v.pause(); }
+    });
+  }
+  function resume(scope) {
+    if (!scope) { return; }
+    Array.prototype.forEach.call(scope.querySelectorAll('video'), function (v) {
+      if (v.loop && v.paused && v.readyState > 1) {
+        var playing = v.play();
+        if (playing && playing.catch) { playing.catch(function () {}); }
+      }
+    });
+  }
+
+  return { hydrate: hydrate, suspend: suspend, resume: resume, reduced: reduced };
+})();
+
+
+// Every frame on this page is outside a switcher, so all of them load now.
+Array.prototype.forEach.call(
+  document.querySelectorAll('.frame[data-shot]'), Media.hydrate);
+
+// ---------------------------------------------------------------------------
+// Tell an Intel visitor here, because nothing downstream can.
+// ---------------------------------------------------------------------------
+//
+// The binary is arm64 only, so an Intel Mac fails at launch with a system
+// error, after the download and, for anyone who got that far in setup, 2.5 GB
+// of weights. The app cannot start far enough to explain itself, so this page
+// is the last place the sentence can be said.
+//
+// Every branch fails open. Anything unavailable, unreadable or unrecognised
+// leaves the page exactly as it shipped, because the two errors do not cost the
+// same: missing an Intel Mac costs what this page already cost, while a wrong
+// guess turns away somebody whose Mac works perfectly. That is also why the
+// download link survives inside the notice rather than the notice replacing it.
+(function () {
+  var notice = document.getElementById('chipcheck');
+  if (!notice) return;
+
+  // Safari reports "MacIntel" on every Mac, Apple silicon included, so this
+  // establishes "a Mac" and says nothing at all about the chip. It is here so a
+  // Windows visitor with an Intel GPU is not told about their Intel Mac.
+  if (!/Mac/.test(navigator.platform || '') &&
+      !/Mac OS X/.test(navigator.userAgent || '')) return;
+
+  var renderer;
+  try {
+    var gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return;
+    var info = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!info) return;
+    renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || '');
+  } catch (e) {
+    return;
+  }
+
+  // The renderer string is the only signal, and a second one was tried and
+  // deleted on measurement. `WEBGL_compressed_texture_s3tc` is widely described
+  // as a desktop-GPU format Apple's own GPUs do not implement, which would have
+  // corroborated this from a second direction. Measured on an M4 Max in Chrome,
+  // both it and `_srgb` are **present**, so it says "true" on the machines it
+  // was supposed to rule out. Requiring it bought no accuracy and could only
+  // ever suppress a correct warning, so it is gone. Do not add it back without
+  // measuring it again.
+  //
+  // Nothing else is available to cross-check with. `navigator.platform` is
+  // "MacIntel" and the user agent says "Intel Mac OS X 10_15_7" on that same
+  // M4 Max, which is why neither can be read as saying anything about a chip.
+
+  // Any mention of Apple counts as Apple silicon: Safari reports "Apple GPU"
+  // and Chrome reports "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro,
+  // ...)". Reading this generously is the cheap direction to be wrong in.
+  if (!renderer || /apple/i.test(renderer)) return;
+  if (!/intel|iris|radeon|amd|nvidia|geforce/i.test(renderer)) return;
+
+  notice.hidden = false;
+  var buttons = document.getElementById('buttons');
+  var under = document.getElementById('under-button');
+  if (buttons) buttons.hidden = true;
+  if (under) under.hidden = true;
+})();
+
+</script>
+
+</body>
+</html>

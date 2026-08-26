@@ -1776,6 +1776,11 @@ extension LibraryWindow: NSMenuItemValidation {
              #selector(renameSelected), #selector(deleteSelected),
              #selector(tagSelected):
             return selected != nil
+        // Both work on a note as well as on a meeting, which is why they ask a
+        // different question from the five above: those are all verbs a note
+        // does not have.
+        case #selector(shareSelected), #selector(copyMarkdownSelected):
+            return hasShareableSelection
         default:
             return true
         }
@@ -3129,6 +3134,21 @@ extension LibraryWindow: NSMenuDelegate {
             return
         }
 
+        // Share first, because it is the only item here that ends with the
+        // meeting in somebody else's hands, and because a person looking for it
+        // is looking for the word rather than for a place in a list. It opens
+        // the Mac's own sheet, so it holds whatever this Mac has: AirDrop,
+        // Messages, Mail, Notes, Reminders, and whatever is turned on under
+        // Sharing in Settings.
+        add(menu, "Share…", #selector(shareSelected), "square.and.arrow.up")
+        // Beside it rather than in the Edit menu, because it is not the ⌘C that
+        // copies a selection: it copies the whole meeting, and Obsidian, a
+        // ticket and a Slack message are all paste destinations that no share
+        // sheet lists.
+        add(menu, "Copy as Markdown", #selector(copyMarkdownSelected), "doc.on.doc")
+        // Export stays. It is the one that asks *where*, and a share sheet
+        // cannot answer that question: a folder in iCloud Drive that a script
+        // watches is not a sharing service.
         add(menu, "Export…", #selector(exportSelected), "square.and.arrow.down")
         menu.addItem(.separator())
         // The model hangs off this item rather than living three screens away
@@ -3236,6 +3256,12 @@ extension LibraryWindow: NSMenuDelegate {
                 "bubble.left.and.bubble.right").representedObject = id
             menu.addItem(.separator())
         }
+        // The same two verbs a meeting has, on the other document this window
+        // opens. A note is the half of a meeting somebody actually sends, so if
+        // sharing reached only one of the two it should have been this one.
+        add(menu, "Share…", #selector(shareSelected), "square.and.arrow.up")
+        add(menu, "Copy as Markdown", #selector(copyMarkdownSelected), "doc.on.doc")
+        menu.addItem(.separator())
         // A note is a markdown file and that is a promise this app makes rather
         // than an implementation detail, so the way to it is on the menu.
         add(menu, "Show in Finder", #selector(revealNote), "folder")
@@ -3428,21 +3454,105 @@ extension LibraryWindow: NSMenuDelegate {
 
     @objc func exportSelected() {
         guard let recording = selected else { return }
+        let document = ShareRecording.document(for: recording)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = recording.exportName + ".md"
+        panel.nameFieldStringValue = document.filename
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        var out = "# \(recording.metadata.title)\n\n\(recording.when)\n\n"
-        for turn in recording.storedTurns {
-            out += "**\(SpeakerName.display(turn.speaker))** · "
-                + "\(TranscriptFormat.stamp(turn.start))\n\n\(turn.text)\n\n"
-        }
-        try? out.write(to: url, atomically: true, encoding: .utf8)
+        // The same bytes the share sheet sends and the same bytes
+        // `listen export --format md` prints. This function used to render its
+        // own, the CLI rendered its own, and the two had already drifted apart
+        // in what they put on the second line. See `ShareDocument`.
+        try? document.markdown.write(to: url, atomically: true, encoding: .utf8)
         // The id and the format, not the destination: a filename is the
         // user's own words about the meeting.
         ActivityLog.append("export", ["recording_id": recording.id, "format": "md"])
+    }
+
+    /// The open page, through the Mac's own share sheet.
+    ///
+    /// One action behind three items: the toolbar's ellipsis, the sidebar's
+    /// right-click menu and the File menu all reach it, and all three put the
+    /// sheet in the same place. What is shared is whatever the page is, which
+    /// is why this asks the sidebar before it asks for a recording: a note page
+    /// really has no meeting, and sharing the last one selected would be a
+    /// control sending a different screen.
+    @objc func shareSelected() {
+        guard let anchor = shareAnchor else { return }
+        if let note = sidebar.selectedNote {
+            ShareRecording.present(ShareRecording.document(for: note),
+                                   from: anchor.view, rect: anchor.rect)
+            // The slug and the format, never the note. `ActivityLog` carries
+            // ids so that the log is safe to read aloud, and a note is the one
+            // artifact here whose title is often the question somebody asked.
+            ActivityLog.append("share", ["note": note.slug, "format": "md"])
+            return
+        }
+        guard let recording = selected, !recording.isLive else { return }
+        ShareRecording.present(ShareRecording.document(for: recording),
+                               from: anchor.view, rect: anchor.rect)
+        ActivityLog.append("share", ["recording_id": recording.id, "format": "md"])
+    }
+
+    /// What the share sheet appears to come out of.
+    ///
+    /// **The ellipsis in the toolbar, and it has to be found rather than
+    /// held.** `actionsItem` is an `NSMenuToolbarItem`, which AppKit draws
+    /// itself: `NSToolbarItem.view` is nil for one, so there is no reference to
+    /// keep. It is found by the accessibility label AppKit already gives it,
+    /// walking up from the content view into the title bar, which is a
+    /// different branch of the hierarchy.
+    ///
+    /// The fallback is the top right of the content view, one point below the
+    /// toolbar, which is within a few points of the same place. A sheet that
+    /// opens slightly off is worth having; a Share that does nothing because a
+    /// private view could not be found is not.
+    private var shareAnchor: (view: NSView, rect: NSRect)? {
+        guard let content = window?.contentView else { return nil }
+        if let button = Self.namedActions(in: content.superview ?? content) {
+            return (button, button.bounds)
+        }
+        return (content, NSRect(x: content.bounds.maxX - 44,
+                                y: content.bounds.maxY - 1, width: 1, height: 1))
+    }
+
+    private static func namedActions(in view: NSView, depth: Int = 0) -> NSView? {
+        if view.accessibilityLabel() == "Actions", view.bounds.width < 120 { return view }
+        guard depth < 12 else { return nil }
+        for child in view.subviews {
+            if let hit = namedActions(in: child, depth: depth + 1) { return hit }
+        }
+        return nil
+    }
+
+    /// The whole document on the pasteboard.
+    ///
+    /// Not the general pasteboard's concealed type and not an expiring item,
+    /// which is what the phone does with a note. The difference is Universal
+    /// Clipboard: a Mac paste target is the Mac the library is already on, and
+    /// the reason this was asked for is pasting a meeting into Obsidian.
+    @objc func copyMarkdownSelected() {
+        if let note = sidebar.selectedNote {
+            ShareRecording.copy(ShareRecording.document(for: note))
+            ActivityLog.append("copy", ["note": note.slug, "format": "md"])
+            return
+        }
+        guard let recording = selected, !recording.isLive else { return }
+        ShareRecording.copy(ShareRecording.document(for: recording))
+        ActivityLog.append("copy", ["recording_id": recording.id, "format": "md"])
+    }
+
+    /// Whether there is a document to hand over at all.
+    ///
+    /// A person's card is not one, and neither is a meeting that is still being
+    /// recorded: sharing that would send a transcript that is still being
+    /// written, which is the same reason every other verb is withheld mid-call.
+    private var hasShareableSelection: Bool {
+        if sidebar.selectedNote != nil { return true }
+        guard let recording = selected else { return false }
+        return !recording.isLive
     }
 
     @objc func deleteSelected() {

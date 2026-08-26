@@ -72,6 +72,21 @@ enum MainMenu {
         // people leave open. Targets nil so it lands on whatever is key.
         add(menu, "Close Window", #selector(NSWindow.performClose(_:)), "w")
         menu.addItem(.separator())
+        // Above Export, because it is the one people go looking for and the
+        // one that ends with the meeting somewhere useful. Export is still
+        // here: it is the verb that asks *where*, which a share sheet cannot.
+        //
+        // No key equivalent, and that is the standard: macOS gives Share none
+        // anywhere, and the two keys near it here are already taken by Export
+        // and Show in Finder.
+        add(menu, "Share…", #selector(LibraryWindow.shareSelected))
+            .target = LibraryWindow.shared
+        // ⇧⌘C rather than ⌘C. Edit's Copy is the responder chain's, and it has
+        // to keep working in the title field and the search field; this copies
+        // the whole meeting whatever is focused.
+        add(menu, "Copy as Markdown", #selector(LibraryWindow.copyMarkdownSelected), "c",
+            [.command, .shift])
+            .target = LibraryWindow.shared
         add(menu, "Export…", #selector(LibraryWindow.exportSelected), "e")
             .target = LibraryWindow.shared
         add(menu, "Show in Finder", #selector(LibraryWindow.revealSelected), "r")

@@ -283,6 +283,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 Things AppKit does that no documentation warns about. These generalise past
 this app, so read them before building any new window, menu or popover.
 
+- An `NSItemProvider` costs you AirDrop, and a file *representation* does not buy it back
+- `standardShareMenuItem` puts its popover in the middle of the window
 - `NSPopover` and the row of chips
 - No window is the only thing that raises
 - The pane is the anchor, and the rect is taken before the edit is committed

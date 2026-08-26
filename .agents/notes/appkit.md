@@ -730,3 +730,62 @@ And the general one, which is the expensive half: **a blank shot is also what a
 window that failed to lay out looks like.** The first reading of those two
 pictures was that the new window had not laid out at all. When a shot disagrees
 with what you expected, read the window through AX before believing the picture.
+
+### An `NSItemProvider` costs you AirDrop, and a file *representation* does not buy it back
+
+Sharing a transcript wants two things at once: the markdown as text, so it
+lands in the body of a message rather than as an attachment, and a `.md` file,
+so AirDrop and Save to Disk have something to carry. One `NSItemProvider`
+carrying both looks like the answer and is half of one.
+
+Measured with `NSSharingService.sharingServices(forItems:)`, which is
+deprecated since 13.0 and still the only way to read the list without a window,
+over seven shapes of the same document:
+
+| items | services |
+|---|---|
+| `[String]` | Mail, Messages, Notes, Reminders, Freeform, Journal |
+| `[URL]` (a file) | **AirDrop**, Mail, Messages, Notes, Reminders, Simulator, Freeform, Journal |
+| provider, `registerDataRepresentation(.utf8PlainText)` | no AirDrop |
+| provider, `registerFileRepresentation(.markdown)` | no AirDrop |
+| provider, both of the above | no AirDrop |
+| provider, text + `registerDataRepresentation(.fileURL)` | **AirDrop**, and the rest |
+| provider, text + `registerObject(url as NSURL)` | **AirDrop**, and the rest |
+
+So AirDrop looks for `public.file-url` specifically. A file *representation*,
+which is the modern API and the one that names a content type and writes the
+file lazily, is not it, and the service simply does not appear: no error, no
+empty row, just six services where there should be seven. Confirmed against
+the running window, where the sheet listed exactly the six.
+
+The shape that works is text first, then `.fileURL`, both registered lazily:
+the order decides who gets which, because a consumer takes the first
+representation it can use, and lazy means the file is written when a service
+asks rather than every time a menu opens over a meeting nobody shares. See
+`ShareRecording.item`.
+
+### `standardShareMenuItem` puts its popover in the middle of the window
+
+`NSSharingServicePicker.standardShareMenuItem` is the native Share item, the
+one Finder's right-click menu has, and it is one line: hand it the items and
+add it to a menu that is rebuilt as it opens. It was in the ellipsis menu for
+exactly as long as it took to photograph.
+
+The sheet it opens is anchored to nothing you can see. Measured on the running
+window: it came up against the top edge, roughly half way across, while the
+ellipsis that had just been clicked was in the top right corner. Reported as a
+sheet "in the middle of the screen" that does not look cast from anything.
+AppKit exposes no anchor, no rect and no delegate hook for it.
+
+`NSSharingServicePicker.show(relativeTo:of:preferredEdge:)` does take one, so
+the item is now an ordinary `NSMenuItem` and the picker is presented by hand.
+The services are identical either way; only the placement differs.
+
+**The anchor has to be found rather than kept.** `actionsItem` is an
+`NSMenuToolbarItem`, which AppKit draws itself, and `NSToolbarItem.view` is nil
+for one, so there is no reference to hold on to. It is found by walking from
+`window.contentView.superview` (the title bar is a different branch of the
+hierarchy from the content) for a view whose `accessibilityLabel()` is
+`Actions`, with the top right of the content view as the fallback: a sheet a
+few points off is worth having, and a Share that does nothing because a private
+view could not be found is not.

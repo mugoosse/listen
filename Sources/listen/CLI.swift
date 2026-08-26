@@ -2102,12 +2102,27 @@ enum CLI {
                       + "\(SpeakerName.display(t.speaker)): \(t.text)")
             }
         default:
-            print("# \(recording.metadata.title)\n")
-            print("\(recording.when)\n")
-            for t in turns {
-                print("**\(SpeakerName.display(t.speaker))** · "
-                      + "\(TranscriptFormat.stamp(t.start))\n\n\(t.text)\n")
-            }
+            // Rendered by `ShareDocument`, which is also what the window's
+            // Export writes and what the share sheet sends on both the Mac and
+            // the phone. There were two copies of this markdown before there
+            // was a third, and they had already drifted.
+            //
+            // **Notes are deliberately not passed, and neither is the length
+            // or the app.** The window shares a meeting, which includes what
+            // somebody wrote about it and the line of provenance a reader of
+            // somebody else's transcript needs. This command is asked for a
+            // transcript by scripts that have been diffing its output for
+            // months, so it prints exactly what it printed before: the title,
+            // the date, the turns. `listen show` is where the full provenance
+            // line already lives, and `--format json` is the machine surface.
+            print(ShareDocument(
+                title: recording.metadata.title,
+                subtitle: ShareDocument.subtitle(date: recording.date, duration: nil),
+                lines: turns.map {
+                    .init(speaker: SpeakerName.display($0.speaker),
+                          start: $0.start, text: $0.text)
+                },
+                stem: recording.exportName).markdown, terminator: "")
         }
         exit(0)
     }

@@ -76,9 +76,10 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
 
         note(showing == .term
              ? "Matched by sound. A single word needs five letters and is never swapped "
-                 + "for a real English word, so \"Codex\" leaves \"codes\" alone. A phrase "
-                 + "needs every word to match, which is how \"Claude Code\" catches "
-                 + "\"Cloud coat\"."
+                 + "for a real English word, so \"Codex\" leaves \"codes\" alone. It can "
+                 + "close up to three spoken words into one, so \"flyinpublic\" catches "
+                 + "\"fly in public\". A phrase needs every word to match, which is how "
+                 + "\"Claude Code\" catches \"Cloud coat\"."
              : "Matches whole words where the text is a word, so \"cat\" leaves "
                  + "\"category\" alone. The longest match wins, so a rule for a full name "
                  + "beats one for the first name.")

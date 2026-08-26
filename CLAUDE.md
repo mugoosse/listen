@@ -216,6 +216,8 @@ The three things written about a recording rather than extracted from it.
 - The dictionary rewrites the library, and only the library
 - Adding a field to `StoredTranscript` needs `init(from:)` by hand
 - Two dictionaries, not one shared file
+- A silent "gh" is a consonant, so a term could not match its own name
+- A one-word term could only ever match one spoken word
 - A tag is a name string, and the vocabulary is derived
 - `tag:job ` looks finished and is not, and the field lifted the wrong pill
 - `kind:` is not a predicate on a recording, and `apply(to:)` ignores it

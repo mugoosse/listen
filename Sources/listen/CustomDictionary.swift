@@ -443,12 +443,23 @@ enum CustomDictionary {
     /// Vowels break a run of equal codes, h and w do not, which is what makes
     /// "Goossens", "Gossens", "Goosens", "Gaussens" and "Gusens" all come out as
     /// g252.
+    ///
+    /// A silent "gh" says nothing, which Soundex proper does not know and which
+    /// costs more here than anywhere else: English writes the sound at the end
+    /// of "site" as "ight" about as often as it writes it "ite". A term spelled
+    /// "Kinsight" coded to k5223 while every mishearing of it, "Kinsite",
+    /// "Kinside", "Kingside", "Kinzite", coded to k523, so the sounds-like pass
+    /// could never match the word it had been handed. Measured on a day of
+    /// dictation history: six of the eight misheard instances of one product
+    /// name, none of which the term could reach.
     static func phoneticKey(_ s: String) -> String {
-        let letters = s.lowercased().filter(\.isLetter)
+        let letters = Array(s.lowercased().filter(\.isLetter))
         guard let first = letters.first else { return "" }
         var key = String(first)
         var previous = consonantClass(first)
-        for c in letters.dropFirst() {
+        for i in 1..<letters.count {
+            let c = letters[i]
+            if isSilentGH(letters, at: i) { continue }
             if let d = consonantClass(c) {
                 if d != previous { key.append(d) }
                 previous = d
@@ -457,6 +468,23 @@ enum CustomDictionary {
             }
         }
         return key
+    }
+
+    /// Whether the "g" at `i` is the silent half of a "gh".
+    ///
+    /// Two conditions, and both are needed. A vowel before, because "Afghan"
+    /// pronounces its g. A consonant after, or the end of the word, because
+    /// that is what separates a silent "gh" from one starting a syllable of its
+    /// own: "sight" and "though" against "doghouse" and "foghorn".
+    ///
+    /// The h itself needs no case here. It is already ignored, and ignored
+    /// without breaking a run, everywhere in `phoneticKey`.
+    private static func isSilentGH(_ letters: [Character], at i: Int) -> Bool {
+        guard letters[i] == "g", i > 0, i + 1 < letters.count,
+              letters[i + 1] == "h",
+              consonantClass(letters[i - 1]) == nil
+        else { return false }
+        return i + 2 >= letters.count || consonantClass(letters[i + 2]) != nil
     }
 
     private static func consonantClass(_ c: Character) -> Character? {
@@ -501,6 +529,70 @@ enum CustomDictionary {
         return false
     }
 
+    /// How many spoken words a one-word term is allowed to take.
+    ///
+    /// Three, because that is the shape of the mishearing: a compound name is
+    /// broken at its own seams and nowhere else, so "Kinsight" comes back as
+    /// "kin site" and "flyinpublic" as "fly in public". Four would start gluing
+    /// clauses together for the length guard in `accepts` to throw away again.
+    private static let maximumJoin = 3
+
+    /// One way a term may match: a run of `span` tokens, keyed either word for
+    /// word or with the gaps closed up.
+    private struct Candidate {
+        /// How many tokens this consumes.
+        let span: Int
+        /// One key per word of the term, or the single key of the whole term
+        /// when `closesGaps`.
+        let keys: [String]
+        /// Whether the span is keyed as one word rather than word by word.
+        let closesGaps: Bool
+        let entry: Entry
+
+        /// `table[n - 1][i]` is the key of the `n` tokens starting at `i`.
+        func matches(at i: Int, in table: [[String]]) -> Bool {
+            closesGaps
+                ? table[span - 1][i] == keys[0]
+                : keys.enumerated().allSatisfy { table[0][i + $0.offset] == $0.element }
+        }
+    }
+
+    /// Every way each enabled term may match, longest span first.
+    ///
+    /// A term of several words is matched word for word, which is the strong
+    /// signal `accepts` leans on to allow a span of real words. A term of one
+    /// word gets those spans too, but keyed as one word, because a compound
+    /// name is precisely what an ASR splits and a one-token matcher could never
+    /// see it: of eight misheard instances of "Kinsight" in a day of dictation
+    /// history, two arrived as two words and nothing in the list could reach
+    /// them.
+    ///
+    /// Longest first, so a term for "Claude Code" beats one for "Claude", and a
+    /// two-word span of a compound name beats a one-word one.
+    private static func candidates(from entries: [Entry]) -> [Candidate] {
+        entries
+            .filter { $0.kind == .term && $0.enabled && eligible($0.text) }
+            .flatMap { entry -> [Candidate] in
+                let keys = entry.text.split(separator: " ").map { phoneticKey(String($0)) }
+                guard keys.count == 1 else {
+                    return [Candidate(span: keys.count, keys: keys,
+                                      closesGaps: false, entry: entry)]
+                }
+                return (1...maximumJoin).map {
+                    Candidate(span: $0, keys: keys, closesGaps: true, entry: entry)
+                }
+            }
+            .enumerated()
+            // Explicit index tiebreak: sorted(by:) is not a stable sort, so
+            // without it equal-span candidates would shuffle between runs.
+            .sorted {
+                $0.element.span == $1.element.span
+                    ? $0.offset < $1.offset
+                    : $0.element.span > $1.element.span
+            }
+            .map(\.element)
+    }
+
     /// Replace misheard words with the term they sound like.
     ///
     /// This is what makes a term worth having in an app with no polishing model
@@ -513,13 +605,8 @@ enum CustomDictionary {
     /// rather than twenty seconds, which is forty times as many chances for a
     /// rule to fire somewhere nobody expected. Hence the counts.
     private static func terms(in text: String, entries: [Entry]) -> Applied {
-        let terms = entries
-            .filter { $0.kind == .term && $0.enabled && eligible($0.text) }
-            .map { (keys: $0.text.split(separator: " ").map { phoneticKey(String($0)) },
-                    entry: $0) }
-            // Longest first, so a term for "Claude Code" beats one for "Claude".
-            .sorted { $0.keys.count > $1.keys.count }
-        guard !terms.isEmpty, !lexicon.isEmpty else { return Applied(text: text) }
+        let candidates = self.candidates(from: entries)
+        guard !candidates.isEmpty, !lexicon.isEmpty else { return Applied(text: text) }
 
         guard let regex = try? NSRegularExpression(
             pattern: "[\\p{L}\\p{N}][\\p{L}\\p{N}._'-]*") else { return Applied(text: text) }
@@ -535,33 +622,66 @@ enum CustomDictionary {
                 return (word, String(raw.dropFirst(word.count)), range)
             }
 
+        // Every key the loop below can ask for, computed once rather than once
+        // per term. Coding a token is the expensive half and it does not depend
+        // on which term is being tried: 200 terms over 7500 words measured 3.2s
+        // asking per term against 0.55s asking once.
+        //
+        // Only as many rows as there is something to match: a list of nothing
+        // but multi-word terms never keys a run at all.
+        let joins = candidates.contains { $0.closesGaps && $0.span > 1 } ? maximumJoin : 1
+        let words = tokens.map(\.word)
+        let table: [[String]] = (1...joins).map { n in
+            (0..<tokens.count).map { i in
+                i + n <= tokens.count ? phoneticKey(words[i..<(i + n)].joined()) : ""
+            }
+        }
+
         var out = ""
         var fired: [String: Int] = [:]
         var cursor = text.startIndex
         var i = 0
         while i < tokens.count {
             var advance = 1
-            for term in terms where i + term.keys.count <= tokens.count {
-                let span = Array(tokens[i..<(i + term.keys.count)])
+            for candidate in candidates where i + candidate.span <= tokens.count {
+                let span = Array(tokens[i..<(i + candidate.span)])
                 // Punctuation inside the span means these words are not one
-                // phrase: "the cloud. Coat rack" is not "Claude Code".
+                // phrase: "the cloud. Coat rack" is not "Claude Code". The
+                // tails cover punctuation stuck to a word.
+                //
+                // Anything standing between the words covers the rest, and it
+                // is not the same guard. The token pattern has to start on a
+                // letter, so a full stop with a space either side is in no
+                // token's tail and no token's word: it is invisible here, and
+                // the splice below replaces the whole span from the first
+                // word's start to the last word's end, so it would be deleted
+                // along with them. Measured on a corpus of 152 dictations
+                // joined by " . ", where "Kinsite . Oh" keyed as "kinsiteoh"
+                // and became one word.
                 guard span.dropLast().allSatisfy({ $0.tail.isEmpty }),
-                      zip(span, term.keys).allSatisfy({ phoneticKey($0.word) == $1 })
+                      zip(span, span.dropFirst()).allSatisfy({ a, b in
+                          text[a.range.upperBound..<b.range.lowerBound]
+                              .allSatisfy { $0 == " " }
+                      }),
+                      candidate.matches(at: i, in: table)
                 else { continue }
 
                 let phrase = span.map(\.word).joined(separator: " ")
-                guard phrase.caseInsensitiveCompare(term.entry.text) != .orderedSame else {
-                    advance = term.keys.count      // already right, leave it alone
+                guard phrase.caseInsensitiveCompare(candidate.entry.text) != .orderedSame else {
+                    advance = candidate.span       // already right, leave it alone
                     break
                 }
-                guard accepts(phrase: phrase, as: term.entry.text, words: term.keys.count)
+                guard accepts(phrase: phrase, as: candidate.entry.text,
+                              words: candidate.span,
+                              joined: candidate.closesGaps && candidate.span > 1
+                                  ? span.map(\.word).joined() : nil)
                 else { continue }
 
                 out += String(text[cursor..<span[0].range.lowerBound])
-                    + term.entry.text + span.last!.tail
+                    + candidate.entry.text + span.last!.tail
                 cursor = span.last!.range.upperBound
-                fired[term.entry.countKey, default: 0] += 1
-                advance = term.keys.count
+                fired[candidate.entry.countKey, default: 0] += 1
+                advance = candidate.span
                 break
             }
             i += advance
@@ -580,13 +700,22 @@ enum CustomDictionary {
         return words.count > 1 ? letters >= 8 : letters >= minimumSoundsLike
     }
 
-    private static func accepts(phrase: String, as term: String, words: Int) -> Bool {
+    /// `joined` is the span with its gaps closed up, and is set only for a
+    /// one-word term that took several spoken words. nil when the term matched
+    /// word for word.
+    private static func accepts(phrase: String, as term: String, words: Int,
+                                joined: String? = nil) -> Bool {
         // A phrase is allowed to be made of real words. "Cloud coat" is two
         // perfectly good English words and still obviously a misheard "Claude
         // Code"; requiring otherwise would make multi-word terms useless. The
         // protection is that every word has to match by sound in sequence, which
         // is a far stronger signal than one word matching alone.
         if words == 1 && isRealWord(phrase) { return false }
+        // Closing the gaps is the weaker of the two signals, because it is one
+        // key over a boundary the speaker did put in, so it keeps the real-word
+        // guard on the thing it would be making: "in sight" is "insight", and
+        // must not become somebody's product name.
+        if let joined, isRealWord(joined) { return false }
         // A wild length difference means the codes collided rather than the
         // speaker being misheard.
         return Double(phrase.count) >= Double(term.count) * 0.6

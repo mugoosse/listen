@@ -91,6 +91,80 @@ the outside is indistinguishable from the feature being broken. `eligible` is
 therefore public, the pane greys those rows, and `listen dictionary add` says so
 on the way in.
 
+### A silent "gh" is a consonant, so a term could not match its own name
+
+`phoneticKey` is Soundex-shaped, and Soundex codes every letter it is handed.
+English writes the sound at the end of "site" as "ight" about as often as it
+writes it "ite", so a term spelled `Kinsight` coded to `k5223` while every
+mishearing of it coded to `k523`:
+
+| spelling | key |
+|---|---|
+| `Kinsight` | `k5223` |
+| `Kinsite`, `Kinside`, `Kingside`, `Kinzite`, `Kinsyte` | `k523` |
+
+Those never compare equal, so the sounds-like pass skipped the word it had been
+given, and a user's own product name was unreachable by the one mechanism built
+for exactly that. Shown rather than reasoned about, because the codes are not
+something anybody can predict by reading their own rule: with the term spelled
+`Kinsite` in a scratch library, `kinside`, `kinzite`, `kinsyte`, `kinnsite` and
+`Kingside` are all rewritten, and with it spelled `Kinsight` none of them are.
+Any name with `ight`, `ough` or `eigh` in it had this.
+
+`isSilentGH` drops the g, and both of its conditions earn their place. A vowel
+before, because "Afghan" pronounces its g. A consonant after, or the end of the
+word, because that is what separates a silent "gh" from one starting a syllable
+of its own: "sight" and "though" against "doghouse" and "foghorn". The h needs
+no case at all, being already ignored, and ignored without breaking a run.
+
+### A one-word term could only ever match one spoken word
+
+`terms(in:)` split the *term* on spaces to get its keys and compared a span of
+exactly that many tokens, so a term of one word was a one-token matcher. A
+compound name is precisely the thing an ASR splits, and at its own seams, so
+that was the other half of the mishearings: of eight misheard instances of one
+product name in a day of dictation history, "kin site" and "can site" arrived as
+two words and nothing in the list could reach them.
+
+A one-word term now also gets the spans that close the gaps, up to
+`maximumJoin` of 3, keyed as one word. Terms of several words are still matched
+word for word, which is the strong signal `accepts` leans on when it allows a
+span of real words: "Cloud coat" is two perfectly good English words and
+obviously "Claude Code". Closing the gaps is the weaker of the two, one key over
+a boundary the speaker did put in, so it keeps the real-word guard on the thing
+it would be making: "in sight" is "insight", and must not become somebody's
+product name.
+
+Measured against the day of history that prompted it, eight misheard instances:
+seven are now rewritten. "can site" is the one that is not, and it should stay
+that way. Soundex keeps the first letter verbatim, so `c` is not `k`, and
+relaxing that merges c, g, j, k, q, s, x and z into one opening sound and makes
+the whole pass untrustworthy. That variant stays a correction.
+
+**The span guard was not the tail guard, and the difference deleted text.** The
+token pattern has to start on a letter or a digit, so a full stop with a space
+either side is in no token's word and in no token's tail: it was invisible to
+the "punctuation inside the span" check, which only ever read tails. The splice
+replaces everything from the first word's start to the last word's end, so
+whatever stood between them went with it. Found by running 152 real dictations
+through the new matcher joined by " . ", where "Kinsite . Oh" keyed as
+"kinsiteoh", matched, and became one word. The fix is a second guard: nothing
+but spaces may separate the words of a span. It was a hole before this change
+as well, reachable by a multi-word term over "cloud . coat", and unreachable in
+practice only because a one-word term could not span anything.
+
+**Keys are computed once per run of tokens, not once per term.** Coding a token
+is the expensive half and it does not depend on which term is being tried, and
+the spans would have made that three times worse. 200 terms over 7500 words:
+3.2s asking per term, 0.55s asking once, which is also faster than the
+word-by-word matcher was before any of this.
+
+That corpus run is worth keeping as the shape of the check. The dictionary
+rewrites an archive nobody may read for a week, so a change to the matcher is
+measured by putting real prose through it and reading every difference, not by
+trying the word that prompted it: 38.9 kB of dictation history, two rules fired,
+five differences, all of them the name.
+
 ## A tag is a name string, and the vocabulary is derived
 
 `People`'s rule applied to subjects instead of speakers. `Tags.all()` groups the

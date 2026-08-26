@@ -1393,11 +1393,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// no attention: whoever wants it goes to Settings, where the pane already
     /// names the version.
     private static func dressSettingsItem(_ item: NSToolbarItem) {
-        let waiting: Bool
-        if case .available = Updater.shared.outcome { waiting = true } else { waiting = false }
+        let waiting = Updater.shared.isPending
+        // Two things wear the same dot, and the tooltip is where they differ.
+        // One of them is a version you could be running in ten seconds and the
+        // other is a download that has not started, and a person deciding
+        // whether to press this deserves to know which.
+        let ready = Updater.shared.isReady
 
-        item.toolTip = waiting ? "An update is available. Settings (⌘,)" : "Settings (⌘,)"
-        let described = waiting ? "Settings, an update is available" : "Settings"
+        item.toolTip = waiting
+            ? (ready ? "An update is ready to install. Settings (⌘,)"
+                     : "An update is available. Settings (⌘,)")
+            : "Settings (⌘,)"
+        let described = waiting
+            ? (ready ? "Settings, an update is ready to install"
+                     : "Settings, an update is available")
+            : "Settings"
 
         guard waiting else {
             item.image = NSImage(systemSymbolName: "gearshape",
@@ -1605,7 +1615,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     // MARK: - Actions
 
-    @objc private func openSettings() { showSettings() }
+    /// The gear, which is also the only badged control in this window.
+    ///
+    /// A dot on a control is a question, and pressing the control has to be the
+    /// answer. It landed on whichever section was last read, so the one press
+    /// that was prompted by the badge was the one press that did not go where
+    /// the badge pointed. The nil default still holds for Cmd-, and for the
+    /// menu bar, which carry no dot and so make no promise.
+    @objc private func openSettings() {
+        showSettings(Updater.shared.isPending ? .updates : nil)
+    }
 
     @objc private func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the

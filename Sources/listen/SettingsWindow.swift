@@ -1121,6 +1121,8 @@ final class UpdatesPane: Pane {
     private var autoCheck: NSButton?
     private var autoDownload: NSButton?
     private var result: NSTextField?
+    private var installButton: NSButton?
+    private var installNote: NSTextField?
     private var lastChecked: NSTextField?
 
     /// A check can also be started from the menu bar, and a scheduled one starts
@@ -1188,6 +1190,30 @@ final class UpdatesPane: Pane {
         widthCapped(outcome)
         result = outcome
 
+        // Directly under the result line, because it is the verb for the
+        // sentence above it: "Version 0.20.0 is ready to install" and then the
+        // way to install it. Hidden the rest of the time rather than disabled,
+        // since there is nothing staged for it to act on and a permanently grey
+        // button is a promise about a state nobody can see.
+        // Deliberately not the window's default button. It is the loudest verb
+        // in Settings, it quits the app, and a stray Return in a pane somebody
+        // opened to read is not consent to be relaunched.
+        let install = NSButton(title: "Install and Relaunch", target: nil, action: nil)
+        let installHandler = ActionHandler { [weak self] _ in
+            // The blocker is re-read on the press rather than only on the last
+            // refresh: a recording can start while this pane sits open, and the
+            // pane does not poll.
+            Updater.shared.installNow()
+            self?.refreshUpdates()
+        }
+        install.target = installHandler
+        install.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(install, "handler", installHandler, .OBJC_ASSOCIATION_RETAIN)
+        stack.addArrangedSubview(install)
+        installButton = install
+
+        installNote = note("")
+
         lastChecked = note("")
 
         // Below the result rather than beside the button: the row above is the
@@ -1206,8 +1232,11 @@ final class UpdatesPane: Pane {
         autoDownload = down
 
         note("With this on, a new version is downloaded in the background and put "
-             + "in place the next time you quit, so you never see a prompt. With it "
-             + "off, Listen asks first and waits.")
+             + "in place the next time you quit, so you never see a prompt. Listen "
+             + "puts a dot on the gear while one is waiting, and Install and "
+             + "Relaunch above is how you take it without waiting for a quit that "
+             + "an app you leave open may not get. With it off, Listen asks first "
+             + "and waits.")
 
         note("Updates come from this project's GitHub releases. Each one is checked "
              + "against Listen's signing key before it is installed, and the check "
@@ -1279,10 +1308,25 @@ final class UpdatesPane: Pane {
             result.stringValue = "● Version \(version) is available."
             result.textColor = .systemBlue
             result.isHidden = false
+        case .ready(let version):
+            result.stringValue = "● Version \(version) is downloaded and ready to install."
+            result.textColor = .systemBlue
+            result.isHidden = false
         case .failed(let why):
             result.stringValue = "○ \(why)"
             result.textColor = .systemOrange
             result.isHidden = false
+        }
+
+        // The button and its line, which only exist while something is staged.
+        if let installButton, let installNote {
+            installButton.isHidden = !Updater.shared.isReady
+            installNote.isHidden = !Updater.shared.isReady
+            let blocker = Updater.shared.installNowBlocker
+            installButton.isEnabled = blocker == nil
+            installNote.stringValue = blocker
+                ?? "Listen quits and comes straight back on the new version. "
+                 + "Leaving it will install the same version the next time you quit."
         }
 
         if let date = Updater.shared.lastCheck {

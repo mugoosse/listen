@@ -490,14 +490,19 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - An empty page needs the greeting the home page has
 - The toolbar's History is gone, and the menu under the card is the one that stays
 
-### `.agents/notes/release.md` (10k)
+### `.agents/notes/release.md` (16k)
 
 `make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`, `Changelog`,
-`ChangelogWindow`.
+`ChangelogWindow`, `Updater`.
 
 - Signing decides whether permissions survive a rebuild
 - Sparkle's key is not in the default keychain account
 - How fast a new version is noticed is four settings, and three of them are defaults
+- The launch probe was what stopped the automatic install
+- The dot is restored from disk, and never from the network
+- Install on quit is a promise an app you never quit cannot keep
+- `LISTEN_UPDATE_READY`, because publishing a release is not a test
+- The badged control has to answer its own badge
 - The changelog is the only place release notes are written
 - Sparkle needs the notes embedded, not linked
 - The notes are in the app now, and they stop at the version you have

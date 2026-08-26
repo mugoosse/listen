@@ -90,14 +90,148 @@ defaults, where it keeps beating the new default forever. For them the pane is
 the only way in, which is why "Install updates automatically" is now a control
 there rather than only a plist key.
 
-**A launch also asks quietly, because the interval is a floor and not a
-period.** Sparkle's scheduler will not check again until the interval has
-elapsed, so a copy launched and quit inside that window learns nothing at all.
-`Updater.checkQuietly` calls `checkForUpdateInformation()` on every launch,
-which shows no window; the answer arrives through the same delegate callbacks
-as any other check and is what puts the badge on the gear. It is guarded on
-`automaticallyChecks`, because somebody who turned checking off meant the
-network too, not just the dialog.
+**A launch used to also ask quietly, and that quiet ask was what stopped every
+automatic install.** `Updater.checkQuietly` called `checkForUpdateInformation()`
+on every launch, to put the badge on the gear without waiting for the scheduler.
+It is gone, and the paragraph below is why.
+
+## The launch probe was what stopped the automatic install
+
+The report was that "Install updates automatically" was ticked, the gear had a
+dot on it, and no version ever arrived. All three were true at once, and the
+probe is what joined them. Read out of Sparkle 2.9.5's own source, three
+separate mechanisms and each one alone is enough:
+
+1. `checkForUpdateInformation` sets `sessionInProgress` **synchronously**.
+   `startUpdater:` schedules its real work with a `dispatch_async` one runloop
+   turn later, and that block reads `if (!self->_sessionInProgress) {
+   [self startUpdateCycle]; }`. So the probe, called in
+   `applicationDidFinishLaunching`, was always in flight by the time the check
+   ran, and `startUpdateCycle` never ran at all. That is the branch holding
+   "we're overdue, run one now", which is the only launch path that can
+   download anything.
+2. `checkForUpdatesWithDriver:` calls `updateLastUpdateCheckDate` before it does
+   anything else, so the probe stamped `SULastCheckTime` with now on every
+   launch, however recently a real check had run.
+3. `SPUProbingUpdateDriver` aborts with `abortUpdateAndShowNextUpdateImmediately:NO`
+   the moment it has an answer, and the completion handler then calls
+   `scheduleNextUpdateCheckFiringImmediately:NO usingCurrentDate:NO`. The `NO`
+   is the expensive one: `intervalSinceCheck` is taken as zero, so the next real
+   check is a **full interval after the launch** rather than where it was due.
+
+A probe downloads nothing. It is `SPUProbingUpdateDriver`, not
+`SPUAutomaticUpdateDriver`, and the automatic driver is only ever reached
+through `_checkForUpdatesInBackground`. So the whole launch did exactly one
+useful thing, put the dot on the gear, and paid for it by pushing the only
+check that could act six hours into the future, from a timer that does not
+survive a quit. **A copy launched more often than every six hours therefore
+never installed anything, ever**, and the dot on the gear was the only evidence
+it left.
+
+Measured on 0.19.0, both builds against the same seeded preference:
+
+```sh
+defaults write com.mgo.listen SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+# launch, wait, read it back
+```
+
+| build | seeded | after launch |
+|---|---|---|
+| 242, with the probe | 15:28:09 | 15:28:11 |
+| 243, without it | 15:27:17 | 15:27:17 |
+
+Two seconds later on the old one, from a check it had no reason to run. The fix
+is to call nothing at launch: Sparkle's own cycle starts one runloop turn in,
+and when the last check is older than `SUScheduledCheckInterval` that cycle is a
+real background check, which downloads and stages with automatic installing on
+and puts Sparkle's own window up with it off. Both are what the Updates pane
+promises. The interval being a floor is fine; it is a floor at six hours.
+
+## The dot is restored from disk, and never from the network
+
+Deleting the probe left one real gap behind, which is the thing it was written
+for: `Outcome` lives in the process and starts at `.unknown`, so a relaunch
+forgot that an update existed and the gear lost its dot until the next scheduled
+check.
+
+`Updater.remember`/`recall` keep the found version in `updatePendingVersion`, so
+the answer is on screen before the window has finished opening and no request
+goes out to get it. It is compared against `AppInfo.version` on the way back in
+rather than trusted, because the obvious way for that key to be stale is the
+update having been installed since it was written, and an app claiming a version
+is available when you are already running it is worse than one saying nothing.
+
+It comes back as `.available` even when the copy really was staged, because the
+block that installs it does not survive a relaunch: claiming a button exists
+that does not is the one lie available here.
+
+## Install on quit is a promise an app you never quit cannot keep
+
+`SUAutomaticallyUpdate` means "downloaded in the background, put in place on the
+next quit". Listen opens at login and watches for meetings, so on a Mac that is
+only ever put to sleep that next quit can be weeks away, and nothing anywhere
+said a version was sitting on disk waiting for it.
+
+`SPUUpdaterDelegate.updater:willInstallUpdateOnQuit:immediateInstallationBlock:`
+is the only place Sparkle hands out a handle that installs on demand. Answering
+`true` claims it, which is what the Install and Relaunch button in the Updates
+pane presses, and the header states the half that makes that safe: "in either
+case Sparkle will always attempt to install the update when the app terminates".
+Quitting still behaves exactly as it did.
+
+The stated cost of answering `true` is that it stalls the update cycle, so no
+further checks run until this one is applied. That is the right trade, because
+there is nothing a later check could find that this copy could act on without
+first installing what it already has, and `canCheckForUpdates` going false is
+what greys out Check Now while a version waits.
+
+**The button asks about recording and transcription first, because a relaunch
+destroys both.** `Updater.installNowBlocker` refuses while `Capture.isRecording`
+or `Queue.isBusy`, and says which, in the note under the button. An hour of
+meeting that has not been written out and a transcription job that would restart
+from the top are the two things in this app that a quit cannot be taken back on.
+
+**Optional protocol methods fail silently, so the selector was checked in the
+binary rather than in the diff.** `SPUUpdaterDelegate` is an ObjC protocol and
+every method on it is optional: a Swift signature that does not match the
+imported declaration is not `@objc`, is not a witness, compiles clean, and is
+simply never called. There is no warning anywhere. The test is one line:
+
+```sh
+strings -a Listen.app/Contents/MacOS/Listen | grep willInstallUpdateOnQuit
+# updater:willInstallUpdateOnQuit:immediateInstallationBlock:
+```
+
+## `LISTEN_UPDATE_READY`, because publishing a release is not a test
+
+The staged state cannot be reached without a signed release newer than the one
+you are running, which means a publish, so without a seam the Install button and
+the second gear tooltip would ship having never been on screen. Same family as
+`LISTEN_OFFLINE`, and the same argument.
+
+```sh
+LISTEN_UPDATE_READY=0.99.0 LISTEN_LIBRARY=/tmp/scratch ./Listen.app/Contents/MacOS/Listen
+```
+
+The install block prints `[Listen] would install 0.99.0` to stderr instead of
+relaunching, which is the one part a fake cannot do. Nothing is persisted while
+it is set: without that guard a single test run would leave a permanent dot on a
+real copy, pointing at a version that does not exist.
+
+## The badged control has to answer its own badge
+
+The gear is the only badged control in the library window, and it opened on
+whichever settings section was last read. So the one press that the badge itself
+prompted was the one press that did not go where the badge pointed, and somebody
+who had last been in General went to General to find out about an update.
+
+`LibraryWindow.openSettings` passes `.updates` while `Updater.isPending`. The nil
+default still holds for Cmd-, and for the menu bar's Settings item, which carry
+no dot and so make no promise about what they are for.
+
+The tooltip distinguishes the two states the dot covers, because one of them is
+a version you could be running in ten seconds and the other is a download that
+has not started.
 
 ## The changelog is the only place release notes are written
 

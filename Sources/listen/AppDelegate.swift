@@ -173,12 +173,26 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // last step is what calls this the first time.
             Dictation.shared.activate()
         }
+        // Constructed, and then left alone. Sparkle runs its own cycle one
+        // runloop turn after this, and if the last check is older than
+        // `SUScheduledCheckInterval` that cycle is a real background check:
+        // with automatic installing on it downloads and stages the update, and
+        // with it off it puts Sparkle's own window up. Both are the launch
+        // behaviour the Updates pane promises.
+        //
+        // **There used to be a silent `checkForUpdateInformation()` here, and
+        // it was the reason automatic installing never happened.** Measured in
+        // Sparkle 2.9.5's own source: that call sets `sessionInProgress`
+        // synchronously, `startUpdater:` skips `startUpdateCycle` when it finds
+        // a session in progress one turn later, and the probing driver stamps
+        // `SULastCheckTime` and then reschedules with `usingCurrentDate:NO`, so
+        // the next real check lands a full interval after launch rather than
+        // where it was due. A probe downloads nothing. So every launch put the
+        // dot on the gear, pushed the only check that could act six hours out,
+        // and a copy launched more often than that never installed anything at
+        // all. The dot the probe existed for is restored from disk instead, by
+        // `Updater.recall`, which asks nobody.
         _ = Updater.shared
-        // Ask the feed on every launch, showing nothing. Sparkle's own
-        // scheduler will not check again until its interval has elapsed, so
-        // without this a copy launched and quit inside that window never
-        // learns it is stale. See `Updater.checkQuietly`.
-        Updater.shared.checkQuietly()
 
         // Last, so a series of shots catches a launch that has already queued
         // whatever was pending.

@@ -692,7 +692,8 @@ enum CLI {
 
     // MARK: - Correcting a transcript
 
-    /// `listen edit <id> "<old sentence>" "<new sentence>"`.
+    /// `listen edit <id> "<old sentence>" "<new sentence>"`, and
+    /// `listen edit <id> --delete "<sentence>"`.
     ///
     /// The same `TranscriptEditor.retext` the transcript pane's right-click
     /// menu uses, for the reason `listen label` exists: with no test target, a
@@ -704,7 +705,7 @@ enum CLI {
     /// itself checks, so the command cannot ask for an edit the editor would
     /// then refuse for a different reason than the one reported here.
     private static func edit(_ args: [String]) -> Never {
-        guard args.count >= 3 else {
+        guard args.count >= 2 else {
             fail("edit needs a recording, the sentence as it stands, and the replacement. "
                  + "Quote both.")
         }
@@ -715,6 +716,38 @@ enum CLI {
             fail("\(recording.id) has no transcript to edit yet.")
         }
 
+        // `--delete` is the window's Delete Sentence, and it is here for the
+        // reason every other transcript edit is: a correction that can only be
+        // made by right-clicking a paragraph is a correction nothing can check.
+        // Matched on the text rather than on a number, the way the rewrite above
+        // is, because a number is not something anybody has.
+        if args[1] == "--delete" {
+            guard args.count >= 3 else { fail("--delete needs the sentence, quoted.") }
+            let going = args[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            let found = transcript.segments.indices.filter {
+                transcript.segments[$0].text
+                    .trimmingCharacters(in: .whitespacesAndNewlines) == going
+            }
+            guard !found.isEmpty else {
+                fail("no sentence in \(recording.id) reads exactly `\(going)`.")
+            }
+            guard found.count == 1 else {
+                fail("\(found.count) sentences read exactly that. Delete it in the window, "
+                     + "where each one is in its own paragraph.")
+            }
+            guard TranscriptEditor.apply(
+                .remove([(index: found[0], text: transcript.segments[found[0]].text)]),
+                to: recording) else {
+                fail("nothing was written.")
+            }
+            log("\(recording.id): sentence \(found[0]) deleted")
+            exit(0)
+        }
+
+        guard args.count >= 3 else {
+            fail("edit needs a recording, the sentence as it stands, and the replacement. "
+                 + "Quote both.")
+        }
         let was = args[1].trimmingCharacters(in: .whitespacesAndNewlines)
         let now = args[2].trimmingCharacters(in: .whitespacesAndNewlines)
         let hits = transcript.segments.indices.filter {
@@ -1425,6 +1458,9 @@ enum CLI {
                                  in it. Prints and changes nothing without
                                  --apply.
       edit <id> <old> <new>      correct one sentence of a transcript
+      edit <id> --delete <text>  take one sentence out of a transcript. The
+                                 window's Delete Sentence, for the sentence the
+                                 model heard twice
       people [<name>]            who is in the library, or where one person is
       rename <name> <new name>   rename one person in every recording
       merge <name> <into>        two rows in the roster, one human
@@ -1555,8 +1591,11 @@ enum CLI {
       --merge-into <speaker>     reassign them onto another speaker
       --discard                  delete their segments. Not an undo for naming:
                                  use --unname for that
-      --move <n> <name>          hand segment n to somebody else, leaving the
-                                 rest of this speaker alone
+      --move <n[,n...]> <name>   hand those segments to somebody else, leaving
+                                 the rest of this speaker alone. Several is the
+                                 window selecting more than one sentence, and
+                                 all of them are refused if any one no longer
+                                 matches
       --move-turn <from> <to> <name>
                                  hand one of their paragraphs to somebody else.
                                  The two numbers are that turn's own start and
@@ -2118,19 +2157,33 @@ enum CLI {
             log("state: \(updated.metadata.state)")
             exit(0)
         case "--move":
-            guard rest.count >= 3, let index = Int(rest[1]) else {
-                fail("--move needs a segment number and a name.")
+            // A list, because the window's is one: selecting half a paragraph
+            // and asking who said it moves every sentence the selection
+            // touches, and a CLI that could only ever move one of them could
+            // not exercise that.
+            let numbers = rest.count >= 2
+                ? rest[1].split(separator: ",").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+                : []
+            guard rest.count >= 3, !numbers.isEmpty, !numbers.contains(where: { $0 == nil }) else {
+                fail("--move needs a segment number, or several separated by "
+                     + "commas, and a name.")
             }
-            guard let segments = recording.storedTranscript?.segments,
-                  index >= 0, index < segments.count else {
-                fail("no segment \(rest[1]) in \(recording.id).")
+            guard let segments = recording.storedTranscript?.segments else {
+                fail("\(recording.id) has no transcript to edit.")
             }
-            // The text this segment holds right now. `.sentence` is a
-            // compare-and-swap against a pane that was drawn before somebody
-            // else edited the transcript, and there is no such pane here: what
-            // was read a line ago is what the window would have been looking at.
-            edit = .reassign(.sentence(index: index, text: segments[index].text),
-                             from: speaker, to: rest[2])
+            var wanted: [(index: Int, text: String)] = []
+            for number in numbers.compactMap({ $0 }) {
+                guard number >= 0, number < segments.count else {
+                    fail("no segment \(number) in \(recording.id).")
+                }
+                // The text this segment holds right now. `.sentences` is a
+                // compare-and-swap against a pane that was drawn before
+                // somebody else edited the transcript, and there is no such
+                // pane here: what was read a line ago is what the window would
+                // have been looking at.
+                wanted.append((index: number, text: segments[number].text))
+            }
+            edit = .reassign(.sentences(wanted), from: speaker, to: rest[2])
         case "--move-turn":
             guard rest.count >= 4, let start = Double(rest[1]),
                   let end = Double(rest[2]) else {

@@ -1547,6 +1547,81 @@ survive the rebuild. `automaticallyAdjustsContentInsets` is turned off in `init`
 rather than left to the first call: it was on until the composer first reported
 a height and off afterwards, which is a difference nothing should depend on.
 
+## A drag across a paragraph starts playback, and playback moves the page
+
+Two reports of the transcript scrolling away after a speaker edit, both from the
+sentence menu and never from the pill, which is what made it look intermittent
+until the difference was found: `show` stops playback and `reloadTranscript`
+deliberately does not, because correcting a word is something people do while
+listening.
+
+What that left armed is `follows`, and **the gesture that arms it is the gesture
+the sentence menu is opened with.** Selecting text begins with a click; a click
+on a paragraph runs `onSeek`, which seeks there and plays. So a reader dragging
+across four sentences to correct who said them has started playback without
+asking for it, and a second or two later the playhead crosses into the next
+paragraph, `refresh` reveals it, and the page goes with the playhead rather than
+staying with the reader.
+
+Three things came out of chasing it, and two of them are about measuring rather
+than about the app:
+
+- **`reloadTranscript` turns following off.** Editing is the reader saying they
+  are reading. `reveal` already had the rule, in the words "if the reader has not
+  gone somewhere else". The audio keeps playing, which is the whole point of that
+  reload not being `show`.
+- **The paragraph the playhead is in is named by when it starts, not by its
+  index.** Every edit renumbers the turns, so an index comparison read a
+  reassignment as the playhead arriving somewhere. See `DetailView.currentStart`.
+- **`show` only re-arms `follows` for a recording that was not already on
+  screen**, the same rule its `scrollToTop` follows and for the same reason: a
+  speaker edit reloads through `show`, and re-arming there undid the reader
+  having scrolled away.
+
+The measuring lesson is worth as much. The first harness for this took its
+"before" reading *before* pressing play, so it measured eleven seconds of
+following and called it a jump, and two fixes were written against a
+reproduction that was not the thing being reported. A reading taken on the wrong
+side of the thing you are not testing is worse than no reading: it is confident.
+The control that settled it was running the same script against the build the
+user already had, which kept the place exactly, and that is what said the pill
+path had never been broken at all.
+
+## The transcript stack is unflipped, and its frames are zero until layout runs
+
+Both halves of this were measured while trying to keep the reader's place by the
+*paragraph* they were on rather than by a number of points, which is the better
+idea in principle and is not in this view.
+
+`NSScrollView`'s clip view here is flipped, so `contentView.bounds.origin.y`
+grows downward and zero is the top: that is what `scrollTranscriptToTop` relies
+on. The document inside it is a plain `NSStackView`, which is **not** flipped, so
+the first paragraph has the *largest* `frame.minY`. A scan for "the last
+paragraph starting above the viewport" therefore walks the document backwards
+and lands on the first one every time. Traced on a 137 turn meeting:
+
+    place: origin=4800 anchor=6.72 top=16234 views=137
+
+The first turn, at 6.72 seconds, is 16234 points down the stack's own axis.
+
+The second half is worse because it is intermittent. A speaker change rebuilds
+the transcript twice, once for the edit and once for the sidebar reload that
+follows, and the second rebuild reads the frames before layout has run, when
+every one of them is zero:
+
+    place: origin=4800 anchor=5340.04 top=0 views=137
+
+Every frame compares equal, so the scan ends on whichever paragraph is last. The
+page moved 214 points on the first edit tried, in the case where restoring a
+plain offset is exactly right, because everything above the reader was
+untouched.
+
+So the offset stays. What made the anchor worth having was a sync pull rewriting
+the transcript under the reader, and that is now impossible: see "A sidecar this
+device has edited is not a sidecar it is behind on" in `cloud-sync.md`. What is
+left that changes the document above the reader is `.discard`, which is rare,
+deliberate and confirmed.
+
 ## Open at the top is the clip view's origin, not a point in the stack
 
 `scrollTranscriptToTop` scrolled the stack's own `bounds.maxY - 1` into view.

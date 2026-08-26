@@ -198,9 +198,20 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
     /// at this width, and a truncated sentence about what is about to be written
     /// is worse than no sentence.
     private let scopeDetail = NSTextField(wrappingLabelWithString: "")
-    /// The whole-speaker repairs, hidden while the narrow scope is armed: they
-    /// act on everything the speaker ever said, which is the size the checkbox
-    /// has just been turned off.
+    /// The whole-speaker repairs.
+    ///
+    /// **They do not hide when the box is unticked, and that was tried.** The
+    /// argument for hiding them was that they act on everything the speaker ever
+    /// said, which is the size the box has just turned off. The argument against
+    /// is stronger and is written in this file's own history: Leave Unnamed is
+    /// the undo somebody reached for when they had named a speaker by mistake,
+    /// and reached past, into Discard, and lost half a transcript. Now that a
+    /// named speaker opens with the box **off**, hiding it there would put that
+    /// undo behind a checkbox nobody has a reason to tick.
+    ///
+    /// They say their own scope instead. "Leave Unnamed" is one speaker in one
+    /// recording, which is what its tooltip says, and neither of them is worded
+    /// as though it were about the turn.
     private var repairs: [NSView] = []
     /// How many turns this speaker has, for what the checkbox says it will do.
     private let turnCount: Int
@@ -328,7 +339,19 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // in front of it.
         if let choice {
             scopeBox.setButtonType(.switch)
-            scopeBox.state = .on
+            // **A speaker who already has a name defaults to this turn only.**
+            //
+            // The two openings of this popover are different questions. On a
+            // placeholder, nobody has said anything yet and naming the voice is
+            // the whole point, so every turn is what is meant. On a name, a
+            // person put that name there deliberately and it has been right for
+            // however many turns it is on: the reason to open this is that the
+            // diarizer gave *this* paragraph to them, which is a correction to
+            // one turn and not a claim that the name was wrong all along.
+            //
+            // Asked for after the checkbox shipped defaulting to every turn,
+            // which made the commoner of the two answers the riskier one.
+            scopeBox.state = VoiceBank.isPlaceholder(speaker) ? .on : .off
             scopeBox.title = "Change every \(choice.noun) by \(SpeakerName.display(speaker))"
             scopeBox.font = .systemFont(ofSize: 12)
             scopeBox.target = self
@@ -392,10 +415,6 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // narrower question, and Merge and Discard would answer a wider one than
         // was asked: they act on everything that speaker ever said.
         if case .name = purpose { addRepairs(to: stack) }
-        // Hidden rather than absent while the narrow scope is armed, so the
-        // popover does not change what it offers between two openings of the
-        // same menu item.
-        drawRepairs()
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView()
@@ -468,7 +487,6 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
     @objc private func scopeChanged() {
         drawScope()
-        drawRepairs()
         // The caret goes back where it was, not to a selection of everything
         // typed so far. `makeFirstResponder` on a text field selects its whole
         // contents, so half a name typed before the box was ticked would be
@@ -488,13 +506,6 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         scopeDetail.stringValue = scopeBox.state == .on
             ? "All \(turnCount) turns by \(shown) change."
             : "Only this turn changes. \(shown) keeps the other \(turnCount - 1)."
-    }
-
-    /// Leave Unnamed and Discard are whole-speaker repairs, so they belong to
-    /// the whole-speaker size. Offering them under an unticked box would be the
-    /// popover contradicting the line above them.
-    private func drawRepairs() {
-        for view in repairs { view.isHidden = !wholeSpeaker }
     }
 
     override func viewDidAppear() {

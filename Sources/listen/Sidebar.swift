@@ -52,7 +52,6 @@ final class SidebarViewController: NSViewController {
     /// which is how a row of tokens behaves everywhere else; replacing is
     /// dismissing the old one first.
     private enum Lens: Equatable {
-        case speaker(String)
         case tag(String)
         /// Recordings with a voice nobody has named. Unlike the other two this
         /// one is set from inside the list, by the row above it, because it is
@@ -317,7 +316,6 @@ final class SidebarViewController: NSViewController {
         var filter = RecordingFilter.parse(q, knownTags: Tags.all(in: library).map(\.name))
         for lens in lenses {
             switch lens {
-            case .speaker(let label): filter.people.append(label)
             case .tag(let name): filter.tags.append(name)
             case .unnamed: filter.needsSpeakers = true
             }
@@ -574,11 +572,6 @@ final class SidebarViewController: NSViewController {
         add(on ? .unnamed : nil)
     }
 
-    /// Also show only the recordings one person is in. nil clears every lens.
-    func filter(bySpeaker label: String?) {
-        add(label.map { Lens.speaker($0) })
-    }
-
     /// Also show only the recordings carrying one tag. nil clears every lens.
     func filter(byTag name: String?) {
         add(name.map { Lens.tag($0) })
@@ -628,16 +621,6 @@ final class SidebarViewController: NSViewController {
             pill.trailing = "✕"
 
             switch lens {
-            case .speaker(let label):
-                // Their name and their colour, so the token is the chip that
-                // set it. No "Only" in front: the row is a list of filters and
-                // a second one reading "Only Emily" beside "Only Ryan" claims
-                // each is the whole of it, which is the opposite of what two
-                // ANDed lenses mean.
-                pill.show(label, title: SpeakerName.display(label))
-                pill.identifier = NSUserInterfaceItemIdentifier("speaker:" + label)
-                pill.toolTip = "Only the recordings \(SpeakerName.display(label)) is in. "
-                    + "Click to drop this filter."
             case .tag(let name):
                 // The neutral wash a tag pill has. A tag is not somebody, so
                 // borrowing a person's colour would be the one token on screen
@@ -686,7 +669,6 @@ final class SidebarViewController: NSViewController {
         guard let id = sender.identifier?.rawValue else { return }
         lenses.removeAll { lens in
             switch lens {
-            case .speaker(let label): return id == "speaker:" + label
             case .tag(let name): return id == "tag:" + name
             case .unnamed: return id == "unnamed"
             }

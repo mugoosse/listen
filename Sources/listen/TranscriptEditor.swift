@@ -40,6 +40,29 @@ enum TranscriptEditor {
         /// not say it, and neither renaming nor merging can fix that without
         /// also moving the parts that were right.
         case reassign(Scope, from: String, to: String)
+
+        /// Take some sentences out of the transcript altogether.
+        ///
+        /// **The one thing an empty field deliberately does not do.** Clearing
+        /// the Edit Sentence field and clicking away is refused, because
+        /// clearing a field is how you start typing a replacement rather than
+        /// how you say "remove this", and a sentence deleted by an empty commit
+        /// would take its timing with it with nothing on screen having asked.
+        /// That refusal was right and it left nothing that *was* the way to say
+        /// it: the only deletion in the app was `.discard`, which removes
+        /// everything one speaker said.
+        ///
+        /// What it is for is what it was asked for: a sentence the model heard
+        /// twice, once at the end of one paragraph and again at the start of the
+        /// next, which is the shape a two-track recording produces where the
+        /// speakers overlap. Neither renaming nor reassigning can fix that,
+        /// because the words are not somebody else's, they are nobody's.
+        ///
+        /// Same compare-and-swap as `.sentences`, and all or nothing for the
+        /// same reason. Removed back to front, because removing shifts every
+        /// index after it and the list was gathered against the transcript as it
+        /// was.
+        case remove([(index: Int, text: String)])
     }
 
     /// Which segments a reassignment moves.
@@ -48,10 +71,12 @@ enum TranscriptEditor {
     /// have to be safe against a pane that was drawn before something else
     /// edited the transcript.
     ///
-    /// `.sentence` is a position and the text that position must still hold: the
-    /// same compare-and-swap `.retext` uses, for the same reason, since
-    /// `.discard` removes segments and an index taken from an older render then
-    /// points at a different sentence.
+    /// `.sentences` is a list of positions, each with the text that position must
+    /// still hold: the same compare-and-swap `.retext` uses, for the same reason,
+    /// since `.discard` removes segments and an index taken from an older render
+    /// then points at a different sentence. It is a list because a selection is
+    /// what a reader means by "this", and one sentence is the case where they
+    /// selected nothing.
     ///
     /// `.turn` is a time window rather than a list of indices, because a
     /// paragraph on screen is a fold over however many segments happen to lie
@@ -68,8 +93,25 @@ enum TranscriptEditor {
     /// by one speaker touched, which on a two-track recording is most of them.
     /// See `Merge.fold` for the measurement.
     enum Scope {
-        case sentence(index: Int, text: String)
+        /// One or more sentences, each named by its position **and** by the text
+        /// that position must still hold.
+        ///
+        /// A list rather than one, because a reader who selects half a paragraph
+        /// and asks who said it means the half they selected. It used to move
+        /// the sentence under the pointer and leave the rest of the selection
+        /// where it was, which is a menu answering a question nobody asked.
+        ///
+        /// All or nothing: every sentence in the list is checked before any of
+        /// them is written, so a stale pane cannot half-apply an edit and leave
+        /// a paragraph split between two speakers by accident.
+        case sentences([(index: Int, text: String)])
         case turn(start: Double, end: Double)
+
+        /// The single-sentence form, which is what `listen label --move` and the
+        /// unselected right-click both mean.
+        static func sentence(index: Int, text: String) -> Scope {
+            .sentences([(index: index, text: text)])
+        }
     }
 
     /// `backup` exists for exactly one caller, `VoiceBank.autoAssign`.
@@ -136,24 +178,61 @@ enum TranscriptEditor {
                 return true
             }
 
+        case .remove(let wanted):
+            guard !wanted.isEmpty else { return false }
+            // Whose they were, before they go, so the bank can be asked about
+            // them afterwards. Same rule `.reassign` follows and arrived at from
+            // the same end: a label that has gone from the transcript entirely
+            // goes on being offered as a suggestion in the next recording.
+            let numbers = Set(wanted.map(\.index))
+            let owners = Set((recording.storedTranscript?.segments ?? [])
+                .enumerated()
+                .filter { numbers.contains($0.offset) }
+                .map { $0.element.speaker })
+            guard change(recording, { segments in
+                for one in wanted {
+                    guard one.index >= 0, one.index < segments.count else { return false }
+                    let current = segments[one.index].text
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard current == one.text
+                        .trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+                }
+                for index in wanted.map(\.index).sorted(by: >) {
+                    segments.remove(at: index)
+                }
+                return true
+            }) else { return false }
+            let left = Set(Recording.find(recording.id)?.speakers ?? [])
+            for owner in owners where !left.contains(owner) {
+                VoiceBank.remove(owner, in: recording)
+            }
+            return true
+
         case .reassign(let scope, let speaker, let target):
             let to = target.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !to.isEmpty, to != speaker else { return false }
             guard change(recording, { segments in
                 switch scope {
-                case .sentence(let index, let text):
-                    guard index >= 0, index < segments.count,
-                          segments[index].speaker == speaker else { return false }
-                    // Trimmed on both sides, for the reason `.retext` gives: an
-                    // imported transcript carries whitespace around a segment
-                    // that the window never shows, so an untrimmed comparison
-                    // refuses every edit on those recordings and nothing on
-                    // screen could explain why.
-                    let current = segments[index].text
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard current == text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    else { return false }
-                    segments[index].speaker = to
+                case .sentences(let wanted):
+                    guard !wanted.isEmpty else { return false }
+                    // Checked in full before anything is written. A partial
+                    // apply would hand some of a selection to one speaker and
+                    // leave the rest with the other, which is worse than
+                    // refusing and is not what the reader asked for either way.
+                    for one in wanted {
+                        guard one.index >= 0, one.index < segments.count,
+                              segments[one.index].speaker == speaker else { return false }
+                        // Trimmed on both sides, for the reason `.retext` gives:
+                        // an imported transcript carries whitespace around a
+                        // segment that the window never shows, so an untrimmed
+                        // comparison refuses every edit on those recordings and
+                        // nothing on screen could explain why.
+                        let current = segments[one.index].text
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard current == one.text
+                            .trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+                    }
+                    for one in wanted { segments[one.index].speaker = to }
                     return true
 
                 case .turn(let start, let end):

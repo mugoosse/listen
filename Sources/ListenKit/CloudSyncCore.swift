@@ -205,7 +205,8 @@ public struct CloudSyncCore: Sendable {
                         // following push never repairs the cloud record. Let
                         // push fetch and compare once; an exact match is still
                         // a no-op, while a richer folder is sent.
-                        let pulled = try await pullRecording(record, into: &report)
+                        let pulled = try await pullRecording(record, base: &base,
+                                                             into: &report)
                         let id = pulled.id
                         // Remember who holds the audio even when that is
                         // nobody. A device without the bytes had no way to
@@ -302,7 +303,7 @@ public struct CloudSyncCore: Sendable {
     struct Pulled { var id: String; var delivered: Bool }
 
     @discardableResult
-    private func pullRecording(_ record: StoredRecord,
+    private func pullRecording(_ record: StoredRecord, base: inout SyncState,
                                into report: inout CloudReport) async throws -> Pulled {
         let blob = try CloudRecords.openRecording(record, key: key)
         guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
@@ -316,7 +317,37 @@ public struct CloudSyncCore: Sendable {
             let stored = CloudRecords.assetKey(file, id: blob.id)
             guard let want = blob.digests[stored] else { continue }
             let local = folder.appendingPathComponent(file)
-            if let have = try? Data(contentsOf: local), sha256Hex(have) == want { continue }
+            let have = (try? Data(contentsOf: local)).map(sha256Hex)
+            if have == want {
+                // Agreement, which is worth writing down: it is the base every
+                // later disagreement is read against.
+                base[sidecar: blob.id, file: file] = want
+                continue
+            }
+
+            // **A local file that differs from the container is not
+            // automatically the older one.**
+            //
+            // This is a three-way decision and it used to be a two-way one, so
+            // a transcript corrected on this Mac was overwritten by the
+            // container's copy of it on the next pull. The pull runs before the
+            // push, so until the push lands the container still holds what this
+            // device had before the edit, and a second Mac pushing its own copy
+            // is enough to bring that record round again. Measured on a real
+            // library: a speaker corrected at 21:27:19, `transcript.json` and
+            // `turns.json` rewritten at 21:28:14 with the pre-edit copy, and
+            // `metadata.json` left at 21:27 because it had not changed. See
+            // `SyncState`, which is the file that already knew this about
+            // notes.
+            //
+            // So: local matches what we last agreed, take the remote; local has
+            // moved since then, keep it and let the push carry it. Unknown is
+            // the migration case and takes the remote, which is what this did
+            // before per-file bases existed.
+            if let have, let agreed = base[sidecar: blob.id, file: file], agreed != have {
+                report.conflicts.append("\(blob.id)/\(file): edited here and not yet sent")
+                continue
+            }
             let data: Data?
             if file == DevicePolicy.sourceIcon {
                 data = blob.sourceIcon
@@ -326,6 +357,7 @@ public struct CloudSyncCore: Sendable {
             guard let data else { continue }
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try data.write(to: local, options: .atomic)
+            base[sidecar: blob.id, file: file] = want
             report.pulledSidecars += 1
         }
 
@@ -442,6 +474,7 @@ public struct CloudSyncCore: Sendable {
         where CloudNaming.recordName(.recording, recording.id, key: key) == recordName {
             Trash.accept(recording.folder, in: library)
             base[sent: recording.id] = nil
+            base.forgetSidecars(recording.id)
             base[audioOn: recording.id] = nil
             base[master: recording.id] = nil
             base[pinned: recording.id] = false
@@ -780,6 +813,22 @@ public struct CloudSyncCore: Sendable {
     // MARK: - Up
 
     /// Put up anything this device authored that the container does not have.
+    /// Write down that the container now holds exactly these sidecars.
+    ///
+    /// The other half of the three-way rule in `pullRecording`: without a base
+    /// there is nothing to compare a later disagreement against, and every
+    /// disagreement reads as "I am behind". Called wherever the container is
+    /// known to agree with this device, which is a save that landed and a
+    /// record that already matched. Never on a pull that only *wrote* some of
+    /// the files, which is why `pullRecording` stamps per file rather than here.
+    private func agreeSidecars(_ recording: Recording, in base: inout SyncState) {
+        for file in policy.files(for: recording.id) where file != "metadata.json" {
+            let url = recording.folder.appendingPathComponent(file)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            base[sidecar: recording.id, file: file] = sha256Hex(data)
+        }
+    }
+
     public func push(into report: inout CloudReport) async {
         var base = state.base
         defer { state.base = base }
@@ -830,6 +879,7 @@ public struct CloudSyncCore: Sendable {
                 // leaves no stamp, so the next pass tries again.
                 if let existing, try sameRecording(existing, as: record) {
                     base[sent: recording.id] = stamp
+                    agreeSidecars(recording, in: &base)
                     if sendingTranscript {
                         reportActivity(recording.id, .ready, fraction: 1)
                     }
@@ -845,6 +895,7 @@ public struct CloudSyncCore: Sendable {
                                             fraction: value))
                 })
                 base[sent: recording.id] = stamp
+                agreeSidecars(recording, in: &base)
                 report.pushedRecordings += 1
                 if sendingTranscript {
                     reportActivity(recording.id, .ready, fraction: 1)

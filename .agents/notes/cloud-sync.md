@@ -135,6 +135,62 @@ devices won a genuine race, and passed until the suite grew enough around it to
 change the timing. What has to be true is that both devices name the same holder
 and exactly one reads it as its own.
 
+## A sidecar this device has edited is not a sidecar it is behind on
+
+The worst bug this app has had, and it is the shape `SyncState` was written to
+make impossible for notes while recordings were left out of it on purpose. The
+comment said a transcript has exactly one writer, the Mac that made it. It has
+one *author*. It has as many **editors** as there are devices showing the
+transcript, because correcting who said a sentence rewrites `transcript.json`
+and `turns.json` on whichever Mac you are sitting at.
+
+Measured on a real library, from the file times alone:
+
+    metadata.json    21:27:19
+    transcript.json  21:28:14
+    turns.json       21:28:14
+
+A speaker was corrected at 21:27:19, which is `TranscriptEditor.change` writing
+the transcript, then the turns, then the metadata. Fifty-five seconds later the
+first two were written again and the third was not, which is the signature of a
+pull: `pullRecording` writes sidecars first and metadata only if it differs. The
+correction went off the screen while its author was looking at it, nothing was
+reported, and the push that followed found the two sides in agreement and sent
+nothing.
+
+Nothing exotic is needed to cause it. The pull runs before the push, on purpose,
+so a Mac shut for a week cannot overwrite a week of work. Until the push lands,
+the container still holds what this device had *before* the edit, so any pass
+that re-fetches that record sees local and remote disagree, and two values
+cannot tell "I am behind" from "I have an edit nobody has seen". A second Mac
+pushing is enough to bring the record round again, and it does not have to touch
+the transcript: renaming the recording republishes the record with its own older
+transcript still attached.
+
+So sidecars have a base now, per file, keyed `sidecar:<id>/<file>`, and the
+four-line table at the top of `SyncState` applies to them unchanged:
+
+| local vs base | remote | what happens |
+|---|---|---|
+| same | differs | take the remote, and agree on it |
+| differs | anything | keep the local copy, report it, let the push carry it |
+| unknown base | differs | take the remote, which is what this did before |
+
+`agreeSidecars` writes the base after a push that landed and after a record that
+already matched. `pullRecording` writes it per file, because a pull writes only
+the files the manifest named and agreeing about the rest would be a claim it
+cannot make.
+
+**The unknown case is the migration and it takes the remote**, which is exactly
+what the old code did, so the first pass after an upgrade behaves as before and
+every pass after it is safe. `metadata.json` keeps its own rule, the `authored`
+guard, which is a different question and was already answered.
+
+Proved in `listen sync --fake`: a Mac edits a transcript, a second Mac with the
+older copy republishes the record, the first Mac pulls and keeps its edit, and
+the push that follows carries it to the second Mac. Disabling the guard fails
+that case, which is how it was checked rather than assumed.
+
 ## The offline window had a deterrent nobody read
 
 `takeTranscriptionLease` returns yes when the container is unreachable, and that

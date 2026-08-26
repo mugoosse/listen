@@ -250,5 +250,45 @@ check "the segment moved"          "1" "$(segments_of $MEETING "$NEW")"
 check "and a stale index is refused" "1" "$(segments_of $MEETING "$NEW")"
 
 echo
+echo "a selection is every sentence it touches"
+# The window's sentence menu acts on the selection, so the scope carries a list
+# and the CLI takes one. Reported as: selecting the bottom half of a paragraph
+# and asking who said it moved the first sentence and left the rest.
+reset
+"$BIN" label $MEETING Me --move 4,5,6 "$NEW" >/dev/null 2>&1
+check "three sentences moved together" "3" "$(segments_of $MEETING "$NEW")"
+# All or nothing. Segment 4 is somebody else's now, so the whole list is
+# refused rather than half-applied across two speakers.
+"$BIN" label $MEETING Me --move 4,7,8 Beile >/dev/null 2>&1
+check "and one stale index refuses the lot" "3" "$(segments_of $MEETING "$NEW")"
+check "with nothing half-written"           "0" \
+      "$(python3 -c "
+import json
+d = json.load(open('$LISTEN_LIBRARY/recordings/$MEETING/transcript.json'))
+print(sum(1 for i in (7, 8) if d['segments'][i]['speaker'] == 'Beile'))")"
+
+echo
+echo "a sentence can be deleted, which an emptied field still refuses to mean"
+# Asked for after finding the model had heard one sentence twice, once at the
+# end of a paragraph and again at the start of the next, which is what a
+# two-track recording produces where the speakers overlap. Emptying the Edit
+# Sentence field is still refused, deliberately; this is the verb that means it.
+reset
+was=$(segments_of $MEETING Me)
+text=$(python3 -c "
+import json
+d = json.load(open('$LISTEN_LIBRARY/recordings/$MEETING/transcript.json'))
+print(d['segments'][4]['text'].strip())")
+"$BIN" edit $MEETING --delete "$text" >/dev/null 2>&1
+check "the sentence is gone"       "$((was - 1))" "$(segments_of $MEETING Me)"
+check "and nobody else lost one"   "$(python3 -c "
+import json
+d = json.load(open('$LISTEN_LIBRARY/recordings/$MEETING/transcript.json'))
+print(sum(1 for s in d['segments'] if s['speaker'] == 'Nick'))")" \
+                                   "$(segments_of $MEETING Nick)"
+"$BIN" edit $MEETING --delete "$text" >/dev/null 2>&1
+check "deleting it again finds nothing" "$((was - 1))" "$(segments_of $MEETING Me)"
+
+echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

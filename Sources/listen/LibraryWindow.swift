@@ -1197,12 +1197,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.select(id)
     }
 
-    /// Show only the recordings one person is in. nil is the whole library.
-    func filter(bySpeaker label: String?) {
-        show()
-        sidebar.filter(bySpeaker: label)
-    }
-
     /// Show only the recordings carrying one tag. nil is the whole library.
     func filter(byTag name: String?) {
         show()

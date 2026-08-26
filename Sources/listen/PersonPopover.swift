@@ -112,9 +112,6 @@ enum PersonPopover {
             menu.addItem(Action("Open in People", "person.2") {
                 LibraryWindow.shared.showPerson(label)
             })
-            menu.addItem(Action("Show Only \(shown)", "line.3.horizontal.decrease") {
-                LibraryWindow.shared.filter(bySpeaker: label)
-            })
             menu.addItem(.separator())
             // The picker, not `SpeakerSheet`. This is the item somebody takes
             // when a name is wrong, so it has to lead somewhere that can say
@@ -310,9 +307,9 @@ private final class ContactCard: NSViewController, NSTextFieldDelegate {
         // thing done *to* the list you were reading, and it left the card's one
         // plain verb pointing away from the person whose card it is; the page
         // that holds everything about them was two levels down, behind an
-        // ellipsis. So the verb leads there, and the filter stays on the chip's
-        // own menu as "Show Only ...", which is where somebody who wants the
-        // list narrowed is already asking for it.
+        // ellipsis. So the verb leads there, and narrowing the library by
+        // somebody is gone altogether: see "Nobody wanted the library narrowed
+        // by a speaker" in `speakers.md`.
         let open = button("Open in People", #selector(openInPeople))
         open.toolTip = "See everything about \(person.display) in People"
         stack.addArrangedSubview(open)

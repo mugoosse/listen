@@ -311,6 +311,33 @@ Card raises the card with the transcript unmoved under it, and on a speaker
 renamed to a letter, Who Is This? gives the picker popover with its Play row
 rather than a separate alert window.
 
+### A selection is every sentence it touches
+
+Right-clicking a paragraph offered "Speaker for This Sentence", and this is what
+it did with a selection over four of them: it moved the one under the pointer
+and left the other three with the old speaker, silently. Reported, and the
+report is the whole argument. A menu opened over a selection is about the
+selection.
+
+`TranscriptFieldEditor` reads `selectedRange()` and hands every sentence the
+selection intersects to `speakerItem`, and the item counts what it is about to
+do: "Speaker for These 4 Sentences". Only when the click is *inside* the
+selection, which is what every other item in that menu does; a right-click
+somewhere else is a new place, not a second opinion about the old one.
+
+`Scope.sentences` is therefore a list, and it is **all or nothing**: every
+sentence is checked against the text it must still hold before any of them is
+written, because a half-applied selection splits a paragraph between two
+speakers in a way nobody asked for and nothing on screen would explain. The
+single-sentence form is a static `Scope.sentence(index:text:)` over a one-item
+list, so `listen label --move` and the unselected right-click read the same as
+they did.
+
+`--move` takes a comma-separated list for the same reason `--move-turn` exists:
+a correction that can only be made by dragging across a paragraph is a
+correction nothing can check. `verify_speakers.sh` moves three sentences at once
+and then proves one stale index refuses the lot.
+
 ### A sentence is named by its index, a turn by a time window
 
 Both have to survive a pane that was drawn before something else edited the
@@ -406,6 +433,75 @@ rule `.merge` follows, arrived at from the other end.
   the speaker's segments in it, and an index whose text no longer matches, both
   refused with nothing written.
 
+### A named speaker opens with the box unticked
+
+The checkbox defaults to whichever answer the question usually has, and the two
+openings of this popover ask different questions.
+
+On a **placeholder**, nobody has said anything about this voice yet and naming it
+is the whole point, so every turn is what is meant and the box is ticked. On a
+**name**, somebody put that name there deliberately and it has been right for
+however many turns it is on; the reason to open this is that the diarizer gave
+*this* paragraph to them, which is a correction to one turn rather than a claim
+that the name was wrong all along. So the box is unticked and the line under it
+reads "Only this turn changes. Nick keeps the other 58."
+
+Asked for after the checkbox shipped ticked in both cases, which made the
+commoner of the two answers the riskier one to accept without reading.
+
+**Leave Unnamed and Discard stopped hiding when the box is unticked**, and that
+had to change with the default. Hiding them was tidy while the box was ticked by
+default: they act on everything the speaker ever said, which is the size the box
+turns off. With a named speaker now opening unticked, hiding them would put
+**the undo** behind a checkbox nobody has a reason to tick, and the undo is the
+one thing this popover exists to keep in reach: see "Discard is a delete, and the
+undo it was mistaken for did not exist" above. They say their own scope in their
+tooltips instead.
+
+### A sentence can be deleted, and an emptied field still does not mean that
+
+Reported as: a sentence the model heard twice, once at the end of one paragraph
+and again at the start of the next; the reader opened Edit Sentence, cleared the
+field, clicked away, and the words came back.
+
+Coming back is correct and is not going to change. Clearing a field is how you
+start typing a replacement, not how you say "remove this", and a sentence deleted
+by an empty commit would take its timing with it with nothing on screen having
+asked. What was wrong is that nothing *was* the way to say it: the only deletion
+in the app was `.discard`, which removes everything one speaker said.
+
+So `.remove` is an edit of its own, and **Delete Sentence** is under
+Speaker for This Sentence in the same menu, because those are the three things
+that can be wrong with a sentence: the words, the speaker, or that it is there
+at all. A selection deletes what it touches, and the item counts it. Same
+compare-and-swap as `.sentences` and the same all-or-nothing, and the segments
+are removed back to front, because removing shifts every index after it.
+
+No confirmation. It removes exactly what is selected on screen, under a verb that
+says Delete, on a gesture the reader made deliberately; `.discard` asks because
+it removes a speaker's whole side of a meeting and there is no way to see how
+much that is. Naming the count in the menu item is what this owes the reader
+instead.
+
+**Why the sentence was there is worth knowing**, because it is not a bug in the
+model. Measured on the recording it was reported from:
+
+    713  Me    4148.46  4155.18  Yeah, it's possible through WhatsApp, but I ...
+    714  Nick  4149.14  4151.78  Yeah, it's possible to remote.
+
+The two overlap by six seconds, because they are two tracks. Nick's microphone
+caught Maxime, the diarizer gave the bleed its own speaker, and Parakeet wrote a
+sentence over it. Clicking that sentence seeks to 4149.14, which is most of a
+second *into* Maxime's line, so the mixdown plays a line the reader has already
+heard: that is the audio being honest about the overlap, not the seek being
+wrong. The highlight then sits on Nick's one-sentence paragraph while Maxime goes
+on talking, which is `speakingTurn` having to pick one turn for an instant that
+two of them cover. See "Turns overlap, so the first one spanning the playhead is
+the wrong one" in `window.md`.
+
+`listen edit <id> --delete "<sentence>"` drives the same edit, for the reason
+every other transcript edit has a CLI form.
+
 ## A person is a name string, and that is the whole identity model
 
 `People` groups the library by the label written in the transcripts. Nothing
@@ -436,16 +532,34 @@ behind the ellipsis, under an item worded the same way as the card's own "and N
 more in People".
 
 So the verb is `openInPeople` and the ellipsis is left holding Edit alone. The
-filter is not gone: it is `Show Only <name>` on the chip's own menu
-(`PersonPopover.menu`), which is where somebody who wants the library narrowed
-is already asking for it, and it is one right-click from the same chip that
-opens the card.
+filter moved to `Show Only <name>` on the chip's own menu, and has since gone
+altogether: see below.
 
 Verified against the built app with AX, on a scratch `LISTEN_LIBRARY` of three
 copied recordings: pressing the chip gives a popover whose last button is
 `Open in People` / "See everything about Céline in People", pressing that leaves
 zero popovers on screen and the split view showing the People roster with
 Céline's page beside it.
+
+### Nobody wanted the library narrowed by a speaker
+
+"Show Only Nick" is gone, and so is the lens behind it. Asked for directly, on
+the grounds that it is not something anybody reaches for: the question "what
+else is this person in" is People's, which is one item above it in the same
+menu and answers it better than a filtered sidebar does.
+
+It took the whole feature with it rather than only the menu item, because that
+item was the only thing that could set `Lens.speaker`. What went: the item,
+`LibraryWindow.filter(bySpeaker:)`, `Sidebar.filter(bySpeaker:)`, the enum case,
+its token in the filter row and its arm of `dropLens`. What stayed:
+`RecordingFilter.people`, which the MCP server's `person` argument uses and
+which was never the sidebar's; and the tag and unnamed lenses, which are the
+same machinery and are still reached from their own chips.
+
+A menu item removed is worth more than it looks here. The pill's menu is the one
+a reader opens when a name is wrong, and it has now lost `Edit X…` and
+`Show Only X` in two passes, both for the same reason: a menu of five similar
+verbs is a menu where the two that matter are hard to find.
 
 ## Renaming somebody everywhere is the first edit that touches many recordings
 

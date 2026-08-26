@@ -138,10 +138,14 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Who said it is corrected at three sizes, and the middle two are new
 - The two sizes are one menu item and a checkbox, because two items were a guess
 - The window names the turn, and it must not select the segments
+- A selection is every sentence it touches
 - Both buttons on a pill open the same menu, and the popover is its first item
 - The skipping belongs to the button that names it, and there is no bar
+- A named speaker opens with the box unticked
+- A sentence can be deleted, and an emptied field still does not mean that
 - A person is a name string, and that is the whole identity model
 - The card's one verb goes to the person, not to the list behind it
+- Nobody wanted the library narrowed by a speaker
 - Renaming somebody everywhere is the first edit that touches many recordings
 - `Me` stays `Me` on disk, whatever you call yourself
 - The window refused a label the CLI had always accepted
@@ -257,6 +261,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The ellipsis said "No recording selected" over a note, because the menu was the recording's
 - The transcript's scroller is at the window's edge, and its margin is the document's
 - The room the composer needs is the transcript's, not the scroll view's
+- A drag across a paragraph starts playback, and playback moves the page
+- The transcript stack is unflipped, and its frames are zero until layout runs
 - Open at the top is the clip view's origin, not a point in the stack
 - A reload that does not scroll still loses the reader's place
 
@@ -340,6 +346,7 @@ that repo is being archived.**
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
 
+- A sidecar this device has edited is not a sidecar it is behind on
 - The offline window had a deterrent nobody read
 - A switch is a policy, and a tap is an instruction
 - A one-channel master is two different things

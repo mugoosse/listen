@@ -368,6 +368,13 @@ final class DetailView: NSView {
     private var follows = true
     private var scrollingProgrammatically = false
 
+    /// When the paragraph the playhead is in begins.
+    ///
+    /// The identity `currentTurn` cannot carry: an index names a position in a
+    /// list that every edit renumbers, and this names the paragraph itself. See
+    /// `refresh`, which is the only reader.
+    private var currentStart: Double?
+
     /// Where the reader is in the transcript, kept so a rebuild can put them
     /// back.
     ///
@@ -2247,7 +2254,17 @@ final class DetailView: NSView {
         length = recording.metadata.duration
         position = 0
         currentTurn = nil
-        follows = true
+        // **Following the playhead belongs to opening a recording**, the same
+        // rule `scrollToTop` above follows and for the same reason. `show` is
+        // also how a speaker edit reloads, and re-arming it there undid the
+        // reader having scrolled away: the next playback tick found the turn
+        // numbering had shifted under the edit, decided the playhead had entered
+        // a new paragraph, and pulled the page to it. An hour of scrolling, lost
+        // to correcting one sentence while the meeting played.
+        if recording.id != previous {
+            follows = true
+            currentStart = nil
+        }
         refresh()
         if hasAudio { loadWaveform(recording) }
 
@@ -2410,7 +2427,7 @@ final class DetailView: NSView {
     private func renderTurns(scrollToTop: Bool = true) {
         // Taken before the stack is emptied, because emptying it is what makes
         // the clip view forget. See `readingOrigin`.
-        let keeping = readingOrigin
+        let keeping = scrollToTop ? nil : readingOrigin
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         turnViews = []
         editingTurn = nil
@@ -2434,16 +2451,45 @@ final class DetailView: NSView {
             // same repair at two depths, and having one on the paragraph and the
             // other only on the pill above it makes the reader hunt for the half
             // they want.
-            view.onSentenceSpeaker = { [weak self] anchor, rect, sentence in
-                guard let self, sentence.range.location != NSNotFound,
-                      NSMaxRange(sentence.range) <= (turn.text as NSString).length
-                else { return nil }
-                let text = (turn.text as NSString).substring(with: sentence.range)
+            view.onSentenceSpeaker = { [weak self] anchor, rect, sentences in
+                guard let self else { return nil }
+                let paragraph = turn.text as NSString
+                let wanted = sentences
+                    .filter { $0.range.location != NSNotFound
+                        && NSMaxRange($0.range) <= paragraph.length }
+                    .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
+                guard !wanted.isEmpty else { return nil }
+                // The count is in the words, because the reader is about to
+                // hand some of a paragraph to somebody else and the one thing
+                // they cannot check afterwards is how much of it went.
+                let many = wanted.count > 1
                 return self.reassignItem(
-                    "Speaker for This Sentence",
-                    scope: .sentence(index: sentence.index, text: text),
-                    from: turn.speaker, asking: "Who said this sentence?",
+                    many ? "Speaker for These \(wanted.count) Sentences"
+                         : "Speaker for This Sentence",
+                    scope: .sentences(wanted), from: turn.speaker,
+                    asking: many ? "Who said these \(wanted.count) sentences?"
+                                 : "Who said this sentence?",
                     anchor: anchor, rect: rect)
+            }
+            view.onSentenceDelete = { [weak self] sentences in
+                guard let self else { return nil }
+                let paragraph = turn.text as NSString
+                let wanted = sentences
+                    .filter { $0.range.location != NSNotFound
+                        && NSMaxRange($0.range) <= paragraph.length }
+                    .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
+                guard !wanted.isEmpty else { return nil }
+                // No confirmation, and the words are why. This removes exactly
+                // what is selected on screen, under a verb that says Delete, on
+                // a gesture the reader made deliberately; `.discard` asks
+                // because it removes a speaker's whole side of a meeting and
+                // there is no way to see how much that is. Naming the count is
+                // what this owes the reader instead.
+                return Action(wanted.count > 1
+                              ? "Delete \(wanted.count) Sentences" : "Delete Sentence",
+                              "trash") { [weak self] in
+                    self?.deleteSentences(wanted)
+                }
             }
             view.onEdit = { [weak self] sentence, was, text in
                 self?.applyEdit(sentence, was: was, to: text)
@@ -2492,12 +2538,14 @@ final class DetailView: NSView {
 
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
-        guard scrollToTop else {
-            restoreTranscriptScroll(to: keeping)
+        // Nothing to put back on the first render of a recording, and nothing
+        // to put back when the reader has not read anything yet.
+        guard let keeping else {
+            readingOrigin = .zero
+            scrollTranscriptToTop()
             return
         }
-        readingOrigin = .zero
-        scrollTranscriptToTop()
+        restoreTranscriptScroll(to: keeping)
     }
 
     /// Put the reader back where they were before a rebuild.
@@ -2511,6 +2559,24 @@ final class DetailView: NSView {
     /// it was read at. `.discard` removes paragraphs, and a stale offset past the
     /// new end is a blank pane with a scroller that says there is something above
     /// it.
+    ///
+    /// **A number of points, and not the paragraph the reader was on.** An
+    /// anchor was written and measured and thrown away, and the measurement is
+    /// the reason to record it. It is the better idea in principle, because an
+    /// offset is only the reader's place while nothing above them changes; it is
+    /// worse in this view, on two counts that cost 214 points on the first edit
+    /// tried. The transcript stack is a plain `NSStackView`, so it is
+    /// **unflipped**: the first paragraph has the *largest* `frame.minY`, and a
+    /// scan for "the last one starting above the viewport" walks the document
+    /// backwards. And the second reload of a pass reads those frames before
+    /// layout has run, when every one of them is still zero, so the anchor is
+    /// whichever paragraph the loop happens to end on. Both are silent.
+    ///
+    /// What made the idea worth having was a pull rewriting the transcript under
+    /// the reader, and that is now impossible: see `SyncState`, where a sidecar
+    /// edit this device has not sent is no longer overwritten. What is left that
+    /// changes the document above the reader is `.discard`, which is rare,
+    /// deliberate and confirmed.
     private func restoreTranscriptScroll(to origin: NSPoint) {
         DispatchQueue.main.async { [self] in
             stack.layoutSubtreeIfNeeded()
@@ -2804,6 +2870,7 @@ final class DetailView: NSView {
         // views whose state changed are touched, which is what keeps this cheap
         // enough to run twenty times a second on an hour-long transcript.
         let index = speakingTurn(at: position)
+        let start = index.flatMap { $0 < turns.count ? turns[$0].start : nil }
         if index != currentTurn {
             trace("playhead \(TranscriptFormat.stamp(position)) -> "
                   + (index.map { "turn \($0) \(turns[$0].speaker)" } ?? "nobody"))
@@ -2814,8 +2881,27 @@ final class DetailView: NSView {
             currentTurn = index
             if let index, index < turnViews.count {
                 turnViews[index].isCurrent = true
-                reveal(index)
+                // **Only when the playhead has entered a different paragraph,
+                // and a paragraph is which one it is rather than where it sits
+                // in the list.**
+                //
+                // Every edit renumbers the turns: reassigning one sentence
+                // splits its paragraph in three, so every index after it moves
+                // by two. Compared by index, the playhead had "arrived
+                // somewhere" on the next tick after any edit, and the page was
+                // dragged to it. The reader was somewhere else, looking at the
+                // sentence they had just corrected, and an hour of scrolling
+                // went with it.
+                //
+                // It only ever happened while something was playing, which is
+                // what made it look intermittent, and **a drag across a
+                // paragraph starts playback**: selecting text begins with a
+                // click, and a click on a paragraph seeks and plays. So it
+                // happened to exactly the gesture the sentence menu is opened
+                // with, and to no other.
+                if start != currentStart { reveal(index) }
             }
+            currentStart = start
         }
         if let currentTurn, currentTurn < turnViews.count {
             turnViews[currentTurn].highlight(position)
@@ -2868,6 +2954,21 @@ final class DetailView: NSView {
     private func reveal(_ index: Int) {
         guard follows, index < turnViews.count else { return }
         let frame = turnViews[index].frame
+        // **Nothing to scroll to before layout has run.**
+        //
+        // `renderTurns` empties the stack and fills it again in one pass, and
+        // every frame in it is zero until the layout that follows. `refresh`
+        // runs in that same pass, from both reloads, and clears `currentTurn`
+        // first, so it always asks for a reveal there. On a zero frame
+        // `scrollToVisible` is asked for `(0, -50, 0, 100)`, and the transcript
+        // stack is an unflipped `NSStackView`, so y = 0 is the **bottom** of the
+        // document: an hour-long meeting jumps to its last paragraph.
+        //
+        // A safety net rather than the fix for anything reported: what made the
+        // transcript scroll away after an edit was being asked to reveal at all,
+        // which `refresh(revealing:)` is about. This is here because scrolling
+        // to a view that has no layout cannot be right whatever asked for it.
+        guard frame.height > 0 else { return }
         guard !scroll.documentVisibleRect.contains(frame) else { return }
         scrollingProgrammatically = true
         stack.scrollToVisible(frame.insetBy(dx: 0, dy: -50))
@@ -2901,6 +3002,7 @@ final class DetailView: NSView {
         playingFocused = false
         position = 0
         currentTurn = nil
+        currentStart = nil
         waveform.progress = 0
         setPlaying(false)
     }
@@ -3263,6 +3365,23 @@ final class DetailView: NSView {
         if reload { reloadTranscript() }
     }
 
+    /// Take some sentences out of the transcript.
+    ///
+    /// The paragraph closes over the gap, which is what `Merge.turns` does with
+    /// whatever is left; if the sentences were the whole paragraph, the
+    /// paragraph goes, and if they were the last of a speaker, the speaker goes
+    /// with them and `TranscriptEditor` drops their voiceprint.
+    private func deleteSentences(_ wanted: [(index: Int, text: String)]) {
+        guard let recording else { return }
+        endEditing()
+        guard TranscriptEditor.apply(.remove(wanted), to: recording) else {
+            NSSound.beep()
+            log("that has changed since the pane was drawn; nothing was written.")
+            return
+        }
+        reloadTranscript()
+    }
+
     // MARK: - Correcting the transcript
 
     /// Write one edited sentence back to the segment it came from.
@@ -3284,7 +3403,8 @@ final class DetailView: NSView {
             // screen. Say so rather than dropping the typing silently.
             NSSound.beep()
             log(typed.isEmpty
-                ? "a sentence cannot be emptied. Delete the speaker instead, or type over it."
+                ? "an emptied field is not a deletion. Right-click the sentence "
+                  + "and choose Delete Sentence."
                 : "that sentence has changed since the pane was drawn; nothing was written.")
             return
         }
@@ -3308,6 +3428,27 @@ final class DetailView: NSView {
         sentences = Merge.sentences(in: turns,
                                     from: updated.storedTranscript?.segments ?? [])
         currentTurn = nil
+        // **Correcting the transcript stops the playhead dragging the page
+        // about, and does not stop the audio.**
+        //
+        // The two go together and only one of them is obvious. `show` is the
+        // other reload and it stops playback outright, so nothing follows
+        // anything afterwards; this one deliberately keeps playing, because
+        // correcting a word is something people do while listening, and that
+        // left `follows` armed with the reader no longer where the playhead is.
+        //
+        // Armed by what, is the part worth writing down: **a drag across a
+        // paragraph starts playback.** Selecting text begins with a click, and a
+        // click on a paragraph seeks and plays. So the gesture that opens the
+        // sentence menu is the gesture that turns following on, and a second or
+        // two after the edit the playhead crossed into the next paragraph and
+        // took the page with it. Reported twice as the transcript scrolling
+        // away, and only ever from the sentence menu, which is why it looked
+        // intermittent.
+        //
+        // Editing is the reader saying they are reading. `reveal` already had
+        // the rule, in the words "if the reader has not gone somewhere else".
+        follows = false
         chips.configure(updated)
         setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
         renderTurns(scrollToTop: false)
@@ -3332,9 +3473,11 @@ final class TranscriptBody: NSTextField {
     var onEdit: ((Merge.Sentence) -> Void)?
     /// Clicked, on the sentence under the pointer, or nil if it landed on none.
     var onClick: ((Merge.Sentence?) -> Void)?
-    /// The submenu that changes who said one sentence, built when the menu
-    /// opens so it lists the speakers the recording has now.
-    var speakerItem: ((Merge.Sentence) -> NSMenuItem?)?
+    /// The submenu that changes who said the selected sentences, built when the
+    /// menu opens so it lists the speakers the recording has now.
+    var speakerItem: (([Merge.Sentence]) -> NSMenuItem?)?
+    /// Take the selected sentences out of the transcript.
+    var deleteItem: (([Merge.Sentence]) -> NSMenuItem?)?
 
     func sentence(at index: Int) -> Merge.Sentence? {
         if let hit = sentences.first(where: { NSLocationInRange(index, $0.range) }) {
@@ -3464,11 +3607,28 @@ final class TranscriptFieldEditor: NSTextView {
         // Copy and the rest are why anyone right-clicks a transcript today, and
         // taking them away to add one item would be a poor trade.
         let standard = super.menu(for: event)
-        guard let body = delegate as? TranscriptBody,
-              let sentence = body.sentence(
-                at: characterIndexForInsertion(at: convert(event.locationInWindow,
-                                                           from: nil)))
-        else { return standard }
+        guard let body = delegate as? TranscriptBody else { return standard }
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        guard let sentence = body.sentence(at: index) else { return standard }
+
+        // **A selection is the reader saying which words they mean.**
+        //
+        // Selecting the second half of a paragraph and asking who said it used
+        // to move the sentence under the pointer and leave the rest of the
+        // selection with the old speaker, silently. Reported, and the report is
+        // the whole argument: a menu opened over a selection is about the
+        // selection.
+        //
+        // Only when the click is inside it, which is what every other item in
+        // this menu does. A right-click somewhere else is a new place, not a
+        // second opinion about the old one.
+        let selected = selectedRange()
+        let inside = selected.length > 0
+            && (NSLocationInRange(index, selected) || index == NSMaxRange(selected))
+        let touched = inside
+            ? body.sentences.filter { NSIntersectionRange($0.range, selected).length > 0 }
+            : []
+        let chosen = touched.isEmpty ? [sentence] : touched
 
         let menu = standard ?? NSMenu()
         let item = NSMenuItem(title: "Edit Sentence",
@@ -3479,8 +3639,19 @@ final class TranscriptFieldEditor: NSTextView {
         // Under Edit Sentence, because they are the same repair: the model got
         // the words wrong, or the diarizer got the person wrong, and a reader
         // who has just noticed one is looking in this menu for the other.
-        if let speaker = body.speakerItem?(sentence) {
+        //
+        // Edit Sentence stays on the one under the pointer whatever is
+        // selected: there is one field, and editing four paragraphs' worth of
+        // sentences in it is not an operation.
+        if let speaker = body.speakerItem?(chosen) {
             menu.insertItem(speaker, at: next)
+            next += 1
+        }
+        // Under both, because it is the third thing that can be wrong with a
+        // sentence and the rarest: the words are right, the speaker is right,
+        // and the sentence should not be there at all.
+        if let delete = body.deleteItem?(chosen) {
+            menu.insertItem(delete, at: next)
             next += 1
         }
         menu.insertItem(.separator(), at: next)
@@ -3588,9 +3759,12 @@ final class TurnView: NSView {
     /// speaker, and to this paragraph. Asked for when the menu opens, never
     /// before: a meeting is hundreds of turns and this is a menu apiece.
     var onSpeakerMenu: ((NSView, NSRect) -> NSMenu?)?
-    /// A sentence in this turn was right-clicked, and this is the item that
-    /// changes who said it.
-    var onSentenceSpeaker: ((NSView, NSRect, Merge.Sentence) -> NSMenuItem?)?
+    /// Some sentences in this turn were right-clicked, and this is the item that
+    /// changes who said them. A list because a selection is what the reader
+    /// means; one entry is the case where they selected nothing.
+    var onSentenceSpeaker: ((NSView, NSRect, [Merge.Sentence]) -> NSMenuItem?)?
+    /// The item that removes them from the transcript.
+    var onSentenceDelete: (([Merge.Sentence]) -> NSMenuItem?)?
     /// A sentence was committed: which one, what it used to say, what it says
     /// now. The old text travels with it so the write can refuse if the
     /// transcript moved underneath.
@@ -3704,9 +3878,13 @@ final class TurnView: NSView {
         bodyLabel.allowsEditingTextAttributes = true
         bodyLabel.sentences = sentences
         bodyLabel.onEdit = { [weak self] in self?.beginEditing($0) }
-        bodyLabel.speakerItem = { [weak self] sentence in
+        bodyLabel.speakerItem = { [weak self] sentences in
             guard let self else { return nil }
-            return self.onSentenceSpeaker?(self, self.speakerButton.frame, sentence)
+            return self.onSentenceSpeaker?(self, self.speakerButton.frame, sentences)
+        }
+        bodyLabel.deleteItem = { [weak self] sentences in
+            guard let self else { return nil }
+            return self.onSentenceDelete?(sentences)
         }
 
         body.orientation = .vertical

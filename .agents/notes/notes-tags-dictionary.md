@@ -193,10 +193,15 @@ zero-height rect opens and closes inside the same call reporting
 The sidebar's `speakerFilter` became a list of `Lens`, drawn as a row of
 `SpeakerPill`s in the bar that used to hold one. **They are ANDed**, because
 "the calls Ryan and Emily were both in" is a question one lens cannot ask and is
-the ordinary reason to reach for this at all. So `filter(bySpeaker:)` and
-`filter(byTag:)` *add* rather than replace, the way a row of tokens behaves
-everywhere else, and replacing is dismissing the old one first. Adding the lens
-already on is a no-op, because clicking a chip twice is something people do.
+the ordinary reason to reach for this at all. So the lenses *add* rather than
+replace, the way a row of tokens behaves everywhere else, and replacing is
+dismissing the old one first. Adding the lens already on is a no-op, because
+clicking a chip twice is something people do.
+
+**The speaker lens is gone**, asked for directly, and with it the example above:
+what is left is `filter(byTag:)` and the unnamed lens. The stacking is unchanged
+and still earns its keep on tags. See "Nobody wanted the library narrowed by a
+speaker" in `speakers.md`.
 
 Three things about the row:
 

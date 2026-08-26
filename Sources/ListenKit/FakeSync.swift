@@ -413,6 +413,74 @@ public enum FakeSync {
                   "a stale phone push replaced the Mac metadata")
         ok("a stale phone cannot downgrade a transcribed cloud record")
 
+        // MARK: an edit nobody has sent yet outranks the container's copy of it
+
+        // The failure this exists to stop, reported from a real two-Mac
+        // library: a speaker was corrected at 21:27:19 and `transcript.json`
+        // was rewritten at 21:28:14 with the pre-edit copy, while
+        // `metadata.json` kept its 21:27 time because it had not changed. The
+        // correction went off the screen while its author was looking at it,
+        // nothing was reported, and the push that followed found the two sides
+        // in agreement and sent nothing.
+        //
+        // Nothing exotic is needed for it. A pull runs before a push, so
+        // between an edit and the next push the container still holds what this
+        // device had before; any pass that re-fetches that record then sees the
+        // two disagree, and until sidecars had a base it read that as being
+        // behind. A second Mac is what makes the record come round again, and
+        // it does not even have to touch the transcript: renaming the recording
+        // republishes the record with its own older transcript still attached.
+        let otherMacLib = try scratchLibrary(root.appendingPathComponent("other-mac"))
+        try? FileManager.default.removeItem(at: EngineState(library: otherMacLib).root)
+        let otherMac = CloudSyncCore(
+            library: otherMacLib, state: EngineState(library: otherMacLib),
+            store: store, key: key, policy: .mac,
+            device: "mac-2", ingests: true)
+        var otherPull = CloudReport()
+        await otherMac.pull(into: &otherPull)
+        let otherFolder = otherMacLib.folder(for: lateID)
+        try check(String(decoding: try Data(contentsOf: otherFolder
+            .appendingPathComponent("transcript.json")), as: UTF8.self).contains("Arrived"),
+                  "the second Mac did not receive the transcript to be stale about")
+
+        // The edit, on the Mac that made the recording, and not sent yet.
+        let corrected = #"{"segments":[{"speaker":"Nick","start":0,"end":1,"text":"Corrected"}]}"#
+        try Data(corrected.utf8).write(to: lateFolder.appendingPathComponent("transcript.json"))
+        try Data(#"[{"speaker":"Nick","start":0,"end":1,"text":"Corrected"}]"#.utf8)
+            .write(to: lateFolder.appendingPathComponent("turns.json"))
+
+        // The second Mac republishes the record for a reason of its own, with
+        // the transcript it still holds.
+        try Data(#"{"id":"\#(lateID)","title":"Renamed elsewhere","source":"mac","state":"done"}"#.utf8)
+            .write(to: otherFolder.appendingPathComponent("metadata.json"))
+        var otherPush = CloudReport()
+        await otherMac.push(into: &otherPush)
+
+        var editPull = CloudReport()
+        await mac.pull(into: &editPull)
+        let keptEdit = String(decoding: try Data(contentsOf: lateFolder
+            .appendingPathComponent("transcript.json")), as: UTF8.self)
+        try check(keptEdit.contains("Corrected"),
+                  "a pull overwrote an edit this device had not sent yet")
+        try check(String(decoding: try Data(contentsOf: lateFolder
+            .appendingPathComponent("turns.json")), as: UTF8.self).contains("Corrected"),
+                  "a pull overwrote the turns beside the edited transcript")
+        try check(editPull.conflicts.contains { $0.contains(lateID) },
+                  "the kept edit was not reported")
+        ok("a pull cannot overwrite a local edit the container has not seen")
+
+        // And it converges: the push that follows carries the edit, and the
+        // device that was stale takes it. Keeping local is only correct if it
+        // is a delay rather than a fork.
+        var editPush = CloudReport()
+        await mac.push(into: &editPush)
+        var otherAgain = CloudReport()
+        await otherMac.pull(into: &otherAgain)
+        try check(String(decoding: try Data(contentsOf: otherFolder
+            .appendingPathComponent("transcript.json")), as: UTF8.self).contains("Corrected"),
+                  "the edit was kept locally and never reached the other Mac")
+        ok("and the push that follows carries it to the device that was stale")
+
         // MARK: notes, and the four cases
 
         try check(decideNote(base: nil, local: nil, remote: "r") == .pull, "never seen here")

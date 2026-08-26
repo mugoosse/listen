@@ -18,12 +18,35 @@ import Foundation
 /// | b | l | b | push |
 /// | b | l | r | **conflict**, touch neither |
 ///
-/// A recording's sidecars need none of this. A transcript has exactly one
-/// writer, the Mac that made it, and audio is written once and never again.
-/// What needs it is anything two devices can edit independently: notes today,
-/// and the library-level files in `DevicePolicy.blobs` as soon as there is a
-/// second Mac, because `contacts.json` and `dictionary.json` are both edited on
-/// whichever machine you happen to be sitting at.
+/// **A recording's sidecars needed none of this, and that was wrong.** The claim
+/// was that a transcript has exactly one writer, the Mac that made it. It has
+/// one *author*; it has as many editors as there are devices showing the
+/// transcript, because correcting who said a sentence rewrites `transcript.json`
+/// and `turns.json` on whichever Mac you are sitting at.
+///
+/// What that cost, measured on a real library: a speaker was corrected at
+/// 21:27:19, and at 21:28:14 `transcript.json` and `turns.json` were rewritten
+/// by a pull with the container's older copy, while `metadata.json` kept its
+/// 21:27 time because it had not changed. The correction was gone from the
+/// screen while its author was looking at it. Nothing failed, nothing was
+/// reported, and the push that followed found local and remote in agreement and
+/// sent nothing.
+///
+/// The shape of it is exactly the one this file was written for. A pull runs
+/// before a push, deliberately, so a Mac that has been shut for a week cannot
+/// overwrite a week of work. Until the push lands, the container still holds
+/// the pre-edit transcript, so any pass that re-fetches that record, and a
+/// second Mac pushing its own copy is enough to cause one, sees local and
+/// remote disagree with no way to tell which is newer. Two values cannot
+/// distinguish "I am behind" from "I have an edit nobody has seen".
+///
+/// So sidecars are keyed here too, per file, and the table above applies to
+/// them unchanged. `metadata.json` is the exception and keeps its own rule, the
+/// `authored` guard in `pullRecording`.
+///
+/// The library-level files in `DevicePolicy.blobs` want this as well, as soon
+/// as there is a second Mac, because `contacts.json` and `dictionary.json` are
+/// both edited on whichever machine you happen to be sitting at.
 ///
 /// So the map is keyed by kind rather than by slug. It was `noteBase[slug]`,
 /// which could only ever answer for one of them.
@@ -36,6 +59,13 @@ public struct SyncState: Codable, Sendable {
 
     public static func noteKey(_ slug: String) -> String { "note:" + slug }
     public static func fileKey(_ name: String) -> String { "file:" + name }
+    /// The digest of one of a recording's sidecars, as both sides last agreed
+    /// it. Its own prefix, disjoint from `sent:` and `note:`, because
+    /// `pushDeletions` walks those two and reads a stamp with no folder as a
+    /// deletion to send.
+    public static func sidecarKey(_ id: String, _ file: String) -> String {
+        "sidecar:" + id + "/" + file
+    }
     public static func sentKey(_ id: String) -> String { "sent:" + id }
     /// A voiceprint record this device owes the container a delete for,
     /// because the recording's bank emptied or its file went with the folder.
@@ -85,6 +115,25 @@ public struct SyncState: Codable, Sendable {
     public subscript(file name: String) -> String? {
         get { base[SyncState.fileKey(name)] }
         set { base[SyncState.fileKey(name)] = newValue }
+    }
+
+    /// The agreed digest for one sidecar of one recording.
+    ///
+    /// Nil means the two sides have never been known to hold the same bytes,
+    /// which is every file until the first pass that sends or receives it. A
+    /// pull takes the remote copy in that case, because there is nothing to say
+    /// the local one is an edit rather than an older copy, and stamps what it
+    /// wrote so the next disagreement can be read properly.
+    public subscript(sidecar id: String, file file: String) -> String? {
+        get { base[SyncState.sidecarKey(id, file)] }
+        set { base[SyncState.sidecarKey(id, file)] = newValue }
+    }
+
+    /// Forget every agreed digest for one recording, which is what a deletion
+    /// leaves behind if nothing does it.
+    public mutating func forgetSidecars(_ id: String) {
+        let prefix = SyncState.sidecarKey(id, "")
+        for key in base.keys where key.hasPrefix(prefix) { base[key] = nil }
     }
 
     /// What this device last put in the container for a recording, as a stamp

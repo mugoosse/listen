@@ -79,7 +79,7 @@ SPINES = {
     # Nothing can be invited into the call, so tapping the Mac's own audio is
     # not a preference, it is the only thing that can work.
     "no-bot": {
-        "heading": "No bot can join a {name} call.",
+        "heading": "Just the two of you.",
         "body": (
             "Meeting notetakers work by being invited into a call as a "
             "participant. A {name} call has no invitation to send, which is why "
@@ -95,7 +95,7 @@ SPINES = {
     },
     # A bot exists and will show up in the participant list with a name on it.
     "quiet": {
-        "heading": "Everyone can see a notetaker bot. Nobody can see this.",
+        "heading": "Only the people you invited.",
         "body": (
             "The usual way to take notes in a {name} call is to let a bot join "
             "it, where it sits in the participant list with a name on it for the "
@@ -110,7 +110,7 @@ SPINES = {
     },
     # Ad hoc, unscheduled, so calendar-driven tools never see it at all.
     "adhoc": {
-        "heading": "It catches the calls nobody scheduled.",
+        "heading": "The five minute call, kept.",
         "body": (
             "A {name} call tends to start because somebody had a question, not "
             "because it was in a calendar a week ago. Notetakers that work from "
@@ -470,7 +470,7 @@ def esc(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def shared_style():
+def base_style():
     """The design system, lifted from index.html so it cannot drift."""
     index = io.open(os.path.join(DOCS, "index.html"), encoding="utf-8").read()
     css = index[index.index("<style>") + len("<style>"):index.index("</style>")]
@@ -478,19 +478,28 @@ def shared_style():
     css = re.sub(r"/\* ---------- the feature switcher.*?/\* ---------- misc",
                  "/* ---------- misc", css, flags=re.S)
     css = re.sub(r"@media \(max-width: 860px\) \{.*?\n\}\n", "", css, flags=re.S)
-    return css + CHANNEL_CSS
+    return css
+
+
+def shared_style():
+    return base_style() + CHANNEL_CSS
 
 
 CHANNEL_CSS = """
 /* ---------- channel pages ---------------------------------------------- */
 
-.steps { counter-reset: step; margin: 34px 0 0; padding: 0; list-style: none; }
+.steps { counter-reset: step; margin: 34px 0 30px; padding: 0; list-style: none; }
 .steps li {
   counter-increment: step;
-  position: relative; padding: 0 0 0 46px; margin: 0 0 22px;
+  position: relative; padding: 0 0 0 46px; margin: 0 0 26px;
   font-size: 16.5px; color: var(--ink-soft);
 }
 .steps li:last-child { margin-bottom: 0; }
+.steps li::after {
+  content: ""; position: absolute; left: 15px; top: 34px; bottom: -22px;
+  width: 1px; background: var(--rule);
+}
+.steps li:last-child::after { display: none; }
 .steps li::before {
   content: counter(step);
   position: absolute; left: 0; top: -2px;
@@ -539,6 +548,18 @@ CHANNEL_CSS = """
 .consent strong { color: var(--ink); }
 
 .legal { font-size: 13.5px; color: var(--ink-faint); margin: 30px 0 0; }
+
+/* The hero sub is the last child of its column here, so `p:last-child` takes
+   its bottom margin away and the buttons end up against it. */
+header.hero .buttons { margin-top: 34px; }
+
+/* The home page's hero frame holds a screenshot, so running it the full width
+   of the page is right. This one is empty until record.mp4 exists, and 16:10
+   across the full width is 640 points of nothing, 364 wider than the copy it
+   belongs to. Held nearer the text measure it stays a picture rather than a
+   void, and the clip that eventually lands in it is still comfortably bigger
+   than the ones in the switcher on the home page. */
+header.hero figure.demo { max-width: 820px; }
 """
 
 
@@ -657,16 +678,24 @@ def render(channel, others):
   <div class="page">
     <div class="col">
       <p class="eyebrow">How it works</p>
-      <h2>Three steps, and none of them are in %(name)s.</h2>
+      <h2>Already recording when it asks.</h2>
       <ol class="steps">
-        <li><b>Press record in the menu bar</b> when the call starts. Listen
-        writes to disk straight away, so you never lose the first minute.</li>
-        <li><b>Have the call.</b> Your microphone goes to one track and
-        everything %(name)s plays goes to another, which is what lets Listen
-        tell the voices apart afterwards.</li>
-        <li><b>Press stop, and keep it.</b> The transcript is written on your own
-        Mac, usually before you have finished closing the window.</li>
+        <li><b>Take the call.</b> Listen notices by itself. An app that is
+        listening and speaking at the same moment is on a call, and nothing else
+        on a Mac routinely does both, so there is no list of supported apps to be
+        left off.</li>
+        <li><b>Answer the question.</b> A small panel asks whether you are in a
+        meeting, and it has <b>already started recording</b>, so the answer costs
+        you nothing either way. Say yes and it carries on. Say no and the
+        recording is thrown away. Say never and it stops asking about %(name)s.</li>
+        <li><b>Hang up.</b> A recording it started stops when the call does, and
+        the transcript is written on your own Mac, usually before you have
+        finished closing the window.</li>
       </ol>
+      <p>The menu bar is still there for a call it did not catch, or one you want
+      running before anybody has joined. Either way your microphone goes to one
+      track and everything %(name)s plays goes to another, which is what lets
+      Listen tell the voices apart afterwards.</p>
     </div>
   </div>
 </section>
@@ -689,10 +718,10 @@ def render(channel, others):
   <div class="page">
     <div class="col">
       <p class="eyebrow">After the call</p>
-      <h2>A transcript with names on it.</h2>
-      <p class="lead">Listen writes the call up on your Mac's own chip, works out
-      who spoke, and remembers the voices, so the regulars name themselves after
-      the first time.</p>
+      <h2>Never listen to it twice.</h2>
+      <p class="lead">Give the call your attention, not your notepad. Listen
+      writes it up on your Mac's own chip, works out who spoke, and remembers the
+      voices, so the regulars name themselves after the first time.</p>
       <ul class="points">
         <li>Search every call you have ever had, instantly and offline</li>
         <li>Ask a question across all of them and click through to the answer</li>
@@ -708,9 +737,10 @@ def render(channel, others):
   <div class="page">
     <div class="col">
       <p class="eyebrow">Privacy</p>
-      <h2>There is no Listen server.</h2>
-      <p class="lead">The recording, the transcript and the names on it are all
-      made on your own computer. No account, and nothing reports back.</p>
+      <h2>Your calls stay yours.</h2>
+      <p class="lead">There is no Listen server, because there are no servers.
+      The recording, the transcript and the names on it are all made on your own
+      computer. No account, and nothing reports back.</p>
       <p>Listen is open source under the AGPL, so none of that has to be taken on
       trust. <a href="security.html">What runs where</a> sets out every
       connection it can make and how to check each one yourself, and there are
@@ -745,9 +775,9 @@ def render(channel, others):
     <div class="col">
       <p class="eyebrow">Get Listen</p>
       <h2>Try it on your next call.</h2>
-      <p class="lead">Free, and it stays free. Apple silicon, macOS 14 or later.
-      The speech model is about 2.5 GB and downloads once, the first time you run
-      it.</p>
+      <p class="lead">Free to download, and open source. Apple silicon, macOS
+      14 or later. The speech model is about 2.5 GB and downloads once, the first
+      time you run it.</p>
       <div class="buttons">
         <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
         <a class="button" href="https://github.com/mugoosse/listen">Read the source</a>

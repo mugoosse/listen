@@ -79,7 +79,7 @@ body {
 
 .page { max-width: var(--page); margin: 0 auto; padding: 0 28px; }
 .col > p, .col > h2, .col > h3, .col > pre,
-.col > .eyebrow, .col > ul, .col > .note { max-width: var(--col); }
+.col > .eyebrow, .col > ul, .col > ol, .col > .note { max-width: var(--col); }
 
 section { padding: 96px 0; }
 section + section { border-top: 1px solid var(--rule-soft); }
@@ -427,16 +427,45 @@ ul.plain li { margin-bottom: 12px; }
 }
 .channel-nav a:hover .chan-icon { opacity: 1; }
 
+.who { display: grid; gap: 16px; margin: 32px 0 0;
+       grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.who a {
+  display: block; text-decoration: none; padding: 22px 24px;
+  border: 1px solid var(--rule); border-radius: 14px; background: var(--paper-warm);
+  transition: border-color .15s ease, transform .15s ease;
+}
+.who a:hover { border-color: var(--ink-faint); transform: translateY(-1px); }
+.who b {
+  display: block; font-family: var(--serif); font-weight: 400; font-size: 21px;
+  line-height: 1.25; color: var(--ink); margin: 0 0 8px;
+}
+.who span { display: block; font-size: 15px; line-height: 1.5; color: var(--ink-soft); }
+
 figure.quote {
   margin: 0; border: 1px solid var(--rule); border-radius: 14px;
   background: var(--paper-warm); padding: 24px 26px;
 }
-figure.quote blockquote { margin: 0 0 16px; }
+#voices .cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+figure.quote { display: flex; flex-direction: column; }
+figure.quote blockquote { margin: 0 0 20px; flex: 1 1 auto; }
 figure.quote blockquote p {
   font-family: var(--serif); font-size: 19px; line-height: 1.4;
   color: var(--ink); margin: 0;
 }
-figure.quote figcaption { font-size: 14.5px; color: var(--ink-faint); margin: 0; }
+figure.quote figcaption {
+  display: flex; align-items: center; gap: 12px; margin: 0;
+  font-size: 14.5px; color: var(--ink-faint); line-height: 1.35;
+}
+figure.quote figcaption img {
+  width: 44px; height: 44px; flex: 0 0 auto;
+  border-radius: 50%; object-fit: cover; display: block;
+}
+figure.quote figcaption b {
+  display: block; font-weight: 600; color: var(--ink);
+}
+figure.quote figcaption a { color: var(--ink-faint); }
+figure.quote figcaption a:hover { color: var(--ink); }
 
 footer {
   padding: 56px 0 96px; border-top: 1px solid var(--rule-soft);
@@ -537,8 +566,9 @@ footer p { color: var(--ink-faint); font-size: 15px; }
   <div class="page">
     <div class="col">
       <p class="eyebrow">What it does</p>
-      <h2>Seven things, one at a time.</h2>
-      <p class="lead">Pick one, or let it run.</p>
+      <h2>Seven things you stop doing.</h2>
+      <p class="lead">Give the call your attention, not your notepad. Pick one,
+      or let it run.</p>
     </div>
 
     <div class="switcher" id="switcher">
@@ -546,7 +576,7 @@ footer p { color: var(--ink-faint); font-size: 15px; }
 
         <article class="panel" id="f-record"
                  data-tab-title="Record the call"
-                 data-tab-note="Both sides of the call, without a bot in it.">
+                 data-tab-note="It spots the call and starts, then asks.">
           <p class="eyebrow panel-heading">Record</p>
           <figure class="demo">
             <div class="frame empty" data-shot="record" data-seconds="14"
@@ -557,11 +587,11 @@ footer p { color: var(--ink-faint); font-size: 15px; }
             <p>Your microphone on one track, everything your Mac plays on the
             other. <strong>Nothing joins the call</strong>, so it works on
             WhatsApp and FaceTime as well as it does on Zoom, Meet and Teams.
-            Press record when the call starts, and decide whether to keep it when
-            you stop.</p>
+            You do not have to remember to start it: Listen spots the call,
+            begins recording, and only then asks whether you want it.</p>
             <ul class="points">
-              <li>Recording starts the moment you press it, so you don't lose the first minute</li>
-              <li>Walk away without deciding and the audio deletes itself after 24 hours</li>
+              <li>It is already recording when it asks, so the answer costs you nothing</li>
+              <li>Say never once and it stops asking about that app</li>
               <li>Asks to record audio, not your screen</li>
             </ul>
           </div>
@@ -717,11 +747,55 @@ footer p { color: var(--ink-faint); font-size: 15px; }
   </div>
 </section>
 
+<section id="who">
+  <div class="page">
+    <div class="col">
+      <p class="eyebrow">Who it is for</p>
+      <h2>Conversations that cannot go to a server.</h2>
+      <p class="lead">Some work rules out a meeting bot before anybody has read
+      the pricing, and some is simply sold by the hour of attention. Either way
+      this was built for you rather than adapted to you.</p>
+    </div>
+    <div class="who">
+      <a href="for-therapists.html">
+        <b>Therapists and counsellors</b>
+        <span>Be with the client. The session is written up by the time you
+        finish.</span>
+      </a>
+      <a href="for-coaches.html">
+        <b>Coaches and consultants</b>
+        <span>They booked your attention. Spend the hour on them, not on your
+        notebook.</span>
+      </a>
+      <a href="for-lawyers.html">
+        <b>Lawyers</b>
+        <span>A record of the call with no third party holding it, and nothing
+        for anyone else to produce.</span>
+      </a>
+      <a href="for-clinicians.html">
+        <b>Doctors and clinicians</b>
+        <span>No business associate agreement to chase, because there is nobody
+        to sign one with.</span>
+      </a>
+      <a href="for-journalists.html">
+        <b>Journalists</b>
+        <span>Interviews transcribed on your own laptop, with the network off
+        if you want.</span>
+      </a>
+      <a href="for-hr-investigations.html">
+        <b>HR and investigations</b>
+        <span>One copy of the interview, on one machine, with an access log
+        beside it.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
 <section id="works-with">
   <div class="page">
     <div class="col">
       <p class="eyebrow">Works with</p>
-      <h2>Whatever the call happens to be on.</h2>
+      <h2>Works with what you use.</h2>
       <p class="lead">Listen records the audio your Mac is already playing, so it
       does not need the app on the other end to support anything. That includes
       the ones no notetaker bot can reach.</p>
@@ -741,33 +815,28 @@ footer p { color: var(--ink-faint); font-size: 15px; }
   </div>
 </section>
 
-<!-- Real quotes only, from people who actually use it.
-     This section stays `hidden` until at least two are in. To turn it on:
-     replace the placeholder cards below with real ones, then delete the
-     `hidden` attribute on the <section>. See docs/TESTIMONIALS.md for how to
-     ask and what makes a usable answer. -->
-<section id="voices" hidden>
+<!-- Real quotes only, from people who actually use it, in their own words.
+     Adding one is a copy of the figure below: quote, photo, name and role.
+     Never write a quote for somebody, even one who would sign it off.
+     docs/TESTIMONIALS.md has how to ask and what makes a usable answer. -->
+<section id="voices">
   <div class="page">
     <div class="col">
       <p class="eyebrow">From people using it</p>
       <h2>What it is actually for.</h2>
     </div>
     <div class="cards">
+
       <figure class="quote">
-        <blockquote><p>PLACEHOLDER. One specific thing they do with it, in their
-        own words, ideally naming the app or the situation.</p></blockquote>
-        <figcaption>Name, what they do, city</figcaption>
+        <blockquote><p>I&#8217;ve tested many similar apps out there, and
+        Listen is finally the one that stuck. I love owning my data, and the
+        dictation is my daily driver.</p></blockquote>
+        <figcaption>
+          <img src="voices/daniel-andrade.jpg" alt="" width="44" height="44">
+          <span><b>Daniel Andrade</b>Founder, <a href="https://vitaltrends.net/">VitalTrends</a></span>
+        </figcaption>
       </figure>
-      <figure class="quote">
-        <blockquote><p>PLACEHOLDER. Short. A sentence they said, not a sentence
-        written for them.</p></blockquote>
-        <figcaption>Name, what they do, city</figcaption>
-      </figure>
-      <figure class="quote">
-        <blockquote><p>PLACEHOLDER. Role alone is fine when a name would be
-        awkward, which it often is for this buyer.</p></blockquote>
-        <figcaption>What they do, city</figcaption>
-      </figure>
+
     </div>
   </div>
 </section>
@@ -796,11 +865,11 @@ footer p { color: var(--ink-faint); font-size: 15px; }
   <div class="page">
     <div class="col">
       <p class="eyebrow">Privacy</p>
-      <h2>There is no Listen server.</h2>
-      <p class="lead">Nothing to hold your meetings, nothing to breach, nothing
-      to hand over. They are saved on your own computer, and the recording, the
-      transcript and the names on it are all made there. No account, and nothing
-      reports back.</p>
+      <h2>Your meetings stay yours.</h2>
+      <p class="lead">There is no Listen server, so there is nothing to breach
+      and nothing to hand over. Your meetings are saved on your own computer, and
+      the recording, the transcript and the names on it are all made there. No
+      account, and nothing reports back.</p>
 
       <ul class="plain">
         <li><strong>It works with the Wi-Fi off.</strong> None of it waits on
@@ -808,9 +877,9 @@ footer p { color: var(--ink-faint); font-size: 15px; }
         <li><strong>Your recordings are ordinary files.</strong> A folder you
         own, that you can move, back up or delete. There is nothing to export,
         because nothing was ever taken.</li>
-        <li><strong>Keep everything, for as long as you like.</strong> Storing
-        your own meetings on your own disk costs nothing, so nothing is ever
-        deleted to make you pay.</li>
+        <li><strong>Keep everything, for as long as you like.</strong> Your
+        library is a folder on a disk you already own, so no history expires and
+        nothing is held back to be unlocked later.</li>
       </ul>
 
       <p>A couple of things can send anything out, and each is off until you
@@ -843,9 +912,9 @@ footer p { color: var(--ink-faint); font-size: 15px; }
     <div class="col">
       <p class="eyebrow">Get Listen</p>
       <h2>Try it on your next call.</h2>
-      <p class="lead">Free, and it stays free. Apple silicon, macOS 14 or
-      later. The speech model is about 2.5 GB and downloads once, the first time
-      you run it.</p>
+      <p class="lead">Free to download, and open source. Apple silicon, macOS
+      14 or later. The speech model is about 2.5 GB and downloads once, the first
+      time you run it.</p>
       <div class="buttons">
         <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
         <a class="button" href="https://github.com/mugoosse/listen">Read the source</a>
@@ -871,6 +940,27 @@ footer p { color: var(--ink-faint); font-size: 15px; }
 
 <script>
 document.documentElement.className += ' js';
+
+// Sections that ship hidden, shown on request.
+//
+// The quotes section is real markup with placeholder text in it, so it must not
+// be visible to a visitor and must be easy to look at while it is being filled
+// in. `?preview` does that without anybody editing the file and forgetting to
+// put the attribute back.
+if (/(^|[?&])preview($|[=&])/.test(location.search)) {
+  Array.prototype.forEach.call(
+    document.querySelectorAll('section[hidden]'),
+    function (section) {
+      section.hidden = false;
+      var flag = document.createElement('p');
+      flag.className = 'under-button';
+      flag.style.cssText = 'margin:0 0 18px;color:var(--blue)';
+      flag.textContent = 'Preview only. This section is hidden to visitors '
+        + 'until the placeholder text is replaced.';
+      var col = section.querySelector('.col');
+      if (col) { col.insertBefore(flag, col.firstChild); }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Media

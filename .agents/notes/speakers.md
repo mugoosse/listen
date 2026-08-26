@@ -808,6 +808,48 @@ A room recording is the one case where the microphone gets no prior either. How
 many people are around a table is exactly the question being asked, and it is
 the number nothing here knows: the calendar counts invitations, not chairs.
 
+### The prior outlived its pass, and every meeting after it had one voice
+
+`Diarizer` used to keep one manager slot, and `manager(expecting:)` stored the
+tuned manager in it. Nothing ever put the free one back, and the pipeline's
+order made that exactly wrong: `printUser` runs the microphone with
+`expecting: 1` after every call's own system pass, so the first recording of
+an app session clustered freely and **every later open-population pass in the
+same process ran with `numSpeakers = 1`**, a command rather than a hint. The
+app is left running for days, so "later" was nearly everything.
+
+The measured case is an 89-minute Discord webinar whose system track held at
+least five people and came back as one cluster, renamed to one attendee and
+split up by hand. The bug has a second face that was never caught in the wild:
+a poisoned free pass on a room's microphone returns one cluster, and one
+cluster on the microphone is labelled `Me` by design, so it reads as a solo
+memo. A 48-minute room recording transcribed two hours after a call looked
+exactly like that and turned out to genuinely be one person, which is the
+point: the mic-side failure is indistinguishable from an ordinary solo
+recording without asking the person who was there.
+
+Proven rather than inferred, against the webinar's `system.wav` with the same
+FluidAudio 0.15.5 the shipped build pinned: a fresh manager at the default 0.6
+finds 8 speakers, deterministically across runs, and matches the hand labels
+(Beile 99% one cluster, Marla 97%, Nick 75%); with `numSpeakers = 1` it
+reproduces the shipped `embeddings.json` speech total to the digit
+(738.1172256470 s). The tuned manager now lives in its own slot beside the
+free one, so a prior lasts exactly as long as the runs that ask for it. If a
+multi-party track ever comes back as one voice again, ask which manager ran
+before blaming the audio.
+
+### The clustering threshold is a similarity, and the comment said distance
+
+FluidAudio's offline `Clustering.threshold` is a cosine similarity, converted
+to a merge distance by `sqrt(2 - 2s)` before the dendrogram is cut, so raising
+it toward 1 **splits more**. The comment on `Diarizer.config` said the
+opposite (a Euclidean distance where larger merges more), and a
+`LISTEN_DIARIZE_THRESHOLD` sweep following it would turn the knob the wrong
+way. Measured on the webinar's system track: 0.35, 0.4 and 0.45 all collapse
+to one cluster, 0.5 gives seven, 0.6 gives eight. The sharp cliff between
+0.45 and 0.5 is worth knowing before tuning: below it the AHC step hands VBx
+one cluster to start from, and nothing recovers.
+
 ## The bank knew everybody except its owner
 
 `Me` was the one label in the library with **no voice behind it**. Nothing

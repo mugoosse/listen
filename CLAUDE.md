@@ -163,6 +163,8 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Re-transcribing an import swaps Whisper for Parakeet, and v2 has no Dutch
 - The legacy m4a holds two tracks, and everything reads only the first
 - A known speaker count is a good prior, and a bad one applied to one track
+- The prior outlived its pass, and every meeting after it had one voice
+- The clustering threshold is a similarity, and the comment said distance
 - The bank knew everybody except its owner
 
 ### `.agents/notes/calendar.md` (15k)

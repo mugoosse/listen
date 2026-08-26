@@ -26,12 +26,23 @@ struct DiarizationOutput {
 /// transcript is built after capture has stopped, so there is no reason to give
 /// up the accuracy.
 actor Diarizer {
+    /// The free-clustering manager, and the only thing `expecting: nil` may
+    /// ever run on. A tuned manager used to be stored in this slot, and the
+    /// order of the pipeline made that exactly wrong: `printUser` runs the mic
+    /// with `expecting: 1` after every call, so the first recording of an app
+    /// session clustered freely and every later system track ran with
+    /// `numSpeakers = 1`, which is a command rather than a hint. An 89-minute
+    /// webinar came back as one far-end voice that way. See
+    /// .agents/notes/speakers.md.
     private var manager: OfflineDiarizerManager?
+    /// The manager for a known speaker count, kept beside the free one so a
+    /// prior lasts exactly as long as the runs that ask for it.
+    private var tuned: OfflineDiarizerManager?
+    private var tunedExpecting: Int?
     /// Loaded once and shared between managers, because the CoreML load is the
     /// expensive part and a different speaker count needs a different config
     /// but the same models.
     private var models: OfflineDiarizerModels?
-    private var loadedExpecting: Int?
 
     /// Where FluidAudio keeps its CoreML bundles.
     ///
@@ -46,10 +57,15 @@ actor Diarizer {
 
     /// Clustering settings, overridable for measurement.
     ///
-    /// `threshold` is a Euclidean distance over unit-normalized embeddings, so
-    /// **larger merges more**: raise it and two people become one. The library
-    /// default is 0.6. `LISTEN_DIARIZE_THRESHOLD` and `LISTEN_MIN_SPEAKERS`
-    /// exist to sweep it against real recordings rather than guess.
+    /// `threshold` is a cosine similarity over unit-normalized embeddings,
+    /// which the library converts to a merge distance (sqrt(2 - 2s)) before
+    /// cutting the dendrogram, so **larger splits more**: raise it toward 1
+    /// and one person becomes two, lower it and two people become one. An
+    /// earlier version of this comment had the direction backwards. Measured
+    /// on a real webinar system track holding five people: 0.35 to 0.45 gave
+    /// one cluster, 0.5 gave seven, 0.6 gave eight. The library default is
+    /// 0.6. `LISTEN_DIARIZE_THRESHOLD` and `LISTEN_MIN_SPEAKERS` exist to
+    /// sweep it against real recordings rather than guess.
     static func config(expecting: Int? = nil) -> OfflineDiarizerConfig {
         let env = ProcessInfo.processInfo.environment
         var clustering = OfflineDiarizerConfig.Clustering.community
@@ -79,22 +95,24 @@ actor Diarizer {
 
     /// Point the diarizer at a known number of speakers.
     ///
-    /// Rebuilds the manager, not the models: the CoreML load is the slow part
-    /// and is reused, while the clustering config is cheap.
+    /// Rebuilds a manager, not the models: the CoreML load is the slow part
+    /// and is reused, while the clustering config is cheap. The tuned manager
+    /// must never be stored where the free one lives; see the trap on
+    /// `manager` above.
     private func manager(expecting: Int?) async throws -> OfflineDiarizerManager {
         guard let manager else { throw DiarizerError.notLoaded }
         guard let expecting, expecting > 0 else { return manager }
-        if loadedExpecting == expecting, let cached = self.manager { return cached }
+        if tunedExpecting == expecting, let tuned { return tuned }
         if models == nil {
             models = try? await OfflineDiarizerModels.load(
                 from: OfflineDiarizerModels.defaultModelsDirectory())
         }
         guard let models else { return manager }
-        let tuned = OfflineDiarizerManager(config: Self.config(expecting: expecting))
-        tuned.initialize(models: models)
-        loadedExpecting = expecting
-        self.manager = tuned
-        return tuned
+        let built = OfflineDiarizerManager(config: Self.config(expecting: expecting))
+        built.initialize(models: models)
+        tunedExpecting = expecting
+        tuned = built
+        return built
     }
 
     /// Diarize one track.

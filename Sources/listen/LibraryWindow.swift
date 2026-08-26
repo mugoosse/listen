@@ -39,7 +39,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// The drawer keeps its two other sizes. A card resting over the meeting it
     /// is about is still the right shape for asking about that meeting, and that
     /// is what `standard` stays.
-    private enum Mode { case library, settings, people, notes, chat }
+    /// Which screen the window is.
+    ///
+    /// **People and Notes are gone, and they were collections rather than
+    /// screens.** They existed because the sidebar was a recording list with no
+    /// room for a person or a note about four meetings, and the segmented
+    /// control at the top of it was the way between the three. The one list
+    /// holds all three kinds now and `LibraryKind` narrows it, so what is left
+    /// is the same thing a Gmail chip is: a state with an off switch rather
+    /// than a place you have to leave. A tab set cannot express "all three",
+    /// which is why pressing Notes on a library with none read as the control
+    /// being broken instead of as an empty answer.
+    private enum Mode { case library, settings, chat }
     private var mode: Mode = .library
     /// Where Back goes, which is wherever chat mode was entered from.
     ///
@@ -63,11 +74,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// People is a third mode for the same reason settings is a second one: it
     /// is a roster and a page, both of which want the whole window, and neither
     /// of which is a recording.
-    private let peopleNav = PeopleNav()
     private let personPane = PersonPane()
     /// Notes are a fourth collection for the reason People is a third: a note
     /// can name four recordings, so a recording-centric list cannot show one.
-    private let notesNav = NotesNav()
     private let notePane = NotePane()
     /// The conversations, in the sidebar's slot while one is being read. See
     /// `ChatNav`, and `Mode.chat` above for why they are there rather than in a
@@ -83,8 +92,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let settingsTitleItem = NSToolbarItem.Identifier("settingsTitle")
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
     private static let settingsItem = NSToolbarItem.Identifier("openSettings")
-    private static let peopleItem = NSToolbarItem.Identifier("openPeople")
-    private static let personActionsItem = NSToolbarItem.Identifier("personActions")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
     // There is no History item any more. It was a menu of the conversations
@@ -557,14 +564,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // rename followed by a click on a speaker aborted the app.
         detail.onChanged = { [weak self] in self?.sidebar.reload() }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
-        peopleNav.onSelect = { [weak self] person in self?.personPane.show(person) }
-        // Two lists now, not three. The recordings sidebar has no picker any
-        // more: it is the one list, so there is no collection for it to report
-        // moving away from. People and Notes keep theirs while they are still
-        // reachable as modes, which is what gets them back to the library.
-        peopleNav.onCollection = { [weak self] in self?.showCollection($0) }
-        notesNav.onCollection = { [weak self] in self?.showCollection($0) }
-        notesNav.onSelect = { [weak self] note in self?.notePane.show(note) }
         // A note names the meetings it is about, and those names are the way
         // back to them. This is what makes a synthesis of four catch-ups
         // navigable rather than a dead end.
@@ -582,21 +581,32 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         // A rename rewrites transcripts, so the roster beside it is stale the
         // moment it lands, and so is the recording list behind both.
-        personPane.onChanged = { [weak self] in
-            guard let self else { return }
-            let keep = self.peopleNav.selected?.label
-            self.peopleNav.reload()
-            if let keep { self.peopleNav.select(keep) }
-        }
+        // A rename rewrites transcripts, so the list beside the card is stale
+        // the moment it lands. The one list rather than the roster, and it puts
+        // its own selection back: see `finishReload`, which keeps a person by
+        // label for exactly this.
+        personPane.onChanged = { [weak self] in self?.sidebar.reload() }
         // A rename, a merge or an unnaming leaves the roster selecting a label
         // that has stopped existing, so it is told where the person went. The
         // pane has to be sent somewhere explicitly: `select` cannot find them,
         // and a roster that quietly keeps its old selection leaves the page it
         // was on frozen mid-edit.
+        // A rename, a merge or an unnaming leaves the card showing a label
+        // that has stopped existing, so the pane is told where the person went.
+        // The list is narrowed to People and searched for the new name, which
+        // is the one arrival that both finds them and says on screen why the
+        // list looks like that.
         personPane.onLandOn = { [weak self] label in
             guard let self else { return }
-            self.peopleNav.reload()
-            if !self.peopleNav.select(label) { self.personPane.show(nil) }
+            guard let person = People.find(label) ?? People.roster()
+                .first(where: { SpeakerName.matches($0.label, label) })
+            else {
+                self.personPane.show(nil)
+                self.sidebar.reload()
+                return
+            }
+            self.personPane.show(person)
+            self.sidebar.reveal(person: person)
         }
 
         Queue.shared.onChange = { [weak self] _ in self?.reload() }
@@ -798,29 +808,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // it here would make Back a second navigation rather than a return.
             composerHost?.enterPage()
 
-        case .people:
-            // The sidebar stays collapsible, unlike settings. It used to be
-            // locked open because the roster was the only way out of this
-            // screen, and now the segmented control at the top of it is the way
-            // in and out of every collection: the lock was about navigation,
-            // not about People.
-            detail.saveYours()
-            detail.stopPlayback()
-            peopleNav.reload()
-            sidebarItem.canCollapse = true
-            split.canToggleSidebar = true
-            sidebarHost.show(peopleNav)
-            detailHost.show(personPane)
-
-        case .notes:
-            detail.saveYours()
-            detail.stopPlayback()
-            notesNav.reload()
-            sidebarItem.canCollapse = true
-            split.canToggleSidebar = true
-            sidebarHost.show(notesNav)
-            detailHost.show(notePane)
-
         case .library:
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
@@ -847,14 +834,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // mode to be forgotten.
         updateComposer()
 
-        // All three, not just the one on screen: the next mode change swaps in
-        // a list whose control was last touched by a click that took the user
-        // somewhere else.
-        if let collection = Self.collection(for: next) {
-            sidebar.setCollection(collection)
-            peopleNav.setCollection(collection)
-            notesNav.setCollection(collection)
-        }
         updateRecordFAB()
         rebuildToolbar()
     }
@@ -914,18 +893,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             chatNav.select(id)
         } else {
             chatNav.clearSelection()
-        }
-    }
-
-    /// Settings and chat have no segment, so they leave the three controls
-    /// alone. Neither is a collection of the library: one is about the app and
-    /// the other is about the working-out.
-    private static func collection(for mode: Mode) -> LibraryCollection? {
-        switch mode {
-        case .library:  return .recordings
-        case .people:   return .people
-        case .notes:    return .notes
-        case .settings, .chat: return nil
         }
     }
 
@@ -992,38 +959,37 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         window?.toolbar?.validateVisibleItems()
     }
 
-    /// Follow the sidebar's segmented control.
-    ///
-    /// Settings is deliberately not one of these: the segments are which part
-    /// of the library you are looking at, and settings is configuring the app.
-    func showCollection(_ collection: LibraryCollection) {
-        switch collection {
-        case .recordings: enter(.library)
-        case .people:     enter(.people)
-        case .notes:      enter(.notes)
-        }
-    }
-
     /// Put the open page away, back to the library and the composer.
     @objc func closeSelected() {
         sidebar.deselect()
     }
 
-    /// Open the roster, on `label` if somebody was asked for.
+    /// Open somebody's card, or the list of everybody.
     ///
-    /// The entry point from a chip's menu and from the toolbar. Selecting the
-    /// person is done after the mode change, because the roster does not exist
-    /// as a list of rows until it has been shown once.
+    /// The entry point from a chip's menu, from a reference in an answer, and
+    /// from the People menu item. It lands in the library now rather than in a
+    /// collection of its own: see `Mode`, and `Sidebar.reveal(person:)` for why
+    /// the name goes into the search field on the way.
+    ///
+    /// With no name it is the browse case, which is the whole roster behind a
+    /// People pill. That reverses the note above `Sidebar.Row` on purpose: the
+    /// objection there was to the roster appearing unasked, and a pill somebody
+    /// can see and drop is the asking.
     func showPerson(_ label: String? = nil) {
         if window == nil { build() }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        enter(.people)
-        if let label {
-            peopleNav.select(label)
-        } else if peopleNav.selected == nil {
-            personPane.show(nil)
+        enter(.library)
+        guard let label else {
+            sidebar.filter(byKind: .people)
+            return
         }
+        // The roster as well as the library, so somebody with a card and
+        // nothing recorded yet is still reachable from a reference.
+        guard let person = People.find(label)
+            ?? People.roster().first(where: { SpeakerName.matches($0.label, label) })
+        else { NSSound.beep(); return }
+        sidebar.reveal(person: person)
     }
 
     private func showPane(_ tab: SettingsTab) {
@@ -1214,12 +1180,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.filter(byUnnamedSpeakers: true)
     }
 
+    /// The roster, as a lens rather than as a collection.
+    ///
+    /// **The one thing the People collection did that nothing else does: browse
+    /// the people you cannot already name.** Typing a name finds somebody you
+    /// have in mind, and `kind:people` is in the magnifier's menu, but neither
+    /// is a keystroke, and losing the tab set should not cost the question a
+    /// shortcut. It is the same shape as the item above it: both are lenses on
+    /// the one list now, so both belong in the same menu.
+    @objc func showPeople(_ sender: Any?) {
+        show()
+        sidebar.filter(byKind: .people)
+    }
+
     // MARK: - Toolbar
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
-         Self.actionsItem, Self.personActionsItem, Self.recordItem,
+         Self.actionsItem, Self.recordItem,
          Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem]
     }
 
@@ -1328,33 +1307,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // is nothing to collide with.
             return [Self.settingsTitleItem, .flexibleSpace, Self.backItem,
                     .sidebarTrackingSeparator, .flexibleSpace]
-        case .people:
-            // The person's actions live beside the way out, where every other
-            // menu in this window lives, rather than as a button inside the
-            // page. It also lets the name and the disc sit at the top of the
-            // page instead of below a row of controls.
-            //
-            // The sidebar toggle is here now, unlike before: these modes no
-            // longer lock the sidebar open, because the segmented control in it
-            // is the navigation and collapsing is a choice like any other.
-            //
-            // No History, for the reason the library has none: what you asked
-            // about somebody is on the card's title menu, under the card you
-            // asked it from.
-            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace,
-                    Self.personActionsItem]
-        case .notes:
-            // Nothing on the right. A note has no verbs yet: it is deleted
-            // where it is written, and there is nothing to export that is not
-            // already a markdown file on disk.
-            // The masthead in every collection, not just the recording list.
-            // Switching is one click now, so a window whose title bar empties
-            // as you move between segments reads as three different screens
-            // rather than three views of one library.
-            return [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
-                    .sidebarTrackingSeparator, .flexibleSpace]
-
         case .chat:
             // **Settings' shape, because this is settings' kind of mode.** The
             // word takes the masthead's slot, Back takes the collapse control's,
@@ -1553,18 +1505,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             Self.dressSettingsItem(item)
             return item
 
-        case Self.personActionsItem:
-            let item = NSMenuToolbarItem(itemIdentifier: id)
-            item.label = "Actions"
-            item.toolTip = "Edit, merge or delete this contact"
-            item.image = NSImage(systemSymbolName: "ellipsis",
-                                 accessibilityDescription: "Actions")
-            // The pane owns the menu and rebuilds it as it opens: which items
-            // belong depends on who is selected and whether they have a card.
-            item.menu = personPane.actionsMenu
-            item.showsIndicator = false
-            return item
-
         case Self.chatsItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Chats"
@@ -1623,16 +1563,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.showsIndicator = false
             return item
 
-        case Self.peopleItem:
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "People"
-            item.toolTip = "Everybody this library knows"
-            item.image = NSImage(systemSymbolName: "person.2",
-                                 accessibilityDescription: "People")
-            item.target = self
-            item.action = #selector(openPeople)
-            return item
-
         case Self.backItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Back"
@@ -1676,7 +1606,6 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // MARK: - Actions
 
     @objc private func openSettings() { showSettings() }
-    @objc private func openPeople() { showPerson() }
 
     @objc private func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the
@@ -3022,11 +2951,9 @@ extension LibraryWindow: NSMenuDelegate {
         // `.library` with `selectedPerson` set: same question, same rows, and
         // without this line their card in that mode answered "nothing asked
         // about this page" over a stack of conversations that name them.
-        if mode == .people || sidebar.selectedPerson != nil {
-            let person = mode == .people
-                ? peopleNav.selected?.label : sidebar.selectedPerson?.label
-            chats = person.map { name in Chat.all().filter { $0.person == name } } ?? []
-            subject = person ?? "this person"
+        if let person = sidebar.selectedPerson?.label {
+            chats = Chat.all().filter { $0.person == person }
+            subject = person
         } else if let recording = sidebar.selectedRecording {
             chats = Chat.about(recording.id)
             subject = "this meeting"

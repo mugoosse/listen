@@ -146,6 +146,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A sentence can be deleted, and an emptied field still does not mean that
 - A person is a name string, and that is the whole identity model
 - The card's one verb goes to the person, not to the list behind it
+- The roster is a lens now, which reverses the note under `Sidebar.Row`
 - Nobody wanted the library narrowed by a speaker
 - Renaming somebody everywhere is the first edit that touches many recordings
 - `Me` stays `Me` on disk, whatever you call yourself
@@ -213,6 +214,8 @@ The three things written about a recording rather than extracted from it.
 - Adding a field to `StoredTranscript` needs `init(from:)` by hand
 - Two dictionaries, not one shared file
 - A tag is a name string, and the vocabulary is derived
+- `tag:job ` looks finished and is not, and the field lifted the wrong pill
+- `kind:` is not a predicate on a recording, and `apply(to:)` ignores it
 - Lenses stack, and `RecordingFilter` is why there is not a fourth predicate
 - The server is no longer read-only, and notes and tags are the whole exception
 - A note belongs to the library, not to a recording
@@ -227,6 +230,9 @@ The three things written about a recording rather than extracted from it.
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
 
+- The three collections are one list, and the switch is a word you type
+- The heading is a button, and it is the first one here that answers to accessibility
+- Three things about the search field that are not obvious
 - The recording in progress is not in the library
 - One elapsed clock per screen, and the row is the one that always counts
 - A sidebar reload is not somebody choosing a recording
@@ -252,7 +258,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Building the mixdown on the main thread froze the first press of play
 - The transcript is never filtered, and the arrays are why it could not be
 - The waveform dims everybody but one, and that is where a quiet speaker is
-- The to-do list is a lens, and deliberately not a status on every row
+- The to-do list is a lens, and the row that offered it was a nag
 - A hidden view held the divider, and the sidebar would not drag at all
 - The gear and the way out are in the title bar, and the rows they replaced are gone
 - The recording panel can be put away, and the dismissal has to survive a menu rebuild

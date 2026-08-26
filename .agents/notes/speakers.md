@@ -541,6 +541,31 @@ copied recordings: pressing the chip gives a popover whose last button is
 zero popovers on screen and the split view showing the People roster with
 Céline's page beside it.
 
+### The roster is a lens now, which reverses the note under `Sidebar.Row`
+
+`Sidebar.Row` said that listing every person over an unfiltered library would be
+the People tab again under another name, and `matchingPeople` returned nothing
+while the field was empty because of it. `kind:people` now lists the whole
+roster, and the reversal is deliberate rather than an oversight.
+
+The objection was to the roster appearing **unasked**. With a People pill on the
+row above the list and one click from off, it is a filtered view somebody
+requested rather than the default state of the window. Without the reversal,
+deleting the People collection takes with it the only way to browse the people
+you cannot already name, which is exactly the case a roster is for. Cmd-Shift-P
+is the keystroke, beside Cmd-U in the View menu, because both are lenses on the
+one list now.
+
+**A tag lens still disqualifies a person card**, and the unnamed lens still
+does: no tag says anything about a person, so a card surviving one would be a
+row the filter did not consider rather than a row it kept. Only the kind lens is
+the exception.
+
+**`ContactBook.matching("")` returns the whole address book, not none.** With
+nothing typed the roster is complete already, because `People.roster(in:)` folds
+the contact book in and sorts it; asking again appended every contact on the Mac
+a second time. The guard is an early return, not a filter.
+
 ### Nobody wanted the library narrowed by a speaker
 
 "Show Only Nick" is gone, and so is the lens behind it. Asked for directly, on

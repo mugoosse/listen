@@ -1,5 +1,44 @@
 import Foundation
 
+/// Which kind of row a search may produce.
+///
+/// This was three segments of a control at the top of the sidebar and is now a
+/// word you type or a heading you click. The difference is not cosmetic: a
+/// segment is a place you are in and have to leave, so there was no way to
+/// express "all three", and pressing Notes on a library with none read as the
+/// control being broken rather than as an empty answer. A lens is a state with
+/// an off switch, and its absence is the whole library.
+///
+/// The raw values are what `kind:` accepts, and `alternates` is what somebody
+/// types when they have not read anything. Singular because that is how a
+/// person says it, `meeting` because that is what a recording is, and `speaker`
+/// because that is the word the transcript uses.
+enum LibraryKind: String, CaseIterable {
+    case recordings, people, notes
+
+    var label: String {
+        switch self {
+        case .recordings: return "Recordings"
+        case .people:     return "People"
+        case .notes:      return "Notes"
+        }
+    }
+
+    private var alternates: [String] {
+        switch self {
+        case .recordings: return ["recording", "meeting", "meetings", "rec"]
+        case .people:     return ["person", "speaker", "speakers"]
+        case .notes:      return ["note"]
+        }
+    }
+
+    /// The kind this word names, or nil.
+    static func named(_ word: String) -> LibraryKind? {
+        let wanted = word.lowercased()
+        return allCases.first { $0.rawValue == wanted || $0.alternates.contains(wanted) }
+    }
+}
+
 /// How the library is narrowed, in one place.
 ///
 /// This predicate used to be written out three times, in the sidebar, in
@@ -40,10 +79,24 @@ struct RecordingFilter {
     /// and not to `metadata.state`, which is wrong in both directions.
     var needsSpeakers = false
 
+    /// Which kind of row the caller may show.
+    ///
+    /// **`apply(to:)` ignores this on purpose, and that is the whole point of
+    /// the comment.** Every other field here is a question about a recording,
+    /// so it can be answered one recording at a time. This one is a question
+    /// about *which lists to consult at all*, and only something holding the
+    /// recordings, the notes and the roster together can answer it. It lives
+    /// here because the parser is the thing that must not be written twice, not
+    /// because the predicate belongs to this type.
+    ///
+    /// So the CLI and the MCP server never set it and lose nothing: they are
+    /// already asking about recordings by having called this at all.
+    var kind: LibraryKind?
+
     var isEmpty: Bool {
         query.trimmingCharacters(in: .whitespaces).isEmpty
             && people.isEmpty && tags.isEmpty && after == nil && before == nil
-            && !needsSpeakers
+            && !needsSpeakers && kind == nil
     }
 
     func apply(to library: [Recording]) -> [Recording] {
@@ -104,12 +157,17 @@ struct RecordingFilter {
         return out
     }
 
-    // MARK: - `tag:` in a search field
+    // MARK: - Operators in a search field
 
-    /// Pull `tag:` terms out of a search string, leaving the rest as the query.
+    /// Every operator the search field understands, as the prefix it is typed
+    /// with. Used here and by the field's completion, which must not invent a
+    /// vocabulary this cannot read back.
+    static let operators = ["tag:", "kind:", "is:"]
+
+    /// Pull operators out of a search string, leaving the rest as the query.
     ///
-    /// Three forms work, and they have to, because a tag can have a space in it
-    /// and a search field has no other way to say where one ends:
+    /// Three forms work for `tag:`, and they have to, because a tag can have a
+    /// space in it and a search field has no other way to say where one ends:
     ///
     ///     tag:kinsight              one word
     ///     tag:"job hunt"            quoted, taken literally
@@ -122,6 +180,15 @@ struct RecordingFilter {
     /// known vocabulary is what makes this unambiguous rather than clever: it
     /// is the same accept-what-they-meant rule `Notes.find` uses for a slug or
     /// a title.
+    ///
+    /// `kind:` and `is:` are the same word, and both are here because they are
+    /// two different pieces of muscle memory: `is:` from GitHub and Gmail,
+    /// `kind:` from Spotlight. A value neither of them recognises is left in
+    /// the query rather than swallowed, so a typo searches for itself instead
+    /// of silently filtering on nothing.
+    ///
+    /// `is:unnamed` sets `needsSpeakers`, which is the lens the to-do row above
+    /// the list already sets. One state, two ways in.
     static func parse(_ text: String, knownTags: [String]) -> RecordingFilter {
         var filter = RecordingFilter()
         var words: [String] = []
@@ -130,7 +197,23 @@ struct RecordingFilter {
         var i = 0
         while i < tokens.count {
             let token = tokens[i]
-            guard token.lowercased().hasPrefix("tag:") else {
+            let low = token.lowercased()
+
+            if low.hasPrefix("kind:") || low.hasPrefix("is:") {
+                let head = String(token[token.index(after: token.firstIndex(of: ":")!)...])
+                if let kind = LibraryKind.named(head) {
+                    filter.kind = kind
+                } else if head.lowercased() == "unnamed" || head.lowercased() == "unlabelled" {
+                    filter.needsSpeakers = true
+                } else {
+                    // Not a word this understands, so it stays a search term.
+                    words.append(token)
+                }
+                i += 1
+                continue
+            }
+
+            guard low.hasPrefix("tag:") else {
                 words.append(token)
                 i += 1
                 continue
@@ -155,7 +238,10 @@ struct RecordingFilter {
             // from every position.
             for step in 1..<min(6, tokens.count - i) {
                 let next = tokens[i + step]
-                if next.lowercased().hasPrefix("tag:") { break }
+                // Any operator ends the run, not just another `tag:`. Without
+                // the other two, `tag:job kind:notes` reads "job kind:notes" as
+                // a candidate tag name and the second operator disappears.
+                if Self.operators.contains(where: { next.lowercased().hasPrefix($0) }) { break }
                 joined += " " + next
                 if knownTags.contains(where: { Tags.matches($0, joined) }) {
                     best = joined
@@ -189,6 +275,47 @@ struct RecordingFilter {
         }
         if !current.isEmpty { out.append(current) }
         return out
+    }
+
+    /// Is the operator at the end of this text still being typed?
+    ///
+    /// **The trap that made this necessary, found by prototyping the field
+    /// rather than by reading it.** The search field lifts a finished operator
+    /// out of itself and into a pill, and "finished" looked like "followed by a
+    /// space". Typing `tag:job hunt` passes through `tag:job ` on the way,
+    /// which satisfies that test, so the field lifted a `#job` pill matching
+    /// nothing and left the word "hunt" stranded behind it. The greedy rule
+    /// above cannot help: it needs words that have not been typed yet.
+    ///
+    /// So a value that is still a prefix of a longer known tag waits, and the
+    /// completion list under the field is what says so. Return is the way to
+    /// finish a value this holds, which is what somebody who really means a tag
+    /// nobody has will press.
+    static func isUnfinished(_ text: String, knownTags: [String]) -> Bool {
+        guard let value = trailingTagValue(text) else { return false }
+        let wanted = value.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !wanted.isEmpty else { return false }
+        return knownTags.contains { $0.lowercased().hasPrefix(wanted + " ") }
+    }
+
+    /// Everything after the last `tag:` that starts a token, or nil.
+    ///
+    /// It runs to the end of the string rather than to the next space, because
+    /// a tag value is the one operand here that can contain one. A quoted value
+    /// returns nil: the quotes have already said where it ends, so there is
+    /// nothing left for the caller to wait for.
+    static func trailingTagValue(_ text: String) -> String? {
+        var best: String?
+        var from = text.startIndex
+        while let found = text.range(of: "tag:", options: .caseInsensitive,
+                                     range: from..<text.endIndex) {
+            let startsToken = found.lowerBound == text.startIndex
+                || text[text.index(before: found.lowerBound)].isWhitespace
+            if startsToken { best = String(text[found.upperBound...]) }
+            from = found.upperBound
+        }
+        guard let best, !best.contains("\"") else { return nil }
+        return best
     }
 }
 

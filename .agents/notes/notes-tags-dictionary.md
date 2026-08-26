@@ -188,6 +188,50 @@ rectangle when the band is collapsed, because a popover anchored to a
 zero-height rect opens and closes inside the same call reporting
 `isShown == false`.
 
+### `tag:job ` looks finished and is not, and the field lifted the wrong pill
+
+The search field takes a finished operator out of itself and makes it a pill,
+and the first version's test for "finished" was "followed by a space". Typing
+`tag:job hunt` passes through `tag:job ` on the way, which passes that test, so
+the field lifted a `#job` pill matching nothing and left the word "hunt"
+stranded behind it. The greedy rule below cannot help: it needs words that have
+not been typed yet.
+
+`RecordingFilter.isUnfinished` is the fix. A value that is still a prefix of a
+longer known tag waits, and the completion list under the field is what says so;
+Return finishes a value it is holding, which is what somebody who really means a
+tag nobody has will press. `trailingTagValue` is the half that finds the operand,
+and it runs to the end of the string rather than to the next space, because a tag
+value is the one operand here that can contain one. A quoted value returns nil:
+the quotes have already said where it ends.
+
+**Found by building the field as a throwaway prototype rather than by reading
+the code.** It is the kind of bug that only exists between two rules that are
+each correct, and neither `parse` nor the lift looks wrong on its own.
+
+The same function is what the completion reads, deliberately: a completion
+offering a word `parse` does not know is a filter that appears to work and
+quietly searches for its own name.
+
+### `kind:` is not a predicate on a recording, and `apply(to:)` ignores it
+
+`RecordingFilter.kind` is a `LibraryKind`, and it is the one field on that struct
+that `apply(to:)` does not consult. Every other field is a question about a
+recording, so it can be answered one recording at a time; this one is a question
+about *which lists to consult at all*, and only something holding the recordings,
+the notes and the roster together can answer it. The sidebar does.
+
+It lives on `RecordingFilter` anyway because the **parser** is the thing that
+must not be written twice. The CLI and the MCP server never set it and lose
+nothing: they are already asking about recordings by having called this at all.
+
+`is:unnamed` maps to `needsSpeakers`, which is the lens the to-do row above the
+list already sets. One state, two ways in.
+
+**The greedy tag run has to break on every operator, not just on another
+`tag:`.** Without that, `tag:job kind:notes` reads "job kind:notes" as a
+candidate tag name and the second operator disappears into the first.
+
 ### Lenses stack, and `RecordingFilter` is why there is not a fourth predicate
 
 The sidebar's `speakerFilter` became a list of `Lens`, drawn as a row of

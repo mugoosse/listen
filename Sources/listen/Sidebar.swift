@@ -28,7 +28,15 @@ final class SidebarViewController: NSViewController {
     /// People tab again under another name. A search is the one moment somebody
     /// has a name in mind, which is exactly when the card is worth showing.
     private enum Row {
-        case header(String)
+        /// A heading, and the lens it sets when there is one.
+        ///
+        /// A day heading sets nothing: "Today" is not a kind, and a lens that
+        /// narrowed the library to one date is a filter nobody asked for from a
+        /// control that looks like a label. Only the three kind headings are
+        /// buttons, and only while no kind lens is already on, because a
+        /// heading offering to show what is already shown is a control that
+        /// does nothing.
+        case header(String, Lens?)
         case recording(Recording)
         case note(Note)
         case person(Person)
@@ -58,9 +66,90 @@ final class SidebarViewController: NSViewController {
         /// the only lens that is a question about the library as a whole rather
         /// than about a thing you arrived at holding.
         case unnamed
+        /// Which kind of row the list may show, which is what the three
+        /// segments above this used to be. See `LibraryKind`.
+        case kind(LibraryKind)
+
+        /// What this reads as on its pill.
+        var title: String {
+            switch self {
+            case .tag(let name): return "#" + name
+            case .unnamed:       return "Needs a speaker"
+            case .kind(let k):   return k.label
+            }
+        }
+
+        /// The pill's tooltip, which is what clicking it does rather than what
+        /// it says: see `renderLenses` for why the title is not overwritten.
+        var explanation: String {
+            switch self {
+            case .tag(let name):
+                return "Only the recordings tagged #\(name). Click to drop this filter."
+            case .unnamed:
+                return "Only the recordings with a voice nobody has named. "
+                    + "Click to drop this filter."
+            case .kind(let k):
+                return "Only \(k.label.lowercased()). Click to drop this filter."
+            }
+        }
+
+        /// The operator that would set this, for putting a pill back into the
+        /// field. Backspace at the head of an empty field is the one gesture
+        /// that runs the lift backwards, and a token that cannot be re-typed is
+        /// a token you can only delete.
+        var typed: String {
+            switch self {
+            case .tag(let name):
+                return name.contains(" ") ? "tag:\"\(name)\"" : "tag:" + name
+            case .unnamed:     return "is:unnamed"
+            case .kind(let k): return "kind:" + k.rawValue
+            }
+        }
+
+        /// A stable name for `dropLens`, which only gets the button back.
+        var id: String {
+            switch self {
+            case .tag(let name): return "tag:" + name
+            case .unnamed:       return "unnamed"
+            case .kind(let k):   return "kind:" + k.rawValue
+            }
+        }
     }
 
     private var lenses: [Lens] = []
+
+    /// The kind lens, if one is on.
+    private var kindLens: LibraryKind? {
+        for lens in lenses { if case .kind(let k) = lens { return k } }
+        return nil
+    }
+
+    /// True while the list is sectioned by kind rather than by day.
+    ///
+    /// **Sections are by kind while you are searching and by day while you are
+    /// browsing.** Chronology is what you want from a library and kind is what
+    /// you want from a result set: a search is the one moment the answer to
+    /// "what sort of thing is this" outranks "when was it". It is also what
+    /// gives all three kinds a heading to click, which is the whole of the
+    /// discoverable route to the kind lens. With notes sorted into the days
+    /// beside recordings there was exactly one heading in the list that named a
+    /// kind, so the affordance could only ever have worked for People.
+    ///
+    /// The day each row belongs to moves into its subtitle when this is on, so
+    /// nothing is lost with the heading that carried it.
+    private var sectionsByKind = false
+
+    /// The tags the magnifier's menu was last built from.
+    ///
+    /// `searchMenuTemplate` is copied when the menu opens rather than consulted
+    /// live, so a template built once at `loadView` lists the tags that existed
+    /// at launch for ever. Rebuilt from `reload` when the vocabulary has
+    /// actually changed, which is rare: adding a tag to a recording.
+    private var menuTags: [String] = []
+
+    /// True while `complete(_:)` is running, so the text change it makes does
+    /// not ask for a completion of the completion.
+    private var completing = false
 
     /// The row that offers the to-do list, above the list and only while there
     /// is one.
@@ -74,38 +163,10 @@ final class SidebarViewController: NSViewController {
     /// the 13 exist. This row is that sentence, it counts rather than warns, and
     /// it is gone entirely the moment the count is zero, so a library with
     /// nothing outstanding looks exactly as it did before this existed.
-    private var todoRow: SidebarRow!
-    private var todoHeight: NSLayoutConstraint!
-    private var todoTop: NSLayoutConstraint!
-
-    /// Where a row's content starts, matching the app icons below.
-    ///
-    /// The to-do row is the only row left using it. Record was the row above the
-    /// list until it became `RecordButton`, and Settings was the row below it
-    /// until it became the gear in the title bar: see `RecordButton` for why the
-    /// first left, which is that a collapsed sidebar took the app's primary
-    /// action off the screen with it.
-    ///
-    /// An inset table indents its rows and `RecordingCell` insets its own
-    /// content inside that. Measured against the result rather than added up
-    /// from the two constants: at 18 this row's icon sat four points left of
-    /// everything under it, which is exactly close enough to look like a
-    /// mistake rather than a margin.
-    ///
-    /// It used to line up with the recording *titles*, because there was
-    /// nothing else in the list to line up with. Now that a recording carries
-    /// its app's icon, the sidebar has two columns and not three: this row's
-    /// icon over the app icons, this row's label over the titles. Measured off
-    /// the screen when both rows were still here, in points from the same edge:
-    /// icon ink at 33 (New Recording), 32 (Settings, a narrower glyph in the
-    /// same box) and 34 (an app icon, which fills its box); text ink at 56 and
-    /// 58. What is left is the glyphs' own side bearings.
-    private static let rowInset: CGFloat = 22
-
-    /// Where a row's *background* starts: level with the search field, so the
-    /// highlight is the width of the control above it rather than a shorter bar
-    /// floating inside the same column.
-    private static let rowEdge: CGFloat = 10
+    /// How many recordings were waiting on a name when the magnifier's menu
+    /// was last built. See `menuTags`: the menu is a template, so a count in it
+    /// is frozen at the moment it was made unless something notices.
+    private var menuWaiting = -1
 
     private var filterBar: NSView!
     private var filterStack: NSStackView!
@@ -166,6 +227,18 @@ final class SidebarViewController: NSViewController {
         searchField.placeholderString = "Search"
         searchField.target = self
         searchField.action = #selector(searchChanged)
+        // For the lift, the completion and the backspace that puts a pill back.
+        // `controlTextDidChange` is the only place the field's text can be read
+        // as it is typed: the `action` above fires on Return and on the search
+        // field's own delay, which is far too late to take an operator out from
+        // under the caret.
+        searchField.delegate = self
+        // The magnifier's menu, which is this app's "show search options". See
+        // `buildSearchMenu`: it costs no width in a 280 point sidebar, which a
+        // standing row of filter chips does.
+        // Built with no count, because `loadView` runs before anything has
+        // read the library. `reload` rebuilds it with one on the first pass.
+        searchField.searchMenuTemplate = buildSearchMenu(tags: knownTags, waiting: 0)
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
         table = NSTableView()
@@ -217,13 +290,8 @@ final class SidebarViewController: NSViewController {
         filterBar.addSubview(filterStack)
         filterBar.isHidden = true
 
-        todoRow = row("", "person.crop.circle.badge.questionmark",
-                      #selector(showUnnamed))
-        todoRow.isHidden = true
-
         container.addSubview(searchField)
         container.addSubview(filterBar)
-        container.addSubview(todoRow)
         container.addSubview(scroll)
         filterHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
         // Collapses to nothing, spacing included. A hidden view keeps its
@@ -231,9 +299,6 @@ final class SidebarViewController: NSViewController {
         // than it did before this row existed.
         filterTop = filterBar.topAnchor.constraint(equalTo: searchField.bottomAnchor,
                                                    constant: 0)
-        todoTop = todoRow.topAnchor.constraint(equalTo: filterBar.bottomAnchor,
-                                               constant: 0)
-        todoHeight = todoRow.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             // Where the collection picker used to start: clear of the traffic
             // lights, which sit over the content because the window uses a
@@ -255,18 +320,7 @@ final class SidebarViewController: NSViewController {
             filterStack.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
             filterStack.trailingAnchor.constraint(lessThanOrEqualTo: filterBar.trailingAnchor),
 
-            // Collapses to nothing, spacing included, for the reason the lens
-            // row above it does: a hidden view keeps its frame, and a library
-            // with nothing outstanding must look exactly as it did before this
-            // row existed.
-            todoTop,
-            todoHeight,
-            todoRow.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                             constant: Self.rowEdge),
-            todoRow.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                              constant: -Self.rowEdge),
-
-            scroll.topAnchor.constraint(equalTo: todoRow.bottomAnchor, constant: 10),
+            scroll.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             // To the bottom of the sidebar. The list used to stop at a hairline
@@ -318,20 +372,36 @@ final class SidebarViewController: NSViewController {
             switch lens {
             case .tag(let name): filter.tags.append(name)
             case .unnamed: filter.needsSpeakers = true
+            case .kind(let k): filter.kind = k
             }
         }
 
-        let matching = filter.apply(to: library)
+        let kind = filter.kind
+        // A query still being typed sections the list even before it matches
+        // anything, so the headings do not appear and disappear under the
+        // pointer as somebody types.
+        sectionsByKind = !filter.query.trimmingCharacters(in: .whitespaces).isEmpty
+            || kind != nil
+
+        let matching = kind == nil || kind == .recordings ? filter.apply(to: library) : []
 
         // Notes stand alongside recordings, sorted into the same days, because
         // a note is a page that happens to have no audio. Only the ones with no
         // single page to live on: see `Row`.
         //
-        // Hidden entirely while a lens is on. Every lens asks something only a
-        // recording can answer, so a note surviving a filter for "the calls
-        // Ryan was in" would be a row the filter did not consider rather than a
-        // row it kept.
-        let noteRows = lenses.isEmpty && !filter.needsSpeakers
+        // Hidden entirely while a tag or the unnamed lens is on. Both ask
+        // something only a recording can answer, so a note surviving a filter
+        // for "the calls tagged #kinsight" would be a row the filter did not
+        // consider rather than a row it kept.
+        //
+        // **The kind lens is the exception, and it has to be**, because it is
+        // the one lens that is about notes as well: `kind:notes` narrowing the
+        // list to nothing would be the Notes tab's empty screen with an extra
+        // step.
+        let noteLensesAllow = !lenses.contains { if case .kind = $0 { return false }
+                                                 return true }
+        let noteRows = noteLensesAllow && !filter.needsSpeakers
+            && (kind == nil || kind == .notes)
             ? Notes.all().filter { Self.pageless($0) && Self.matches($0, query: filter.query) }
             : []
 
@@ -351,7 +421,13 @@ final class SidebarViewController: NSViewController {
         // written in the last minute would otherwise sit above it.
         if let live { items.insert((live.date, .recording(live)), at: 0) }
 
-        refreshTodo(in: library)
+        // The magnifier lists the tags that exist and how much labelling is
+        // outstanding, so it is rebuilt when either changes. See `menuTags`.
+        let tags = Tags.all(in: library).map(\.name)
+        let waiting = waitingCount(in: library)
+        if tags != menuTags || waiting != menuWaiting {
+            searchField.searchMenuTemplate = buildSearchMenu(tags: tags, waiting: waiting)
+        }
 
         rows = []
 
@@ -363,22 +439,68 @@ final class SidebarViewController: NSViewController {
         // One section above the library says what they are and leaves the rest
         // of the list meaning exactly what it meant before anybody typed.
         let people = matchingPeople(filter.query, needsSpeakers: filter.needsSpeakers,
-                                    in: library)
+                                    kind: kind, in: library)
         if !people.isEmpty {
-            rows.append(.header(people.count == 1 ? "Person" : "People"))
+            // Singular when there is one, and it is still the kind's heading:
+            // the lens it sets is People either way.
+            rows.append(.header(people.count == 1 ? "Person" : "People",
+                                offer(.kind(.people), unless: kind)))
             rows.append(contentsOf: people.map { Row.person($0) })
+        }
+
+        guard !sectionsByKind else {
+            // Searching: one heading per kind, in the order somebody reads them
+            // in. People are already above; notes before recordings because
+            // there are far fewer of them and a section that scrolls off the
+            // bottom is a section nobody knows is there.
+            let notes = items.compactMap { item -> Row? in
+                if case .note = item.row { return item.row }
+                return nil
+            }
+            if !notes.isEmpty {
+                rows.append(.header("Notes", offer(.kind(.notes), unless: kind)))
+                rows.append(contentsOf: notes)
+            }
+            let recordings = items.compactMap { item -> Row? in
+                if case .recording = item.row { return item.row }
+                return nil
+            }
+            if !recordings.isEmpty {
+                rows.append(.header("Recordings", offer(.kind(.recordings), unless: kind)))
+                rows.append(contentsOf: recordings)
+            }
+            finishReload(keepID: keepID)
+            return
         }
 
         var lastHeading: String?
         for item in items {
             let heading = Self.heading(for: item.date)
             if heading != lastHeading {
-                rows.append(.header(heading))
+                rows.append(.header(heading, nil))
                 lastHeading = heading
             }
             rows.append(item.row)
         }
 
+        finishReload(keepID: keepID)
+    }
+
+    /// A heading's lens, or nil when that lens is already on.
+    ///
+    /// A heading offering to show what is already shown is a control that does
+    /// nothing, and the pill above the list is what turns it back off.
+    private func offer(_ lens: Lens, unless current: LibraryKind?) -> Lens? {
+        current == nil ? lens : nil
+    }
+
+    /// Draw the rows and put the selection back on whatever the pane is showing.
+    ///
+    /// Split out of `reload` when the list gained a second way to be assembled.
+    /// Two copies of the three-way "keep what is open" rule is two places for
+    /// the next kind of row to be forgotten, and this is the half that decides
+    /// whether a rename silences the recording being renamed.
+    private func finishReload(keepID: String?) {
         reloading = true
         table.reloadData()
 
@@ -447,17 +569,41 @@ final class SidebarViewController: NSViewController {
     /// for a field somebody is still typing into: "marc" would find nobody and
     /// read as "no such person" rather than as "keep going".
     ///
-    /// Empty while nothing is typed, and empty while a lens is on: a lens is
-    /// already a claim about which recordings are interesting, and a person card
-    /// is not one of them.
+    /// Empty while nothing is typed, and empty while a tag or the unnamed lens
+    /// is on: both are claims about which recordings are interesting, and a
+    /// person card is not one of them.
+    ///
+    /// **`kind:people` is the exception, and it lists the whole roster.** This
+    /// reverses the rule written above `Row`, which was that listing everybody
+    /// over an unfiltered library would be the People tab under another name.
+    /// That objection was to the roster appearing *unasked*: with a People pill
+    /// visibly on the row above and one click from off, it is a filtered view
+    /// somebody requested rather than the default state of the window. Without
+    /// the reversal, deleting the People collection would take with it the only
+    /// way to browse the people you cannot already name, which is exactly the
+    /// case a roster is for.
     private func matchingPeople(_ query: String, needsSpeakers: Bool,
-                                in library: [Recording]) -> [Person] {
+                                kind: LibraryKind?, in library: [Recording]) -> [Person] {
+        guard !needsSpeakers, kind == nil || kind == .people else { return [] }
+        // A tag lens is still disqualifying: no tag says anything about a
+        // person, so a card surviving one would be a row the filter did not
+        // consider.
+        guard !lenses.contains(where: { if case .kind = $0 { return false }
+                                        return true }) else { return [] }
+
         let wanted = query.trimmingCharacters(in: .whitespaces)
-        guard !wanted.isEmpty, lenses.isEmpty, !needsSpeakers else { return [] }
+        guard !wanted.isEmpty || kind == .people else { return [] }
 
         var found = People.roster(in: library).filter {
-            $0.display.localizedCaseInsensitiveContains(wanted)
+            wanted.isEmpty || $0.display.localizedCaseInsensitiveContains(wanted)
         }
+        // Nothing typed means the whole roster, which `People.roster` has
+        // already folded the contact book into and sorted. Asking
+        // `ContactBook.matching("")` here as well would append the entire
+        // address book a second time, because an empty query matches every
+        // contact rather than none.
+        guard !wanted.isEmpty else { return found }
+
         // A contact with no recordings, appended rather than merged: anybody the
         // roster already knows is there with their real counts, and `Person.summary`
         // says "no recordings yet" for the rest.
@@ -540,31 +686,77 @@ final class SidebarViewController: NSViewController {
         return true
     }
 
-    /// How many recordings are waiting on a name, said once above the list.
+    /// How many recordings are waiting on a name.
     ///
-    /// Counted from the **unfiltered** library, so the row goes on saying how
-    /// much work there is while a search is narrowing the list to something
-    /// else. A count that moved with the search would be answering a question
-    /// nobody asked and would read as zero the moment somebody typed.
+    /// Counted from the **unfiltered** library, so the number is about the
+    /// library rather than about whatever is on screen: one that moved with the
+    /// search would read as zero the moment somebody typed.
     ///
-    /// Hidden while the lens is on, because then the list *is* the answer and a
-    /// row offering to show what is already shown is a control that does
-    /// nothing. The lens pill above it is what turns it back off.
-    private func refreshTodo(in library: [Recording]) {
-        let waiting = lenses.contains(.unnamed) ? 0 : Labelling.waiting(in: library).count
-        let show = waiting > 0
-        todoRow.isHidden = !show
-        todoHeight.constant = show ? 32 : 0
-        todoTop.constant = show ? 10 : 0
-        guard show else { return }
-        todoRow.title = waiting == 1
-            ? "1 recording needs a speaker"
-            : "\(waiting) recordings need a speaker"
-        todoRow.toolTip = "Show only the recordings with a voice nobody has named."
+    /// Cheap enough to ask on every reload. `Labelling.waits` is answered from
+    /// a cache keyed on each `turns.json` stamp, which is why the lens is
+    /// ordered first among the three predicates that read transcripts.
+    private func waitingCount(in library: [Recording]) -> Int {
+        Labelling.waiting(in: library).count
     }
 
     @objc private func showUnnamed() {
         filter(byUnnamedSpeakers: true)
+    }
+
+    /// A section heading was clicked, so narrow the list to that kind.
+    ///
+    /// The identifier carries the lens rather than a closure per row, because
+    /// the header views are made and thrown away by the table on every reload
+    /// and a captured lens would outlive the row it was made for.
+    @objc private func headerClicked(_ sender: NSView) {
+        guard let id = sender.identifier?.rawValue,
+              let kind = LibraryKind.allCases.first(where: { "kind:" + $0.rawValue == id })
+        else { return }
+        add(.kind(kind))
+    }
+
+    /// Show only one kind of row, from outside the list.
+    ///
+    /// The route the People menu item takes now that the roster is not a
+    /// collection to navigate to.
+    func filter(byKind kind: LibraryKind) {
+        add(.kind(kind))
+    }
+
+    /// Open somebody's card, with the list saying why it looks like that.
+    ///
+    /// **The one arrival that replaces the People collection.** A chip's menu
+    /// used to swap the whole sidebar for a roster behind a tab strip, which is
+    /// a screen with nothing on it explaining how you got there and a Notes tab
+    /// one click away that had nothing to do with the question. This types the
+    /// name into the field instead, so the reason the list has changed is the
+    /// first thing on it, and the way back is the ✕ the field already has.
+    ///
+    /// The name and not a `kind:people` lens, because the question a chip asks
+    /// is "who is this", not "show me everybody". The recordings they are in
+    /// come up under it, which is the other half of that question.
+    func reveal(person: Person) {
+        loadViewIfNeeded()
+        lenses = []
+        let name = person.display
+        searchField.stringValue = name
+        query = name
+        // Set before the reload, so `finishReload` puts the selection back on
+        // them the way it does for a person whose row survived a reload.
+        selectedPerson = person
+        selectedRecording = nil
+        selectedNote = nil
+        renderLenses()
+        if let row = rows.firstIndex(where: {
+            if case .person(let p) = $0 { return p.label == person.label }
+            return false
+        }) {
+            table.scrollRowToVisible(row)
+        }
+        // Explicitly, because the selection above was made with `reloading`
+        // set: that is what stops a rebuild being reported as somebody choosing
+        // a row, and this arrival really is a choice.
+        onSelectPerson?(person)
     }
 
     /// Also show only the recordings with somebody unnamed in them.
@@ -589,9 +781,29 @@ final class SidebarViewController: NSViewController {
             renderLenses()
             return
         }
-        guard !lenses.contains(next) else { return }
-        lenses.append(next)
+        guard insert(next) else { return }
         renderLenses()
+    }
+
+    /// Put a lens in the list without redrawing anything.
+    ///
+    /// Split out for the lift, which can take three operators out of the field
+    /// in one keystroke: `add` renders and reloads on each call, so a paste of
+    /// `kind:notes tag:kinsight` rebuilt the whole library list twice to show
+    /// one row of pills.
+    @discardableResult
+    private func insert(_ next: Lens) -> Bool {
+        guard !lenses.contains(next) else { return false }
+        // **Two kind lenses cannot stack.** Every other lens here is ANDed, and
+        // ANDing "only people" with "only notes" is a list that is empty by
+        // construction rather than because nothing matched. So a second kind
+        // replaces the first, which is also what somebody clicking a second
+        // heading means.
+        if case .kind = next {
+            lenses.removeAll { if case .kind = $0 { return true }; return false }
+        }
+        lenses.append(next)
+        return true
     }
 
     private func renderLenses() {
@@ -620,24 +832,15 @@ final class SidebarViewController: NSViewController {
             // does is the tooltip, which is `AXHelp`.
             pill.trailing = "✕"
 
-            switch lens {
-            case .tag(let name):
-                // The neutral wash a tag pill has. A tag is not somebody, so
-                // borrowing a person's colour would be the one token on screen
-                // whose colour means nothing.
-                pill.showPlain("#" + name)
-                pill.identifier = NSUserInterfaceItemIdentifier("tag:" + name)
-                pill.toolTip = "Only the recordings tagged #\(name). "
-                    + "Click to drop this filter."
-            case .unnamed:
-                // The same neutral wash, for the same reason: this lens is about
-                // a state of the library rather than about a person, so a
-                // person's colour would be a lie about what set it.
-                pill.showPlain("Needs a speaker")
-                pill.identifier = NSUserInterfaceItemIdentifier("unnamed")
-                pill.toolTip = "Only the recordings with a voice nobody has named. "
-                    + "Click to drop this filter."
-            }
+            // The neutral wash, for every one of them. A tag is not somebody, a
+            // state of the library is not somebody, and neither is a kind of
+            // row, so borrowing a person's colour would be the one token on
+            // screen whose colour means nothing. `Lens` owns the words: three
+            // switches over the same enum in three functions is three places
+            // for the fourth case to be forgotten.
+            pill.showPlain(lens.title)
+            pill.identifier = NSUserInterfaceItemIdentifier(lens.id)
+            pill.toolTip = lens.explanation
             filterStack.addArrangedSubview(pill)
             pill.widthAnchor.constraint(lessThanOrEqualToConstant: max(44, share))
                 .isActive = true
@@ -667,12 +870,7 @@ final class SidebarViewController: NSViewController {
 
     @objc private func dropLens(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue else { return }
-        lenses.removeAll { lens in
-            switch lens {
-            case .tag(let name): return id == "tag:" + name
-            case .unnamed: return id == "unnamed"
-            }
-        }
+        lenses.removeAll { $0.id == id }
         renderLenses()
     }
 
@@ -701,23 +899,8 @@ final class SidebarViewController: NSViewController {
               let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false)
                   as? RecordingCell
         else { return }
-        cell.configure(recording)
+        cell.configure(recording, dated: sectionsByKind)
     }
-
-    /// Put the segmented control back where the window says it should be.
-    ///
-    /// Each list carries its own copy of the same control, so clicking Notes on
-    /// this one leaves it reading "Notes" while this one is the list on screen.
-    /// Measured that way round: the sidebar came back to Recordings with the
-    /// segment still highlighting Notes, which reads as the control having
-    /// stopped working.
-    /// Nothing to put back in agreement: this list has no picker any more.
-    ///
-    /// Kept as a no-op rather than deleted so `enter(_:)` can go on telling all
-    /// three lists about a mode change without knowing which of them still draw
-    /// a control. People and Notes are still modes while the merge is being
-    /// tried out, and one of them is where the caller is heading.
-    func setCollection(_ collection: LibraryCollection) {}
 
     /// Is anything open, whatever kind it is?
     var hasSelection: Bool {
@@ -757,8 +940,155 @@ final class SidebarViewController: NSViewController {
     // MARK: - Actions
 
     @objc private func searchChanged() {
+        // Return, and the search field's own delay. `controlTextDidChange` has
+        // usually run first and left `query` correct already; this is what
+        // catches a value the lift is holding, which is the whole point of
+        // Return being the other way to finish one. See `liftOperators`.
+        liftOperators(finishing: true)
         query = searchField.stringValue
         reload()
+    }
+
+    // MARK: - Operators in the field
+
+    /// Take any finished operator out of the field and make it a pill.
+    ///
+    /// **The field holds free text and the row below it holds operators, and
+    /// nothing is ever in both.** The pill row already exists as *the* place
+    /// that says this list is not the whole library, so leaving `tag:kinsight`
+    /// sitting in the field would state the same fact twice, in two places that
+    /// can disagree. That is Drive's choice rather than Gmail's, and here it is
+    /// forced by a control that was already on screen.
+    ///
+    /// Finished means followed by a space, except when the value could still
+    /// grow: see `RecordingFilter.isUnfinished` for the `tag:job ` trap and why
+    /// this waits. `finishing` is Return, which says to take the value as typed
+    /// however incomplete it looks.
+    ///
+    /// Returns true when something moved, so the caller knows the field's text
+    /// has been rewritten under the caret.
+    @discardableResult
+    private func liftOperators(finishing: Bool = false) -> Bool {
+        let text = searchField.stringValue
+        guard finishing || text.last?.isWhitespace == true else { return false }
+        let known = knownTags
+        guard finishing || !RecordingFilter.isUnfinished(text, knownTags: known)
+        else { return false }
+
+        let parsed = RecordingFilter.parse(text, knownTags: known)
+        var moved = false
+        if let kind = parsed.kind { moved = insert(.kind(kind)) || moved }
+        if parsed.needsSpeakers { moved = insert(.unnamed) || moved }
+        for tag in parsed.tags { moved = insert(.tag(tag)) || moved }
+        // Nothing to lift, or every operator typed was one already on: either
+        // way the words have to come out of the field, or `tag:kinsight` stays
+        // in it as a search term matching no title in the library.
+        guard parsed.kind != nil || parsed.needsSpeakers || !parsed.tags.isEmpty
+        else { return false }
+
+        searchField.stringValue = parsed.query
+        query = parsed.query
+        // The caret goes to the end of what is left, which is where it was.
+        searchField.currentEditor()?
+            .selectedRange = NSRange(location: (parsed.query as NSString).length, length: 0)
+        if moved { renderLenses() } else { reload() }
+        return true
+    }
+
+    /// The tag vocabulary, which both the parser and the completion read.
+    private var knownTags: [String] { Tags.all().map(\.name) }
+
+    /// What the magnifier offers, which is this window's "show search options".
+    ///
+    /// **A menu rather than a row of chips under the field.** Gmail has a full
+    /// advanced-search sheet and Drive keeps a standing row of chips; at 280
+    /// points, with a to-do row and the meeting being recorded already
+    /// competing for the top of the list, a form is the wrong shape and a
+    /// permanent chip row is the wrong width. This costs no pixels at all and
+    /// is the control macOS users already expect the magnifier to have.
+    ///
+    /// **Every item names the operator it writes.** That is the one thing
+    /// Gmail's advanced form gets right and its chips do not: using the form
+    /// composes the query string in the box, so the discoverable route teaches
+    /// the typed one instead of being a parallel way to do the same thing.
+    private func buildSearchMenu(tags: [String], waiting: Int) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(Self.caption("Show only"))
+        for kind in LibraryKind.allCases {
+            menu.addItem(Self.option(kind.label, "kind:" + kind.rawValue,
+                                     target: self, action: #selector(pickKind(_:)),
+                                     represented: kind.rawValue))
+        }
+        menu.addItem(.separator())
+        menu.addItem(Self.caption("Narrow by"))
+        // **The count is here and nowhere else.** A row above the list used to
+        // carry it, and it was removed on request: some voices are never going
+        // to be named, so a permanent "5 recordings need a speaker" is a
+        // standing claim of outstanding work that will never reach zero, which
+        // is the definition of a nag rather than a to-do list. The number is
+        // still worth having, so it moved to the one place you only see by
+        // going to look. Absent entirely at zero, so an empty count is never
+        // printed.
+        menu.addItem(Self.option(waiting > 0 ? "Needs a speaker  (\(waiting))"
+                                             : "Needs a speaker",
+                                 "is:unnamed",
+                                 target: self, action: #selector(showUnnamed)))
+        if !tags.isEmpty {
+            for name in tags.prefix(Self.menuTagLimit) {
+                let typed = name.contains(" ") ? "tag:\"\(name)\"" : "tag:" + name
+                menu.addItem(Self.option("#" + name, typed,
+                                         target: self, action: #selector(pickTag(_:)),
+                                         represented: name))
+            }
+        }
+        menuTags = tags
+        menuWaiting = waiting
+        return menu
+    }
+
+    /// How many tags the magnifier lists before it stops.
+    ///
+    /// The menu is a way in, not the tag list: `tag:` in the field completes
+    /// against every one of them, and a menu long enough to scroll is a menu
+    /// nobody reads to the bottom of. Eight is what fits under the field
+    /// without the menu reaching the middle of the window at the height this
+    /// sidebar runs at.
+    private static let menuTagLimit = 8
+
+    private static func caption(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    /// One row of the magnifier's menu: what it does on the left, what it types
+    /// on the right, in the monospaced face an operator is read in.
+    private static func option(_ title: String, _ typed: String,
+                               target: AnyObject, action: Selector,
+                               represented: Any? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = target
+        item.representedObject = represented
+        let line = NSMutableAttributedString(
+            string: title,
+            attributes: [.font: NSFont.menuFont(ofSize: 0)])
+        line.append(NSAttributedString(
+            string: "   " + typed,
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                         .foregroundColor: NSColor.secondaryLabelColor]))
+        item.attributedTitle = line
+        return item
+    }
+
+    @objc private func pickKind(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let kind = LibraryKind(rawValue: raw) else { return }
+        add(.kind(kind))
+    }
+
+    @objc private func pickTag(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        add(.tag(name))
     }
 
     /// A click on the row that is already open closes it.
@@ -782,15 +1112,6 @@ final class SidebarViewController: NSViewController {
         // Double-click is rename, matching Finder. The single click already
         // means "show me this one".
         LibraryWindow.shared.renameSelected()
-    }
-
-    /// A full-width row: icon, then text, then nothing. The shape of a
-    /// navigation item rather than of a button, because that is what these are.
-    private func row(_ title: String, _ symbol: String, _ action: Selector) -> SidebarRow {
-        let button = SidebarRow(title: title, target: self, action: action,
-                                contentInset: Self.rowInset - Self.rowEdge)
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        return button
     }
 
     private func rowMenu() -> NSMenu {
@@ -829,26 +1150,34 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?,
                    row: Int) -> NSView? {
         switch rows[row] {
-        case .header(let title):
-            let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: 12, weight: .semibold)
-            label.textColor = .secondaryLabelColor
-            let holder = NSView()
-            label.translatesAutoresizingMaskIntoConstraints = false
-            holder.addSubview(label)
-            NSLayoutConstraint.activate([
-                // Level with the icon column below it, not four points inside
-                // it. A day heading, an app icon and New Recording's dot now
-                // share one edge, and every title in the list shares the next.
-                label.leadingAnchor.constraint(equalTo: holder.leadingAnchor,
-                                               constant: RecordingCell.textInset),
-                label.bottomAnchor.constraint(equalTo: holder.bottomAnchor, constant: -4),
-            ])
-            return holder
+        case .header(let title, let lens):
+            guard let lens else {
+                let label = NSTextField(labelWithString: title)
+                label.font = SectionHeader.font
+                label.textColor = .secondaryLabelColor
+                let holder = NSView()
+                label.translatesAutoresizingMaskIntoConstraints = false
+                holder.addSubview(label)
+                NSLayoutConstraint.activate([
+                    // Level with the icon column below it, not four points
+                    // inside it. A day heading, an app icon and New Recording's
+                    // dot now share one edge, and every title in the list
+                    // shares the next.
+                    label.leadingAnchor.constraint(equalTo: holder.leadingAnchor,
+                                                   constant: RecordingCell.textInset),
+                    label.bottomAnchor.constraint(equalTo: holder.bottomAnchor,
+                                                  constant: -4),
+                ])
+                return holder
+            }
+            let header = SectionHeader(title: title, target: self,
+                                       action: #selector(headerClicked(_:)))
+            header.identifier = NSUserInterfaceItemIdentifier(lens.id)
+            return header
 
         case .recording(let recording):
             let cell = RecordingCell()
-            cell.configure(recording)
+            cell.configure(recording, dated: sectionsByKind)
             return cell
 
         case .note(let note):
@@ -857,6 +1186,9 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             // being a `SpeakerPill`: a note in this list is the same object it
             // always was, so it should be drawn by the same code and not by a
             // copy of its numbers that can go out of step.
+            // No `dated:` here, unlike the recording above it: `NoteCell`
+            // already prints the note's date on every row, because the Notes
+            // collection it was written for had no day headings to carry one.
             let cell = NoteCell()
             cell.configure(note)
             return cell
@@ -915,6 +1247,127 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 
 // MARK: - Row menu
 
+// MARK: - The search field
+
+/// Typing an operator, and the two gestures that run it backwards.
+///
+/// The field is the only place any of this can be done, because
+/// `NSSearchField`'s `action` fires on Return and on its own delay: far too
+/// late to take an operator out from under a caret that has moved on.
+extension SidebarViewController: NSSearchFieldDelegate {
+    func controlTextDidChange(_ note: Notification) {
+        // The completion inserts text, which arrives back here. Without this
+        // the insertion asks to complete the thing it has just completed.
+        guard !completing else { return }
+        // Lift first: it rewrites the field, and `query` has to be what is left
+        // rather than what was typed.
+        guard !liftOperators() else { return }
+        query = searchField.stringValue
+        reload()
+        offerCompletion()
+    }
+
+    /// Backspace at the head of the field puts the last pill back as text.
+    ///
+    /// **The half that stops the lift feeling like a fight.** Without it a
+    /// token can only be dismissed, so a mistyped tag means clicking the pill
+    /// and typing the whole operator again, and the field appears to eat what
+    /// you wrote. This is the same gesture every token field on this platform
+    /// has, and `Lens.typed` is what makes it possible: a pill that cannot be
+    /// written back is a pill you can only delete.
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.deleteBackward(_:)),
+              textView.selectedRange() == NSRange(location: 0, length: 0),
+              let last = lenses.last
+        else { return false }
+
+        lenses.removeLast()
+        let restored = last.typed
+        let text = query.isEmpty ? restored : restored + " " + query
+        searchField.stringValue = text
+        query = text
+        // The caret lands at the end of what came back, not at the end of the
+        // line: what you are about to edit is the operator, and the words after
+        // it were already where you wanted them.
+        textView.selectedRange = NSRange(location: (restored as NSString).length, length: 0)
+        renderLenses()
+        return true
+    }
+
+    /// What `tag:` and `kind:` complete to.
+    ///
+    /// The candidates are the vocabulary the parser reads back, deliberately:
+    /// a completion offering a word `RecordingFilter.parse` does not know is a
+    /// filter that appears to work and quietly searches for its own name.
+    ///
+    /// Nothing is preselected. `complete(_:)` inserts the selected candidate as
+    /// it opens the list, so a default selection types over the value somebody
+    /// is halfway through, which is exactly the behaviour the lift already had
+    /// to be taught not to do.
+    func control(_ control: NSControl, textView: NSTextView, completions words: [String],
+                 forPartialWordRange charRange: NSRange,
+                 indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String] {
+        index.pointee = -1
+        guard let context = completionContext(in: textView.string, at: charRange)
+        else { return [] }
+        let typed = (textView.string as NSString).substring(with: charRange).lowercased()
+        let wanted = (context.stem + typed).lowercased()
+        return context.candidates
+            .filter { $0.lowercased().hasPrefix(wanted) }
+            // Only the part that is not already on screen: the range being
+            // replaced is the partial word, not the whole operand, so returning
+            // the full value writes the stem twice.
+            .map { String($0.dropFirst(context.stem.count)) }
+    }
+
+    /// Which operator the caret is inside, and what has already been typed of
+    /// its value before the range about to be replaced.
+    private struct Completion {
+        let candidates: [String]
+        /// The part of the value before `charRange`, which a multi-word tag can
+        /// have and a kind cannot.
+        let stem: String
+    }
+
+    private func completionContext(in text: String, at range: NSRange) -> Completion? {
+        let ns = text as NSString
+        guard range.location <= ns.length else { return nil }
+        let before = ns.substring(to: range.location)
+
+        // `kind:` and `is:` take one word, so the operator has to be right
+        // here. `unnamed` is on the list because `is:unnamed` is the typed form
+        // of the lens the to-do row sets, and somebody who has seen the pill is
+        // owed a way to type it.
+        let low = before.lowercased()
+        if low.hasSuffix("kind:") || low.hasSuffix("is:") {
+            return Completion(candidates: LibraryKind.allCases.map(\.rawValue) + ["unnamed"],
+                              stem: "")
+        }
+
+        // A tag value can contain spaces, so its operator may be several words
+        // back. `trailingTagValue` is the parser's own idea of where it starts,
+        // which is what keeps the completion and the parse agreeing.
+        guard let stem = RecordingFilter.trailingTagValue(before) else { return nil }
+        return Completion(candidates: knownTags, stem: stem)
+    }
+
+    /// Offer a completion, but only inside an operator.
+    ///
+    /// Calling `complete(_:)` on every keystroke would put a list under every
+    /// word somebody searches for, which is a spell-checker rather than a
+    /// filter.
+    private func offerCompletion() {
+        guard let editor = searchField.currentEditor() as? NSTextView else { return }
+        let range = editor.rangeForUserCompletion
+        guard range.location != NSNotFound,
+              completionContext(in: editor.string, at: range) != nil else { return }
+        completing = true
+        editor.complete(nil)
+        completing = false
+    }
+}
+
 extension SidebarViewController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         // Right-clicking a row selects it first, so the menu and the toolbar
@@ -955,12 +1408,19 @@ final class RecordingCell: NSView {
     /// The icon column, and the text column after it, are the sidebar's and not
     /// this cell's.
     ///
-    /// `SidebarViewController.rowInset` puts New Recording's icon 22 points in,
-    /// measured against what is under it, and `SidebarRow` puts its label
-    /// 16 + 8 after that. A row that reserves the
-    /// same 16 and then uses a gap of its own invention lands two points off
-    /// every other label in the list, which is the width that reads as a
-    /// mistake rather than as a margin. So: same icon, same gap, one column.
+    /// **The 22 points these add up to were measured against three rows that
+    /// no longer exist**, and the number outlived all of them: New Recording,
+    /// Settings and the to-do row each put an icon 22 points in, and this cell
+    /// lines its app icon up with where they were. Measured off the screen
+    /// while they were still there, in points from the same edge: icon ink at
+    /// 33 (New Recording), 32 (Settings, a narrower glyph in the same box) and
+    /// 34 (an app icon, which fills its box); text ink at 56 and 58. What is
+    /// left is the glyphs' own side bearings.
+    ///
+    /// A cell that reserves the same 16 and then uses a gap of its own
+    /// invention lands two points off every other label in the list, which is
+    /// the width that reads as a mistake rather than as a margin. So: same
+    /// icon, same gap, one column.
     private static let icon: CGFloat = 16
     private static let gap: CGFloat = 8
     /// The cell's own inset, inside the inset table's. 8 + 14 is the 22 above.
@@ -1030,7 +1490,9 @@ final class RecordingCell: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ recording: Recording) {
+    /// `dated` prints the day on the row, for when the heading above it names
+    /// a kind rather than a day. See `SidebarViewController.sectionsByKind`.
+    func configure(_ recording: Recording, dated: Bool = false) {
         title.stringValue = recording.displayTitle
         // The column is reserved whether or not there is an icon to put in it,
         // so every title in the list starts at the same place. Indenting only
@@ -1061,8 +1523,12 @@ final class RecordingCell: NSView {
         // job, and together they pushed the percentage off the line at the
         // widths this sidebar actually runs at.
         let transcribingHere = Queue.shared.running == recording.id
+        // The day comes back onto the row when the list is sectioned by kind,
+        // because then there is no day heading above it carrying it. Leading,
+        // where the heading was, so a row reads the same way round either way.
+        let day = dated ? SidebarViewController.heading(for: recording.date) : ""
         let facts = transcribingHere ? ""
-            : [recording.clockTime, length].filter { !$0.isEmpty }
+            : [day, recording.clockTime, length].filter { !$0.isEmpty }
                 .joined(separator: " · ")
         let state = recording.stateText
 
@@ -1226,107 +1692,110 @@ extension NSView {
     }
 }
 
-/// A sidebar row that lights up under the pointer.
+/// A section heading that is also the control that narrows the list to it.
 ///
-/// A view rather than a button, for one reason: the highlight has to span the
-/// sidebar the way the search field above it does, while the icon and the text
-/// line up with the recording titles below. A button's frame is both its
-/// background and its content, so it can satisfy one or the other. Here the
-/// frame is the width of the search field and `contentInset` puts the content
-/// where the list is.
+/// **The heading is the chip.** Gmail and Drive grow a row of filter chips
+/// under the search box because a mail list has no sections to hang them on;
+/// this list has three, so the affordance is already on screen and needs no new
+/// chrome in a 280 point column. Click "People" and the list becomes people,
+/// with a pill above it saying so.
+///
+/// The hint only appears under the pointer. A heading that permanently
+/// advertises what clicking it does is a row of instructions down the side of
+/// the window, and the heading's first job is still to say what the rows under
+/// it are.
+///
+/// **Unlike `HoverRow` this one answers to accessibility.**
+/// Those two are plain views with a target and an action, so no automation and
+/// no screen reader can press them, which is a real gap and not just a testing
+/// one. There is no reason to add a third: the role, the title and the press
+/// are four lines.
 @MainActor
-final class SidebarRow: NSView {
-    private let icon = NSImageView()
+final class SectionHeader: NSView {
+    static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+
     private let label = NSTextField(labelWithString: "")
+    private let hint = NSTextField(labelWithString: "Only these")
     private weak var target: AnyObject?
     private let action: Selector
 
-    /// Where the icon starts, measured from the row's own leading edge.
-    private let contentInset: CGFloat
-
-    var title: String {
-        get { label.stringValue }
-        set { label.stringValue = newValue }
-    }
-
-    var image: NSImage? {
-        get { icon.image }
-        set { icon.image = newValue }
-    }
-
-    /// Tints both halves, so a row is one colour rather than an icon and a
-    /// label that happen to agree.
-    var contentTintColor: NSColor? {
+    private var hovering = false {
         didSet {
-            icon.contentTintColor = contentTintColor
-            label.textColor = contentTintColor ?? .labelColor
+            guard hovering != oldValue else { return }
+            hint.isHidden = !hovering
+            restyle()
         }
     }
 
-    /// Whether the row answers. A disabled row keeps its words and dims, which
-    /// is the one shape on this platform that reads as "not now" rather than as
-    /// something having gone wrong.
-    var isEnabled = true {
-        didSet {
-            guard isEnabled != oldValue else { return }
-            alphaValue = isEnabled ? 1 : 0.4
-            // Or the highlight from the last hover stays painted under a row
-            // that no longer responds to the pointer.
-            hovering = false
-            pressed = false
-        }
-    }
-
-    private var hovering = false { didSet { restyle() } }
-    private var pressed = false { didSet { restyle() } }
-
-    init(title: String, target: AnyObject?, action: Selector,
-         contentInset: CGFloat = 12) {
+    init(title: String, target: AnyObject?, action: Selector) {
         self.target = target
         self.action = action
-        self.contentInset = contentInset
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
         translatesAutoresizingMaskIntoConstraints = false
 
         label.stringValue = title
-        label.font = .systemFont(ofSize: 13, weight: .medium)
-        label.lineBreakMode = .byTruncatingTail
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(icon)
-        addSubview(label)
+        label.font = Self.font
+        label.textColor = .secondaryLabelColor
+
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = Brand.accent
+        hint.isHidden = true
+        // Or a long heading pushes it off the edge instead of truncating
+        // itself, which is the way round the sidebar's titles already work.
+        hint.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        for view in [label, hint] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: contentInset),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
-                                            constant: -contentInset),
+            // The same edge as a day heading, so the two do not appear to be
+            // indented differently when a search swaps one set for the other.
+            label.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                           constant: RecordingCell.textInset),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            hint.firstBaselineAnchor.constraint(equalTo: label.firstBaselineAnchor),
+            hint.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                           constant: -RecordingCell.textInset),
+            hint.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor,
+                                          constant: 8),
         ])
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+        setAccessibilityHelp("Show only \(title.lowercased()).")
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func restyle() {
-        let alpha: CGFloat = pressed ? 0.26 : (hovering ? 0.16 : 0)
-        layer?.backgroundColor = alpha == 0
-            ? NSColor.clear.cgColor
-            : hoverTint(alpha).cgColor
+    override func accessibilityPerformPress() -> Bool {
+        NSApp.sendAction(action, to: target, from: self)
+        return true
     }
 
-    /// A `CGColor` is a snapshot of whatever it was resolved from, so switching
-    /// the Mac between light and dark leaves the last one behind.
+    /// The heading is one control, not a control containing two labels.
+    ///
+    /// Measured through the accessibility tree: a section read "Person,
+    /// Person, Person", once for the table's own cell wrapper, once for this
+    /// view and once for the field inside it. `setAccessibilityElement(false)`
+    /// on the fields does not do it, because `NSTextField` answers that
+    /// question itself; emptying the children is what removes them.
+    override func accessibilityChildren() -> [Any]? { [] }
+
+    private func restyle() {
+        layer?.backgroundColor = hovering ? hoverTint(0.10).cgColor : NSColor.clear.cgColor
+    }
+
+    /// A `CGColor` is a snapshot of what it was resolved from, so switching the
+    /// Mac between light and dark leaves the last one painted.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         restyle()
     }
 
-    /// Rebuilt on every layout, because a tracking area holds the rectangle it
-    /// was made with: one added once keeps lighting up the place the row used
-    /// to be after the sidebar is resized.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for area in trackingAreas { removeTrackingArea(area) }
@@ -1336,18 +1805,18 @@ final class SidebarRow: NSView {
             owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = isEnabled }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
-    override func mouseDown(with event: NSEvent) { pressed = isEnabled }
 
     override func mouseUp(with event: NSEvent) {
-        pressed = false
-        guard isEnabled else { return }
-        // Only when the pointer is still on the row, which is what letting go
-        // somewhere else means everywhere on this platform.
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         NSApp.sendAction(action, to: target, from: self)
     }
+
+    /// Swallow the press so the table underneath does not treat it as a click
+    /// on the list. `shouldSelectRow` already refuses the selection; this stops
+    /// `rowClicked` seeing a click that closed the open page.
+    override func mouseDown(with event: NSEvent) {}
 }
 
 extension Recording {

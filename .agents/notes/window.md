@@ -284,7 +284,118 @@ to delete first, and clearing the field un-names the recording rather than
 being refused. `exportName` puts the date back for a filename, because a folder
 of `Untitled.md`, `Untitled 2.md` is a folder nobody can read.
 
+## The three collections are one list, and the switch is a word you type
+
+The whole of the section below is history now: `LibraryCollection`,
+`CollectionPicker`, `PeopleNav`, `NotesNav`, `Mode.people` and `Mode.notes` are
+gone. Read it for why the segmented control existed, because the constraint that
+produced it is still true: a note about four meetings has no home in a
+recording-centric sidebar, and without somewhere to put it the app can create
+something it cannot show. What changed is the answer, not the problem.
+
+**A segment is a place you are in and have to leave; a lens is a state with an
+off switch.** That is the whole argument and everything else follows from it.
+Three consequences the tab set could not avoid:
+
+1. **It could not say "all three".** There is no All segment and there was never
+   going to be one, so the one list that answers "where did I see that" had to
+   be assembled by looking in three places by hand.
+2. **An empty collection read as a broken control.** Pressing Notes on a library
+   with none gave a blank pane, which is indistinguishable from the click not
+   working. A `kind:notes` pill over an empty list is an answer.
+3. **Search meant a different thing in each of three states**, because it scoped
+   to the active segment. The placeholder had to say so ("Search people"), which
+   is a control explaining itself in a 280 point column.
+
+What replaced it, in the order the moves are worth making:
+
+**The section heading is the filter.** `SectionHeader` is the heading and the
+control that narrows the list to it, with an "Only these" hint that appears
+under the pointer. Gmail and Drive grow a row of filter chips under the search
+box because a mail list has no sections to hang them on; this list has three, so
+the affordance was already on screen and needed no new chrome. It is the whole
+of the discoverable route to the kind lens.
+
+**Sections are by kind while you are searching and by day while you are
+browsing.** This is a real added claim and the one to look at first if any of
+this feels wrong. Chronology is what you want from a library and kind is what
+you want from a result set. It is also what makes the heading affordance
+possible at all: notes are sorted into the days beside recordings, so before
+this there was exactly one heading in the list that named a kind and the
+heading-as-filter could only ever have worked for People. `sectionsByKind` is
+the flag, and the day moves into the row's subtitle when it is on, so nothing is
+lost with the heading that carried it. The cost is that the list visibly
+reorganises itself on the first character typed, which is a bigger motion than
+anything else here.
+
+**`kind:` and `is:` join `tag:` in the field**, parsed by `RecordingFilter.parse`
+against `LibraryKind`. Both words, because `is:` is the muscle memory from
+GitHub and Gmail and `kind:` is Spotlight's. A value neither recognises stays in
+the query rather than being swallowed, so a typo searches for itself instead of
+silently filtering on nothing.
+
+**A finished operator lifts out of the field and becomes a pill.** The field
+holds free text and the row under it holds operators, and nothing is ever in
+both: the pill row already existed as *the* place that says this list is not the
+whole library, so leaving `tag:kinsight` in the field would state the same fact
+twice in two places that can disagree. That is Drive's choice rather than
+Gmail's, forced here by a control that was already on screen. See
+`liftOperators`, and the trap under it.
+
+**Backspace at the head of an empty field puts the last pill back as text.**
+This is the half that stops the lift feeling like a fight: without it a token
+can only be dismissed, so a mistyped tag means clicking the pill and typing the
+whole operator again, and the field appears to eat what you wrote. `Lens.typed`
+is what makes it possible, and a pill that cannot be written back is a pill you
+can only delete.
+
+**The options live in the magnifier, not in a standing chip row.**
+`NSSearchField.searchMenuTemplate` costs no width, which a row of chips does not
+have to give in 280 points with a to-do row and a live recording already
+competing for the top of the list. Every item names the operator it writes
+(`People   kind:people`), which is the one thing Gmail's advanced form gets
+right and its chips do not: the discoverable route teaches the typed one instead
+of being a parallel way to do the same thing.
+
+### The heading is a button, and it is the first one in this app that answers to accessibility
+
+`SidebarRow` and `HoverRow` are plain `NSView`s with a target and an action, so
+no automation and no screen reader can press them. `SectionHeader` sets
+`accessibilityRole`, a label and `accessibilityPerformPress`, which is four
+lines, and it is how the whole of this was tested end to end through
+`AXUIElementCreateApplication`.
+
+**`setAccessibilityElement(false)` on the labels inside it does nothing.**
+`NSTextField` answers that question itself. Measured through the tree: a section
+read "Person, Person, Person", once for the table's own `AXCell` wrapper, once
+for the header and once for the field inside it. `accessibilityChildren() -> []`
+is what removes them, and the `AXCell` is AppKit's and stays.
+
+### Three things about the search field that are not obvious
+
+**`NSSearchField`'s `action` is far too late to edit the text.** It fires on
+Return and on the field's own delay, by which time the caret has moved on.
+`controlTextDidChange` is the only place an operator can be taken out from under
+it, which is why the field has a delegate at all.
+
+**`complete(_:)` is re-entrant.** It inserts text, which arrives back in
+`controlTextDidChange`, which asks to complete the completion. `completing` is
+the guard.
+
+**Nothing may be preselected in the completion list.** `complete(_:)` inserts
+the selected candidate as it opens, so a default selection types over the value
+somebody is halfway through. `index.pointee = -1` is what stops it, and it is
+the same mistake the lift had to be taught not to make.
+
+**The magnifier's menu is a template, copied when it opens rather than consulted
+live.** A menu built once in `loadView` lists the tags that existed at launch
+for ever. `menuTags` is the last vocabulary it was built from, and `reload`
+rebuilds it when that changes, which is rare.
+
 ## Collection navigation is in the sidebar, not the toolbar
+
+**Superseded: see the section above.** Kept because the constraint is still
+true and the reasoning is what the replacement had to answer.
 
 A three-way segmented control above the search field: Recordings, People, Notes.
 People used to be a toolbar button and is not one any more.
@@ -983,10 +1094,37 @@ between two turns and is a different claim: both callers test emptiness to fall
 back to the single accent fill, which is what a recording with no transcript, or
 one whose duration has not arrived yet, still gets.
 
-## The to-do list is a lens, and deliberately not a status on every row
+## The to-do list is a lens, and the row that offered it was a nag
 
-A row above the sidebar's list counts the recordings waiting on a name and is
-gone entirely when the count is zero.
+The row above the sidebar's list is gone. So are `SidebarRow`, the `rowInset`
+and `rowEdge` constants and the factory that made them, which had no other
+callers left once it went.
+
+**Removed on request, and the argument is the one this note already made in the
+other direction.** The row survived on the grounds that what was missing was
+never a badge on thirteen rows, it was one sentence saying the thirteen exist.
+That held while the row was the only way to ask. It stopped holding once the
+lens was in the magnifier's menu, in the View menu on ⌘U and typeable as
+`is:unnamed`: the row became the only one of the four that asks unprompted, on
+every launch, for ever.
+
+And it can never reach zero. Some voices in a meeting are never going to be
+named, because nobody remembers who the fourth person on the call was, so a
+permanent "5 recordings need a speaker" is a standing claim of outstanding work
+against a number that will not come down. That is the difference between a to-do
+list and a nag, and this note drew that distinction to justify the row before it
+described the row that failed it.
+
+**The count moved rather than going with it.** `is:unnamed` in the magnifier
+reads "Needs a speaker  (5)", which is the same number in the one place you only
+see by going to look. Absent entirely at zero, so an empty count is never
+printed. It costs a rebuild of the search menu template whenever the number
+changes, tracked by `menuWaiting` the way the tag vocabulary is tracked by
+`menuTags`, and `Labelling.waits` is answered from a cache keyed on each
+`turns.json` stamp so asking on every reload is a stat per recording.
+
+What is below is the row's own reasoning, kept because two of its four points are
+now the *lens's* rules and still apply.
 
 **A status on the rows is what this replaces, and it was removed on purpose.**
 `Recording.stateText` records why: an unnamed speaker reads as "Speaker A" in the

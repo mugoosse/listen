@@ -129,6 +129,10 @@ enum MainMenu {
         // question at all.
         add(menu, "Recordings Needing a Speaker",
             #selector(LibraryWindow.showUnnamedSpeakers(_:)), "u")
+        // The other lens worth a keystroke, and the only route to the roster
+        // that is one. See `LibraryWindow.showPeople`.
+        add(menu, "People", #selector(LibraryWindow.showPeople(_:)), "p",
+            [.command, .shift])
         menu.addItem(.separator())
         // The toolbar's Chats button is on the home page only, and the History
         // menu it shares the slot with is scoped to whatever page you are on, so

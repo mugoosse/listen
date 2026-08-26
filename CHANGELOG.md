@@ -8,6 +8,126 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.21.0 (2026-08-26)
+
+### Notes can be tagged
+
+A tag was the one way to say what a meeting was *about*, and it stopped at the
+meeting. Asked to file the calls and the write-ups of them under one name, the
+app could do exactly half of it and had no way to say so, so it tagged the
+recordings and went quiet about the notes.
+
+Recordings and notes share one set of tag names. `listen tags` lists each name
+once with both counts, either of which can be zero, so a tag only notes carry
+still exists. Adding one adopts the spelling already in the library, in both
+directions: tagging a note `Kinsight` where a recording holds `kinsight` files it
+under the one that is there.
+
+Nothing is inherited. Tagging a meeting does not tag the notes about it, so
+filing a subject means doing both. That keeps two questions apart that are worth
+asking separately: what was said in meetings filed under this, and what has been
+written up about it.
+
+The note page and the notes drawer inside a recording both have the tag strip
+the transcript header has, `tag:` in the search field narrows notes as well as
+meetings, and `listen tags add --note <slug>` does it from the command line. An
+agent can tag a note over MCP, including your own note: its words still cannot
+be changed from there, because they were not derived from anything and there is
+no way to get them back, but filing is one click to undo.
+
+### The Notes list was hiding most of your notes
+
+A note about exactly one meeting was left out of the Notes collection. Notes
+about several were listed, and so were notes about none, which is a rule that
+makes sense for the unfiltered library, where a meeting and the note about that
+one meeting would otherwise be two rows saying the same thing. The Notes
+collection contains no meetings for it to double up with.
+
+Measured on a real library: it showed five notes of fourteen. If your Notes tab
+has looked emptier than it should, this is why. A tag filter had the same fault
+for the same reason.
+
+### A note deleted by sync is recoverable again
+
+A recording deleted on another device's say-so has always gone to the trash for
+a fortnight. A note did too, down one of the two paths that apply such a
+deletion; down the other it was removed outright, with nothing to put back. The
+trash even told you to put one back into `recordings/ or notes/`, which only one
+of the two paths ever made true.
+
+Found on a real library, which lost four notes to it. Both paths now trash.
+
+### `listen sync refetch`
+
+A sync pass asks for what has changed since the last one, so a record that has
+not changed is never mentioned again. That makes anything lost on one device
+while its record survives in iCloud permanently invisible to that device,
+however many times it syncs. Restoring the file on a second Mac does not help
+either: the restored copy matches the record, so there is nothing to send.
+
+`listen sync refetch` drops the change token, so the next pass asks the container
+for everything. It can only add: a token dropped on purpose is not the same as
+one the server could not resume, and the store reports no deletions for it, so
+the pass has nothing it could remove. Only the token goes, so this is not a
+re-upload of the library.
+
+If notes or recordings have gone missing on one device and you can see them in
+`listen sync inspect`, this is the command. It does not resurrect anything the
+container no longer holds, and a backup is still the only route back from that.
+
+### An agent asked a read-only question could delete a note
+
+Listen decides which tools a question may call, and until now told only one of
+the three ways of asking. Through Codex the agent saw the whole tool surface
+whatever you had said about writing, and through an OpenAI-compatible endpoint
+the restriction shaped what was offered and not what was accepted, so a model
+that named a tool it had never been offered was handed it.
+
+The list now travels into the server itself, which is the only place all three
+have in common, and a tool outside it is refused by name. `listen mcp --tools`
+does the same for any client, and `listen mcp` on its own is unchanged.
+
+### A term is matched by sound, and a silent "gh" was a consonant
+
+The dictionary matches a term by how it sounds, and a name with "ight", "ough"
+or "eigh" in it could not be matched by sound at all. The silent letters left a
+digit behind in the phonetic code, so `Kinsight` coded differently from every
+mishearing of it and the one mechanism built for a product name skipped that
+name. Shown rather than argued, because nobody can predict a consonant code by
+reading their own rule: spelled `Kinsite` in a scratch library, `kinside`,
+`kinzite`, `kinsyte` and `Kingside` were all corrected, and spelled `Kinsight`
+none of them were.
+
+A one-word term also only ever matched one spoken word, which is the other half
+of it, because a compound name is exactly what speech recognition splits: "kin
+site" and "can site" arrived as two words and nothing in the list could reach
+them. A one-word term now also matches across a gap of up to three words.
+
+### A crumb of a speaker is folded into the voice it came from
+
+A 37-minute call separated into a third speaker holding 2.6 seconds of audio:
+"Yeah.", "Yeah." and "What were you saying?". That is not a person, and it cost
+three things at once. It put a chip on the meeting, it held the recording in
+"needs labelling" for ever because nobody was ever going to name it, and it
+withheld the automatic title from the two people who had done the talking.
+
+A cluster under 5 seconds and under 1% of its track is now folded into the voice
+it most resembles, before the letters are handed out. Both cuts are required and
+both sit in measured gaps: on the development library the crumbs and the real
+people separate at 2.6 to 6.7 seconds and at 0.10% to 0.77%.
+
+### Speak is not named anywhere in the app
+
+Speak's dictation is part of Listen and that app is not worked on any more, so a
+pane naming it made a reader stop and ask what it was. The Dictionary pane's
+"Imported from Speak" section, the Models pane's "shared with Speak", and the
+`--from-speak` flag have all gone.
+
+Importing that file still works and always will: `listen dictionary import
+~/Library/Application\ Support/speak/dictionary.json` does exactly what the flag
+did. The reader is deliberately liberal about the shape, because losing a
+convenience flag is cheap and losing years of somebody's corrections is not.
+
 ## 0.20.0 (2026-08-26)
 
 ### Automatic updates were never installing

@@ -875,6 +875,62 @@ to one cluster, 0.5 gives seven, 0.6 gives eight. The sharp cliff between
 0.45 and 0.5 is worth knowing before tuning: below it the AHC step hands VBx
 one cluster to start from, and nothing recovers.
 
+### A room needs a higher threshold than a call, and 0.6 filed two people as one
+
+The manager fix above put the free clusterer back on the room's microphone and
+it still came back with **one** voice. The prior was never the whole story: a
+threshold tuned on system tracks is simply wrong for far-field audio.
+
+Two people at a table share one microphone, one distance and one room's
+reverberation, so their embeddings land far closer together than two people
+arriving down separate calls do, and at 0.6 the dendrogram merges them. The mic
+pass labels a single cluster `Me` by design, so a two-person meeting files
+itself under one name with nothing on screen saying so. That is the shape the
+section above predicted would be indistinguishable from a solo memo, caught in
+the wild this time: a 14-minute phone memo of a two-person meeting,
+`2026-08-26-140435-53C7`.
+
+Swept with `LISTEN_DIARIZE_THRESHOLD` on FluidAudio 0.15.5, free clustering,
+speakers found per track:
+
+| track                                    | 0.6   | 0.65 | 0.7   | 0.75  | 0.8 |
+|------------------------------------------|-------|------|-------|-------|-----|
+| phone memo, two people (mic)             | **1** | 2    | 2     | 2     | 2   |
+| 48-min solo memo in a room (mic)         | 1     |      | 1     | 1     | 1   |
+| 2-hour workshop in a room (mic)          | 4     |      | 6     | 6     |     |
+| 89-min webinar, five-plus people (system)| 8     |      | 8     | **9** |     |
+| 1:1 call, one far-end voice (system)     | 1     |      | 1     | 1     | 1   |
+| 1:1 call, two far-end voices (system)    | 2     |      | 2     | 2     | 2   |
+
+The phone memo's correct band is 0.65 to 0.85 (0.9 gives three). The webinar is
+right at 0.6 and over-splits at 0.75. **The two bands barely overlap**, which is
+why this is two numbers rather than one raised default: a single value that
+satisfied both would balance on the edge of each. `Diarizer.separateThreshold`
+stays 0.6 and `Diarizer.roomThreshold` is 0.75, each in the middle of its own
+band.
+
+The workshop row is the one worth reading twice, because 4 to 6 looks like an
+over-split and is not. At 0.6 its largest cluster holds **73% of a two-hour
+build session** (5475 s of 7490 s); at 0.7 that one cluster becomes two speakers
+of about 30% each and the rest is unchanged. A single voice holding three
+quarters of a workshop was the same merge failure, just not obvious enough to
+notice.
+
+The guard against the opposite error is the solo row: a room that genuinely held
+one person stays one cluster all the way to 0.8, so raising the room threshold
+does not invent a second speaker where there is none.
+
+`Pipeline` now passes `room: true` on the one free microphone pass, and
+`Diarizer` keeps a third manager for it. A prior still beats a threshold: a
+known `expecting:` sets `numSpeakers` outright and no threshold is consulted, so
+`printUser` and `Enroll` are unaffected by either number.
+
+**And the collapse is logged now.** A room that separates into one voice writes
+a line saying so before labelling the whole recording `Me`, because the failure
+has no face: on screen it is exactly an ordinary solo memo. If somebody reports
+a meeting filed under one name, that line says whether the diarizer saw one
+voice or was never asked.
+
 ## The bank knew everybody except its owner
 
 `Me` was the one label in the library with **no voice behind it**. Nothing

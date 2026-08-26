@@ -26,15 +26,21 @@ struct DiarizationOutput {
 /// transcript is built after capture has stopped, so there is no reason to give
 /// up the accuracy.
 actor Diarizer {
-    /// The free-clustering manager, and the only thing `expecting: nil` may
-    /// ever run on. A tuned manager used to be stored in this slot, and the
-    /// order of the pipeline made that exactly wrong: `printUser` runs the mic
-    /// with `expecting: 1` after every call, so the first recording of an app
-    /// session clustered freely and every later system track ran with
-    /// `numSpeakers = 1`, which is a command rather than a hint. An 89-minute
-    /// webinar came back as one far-end voice that way. See
+    /// The free-clustering manager for a track that carries one voice per
+    /// microphone, and the only thing an open-population pass over a system
+    /// track or an import may run on. A tuned manager used to be stored in this
+    /// slot, and the order of the pipeline made that exactly wrong: `printUser`
+    /// runs the mic with `expecting: 1` after every call, so the first
+    /// recording of an app session clustered freely and every later system
+    /// track ran with `numSpeakers = 1`, which is a command rather than a
+    /// hint. An 89-minute webinar came back as one far-end voice that way. See
     /// .agents/notes/speakers.md.
     private var manager: OfflineDiarizerManager?
+    /// The free-clustering manager for a room, which is the same clustering at
+    /// a higher threshold. Kept apart from the one above for the same reason
+    /// `tuned` is: a manager built for one kind of track must never answer for
+    /// another. See `roomThreshold`.
+    private var roomManager: OfflineDiarizerManager?
     /// The manager for a known speaker count, kept beside the free one so a
     /// prior lasts exactly as long as the runs that ask for it.
     private var tuned: OfflineDiarizerManager?
@@ -55,20 +61,53 @@ actor Diarizer {
         FileManager.default.fileExists(atPath: modelsDirectory.path)
     }
 
+    /// Where one voice stops being two, on a track where every voice arrived
+    /// on its own microphone.
+    ///
+    /// A cosine similarity over unit-normalized embeddings, which the library
+    /// converts to a merge distance (sqrt(2 - 2s)) before cutting the
+    /// dendrogram, so **larger splits more**: raise it toward 1 and one person
+    /// becomes two, lower it and two people become one. An earlier version of
+    /// this comment had the direction backwards. Measured on a real webinar
+    /// system track holding five people: 0.35 to 0.45 gave one cluster, 0.5
+    /// gave seven, 0.6 gave eight and matched the hand labels, 0.75 gave nine.
+    /// The library default is 0.6, and the measurement agrees with it.
+    static let separateThreshold = 0.6
+
+    /// The same knob for a room, where **one** microphone carried everybody.
+    ///
+    /// **0.6 is measurably too low for far-field audio and this is the whole
+    /// bug behind "only I was identified".** Two people at a table share a
+    /// microphone, a distance and a room's reverberation, so their embeddings
+    /// land far closer together than two people on separate calls do, and the
+    /// dendrogram merges them. Measured on a 14-minute two-person phone memo:
+    /// 0.5 and 0.6 gave **one** cluster, which the mic pass labels `Me` by
+    /// design and so reads as a solo memo; 0.65 through 0.85 gave two; 0.9
+    /// gave three. On a 2-hour workshop in a room, 0.6 put 73% of the session
+    /// under a single voice and 0.7 to 0.75 split that into two speakers of
+    /// 30% each.
+    ///
+    /// It is a separate number rather than a new default for both, because the
+    /// two constraints do not overlap by much: the webinar's system track is
+    /// right at 0.6 and over-splits at 0.75, and the room band starts at 0.65.
+    /// Raising one number to satisfy both would leave it balanced on the edge
+    /// of each. Guarded below by the fact that a genuinely solo room stays one
+    /// cluster all the way to 0.8, measured on a 48-minute memo.
+    static let roomThreshold = 0.75
+
     /// Clustering settings, overridable for measurement.
     ///
-    /// `threshold` is a cosine similarity over unit-normalized embeddings,
-    /// which the library converts to a merge distance (sqrt(2 - 2s)) before
-    /// cutting the dendrogram, so **larger splits more**: raise it toward 1
-    /// and one person becomes two, lower it and two people become one. An
-    /// earlier version of this comment had the direction backwards. Measured
-    /// on a real webinar system track holding five people: 0.35 to 0.45 gave
-    /// one cluster, 0.5 gave seven, 0.6 gave eight. The library default is
-    /// 0.6. `LISTEN_DIARIZE_THRESHOLD` and `LISTEN_MIN_SPEAKERS` exist to
-    /// sweep it against real recordings rather than guess.
-    static func config(expecting: Int? = nil) -> OfflineDiarizerConfig {
+    /// `room` picks which of the two thresholds above applies, and carries the
+    /// answer `Pipeline.decideRoom` reached. The microphone pass over a room is
+    /// the one place it is true.
+    ///
+    /// `LISTEN_DIARIZE_THRESHOLD` and `LISTEN_MIN_SPEAKERS` exist to sweep
+    /// against real recordings rather than guess, and override either.
+    static func config(expecting: Int? = nil,
+                       room: Bool = false) -> OfflineDiarizerConfig {
         let env = ProcessInfo.processInfo.environment
         var clustering = OfflineDiarizerConfig.Clustering.community
+        clustering.threshold = room ? roomThreshold : separateThreshold
         if let raw = env["LISTEN_DIARIZE_THRESHOLD"], let value = Double(raw) {
             clustering.threshold = value
         }
@@ -93,26 +132,51 @@ actor Diarizer {
         manager = m
     }
 
-    /// Point the diarizer at a known number of speakers.
+    /// The manager for one kind of pass: a known speaker count, a room, or
+    /// neither.
     ///
     /// Rebuilds a manager, not the models: the CoreML load is the slow part
-    /// and is reused, while the clustering config is cheap. The tuned manager
-    /// must never be stored where the free one lives; see the trap on
-    /// `manager` above.
-    private func manager(expecting: Int?) async throws -> OfflineDiarizerManager {
+    /// and is reused, while the clustering config is cheap. Each kind gets its
+    /// own slot and none of them may ever be stored in another's; see the trap
+    /// on `manager` above, which is what happens when one is.
+    ///
+    /// A known count wins over `room`, because `numSpeakers` sets the answer
+    /// outright and no threshold is consulted once it does. That is only ever
+    /// `printUser` asking the microphone for one voice it already knows the
+    /// count of, and `Enroll` asking a mixdown for the number the transcript
+    /// named.
+    private func manager(expecting: Int?,
+                         room: Bool) async throws -> OfflineDiarizerManager {
         guard let manager else { throw DiarizerError.notLoaded }
-        guard let expecting, expecting > 0 else { return manager }
-        if tunedExpecting == expecting, let tuned { return tuned }
+        if let expecting, expecting > 0 {
+            if tunedExpecting == expecting, let tuned { return tuned }
+            guard let models = await models() else { return manager }
+            let built = OfflineDiarizerManager(config: Self.config(expecting: expecting))
+            built.initialize(models: models)
+            tunedExpecting = expecting
+            tuned = built
+            return built
+        }
+        guard room else { return manager }
+        if let roomManager { return roomManager }
+        guard let models = await models() else { return manager }
+        let built = OfflineDiarizerManager(config: Self.config(room: true))
+        built.initialize(models: models)
+        roomManager = built
+        return built
+    }
+
+    /// The CoreML bundles, loaded once and shared by every manager.
+    ///
+    /// `load()` has already fetched them through `prepareModels()`; this is the
+    /// handle on them a second manager needs to be initialized from, and it is
+    /// the expensive part that must not be paid per configuration.
+    private func models() async -> OfflineDiarizerModels? {
         if models == nil {
             models = try? await OfflineDiarizerModels.load(
                 from: OfflineDiarizerModels.defaultModelsDirectory())
         }
-        guard let models else { return manager }
-        let built = OfflineDiarizerManager(config: Self.config(expecting: expecting))
-        built.initialize(models: models)
-        tunedExpecting = expecting
-        tuned = built
-        return built
+        return models
     }
 
     /// Diarize one track.
@@ -123,8 +187,14 @@ actor Diarizer {
     /// turns. The prior is the whole difference. Letting the clusterer loose on
     /// a track that holds one person is how one person becomes two, which is the
     /// most common diarization error there is.
-    func run(_ url: URL, expecting: Int? = nil) async throws -> DiarizationOutput {
-        let manager = try await manager(expecting: expecting)
+    ///
+    /// `room` says the track came off one microphone in a shared space, which
+    /// is a different clustering problem and gets a different threshold. See
+    /// `roomThreshold`: leaving it `false` on a room is how several people come
+    /// back as one.
+    func run(_ url: URL, expecting: Int? = nil,
+             room: Bool = false) async throws -> DiarizationOutput {
+        let manager = try await manager(expecting: expecting, room: room)
         let result = try await manager.process(url)
 
         var turns: [SpeakerTurn] = []

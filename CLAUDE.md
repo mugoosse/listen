@@ -167,6 +167,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A known speaker count is a good prior, and a bad one applied to one track
 - The prior outlived its pass, and every meeting after it had one voice
 - The clustering threshold is a similarity, and the comment said distance
+- A room needs a higher threshold than a call, and 0.6 filed two people as one
 - The bank knew everybody except its owner
 
 ### `.agents/notes/calendar.md` (15k)

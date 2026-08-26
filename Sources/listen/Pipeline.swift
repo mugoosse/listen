@@ -273,7 +273,15 @@ actor Pipeline {
                     // one number nothing here knows: the calendar counts
                     // invitations, not chairs. See .agents/notes/speakers.md on
                     // what a wrong prior does to a track.
-                    let diarization = try await diarizer.run(recording.micURL)
+                    //
+                    // `room: true` is not decoration. One microphone across a
+                    // table puts two people far closer together in embedding
+                    // space than two people on separate calls, and at the
+                    // threshold a system track wants they merge. Without it a
+                    // two-person phone memo came back as one voice, which the
+                    // branch below then labels `Me`. See `Diarizer.roomThreshold`.
+                    let diarization = try await diarizer.run(recording.micURL,
+                                                             room: true)
                     mic = DiarizationOutput(
                         turns: Merge.namespaced(diarization.turns, "room"),
                         embeddings: Merge.namespaced(diarization.embeddings, "room"),
@@ -318,6 +326,16 @@ actor Pipeline {
                 embeddings.merge(room.embeddings) { a, _ in a }
                 speech.merge(room.speech) { a, _ in a }
             } else {
+                // Said out loud, because this is the one failure with no face.
+                // A room that clusters to a single voice is labelled `Me` and
+                // is then indistinguishable on screen from an ordinary solo
+                // memo, which is how a two-person meeting filed itself under
+                // one name and nothing anywhere said so.
+                if room, let mic {
+                    let voices = Set(mic.turns.map(\.label)).count
+                    log("\(recording.id): the room separated into \(voices) "
+                        + "voice(s), so the whole recording is \(Self.userLabel)")
+                }
                 labelled += transcript.segments.map {
                     LabelledSegment(start: $0.start, end: $0.end,
                                     speaker: Self.userLabel, text: $0.text)

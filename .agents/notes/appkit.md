@@ -494,6 +494,22 @@ way in, which is also what puts it back. The setter is overridden to capture it,
 and the recolour writes through `super`, or the lit copy becomes the one the
 button remembers and it never goes quiet again.
 
+## An attributed string brings its own truncation, which is none
+
+The same rule, applied to layout instead of colour, and quieter about it. A
+label's `lineBreakMode = .byTruncatingTail` holds only for `stringValue`;
+setting `attributedStringValue` replaces the field's typography wholesale, and
+runs built with just a colour and a font carry the default paragraph style,
+which **word-wraps**. Nothing looks wrong until a string is long enough, which
+for the sidebar's subtitle meant the first long transcription stage: the line
+wrapped, the row is a fixed 52 points, and the second line pushed the activity
+bar over the card's bottom edge, drawing outside it. Reported from the
+screenshot, on a row whose field plainly said truncate.
+
+Every run needs a `.paragraphStyle` whose `lineBreakMode` is the truncation
+the field meant to have, exactly as every run already needs the font. One
+shared `NSMutableParagraphStyle` per build site is enough.
+
 ## `glyphIndex(for:in:)` answers with the nearest glyph, however far away
 
 Underlining the link under the pointer needs the character at a point, and

@@ -292,6 +292,7 @@ this app, so read them before building any new window, menu or popover.
 - A typed chevron is not aligned with the text beside it
 - A tool tip is a tracking area, so clearing them all takes it with it
 - An attributed title's colour wins over `contentTintColor`
+- An attributed string brings its own truncation, which is none
 - `glyphIndex(for:in:)` answers with the nearest glyph, however far away
 - A disabled button greys its title, unless the title is attributed
 - A leading image is laid out at the button's edge, not beside its title

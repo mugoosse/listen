@@ -1055,8 +1055,15 @@ final class RecordingCell: NSView {
         // file: `metadata.duration` is written when capture stops.
         let live = recording.isLive
         let length = live ? Recording.length(Capture.shared.elapsed) : recording.lengthText
-        let facts = [recording.clockTime, length].filter { !$0.isEmpty }
-            .joined(separator: " · ")
+        // The clock and the length give way while this row is the job being
+        // transcribed. The stage sentence is the information of the moment,
+        // the two facts are stable and come back with the reload that ends the
+        // job, and together they pushed the percentage off the line at the
+        // widths this sidebar actually runs at.
+        let transcribingHere = Queue.shared.running == recording.id
+        let facts = transcribingHere ? ""
+            : [recording.clockTime, length].filter { !$0.isEmpty }
+                .joined(separator: " · ")
         let state = recording.stateText
 
         // Red on the state word alone, and not on the line. The time and the
@@ -1069,9 +1076,18 @@ final class RecordingCell: NSView {
         // description of what is drawn, so the monospaced digits set on the
         // field once are not inherited by anything set this way. Without it the
         // clock changes width as it counts.
+        //
+        // The paragraph style travels too, and losing it is worse than losing
+        // the font: the field's own `.byTruncatingTail` is replaced by the
+        // string's default, which wraps. The row is 52 points whatever its
+        // content wants, so a subtitle long enough to wrap put its second line
+        // and the activity bar under it over the card's bottom edge.
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
         func run(_ text: String, _ colour: NSColor) -> NSAttributedString {
             NSAttributedString(string: text, attributes: [.foregroundColor: colour,
-                                                          .font: Self.subtitleFont])
+                                                          .font: Self.subtitleFont,
+                                                          .paragraphStyle: style])
         }
         let line = NSMutableAttributedString(attributedString: run(facts, .secondaryLabelColor))
         if !state.isEmpty {

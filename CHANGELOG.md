@@ -8,6 +8,111 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.20.0 (2026-08-26)
+
+### Automatic updates were never installing
+
+"Install updates automatically" was ticked, the gear carried its dot, and no
+version ever arrived. Listen put that badge up early by probing for update
+information on every launch, and in Sparkle 2.9.5 a probe breaks the automatic
+install three separate ways, each sufficient on its own: it marks a session in
+progress before the update cycle starts, so the only launch path that runs an
+overdue check is skipped; it stamps the last-check time before doing any work;
+and it schedules the next check a full interval after launch rather than when
+it was actually due. A probe downloads nothing, so a copy launched more often
+than every six hours installed nothing, ever.
+
+Measured on the same seeded preference: build 242 moved the last-check stamp
+on a launch two seconds after a check, and build 243 left it alone. Nothing is
+called at launch now, and Sparkle's own cycle runs a real background check when
+one is overdue.
+
+This cannot fix itself backwards. The copy you are reading this in is the one
+with the bug, so if you have been on 0.19.0 or earlier wondering why updates
+never landed, this is the last one you install by hand.
+
+Install on quit is also a promise an app you never quit can never keep, and
+Listen opens at login and sits watching for meetings. The Updates pane has an
+Install and Relaunch button now. It refuses while a recording or a
+transcription is running, and says which, because a relaunch throws away an
+hour of meeting that has not been written out yet.
+
+### Share a meeting instead of exporting it
+
+Sharing a transcript meant Export, which is a save panel and a file on disk, so
+sending one to a colleague meant writing a file and then going to find it
+again. Share and Copy as Markdown now sit beside it in the ellipsis, the
+sidebar's right-click menu and the File menu. Export stays: it is the one that
+asks *where*, and a share sheet cannot answer that.
+
+What gets shared is the whole page, notes above the transcript, because that is
+the order it was read in and the summary is the half a reader of somebody
+else's meeting wants first. A note shares on its own. Neither is offered
+mid-recording, for the same reason every other verb is withheld there.
+
+Copy as Markdown is Shift-Cmd-C rather than Cmd-C, because Edit's Copy belongs
+to the responder chain and has to keep working in the title and search fields.
+
+There were two copies of this markdown before there was a third, and they had
+already drifted in what they put on the second line. The window, the share
+sheet and `listen export --format md` all go through one renderer now. The
+CLI's output is byte-identical to what it printed before, because scripts have
+been diffing it for months.
+
+### The library is one list, narrowed by what you type
+
+Recordings, People and Notes were three segments above the search field, so
+search meant a different thing in each of three states, the set could not say
+"all three", and an empty Notes tab read as the control being broken rather
+than as an empty answer. They are one list now, narrowed by a lens that
+behaves like every other pill in the row: a state with an off switch, whose
+absence is the whole library.
+
+`kind:` and `is:` join `tag:` in the search field. A finished operator lifts
+out of the field into a pill, and backspace at the head of an empty field puts
+it back as text. The section headings are controls, so clicking one narrows to
+it, and the magnifier's menu names the operator each item writes.
+`kind:people` lists the whole roster, on Cmd-Shift-P.
+
+The "5 recordings need a speaker" row is gone with it. It was the only one of
+these that asked unprompted, and its count can never reach zero, because some
+voices are never going to be named. The number moved into the magnifier, where
+it reads "Needs a speaker (5)" and you only meet it by going to look.
+
+### A conversation in a room stops collapsing into one voice
+
+A two-person phone memo came back as a single cluster, which the microphone
+pass labels `Me` by design, so a meeting filed itself under one name with
+nothing on screen saying so. The 0.6 clustering threshold was measured against
+system tracks, where every voice arrives down its own call with its own
+microphone. Two people at a table share one microphone, one distance and one
+room's reverberation, so their embeddings land far closer together and the
+dendrogram merges them.
+
+Measured across the library, counting speakers found by free clustering: a
+phone memo needs 0.65 to 0.85 and gives one cluster at 0.6, while an 89-minute
+webinar's system track is right at 0.6 and over-splits at 0.75. The two bands
+barely overlap, so a room gets its own threshold rather than everything getting
+a raised one. A 2-hour workshop in a room is the row worth reading twice, since
+4 to 6 clusters looks like an over-split and is not: at 0.6 its largest cluster
+held 73% of the session, and at 0.7 that one voice became two speakers of about
+30% each. Guarded by a 48-minute memo that genuinely holds one person and stays
+one cluster to 0.8.
+
+A room that still separates into one voice says so in the log before it labels
+the whole recording, because on screen that failure looks exactly like an
+ordinary solo memo.
+
+### Phone memos can be named after their speakers
+
+The phone writes `Memo, 26 August, 12:20` when nobody types a title, and Listen
+read a title with no recorded source as one a person had chosen, so it never
+wrote over it. Naming the last speaker rewrote the transcript and left the
+title alone, and the calendar could never reach one either. Six of the eight
+phone recordings in the library were frozen that way, three of them still
+waiting to be labelled. The phone stamps the source now, and Listen
+reconstructs it for memos made by builds that did not.
+
 ## 0.19.0 (2026-08-26)
 
 ### Release notes are in the app

@@ -1075,19 +1075,44 @@ final class AgentRun {
 
     // MARK: What it is allowed to do
 
-    /// The MCP tools a question may call.
+    /// The MCP tools a question may call, by their bare names.
     ///
     /// `delete_note` is on neither list. The server offers it because the CLI
     /// and a human at an MCP client should be able to undo a note, but an agent
     /// answering a question in a chat box has no business removing one, and the
     /// asymmetry is deliberate: everything else here is reversible by hand in
     /// the window, and a deleted note is not.
+    ///
+    /// **This was the stated owner of that decision and only one backend was
+    /// listening.** Claude passed it as `--allowedTools`; Codex was handed
+    /// nothing of the sort and saw all thirteen tools, `delete_note` included,
+    /// whatever `--write` said; and an OpenAI-compatible endpoint used this to
+    /// choose which schemas to *advertise* and then ran whatever name came
+    /// back. Measured against the shipped 0.20.0 binary, `listen mcp` answered
+    /// `tools/list` with thirteen tools however it was invoked.
+    ///
+    /// So the list is now carried into the server itself, as
+    /// `listen mcp --tools a,b,c`, which is the only place all three backends
+    /// have in common: Codex cannot filter an MCP server's tools at all
+    /// (codex-cli 0.147.0 takes a command, args, env, cwd and two timeouts per
+    /// server, and nothing else). Claude is still given `--allowedTools` as
+    /// well, so the client filters and the server refuses, and all three
+    /// backends now fail the same way.
     static func tools(allowWrites: Bool) -> [String] {
         let read = ["list_recordings", "get_recording", "get_transcript",
                     "search_transcripts", "list_people", "list_tags",
                     "list_notes", "read_note"]
         let write = ["write_note", "edit_note", "add_tags", "remove_tags"]
-        return (read + (allowWrites ? write : [])).map { "mcp__listen__\($0)" }
+        return read + (allowWrites ? write : [])
+    }
+
+    /// The same list in Claude's naming for an MCP tool.
+    ///
+    /// The prefix means nothing to the server, to Codex or to an endpoint, so
+    /// it is added at the one place that talks to Claude rather than stripped
+    /// again at the two that do not.
+    static func claudeToolNames(allowWrites: Bool) -> [String] {
+        tools(allowWrites: allowWrites).map { "mcp__listen__\($0)" }
     }
 
     /// The MCP server block, pointing at this very binary.
@@ -1097,9 +1122,13 @@ final class AgentRun {
     /// somebody is running a build out of a working directory, and an answer
     /// that came from a different library than the window is showing is the
     /// worst possible kind of wrong.
-    static var mcpConfigJSON: String {
+    ///
+    /// Takes the allowlist rather than reading it, because the argv it writes
+    /// is what actually restricts the server: see `tools(allowWrites:)`.
+    static func mcpConfigJSON(tools: [String]) -> String {
         let object: [String: Any] = ["mcpServers": [
-            "listen": ["command": AppInfo.executable.path, "args": ["mcp"]],
+            "listen": ["command": AppInfo.executable.path,
+                       "args": ["mcp", "--tools", tools.joined(separator: ",")]],
         ]]
         // Slashes unescaped, which JSON does not require either way. It only
         // matters because this string is what `--print-command` shows somebody
@@ -1168,6 +1197,14 @@ final class AgentRun {
             You may also write notes and tags. Write a note only when asked to, \
             put the recording it is about in `recording_id`, and never delete or \
             overwrite somebody else's wording without being told to.
+
+            A tag goes on a recording or on a note, and `add_tags` takes one or \
+            the other. They share one vocabulary, so call `list_tags` and reuse \
+            a name that already fits rather than coining a near-duplicate. \
+            **A note does not inherit its recording's tags**: filing a subject \
+            means tagging the meetings and the notes about them separately, and \
+            `list_notes` with a tag asks what is filed rather than what the \
+            meeting was filed as.
             """
         }
         return text
@@ -1176,6 +1213,7 @@ final class AgentRun {
     // MARK: Building the command
 
     static func arguments(for question: Question) -> [String] {
+        let allowed = tools(allowWrites: question.allowWrites)
         switch question.backend {
         case .claude:
             var args = [
@@ -1184,14 +1222,18 @@ final class AgentRun {
                 // stream-json refuses to run without it, which is not obvious
                 // from the flag's name.
                 "--verbose",
-                "--mcp-config", mcpConfigJSON,
+                // The allowlist goes into the server's own argv here, and into
+                // --allowedTools below. Both, deliberately: the client filters
+                // and the server refuses, so Claude fails the same way Codex
+                // and an endpoint now do.
+                "--mcp-config", mcpConfigJSON(tools: allowed),
                 // Only ours. Without it every MCP server in the user's global
                 // config is launched by a meeting recorder.
                 "--strict-mcp-config",
                 // No Bash, no Read, no WebFetch. The MCP surface is the whole
                 // world, which is what makes the TCC story true.
                 "--tools", "",
-                "--allowedTools", tools(allowWrites: question.allowWrites)
+                "--allowedTools", claudeToolNames(allowWrites: question.allowWrites)
                     .joined(separator: ","),
                 // No settings.json from any scope, so no hooks and no plugins.
                 // Measured: five SessionStart hooks fired without this.
@@ -1220,7 +1262,15 @@ final class AgentRun {
                 "--ignore-user-config",
                 "-c", "approval_policy=\"never\"",
                 "-c", "mcp_servers.listen.command=\"\(AppInfo.executable.path)\"",
-                "-c", "mcp_servers.listen.args=[\"mcp\"]",
+                // **The only place Codex can be restricted at all.** It has no
+                // equivalent of `--allowedTools`: measured against codex-cli
+                // 0.147.0, `codex mcp list --json` renders a server as a
+                // command, args, env, cwd and two timeouts, with no tool
+                // allowlist anywhere. So the list rides in the server's own
+                // argv and `listen mcp` refuses the rest. Before this, a
+                // read-only `listen ask --codex` could delete a note.
+                "-c", "mcp_servers.listen.args=[\"mcp\",\"--tools\","
+                    + "\"\(allowed.joined(separator: ","))\"]",
                 // Not the same gate as approval_policy, and this is the one
                 // that matters. With approval_policy alone every MCP call came
                 // back "user cancelled MCP tool call" and the model answered

@@ -165,7 +165,7 @@ enum CLI {
         case "edit":
             edit(rest)
         case "mcp":
-            MCP.serve()
+            MCP.serve(rest)
         case "ask":
             ask(rest)
         case "provider":
@@ -797,7 +797,12 @@ enum CLI {
         }
     }
 
-    /// Every tag in the library, with how many recordings carry it.
+    /// Every tag in the library, with what carries it.
+    ///
+    /// `summary` rather than a second number column, because `kinsight  6  2`
+    /// cannot be read without a header and this CLI has no headers anywhere.
+    /// It also lets a tag only notes carry say so, which one shared vocabulary
+    /// over two kinds of thing has to be able to do.
     private static func tagsList() -> Never {
         let all = Tags.all()
         guard !all.isEmpty else {
@@ -808,35 +813,77 @@ enum CLI {
         let width = all.map(\.name.count).max() ?? 0
         for tag in all {
             print(tag.name.padding(toLength: width, withPad: " ", startingAt: 0)
-                  + "  \(tag.count)")
+                  + "  \(tag.summary)")
         }
         exit(0)
     }
 
-    /// The recording and the tags a subcommand was given, or a refusal.
-    private static func tagged(_ args: [String], verb: String) -> (Recording, [String]) {
-        guard let id = args.first else {
-            fail("\(verb) needs a recording id and at least one tag.")
+    /// What a tag subcommand was pointed at: a recording, or a note.
+    ///
+    /// **A bare argument is always a recording id, and a note needs `--note`.**
+    /// No falling back from one to the other when the id matches nothing: they
+    /// are different namespaces, a collision would tag the wrong thing, and an
+    /// error that had tried both could not say which it was looking for.
+    private static func tagged(_ args: [String], verb: String) -> (Taggable, [String]) {
+        var names: [String] = []
+        var slug: String?
+        var id: String?
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--note":
+                i += 1
+                guard i < args.count else { fail("--note needs a note slug or title.") }
+                slug = args[i]
+            default:
+                guard !args[i].hasPrefix("-") else {
+                    fail("unknown option `\(args[i])`. Try `listen help`.")
+                }
+                // The first bare word is what is being tagged, unless --note
+                // already said. Everything after it is a tag.
+                if slug == nil, id == nil, names.isEmpty { id = args[i] }
+                else { names.append(args[i]) }
+            }
+            i += 1
         }
-        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
-        let names = Array(args.dropFirst())
         guard !names.isEmpty else {
             fail("\(verb) needs at least one tag. Give them one at a time, "
                  + "quoting any with a space in.")
         }
-        return (recording, names)
+
+        if let slug {
+            guard let note = Notes.find(slug) else { fail("no note `\(slug)`.") }
+            return (.note(note), names)
+        }
+        guard let id else {
+            fail("\(verb) needs a recording id, or --note <slug>, and at least one tag.")
+        }
+        guard let recording = Recording.find(id) else { fail("no recording `\(id)`.") }
+        return (.recording(recording), names)
+    }
+
+    /// What a subject carries now, and what to call it in a line about it.
+    private static func filing(_ subject: Taggable) -> (tags: [String], name: String) {
+        switch subject {
+        case .recording(let recording): return (Tags.of(recording), recording.id)
+        case .note(let note):           return (Tags.of(note), note.slug)
+        }
     }
 
     private static func tagsAdd(_ args: [String]) -> Never {
-        let (recording, names) = tagged(args, verb: "add")
-        let before = Tags.of(recording)
+        let (subject, names) = tagged(args, verb: "add")
+        let (before, what) = filing(subject)
         do {
-            let after = try Tags.add(names, to: recording)
+            let after: [String]
+            switch subject {
+            case .recording(let recording): after = try Tags.add(names, to: recording)
+            case .note(let note):           after = try Tags.add(names, to: note)
+            }
             print(after.joined(separator: ", "))
             let added = after.filter { name in !before.contains(name) }
             log(added.isEmpty
                 ? "already tagged. Nothing changed."
-                : "added \(added.joined(separator: ", ")) to \(recording.id).")
+                : "added \(added.joined(separator: ", ")) to \(what).")
         } catch {
             fail(error.localizedDescription)
         }
@@ -844,15 +891,19 @@ enum CLI {
     }
 
     private static func tagsRemove(_ args: [String]) -> Never {
-        let (recording, names) = tagged(args, verb: "remove")
-        let before = Tags.of(recording)
+        let (subject, names) = tagged(args, verb: "remove")
+        let (before, what) = filing(subject)
         do {
-            let after = try Tags.remove(names, from: recording)
+            let after: [String]
+            switch subject {
+            case .recording(let recording): after = try Tags.remove(names, from: recording)
+            case .note(let note):           after = try Tags.remove(names, from: note)
+            }
             if !after.isEmpty { print(after.joined(separator: ", ")) }
             let gone = before.filter { name in !after.contains(name) }
             log(gone.isEmpty
                 ? "not tagged with that. Nothing changed."
-                : "removed \(gone.joined(separator: ", ")) from \(recording.id).")
+                : "removed \(gone.joined(separator: ", ")) from \(what).")
         } catch {
             fail(error.localizedDescription)
         }
@@ -867,13 +918,11 @@ enum CLI {
         let old = args[0]
         let new = args[1]
         guard Tags.find(old) != nil else {
-            fail("no recording is tagged `\(old)`. `listen tags` lists them.")
+            fail("nothing is tagged `\(old)`. `listen tags` lists them.")
         }
         do {
-            let changed = try Tags.rename(old, to: new)
-            log(changed.isEmpty
-                ? "nothing changed."
-                : "renamed in \(changed.count) recording\(changed.count == 1 ? "" : "s").")
+            let touched = try Tags.rename(old, to: new)
+            log(touched.isEmpty ? "nothing changed." : "renamed in \(touched.summary).")
         } catch {
             fail(error.localizedDescription)
         }
@@ -883,17 +932,17 @@ enum CLI {
     /// Take a tag off everything.
     ///
     /// Not a delete of anything: a tag has no existence apart from the
-    /// recordings carrying it, so there is nothing else for this to mean.
+    /// recordings and notes carrying it, so there is nothing else for this to
+    /// mean.
     private static func tagsDelete(_ args: [String]) -> Never {
         guard let name = args.first, args.count == 1 else {
             fail("delete takes one tag. Quote it if it has a space in.")
         }
         guard let tag = Tags.find(name) else {
-            fail("no recording is tagged `\(name)`. `listen tags` lists them.")
+            fail("nothing is tagged `\(name)`. `listen tags` lists them.")
         }
-        let changed = Tags.delete(tag.name)
-        log("took `\(tag.name)` off \(changed.count) "
-            + "recording\(changed.count == 1 ? "" : "s").")
+        let touched = Tags.delete(tag.name)
+        log("took `\(tag.name)` off \(touched.summary).")
         exit(0)
     }
 
@@ -1164,6 +1213,7 @@ enum CLI {
     /// question anybody has about a folder of them.
     private static func notesList(_ args: [String]) -> Never {
         var about: [String] = []
+        var filed: [String] = []
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -1171,6 +1221,10 @@ enum CLI {
                 i += 1
                 guard i < args.count else { fail("--recording needs a recording id.") }
                 about.append(args[i])
+            case "--tag":
+                i += 1
+                guard i < args.count else { fail("--tag needs a tag.") }
+                filed.append(args[i])
             default:
                 // A bare id still works, because `listen notes list <id>` is
                 // what anybody who used the previous shape will type.
@@ -1183,16 +1237,22 @@ enum CLI {
         }
 
         let recordings = notesRecordings(about)
-        let notes = recordings.isEmpty
+        // ANDed with the recordings, and a note's own tags only. A note about a
+        // meeting tagged `kinsight` is not itself tagged `kinsight`, which is
+        // what makes this and `listen list --tag` two different questions.
+        let notes = (recordings.isEmpty
             ? Notes.all()
             : recordings.flatMap(Notes.list(about:))
                 .reduce(into: [Note]()) { out, note in
                     if !out.contains(where: { $0.slug == note.slug }) { out.append(note) }
-                }
+                }).filter { $0.carries(filed) }
         guard !notes.isEmpty else {
+            let narrowed = !filed.isEmpty
             log(recordings.isEmpty
-                ? "no notes in the library yet."
-                : "no notes about \(recordings.map(\.id).joined(separator: ", ")) yet.")
+                ? (narrowed ? "no notes tagged \(filed.joined(separator: ", "))."
+                            : "no notes in the library yet.")
+                : "no notes about \(recordings.map(\.id).joined(separator: ", "))"
+                    + (narrowed ? " tagged \(filed.joined(separator: ", "))." : " yet."))
             exit(0)
         }
 
@@ -1208,6 +1268,9 @@ enum CLI {
             if note.recordings.count > 1 {
                 facts.append("\(note.recordings.count) recordings")
             }
+            // Tags with a leading hash, which is how they are typed into the
+            // search field and drawn on a pill.
+            facts += note.tags.map { "#" + $0 }
             print(note.slug.padding(toLength: max(width + 2, note.slug.count + 2),
                                     withPad: " ", startingAt: 0)
                   + note.title + "  (" + facts.joined(separator: ", ") + ")")
@@ -1237,6 +1300,10 @@ enum CLI {
             + (note.updated.isEmpty ? "" : " on \(note.updated)"))
         trace("  title: \(note.title)")
         if let prompt = note.prompt, !prompt.isEmpty { trace("  prompt: \(prompt)") }
+        // A slug-shaped fact, so it goes on the safe side of the split above:
+        // a tag is the user's own word for a subject and it can hold anything.
+        // It stays behind `trace` for that reason, beside `title` and `prompt`.
+        if !note.tags.isEmpty { trace("  tags: \(note.tags.joined(separator: ", "))") }
         // Every source, including one the library no longer has, which prints
         // as a bare id. A note that quietly stopped listing a deleted meeting
         // would be claiming it was never about it.
@@ -1260,6 +1327,7 @@ enum CLI {
         var replacing: String?
         var was: String?
         var about: [String] = []
+        var filed: [String] = []
         var i = 0
         while i < args.count {
             func value(_ flag: String) -> String {
@@ -1274,6 +1342,11 @@ enum CLI {
             case "--replace":   replacing = value("--replace")
             case "--title":     title = value("--title")
             case "--recording": about.append(value("--recording"))
+            // Repeated rather than comma-separated, which is this CLI's rule
+            // and is load-bearing here rather than merely consistent: a tag is
+            // the user's own words, and `Tags.check` refuses a comma precisely
+            // so that no form of this can ever be ambiguous.
+            case "--tag":       filed.append(value("--tag"))
             case "--was":       was = value("--was")
             case "--was-file":  was = read(file: value("--was-file"), for: "--was-file")
             case let other where other.hasPrefix("-"):
@@ -1302,9 +1375,13 @@ enum CLI {
                 // Nil rather than an empty array when no --recording was given:
                 // adding a paragraph is not a claim about what the note is
                 // about, so the sources are left exactly as they were.
+                // `tags` is nil when no --tag was given, for the same reason
+                // `recordings` is: rewriting the body is not a claim about the
+                // filing. `listen tags add --note <slug>` is how one moves.
                 note = try Notes.replace(replacing, body: body, title: title,
                                          prompt: prompt, source: .cli,
                                          recordings: about.isEmpty ? nil : about,
+                                         tags: filed.isEmpty ? nil : filed,
                                          expecting: was)
                 log("rewrote `\(note.slug)`")
             } else {
@@ -1317,7 +1394,8 @@ enum CLI {
                          + "this would add a note rather than change one.")
                 }
                 note = try Notes.create(title: title, body: body, source: .cli,
-                                        prompt: prompt, recordings: about)
+                                        prompt: prompt, recordings: about,
+                                        tags: filed)
                 log("wrote `\(note.slug)`, about "
                     + note.recordings.joined(separator: ", "))
             }
@@ -1457,8 +1535,10 @@ enum CLI {
       import <path>              bring in a meet_transcriptions library
       enroll [<id>…] [--force]   re-derive voiceprints for named speakers
       dictionary <sub>           your own terms and corrections
-      notes <sub>                the note artifacts, one or many recordings each
-      tags <sub>                 what the recordings are about, in your words
+      notes <sub>                the note artifacts, one or many recordings each.
+                                 list and write take --tag.
+      tags <sub>                 what a recording or a note is about, in your
+                                 words. add and remove take --note <slug>.
       calendar <sub>             the calendars on this Mac, and what they name
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
@@ -1468,8 +1548,9 @@ enum CLI {
                                  are keeping it. An id narrows it to one
                                  recording; --build makes its master here and
                                  says what that cost.
-      mcp                        stdio MCP server. Notes and tags are the only
-                                 things an agent can write.
+      mcp [--tools a,b,c]        stdio MCP server. Notes and tags are the only
+                                 things an agent can write. --tools serves only
+                                 those, and refuses the rest by name.
       changelog [<version>]      what changed, from the notes that shipped in
                                  this copy. --list for the versions alone.
       activity [--limit N]       what has touched the library: tool calls,

@@ -3344,8 +3344,20 @@ extension LibraryWindow: NSMenuDelegate {
     ///
     /// Same argument as Rename, and the same funnel: `DetailView` is what knows
     /// the three-step order a popover here has to be opened in.
+    /// Cmd-T, on whichever page is showing.
+    ///
+    /// **Routed rather than sent straight to `detail`.** A note is a page in
+    /// this window like a recording is, and `detail` is still holding whichever
+    /// meeting was open before, so the unrouted version opened the popover over
+    /// a pane nobody was looking at and filed the wrong thing. Exactly the bug
+    /// already recorded as "The ellipsis said No recording selected over a
+    /// note", which is the same mistake about the same two panes.
     @objc func tagSelected() {
-        detail.beginEditingTags()
+        if sidebar.selectedNote != nil {
+            notePane.beginEditingTags()
+        } else {
+            detail.beginEditingTags()
+        }
     }
 
     @objc func revealSelected() {

@@ -61,6 +61,19 @@ public struct Note: Codable, Sendable, Identifiable {
     /// write it, and the meeting page's "Asked for" line opens it again.
     public var chat: String?
     public var recordings: [String]
+    /// What this note is filed under, in the user's own words.
+    ///
+    /// One vocabulary with `Metadata.tags` on a recording, and carried
+    /// explicitly: a note does not inherit a tag from a meeting it names.
+    /// Listen 0.21.0 and later write it.
+    ///
+    /// `[String]` and not `[String]?`, which is the opposite of
+    /// `Metadata.tags`. That Optional is load-bearing because `Metadata` uses
+    /// the synthesized decoder, which throws `keyNotFound` on a missing key
+    /// even where the property has a default. This type is read by a
+    /// hand-rolled `parse` and a hand-written `init(from:)` with `try?` on
+    /// every field, so there is no key here that can be missing.
+    public var tags: [String]
     public var body: String
 
     /// Frontmatter this version has never heard of, kept exactly as it was
@@ -103,21 +116,46 @@ public struct Note: Codable, Sendable, Identifiable {
     /// this digest cannot detect one being lost, which is exactly how they were
     /// being lost before `extra` existed, so preserving them is the safeguard
     /// and this is not.
+    ///
+    /// **`tags` is in here, and that is the one place this type's formula has
+    /// ever moved.** They are not provenance: a tag is edited repeatedly, by
+    /// hand and by an agent, so leaving it out is silent loss rather than
+    /// saved traffic. A tag added on the Mac would produce no version change,
+    /// never push, and then be overwritten the next time the phone edited the
+    /// body, which is exactly the failure the paragraph above says this digest
+    /// cannot detect.
+    ///
+    /// **Appended last, and only when there are tags**, which is the whole of
+    /// what keeps the change affordable. Two devices computing this by
+    /// different formulas push and pull the same note for ever: `pullNote`
+    /// stamps the *sender's* digest into the base while push stamps its own,
+    /// so neither side ever agrees. Every note written before this field
+    /// existed produces the string it always produced, so nothing already on
+    /// disk moves and the churn is bounded to notes that actually carry a tag,
+    /// until the phone computes the same string. `CloudReport.pushedNotes` on
+    /// a second consecutive pass is the number that says whether it has.
+    ///
+    /// Sorted and comma-joined the way `recordings` is, which is unambiguous
+    /// only because `Tags.check` refuses a comma in a tag name.
     public var version: String {
         var canonical = title
         canonical += "\n" + recordings.sorted().joined(separator: ",")
         canonical += "\n" + body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tags.isEmpty {
+            canonical += "\n" + tags.sorted().joined(separator: ",")
+        }
         return sha256Hex(Data(canonical.utf8))
     }
 
     public init(slug: String, title: String, created: String, updated: String,
                 source: String, recordings: [String], body: String,
                 prompt: String? = nil, chat: String? = nil,
-                extra: [String: String] = [:]) {
+                tags: [String] = [], extra: [String: String] = [:]) {
         self.slug = slug; self.title = title; self.created = created
         self.updated = updated; self.source = source
         self.prompt = prompt; self.chat = chat
-        self.recordings = recordings; self.body = body; self.extra = extra
+        self.recordings = recordings; self.tags = tags
+        self.body = body; self.extra = extra
     }
 
     /// Decoded leniently, so a note sent by a version that models more fields
@@ -133,6 +171,7 @@ public struct Note: Codable, Sendable, Identifiable {
         prompt = try? c.decode(String.self, forKey: .prompt)
         chat = try? c.decode(String.self, forKey: .chat)
         recordings = (try? c.decode([String].self, forKey: .recordings)) ?? []
+        tags = (try? c.decode([String].self, forKey: .tags)) ?? []
         body = (try? c.decode(String.self, forKey: .body)) ?? ""
         extra = (try? c.decode([String: String].self, forKey: .extra)) ?? [:]
     }
@@ -191,8 +230,16 @@ public struct Note: Codable, Sendable, Identifiable {
         var extra: [String: String] = [:]
         var sequences: [String: [String]] = [:]
         var openSequence: String?
+        // `tags` is here rather than in `extra`, and modelling it fixed a hole
+        // as well as adding a field. An unknown key with an **empty** value
+        // takes both routes: `extra[key] = ""` from the scalar below, and its
+        // `- ` lines into `sequences[key]`, which nothing reads. Serialising
+        // then writes back a bare `tags:` and the list is gone. That is the
+        // same failure the comment above records for `recordings`, and it is
+        // still open for the next unknown key that arrives as a block
+        // sequence. Modelling one is what closes it for that one.
         let known: Set<String> = ["title", "created", "updated", "source",
-                                  "prompt", "chat", "recordings"]
+                                  "prompt", "chat", "recordings", "tags"]
         for line in rest[rest.startIndex..<end.lowerBound].split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
@@ -214,20 +261,25 @@ public struct Note: Codable, Sendable, Identifiable {
             guard known.contains(key) else { extra[key] = raw; continue }
             fields[key] = unquote(raw)
         }
-        let recordings = sequences["recordings"] ?? (fields["recordings"] ?? "[]")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"")) }
-            .filter { !$0.isEmpty }
+        // Block sequence first and the flow form second, for both of the list
+        // fields. Listen writes the flow form and accepts either.
+        func list(_ key: String) -> [String] {
+            sequences[key] ?? (fields[key] ?? "[]")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"")) }
+                .filter { !$0.isEmpty }
+        }
         return Note(slug: slug,
                     title: fields["title"] ?? heading(in: text) ?? slug,
                     created: fields["created"] ?? stamp,
                     updated: fields["updated"] ?? fields["created"] ?? stamp,
                     source: fields["source"] ?? "you",
-                    recordings: recordings,
+                    recordings: list("recordings"),
                     body: String(rest[end.upperBound...]),
                     prompt: fields["prompt"],
                     chat: fields["chat"],
+                    tags: list("tags"),
                     extra: extra)
     }
 
@@ -256,8 +308,27 @@ public struct Note: Codable, Sendable, Identifiable {
     /// note that has been through this app is not diffable from one that has
     /// not. Unknown keys are written after the ones both apps know and before
     /// `recordings`, which is where Listen puts the two this version learned.
+    ///
+    /// `tags` sits in that same band, immediately before `extra`. A deployed
+    /// client that does not model it holds it in `extra` and writes it out in
+    /// the sorted loop, which lands in the same place, so the two produce
+    /// byte-identical files and nothing churns.
+    ///
+    /// **`tags` is written even when it is empty, which is the opposite of
+    /// what a recording does.** `Tags.write` stores an empty list as nil so
+    /// that a recording with no tags is indistinguishable from one written
+    /// before the field existed, and that is right there because only the
+    /// authoring device ever serialises a recording's metadata. A note is the
+    /// one sidecar both devices write, and `Library.writeNote` merges `extra`
+    /// with "absent means unchanged". So if an empty list were spelled as an
+    /// absent key, clearing a note's tags could never reach a peer that is
+    /// still holding them in `extra`: the merge would put them straight back,
+    /// and the two sides would agree on a digest while holding different
+    /// files. Writing `tags: []` makes the clear an instruction that merge can
+    /// see.
     public func serialised() -> String {
-        let list = recordings.map { "\"\($0)\"" }.joined(separator: ", ")
+        let sources = recordings.map { "\"\($0)\"" }.joined(separator: ", ")
+        let filed = tags.map { "\"\($0)\"" }.joined(separator: ", ")
         var out = "---\n"
         out += "title: \"\(title)\"\n"
         out += "created: \(created)\n"
@@ -265,8 +336,9 @@ public struct Note: Codable, Sendable, Identifiable {
         out += "source: \(source)\n"
         if let prompt, !prompt.isEmpty { out += "prompt: \"\(prompt)\"\n" }
         if let chat, !chat.isEmpty { out += "chat: \"\(chat)\"\n" }
+        out += "tags: [\(filed)]\n"
         for key in extra.keys.sorted() { out += "\(key): \(extra[key]!)\n" }
-        out += "recordings: [\(list)]\n"
+        out += "recordings: [\(sources)]\n"
         out += "---\n\n"
         return out + body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }

@@ -177,6 +177,14 @@ public struct Library: Sendable {
             // every client, including the ones already installed.
             if note.prompt == nil { note.prompt = existing.prompt }
             if note.chat == nil { note.chat = existing.chat }
+            // **`tags` is deliberately not on this rule**, and it looks like an
+            // omission. The rule protects a field a caller might drop because
+            // it does not model it; a caller that does not model `tags` does
+            // not drop it, it carries it through `extra` and hands it back. So
+            // an absent tag list here is a real one, and it has to be, because
+            // clearing every tag off a note is a thing somebody does on
+            // purpose. See `Note.serialised`, which writes the key even when
+            // the list is empty so that this merge can tell the two apart.
             note.extra = existing.extra.merging(note.extra) { _, incoming in incoming }
         } else if expecting != nil {
             throw NoteConflict(theirs: Note(slug: note.slug, title: note.title,

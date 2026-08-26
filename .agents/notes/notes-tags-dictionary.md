@@ -382,6 +382,193 @@ string when quoted. Matching against a known vocabulary is what makes a space in
 a tag unambiguous rather than clever, and it is the same accept-what-they-meant
 rule `Notes.find` uses for a slug or a title.
 
+## One vocabulary, two kinds of thing, and no inheritance
+
+A note carries tags now. It was asked for as "tag all the calls and notes with
+Edgar about the Kinsight project", which the app could do exactly half of: it
+tagged the recordings, and had no tool that could refuse the rest, so it did
+half the job and said nothing.
+
+`Tags.all` reads `Recording.all()` and `Notes.all()` and groups both by the same
+lowercased key, so **there is one vocabulary and a tag only a note carries is a
+tag that exists**. That is what makes `Tags.adopted` work across the two:
+tagging a note `Kinsight` where a recording holds `kinsight` files it under the
+one that is there, and the other way round. Without it the two kinds would grow
+parallel spellings of the same filing and neither would have everything, which
+is the failure a derived vocabulary is always one step away from.
+
+`rename` and `delete` therefore sweep both. Leaving the notes behind would
+strand copies under the old name, and since a tag nothing carries does not
+exist, the old name would reappear in the list the moment the rename finished.
+They return `Touched` rather than a count of recordings for the same reason: the
+three callers print how many, and one that said "3 recordings" after rewriting
+four notes as well would be wrong in the one place somebody reads to decide.
+
+**Nothing is inherited.** A note about a meeting tagged `kinsight` carries
+nothing until somebody tags the note. This is `Notes`'s existing rule, the one
+that says a note states its sources and nothing parses the body looking for
+links: an inherited tag is a claim nobody made, and "why does this note have a
+tag I never gave it" is a question with no answer anywhere in the file. It also
+keeps `list_notes {tags}` and `list_recordings {tags}` two different questions,
+which is what a caller actually wants: what is filed under this, and what was
+said in meetings filed under this.
+
+The cost is that filing a subject means tagging both, and the agent brief says
+so in as many words, because a model that assumed inheritance would tag the
+meetings and report the job done.
+
+### A note's tags are in the digest only when it has any
+
+`Note.version` is the compare-and-swap token and it was title, recordings and
+body. Tags had to join it, and that is the one time this formula has moved.
+
+Leaving them out was the alternative and it is silent loss, not saved traffic.
+A tag added on the Mac would change no digest, so it would never push; the phone
+would then edit the body, push markdown that never carried the tag, and the Mac
+would pull it back with the tag gone and nothing anywhere reporting it. That is
+precisely the failure the `extra` comment says this digest cannot detect. Tags
+are not write-once provenance like `prompt` and `chat`: they are edited
+repeatedly, by hand and by an agent.
+
+**What it costs, stated rather than discovered later.** Two devices computing
+`version` by different formulas push and pull the same note for ever, because
+`pullNote` stamps the *sender's* digest into the base while push stamps its own,
+so neither side ever agrees with itself. Traced:
+
+1. Mac push: base `V_ios`, local `V_mac`, remote `V_ios`, so `remote == base`
+   and it pushes.
+2. Phone pull: `local == base`, so it pulls, and stamps `base = V_mac`, the
+   sender's.
+3. Phone push: it recomputes `V_ios` off its own disk, `remote == base`, pushes.
+4. Mac pull: `local == base`, pulls. Back to 1.
+
+The content never changes, because `extra` round-trips the key on the side that
+does not model it, so this is wasted round trips rather than data loss. It stops
+when the iOS app, which is a separate repo, computes the same string.
+
+**Appending after the body and only when the list is non-empty is what bounds
+it.** Every note written before this field existed produces the string it always
+produced, so nothing already on disk re-syncs and the whole library does not move
+at once; the churn covers only notes that actually carry a tag. `FakeSync` holds
+the pre-change digest as a hard-coded constant for exactly this, and a second
+consecutive pass asserting `pushedNotes == 0` is the churn check.
+
+A separate tags digest in `NoteBlob` was considered and is worse: the deployed
+client's `decideNote` does not consult it, so the phone still recomputes and
+pushes its own version, and you pay a new field and a second digest to keep in
+step for the same ping-pong.
+
+### The empty list is written for a note and omitted for a recording
+
+`Tags.write` stores a recording's empty tag list as nil, so a recording with no
+tags is indistinguishable from one written before the field existed. Two ways to
+spell "no tags" is one more than the number of things it can mean.
+
+A note does the opposite: `tags: []` is written out. The reason is that a note
+is the one sidecar **both devices serialise**, and `Library.writeNote` merges
+`extra` with "absent means unchanged", which exists to stop a client dropping a
+field it does not model. If an empty list were an absent key, clearing a note's
+tags could never reach a peer still holding them in `extra`: the merge would put
+them straight back, the two sides would agree on a digest while holding
+different files, and the tag would come back from a device nobody had touched.
+Writing the key makes a clear an instruction the merge can see. `FakeSync`
+asserts the clear crosses.
+
+Only the authoring device serialises a recording's `metadata.json`, which is why
+the recording rule is safe and this one is not. The two comments point at each
+other.
+
+### Tagging a note does not touch `updated`
+
+`updated != created` is what `MCP.brief` reports as `edited_by_hand`, and that
+is how an agent knows a note is one to rewrite carefully or leave alone. Filing
+a note is not editing its words, so an agent's own `add_tags` setting that flag
+would be a lie it reads back on its next turn. `Notes.setTags` is the only write
+path that leaves the clock alone.
+
+Nothing downstream needs the clock: `version` is content and tags are in it, so
+the sync sees a tag without a timestamp. One thing did, and it was invisible
+from the outside. `DetailView.signature` keyed its redraw on `slug|updated`, so
+a tag landing changed nothing it could see and the drawer sat showing the old
+pills until something else happened to the pane. The tags are in the signature
+now.
+
+### `pageless` only earns its keep while recordings are in the list too
+
+`Sidebar.pageless` answers "does this note already have a page to live on", and
+it exists so the unfiltered library does not list every meeting twice, once as
+itself and once as the note about that one meeting. That is a rule about a list
+of everything and about nothing else, and it was being applied to two lists that
+are not that. Both hid notes with nothing on screen to say so.
+
+**The Notes collection was the bad one, and it was found by looking at a real
+library.** `kind:notes` puts no recordings in the list at all, so there is
+nothing for a note to double up with, and yet every note about exactly one
+meeting was dropped from it. Most notes are about one meeting, so a list called
+Notes was showing five of fourteen and reading as a library with almost no notes
+in it. Reproduced on a scratch library with two notes: it listed one.
+
+**A tag lens is the same mistake.** The list is then not everything, it is what
+matches, and dropping a match because it also has a home elsewhere is a wrong
+answer rather than a tidier one.
+
+So the test is `pageless || !mayDoubleUp`, where a list may double up only when
+it is showing recordings and no tag lens is narrowing it. The unfiltered library
+is unchanged, which is the thing to check after touching this.
+
+The comment this replaces said a note surviving a tag filter "would be a row the
+filter did not consider rather than a row it kept", which was true only while a
+note had no tags and is the exact claim this reverses. One thing did not change:
+`is:unnamed` still hides notes entirely, because it asks something only a
+recording can answer.
+
+`noteLensesAllow` is gone with it. `filter.tags` and `filter.needsSpeakers`
+already carry both the typed operators and the clicked lenses, and reading
+`lenses` separately was how a typed `tag:` and a clicked pill could have come to
+behave differently.
+
+### The tags are text in the note row, and pills everywhere else
+
+Full parity was asked for and this is where it stops, on purpose.
+`Sidebar.heightOfRow` returns a flat 52 for every row and `NoteCell` is already
+two lines in a 280 point sidebar, so pills there need a third line or variable
+heights. The stronger reason is that **a recording row shows no tags at all**:
+pills on note rows and nothing on meeting rows would have the list say a note is
+more filed than the meeting it is about, which is the opposite of what one
+vocabulary means. So the row gets `#name` in the `" · "` line it already has,
+for no layout at all, and the whole list in its tooltip because that line
+truncates and the tags are at the end of it.
+
+Pills on both cells with a height that moves for both is a real option and a
+separate change, worth its own measurement.
+
+`TagChips` itself is shared rather than copied, over a `Taggable` enum. Only
+about six lines of its 509 were recording-shaped, and the two things a copy
+would have duplicated are both already-paid-for bugs: the picker's
+`sendsActionOnEndEditing = false`, and the strip's `.defaultHigh` leading pin,
+which is a measured fix for Auto Layout breaking the *trailing* one and running
+the row 335 points off the pane. `maxChips` and `maxChipWidth` became instance
+settings keeping the measured defaults, because those numbers were derived from
+the leftover space in the transcript header after two speaker pills and the note
+page's row shares with nothing.
+
+Three places carry a strip now: the transcript header (the recording's), the
+note page (a pageless note's), and the notes drawer inside a recording
+(whichever note is being read). The third is not optional, because a note about
+exactly one meeting is only ever read in that drawer and would otherwise be
+taggable from the CLI and an agent and nowhere in the window.
+
+### An agent may tag the user's own note, and still may not rewrite it
+
+`add_tags` and `remove_tags` resolve through `MCP.note`, not `MCP.writable`.
+That note is unwritable because its words were not derived from anything and
+there is no way to get them back, which is the transcript argument applied to
+the one document in the library nobody can reconstruct. A tag is filing rather
+than wording: it is one click to remove in the window, and the argument for tags
+being writable at all, that a tag is how a question says what it is about,
+applies hardest to the note an agent most wants to find again. The tool
+description says so, because it reads as a hole otherwise.
+
 ## The server is no longer read-only, and notes and tags are the whole exception
 
 This reverses a property `CLAUDE.md`, `README.md`, `SPEC.md`, the Developers

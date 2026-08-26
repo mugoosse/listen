@@ -168,6 +168,15 @@ final class DetailView: NSView {
     /// write. Same size, same weight, same colour as "Transcript", because they
     /// are the two halves of one page.
     private let notesHeading = NSTextField(labelWithString: "Notes")
+    /// What the note being read is filed under.
+    ///
+    /// **Its own strip, not the one in the header.** That one is the
+    /// recording's, and the two are different claims: a meeting tagged
+    /// `kinsight` and the write-up of it tagged `kinsight` are two filings, and
+    /// nothing here infers one from the other. This is also the only place a
+    /// note about a single meeting can be tagged by hand, because such a note
+    /// is read in this drawer and never gets a page of its own in the sidebar.
+    private let noteTagChips = TagChips()
     private var notesHeadingTop: NSLayoutConstraint!
     private var notesHeadingHeight: NSLayoutConstraint!
     /// The greeting over an empty pane, with the mascot beside it.
@@ -451,6 +460,14 @@ final class DetailView: NSView {
         }
         tagChips.onChanged = { [weak self] in self?.refreshTags() }
 
+        // Two on the pane, and each writes to the thing its row is about. This
+        // one is the note's; `tagChips` above is the recording's.
+        noteTagChips.onTag = { name, _, _ in LibraryWindow.shared.filter(byTag: name) }
+        noteTagChips.onAdd = { [weak self] anchor, rect in
+            self?.editNoteTags(from: anchor, rect: rect)
+        }
+        noteTagChips.onChanged = { [weak self] in self?.refreshNoteTags() }
+
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
 
@@ -543,7 +560,7 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, notesHeading, recordingHeading, greeting,
+                  chatLinks, notesHeading, noteTagChips, recordingHeading, greeting,
                   recentChats, empty, emptyIcon, transcribing, live] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -762,6 +779,14 @@ final class DetailView: NSView {
             notesHeadingHeight,
             notesHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             notesHeading.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            // Trailing on the heading's own row, which is the arrangement the
+            // strip is built for: it grows leftward from the pane's edge, so
+            // "Notes" and the filing never fight for a fixed split.
+            noteTagChips.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            noteTagChips.centerYAnchor.constraint(equalTo: notesHeading.centerYAnchor),
+            noteTagChips.heightAnchor.constraint(equalToConstant: 22),
+            noteTagChips.leadingAnchor.constraint(
+                greaterThanOrEqualTo: notesHeading.leadingAnchor, constant: 60),
 
             noteInfoTop,
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -1279,8 +1304,16 @@ final class DetailView: NSView {
         if !reset { applyShowing() }
     }
 
+    /// What has to change for this pane to redraw its notes.
+    ///
+    /// **The tags are in here because `updated` deliberately does not move when
+    /// they change.** `Notes.setTags` leaves the clock alone so that an agent
+    /// tagging a note does not mark it hand-edited, which means a slug-and-date
+    /// signature cannot see a tag land, and the pane sat showing the old ones
+    /// until something else happened to it.
     private func signature() -> String {
-        notes.map { "\($0.slug)|\($0.updated)" }.joined(separator: ",")
+        notes.map { "\($0.slug)|\($0.updated)|\($0.tags.joined(separator: "+"))" }
+            .joined(separator: ",")
             + "#" + (showingNote ?? "")
     }
 
@@ -1318,10 +1351,16 @@ final class DetailView: NSView {
             notesText.isEditable = false
             notesText.textStorage?.setAttributedString(NSAttributedString())
             noteInfo.textStorage?.setAttributedString(NSAttributedString())
+            // No note being read, so no filing to show and nothing for the `＋`
+            // to add to. `clear()` hides it, which is what keeps a lone button
+            // off the heading of a recording with no notes at all.
+            noteTagChips.clear()
             updatePlaceholder()
             return
         }
         setProvenance(of: note)
+        noteTagChips.isHidden = false
+        noteTagChips.configure(.note(note))
 
         if Notes.isYours(note) {
             notesText.isEditable = true
@@ -1755,6 +1794,9 @@ final class DetailView: NSView {
         // Collapsed as well as hidden, spacing included, which this file
         // records three times over.
         notesHeading.isHidden = !readable
+        // With the heading, always. It is pinned to that row, so a strip left
+        // behind would draw over whatever collapsed up into the space.
+        if !readable { noteTagChips.isHidden = true }
         notesHeadingHeight.constant = readable ? 16 : 0
         notesHeadingTop.constant = readable ? 12 : 0
         // No heading over a meeting with nothing under it either. The sentence
@@ -2222,7 +2264,7 @@ final class DetailView: NSView {
         // untranscribed recording keeps the layout it had before this row
         // existed.
         chips.configure(recording)
-        tagChips.configure(recording)
+        tagChips.configure(.recording(recording))
         setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
 
         turns = recording.storedTurns
@@ -2336,6 +2378,9 @@ final class DetailView: NSView {
         // above "Select something from the list."
         recordingHeading.isHidden = hidden
         notesHeading.isHidden = hidden
+        // The list this comment is about. The strip lives on the heading's row,
+        // so it has to go when the heading does.
+        if hidden { noteTagChips.clear() }
         chatLinks.isHidden = hidden
         if hidden {
             // Collapsed as well as hidden, spacing included, or the empty
@@ -2404,9 +2449,43 @@ final class DetailView: NSView {
         guard let recording else { return }
         let anchor = convert(rect, from: view)
         endEditing()
-        TagPopover.show(for: recording, from: self, rect: anchor) { [weak self] in
+        TagPopover.show(for: .recording(recording), from: self, rect: anchor) { [weak self] in
             self?.refreshTags()
         }
+    }
+
+    /// The add popover for the note being read.
+    ///
+    /// `saveYours()` before it opens, for the reason `editTags` calls
+    /// `endEditing`: the user's own note is an editable text view on this page,
+    /// tagging it reloads the drawer, and a reload that ran with an uncommitted
+    /// caret in the box would take the last thing typed with it.
+    private func editNoteTags(from view: NSView, rect: NSRect) {
+        guard let note = notes.first(where: { $0.slug == showingNote }) else { return }
+        let anchor = convert(rect, from: view)
+        saveYours()
+        TagPopover.show(for: .note(note), from: self, rect: anchor) { [weak self] in
+            self?.refreshNoteTags()
+        }
+    }
+
+    /// Redraw the note's strip, and only it.
+    ///
+    /// Not `reloadNotes`, which rebuilds the picker and re-renders the body: a
+    /// note being read with a caret in it must not be rewritten from disk
+    /// because a pill was clicked beside it.
+    private func refreshNoteTags() {
+        guard let slug = showingNote, let updated = Notes.find(slug) else { return }
+        if let index = notes.firstIndex(where: { $0.slug == slug }) {
+            notes[index] = updated
+        }
+        noteTagChips.isHidden = false
+        noteTagChips.configure(.note(updated))
+        // The signature has the tags in it, so the next `reloadNotes` would
+        // redraw for a change this has already drawn. Restamping keeps that
+        // from throwing away a caret the user still has in the box.
+        notesSignature = signature()
+        LibraryWindow.shared.reload()
     }
 
     /// Redraw the strip after a tag changed, and nothing else.
@@ -2419,7 +2498,7 @@ final class DetailView: NSView {
     func refreshTags() {
         guard let recording, let updated = Recording.find(recording.id) else { return }
         self.recording = updated
-        tagChips.configure(updated)
+        tagChips.configure(.recording(updated))
         setChipsCollapsed(chips.isEmpty && tagChips.isEmpty)
         LibraryWindow.shared.reload()
     }

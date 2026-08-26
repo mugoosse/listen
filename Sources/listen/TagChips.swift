@@ -1,7 +1,15 @@
 import AppKit
 
-/// What this recording is about, as a row of pills at the trailing edge of the
-/// speaker chips.
+/// What this recording or note is about, as a row of pills.
+///
+/// **One view for both, and it is not a convenience.** The type-to-filter
+/// popover below holds `sendsActionOnEndEditing = false`, which is a trap this
+/// codebase has already paid for twice, and the strip's leading pin is a
+/// measured fix for Auto Layout breaking the wrong constraint. A second copy
+/// for notes would be where both come back, and the precedent is written down:
+/// the sidebar's speaker match and MCP's were two copies of one predicate and
+/// they had already come apart. What varies between a meeting and a note is
+/// `Taggable`, and that is the whole of it.
 ///
 /// **The same band as the speakers, deliberately.** The header above the
 /// transcript is already six deep: title, subtitle, chips, the document toggle,
@@ -43,28 +51,43 @@ final class TagChips: NSView {
     /// under the date of every recording in the library.
     private(set) var isEmpty = true
 
-    private var recording: Recording?
+    private var subject: Taggable?
 
     /// How many pills before the rest go into an overflow menu.
     ///
-    /// Three rather than `SpeakerChips`'s five. These share a row with the
-    /// speakers and lose to them when the pane is narrow, so the budget here is
-    /// what is left rather than what fits: a fourth tag is one click away and a
-    /// truncated name is not a name.
-    private static let maxChips = 3
+    /// Three rather than `SpeakerChips`'s five, and that is the transcript
+    /// header's number: these share a row with the speakers there and lose to
+    /// them when the pane is narrow, so the budget is what is left rather than
+    /// what fits. A fourth tag is one click away and a truncated name is not a
+    /// name.
+    private var maxChips = 3
 
     /// The widest one pill is allowed to be, in points.
     ///
-    /// Measured rather than chosen. The window will not go below 1056 points
-    /// wide, which with the sidebar open leaves the pane 736; two speakers take
-    /// about 230 of that, so the tags have roughly 480 to share. Take off the
-    /// `＋` and the spacing and three pills have about 140 each.
+    /// Measured rather than chosen, **and measured for the transcript header**.
+    /// The window will not go below 1056 points wide, which with the sidebar
+    /// open leaves the pane 736; two speakers take about 230 of that, so the
+    /// tags have roughly 480 to share. Take off the `＋` and the spacing and
+    /// three pills have about 140 each.
     ///
     /// A tag may be 40 characters, which draws at over 300, so without this a
     /// single long one pushes its neighbours off the row. Truncated, the pill
     /// keeps its shape and the whole name is in the tooltip, which is the same
     /// trade the sidebar's title makes.
-    private static let maxChipWidth: CGFloat = 140
+    private var maxChipWidth: CGFloat = 140
+
+    /// Room for a row that is not sharing with the speakers.
+    ///
+    /// The note page's strip has the full width of the pane and nothing
+    /// competing for it, so the two numbers above are simply the wrong ones
+    /// there. They are still the defaults, because the header they were
+    /// measured against is the busier case; this says out loud that a caller
+    /// with a different row measured its own rather than inheriting somebody
+    /// else's number by accident.
+    func widen(maxChips: Int, maxChipWidth: CGFloat) {
+        self.maxChips = maxChips
+        self.maxChipWidth = maxChipWidth
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -101,14 +124,14 @@ final class TagChips: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ recording: Recording) {
+    func configure(_ subject: Taggable) {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
-        self.recording = recording
+        self.subject = subject
 
-        let tags = Tags.of(recording)
+        let tags = subject.tags
         isEmpty = tags.isEmpty
 
-        let overflow = tags.dropFirst(Self.maxChips)
+        let overflow = tags.dropFirst(maxChips)
         if !overflow.isEmpty {
             // Before the visible ones, not after. The row is read right to left
             // from the window's edge, so a count on the far right would be the
@@ -132,7 +155,7 @@ final class TagChips: NSView {
             stack.addArrangedSubview(more)
         }
 
-        for name in tags.prefix(Self.maxChips) {
+        for name in tags.prefix(maxChips) {
             stack.addArrangedSubview(pill(name))
         }
 
@@ -145,7 +168,7 @@ final class TagChips: NSView {
     /// pane offering to tag a recording that is not there.
     func clear() {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
-        recording = nil
+        subject = nil
         isEmpty = true
         isHidden = true
     }
@@ -156,9 +179,9 @@ final class TagChips: NSView {
         button.action = #selector(tagClicked(_:))
         button.showPlain("#" + name)
         button.identifier = NSUserInterfaceItemIdentifier(name)
-        button.toolTip = "Show only the recordings tagged #\(name)"
+        button.toolTip = "Show only what is tagged #\(name)"
         button.menu = menu(for: name)
-        button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxChipWidth)
+        button.widthAnchor.constraint(lessThanOrEqualToConstant: maxChipWidth)
             .isActive = true
         return button
     }
@@ -170,9 +193,14 @@ final class TagChips: NSView {
     /// that are not a click go here rather than into a second popover.
     private func menu(for name: String) -> NSMenu {
         let menu = NSMenu()
+        // The third item names what it is taking the tag off, because "Remove"
+        // alone beside "Rename Everywhere" reads as the same scale of edit and
+        // is not. The kind comes from the subject: the strip is on a note page
+        // as well as a meeting now.
+        let kind = subject?.kindWord ?? "Recording"
         for (title, action) in [("Show Only These", #selector(filterTo(_:))),
                                 ("Rename Everywhere…", #selector(renameTag(_:))),
-                                ("Remove From This Recording", #selector(removeTag(_:)))] {
+                                ("Remove From This \(kind)", #selector(removeTag(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = name
@@ -186,8 +214,10 @@ final class TagChips: NSView {
         button.target = self
         button.action = #selector(addClicked(_:))
         button.showPlain("＋")
-        button.toolTip = recording.map { Tags.of($0).isEmpty }.map {
-            $0 ? "Say what this recording is about" : "Add another tag"
+        button.toolTip = subject.map(\.tags).map {
+            $0.isEmpty
+                ? "Say what this \(subject?.kindWord.lowercased() ?? "recording") is about"
+                : "Add another tag"
         }
         return button
     }
@@ -223,9 +253,9 @@ final class TagChips: NSView {
     }
 
     @objc private func removeTag(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String, let recording else { return }
+        guard let name = sender.representedObject as? String, let subject else { return }
         do {
-            _ = try Tags.remove([name], from: recording)
+            try subject.removing([name])
             onChanged?()
         } catch {
             // Said out loud rather than swallowed. A `try?` here would leave a
@@ -237,16 +267,21 @@ final class TagChips: NSView {
 
     @objc private func renameTag(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
-        let carrying = Tags.find(name)?.count ?? 0
+        let tag = Tags.find(name)
 
         let alert = NSAlert()
         alert.messageText = "Rename #\(name)?"
         // The count before the fact, for the reason `People.collisions` is
         // counted before a rename: nothing afterwards would show that this
         // reached recordings the user was not looking at.
-        alert.informativeText = carrying == 1
-            ? "It is on this recording only."
-            : "It is on \(carrying) recordings, and all of them change."
+        //
+        // `summary` rather than a count of recordings, because the rename
+        // reaches notes too and a sentence that said "3 recordings" before
+        // rewriting four notes as well would be wrong in the one place
+        // somebody is reading to decide.
+        alert.informativeText = tag?.total == 1
+            ? "It is on this \(subject?.kindWord.lowercased() ?? "recording") only."
+            : "It is on \(tag?.summary ?? "nothing"), and all of them change."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = name
         alert.accessoryView = field
@@ -288,12 +323,12 @@ enum TagPopover {
     /// together, and dismissing after the first would mean four clicks to get
     /// back to where you already were. It is `.transient`, so clicking anywhere
     /// else is still how it goes away.
-    static func show(for recording: Recording, from view: NSView, rect: NSRect,
+    static func show(for subject: Taggable, from view: NSView, rect: NSRect,
                      changed: @escaping () -> Void) {
         current?.performClose(nil)
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = TagPickerController(recording: recording,
+        popover.contentViewController = TagPickerController(subject: subject,
                                                             changed: changed)
         DispatchQueue.main.async {
             // Refused rather than raised, for the reason `PersonPopover.show`
@@ -317,17 +352,19 @@ enum TagPopover {
 
 @MainActor
 private final class TagPickerController: NSViewController, NSTextFieldDelegate {
-    private let recording: Recording
+    private let subject: Taggable
     private let changed: () -> Void
 
     private let field = NSTextField(string: "")
     private var rows: NSStackView!
     private var carried: [String] = []
+    /// How much carries each tag, by lowercased name. Rebuilt by `render`.
+    private var counts: [String: Int] = [:]
 
     private static let width: CGFloat = 280
 
-    init(recording: Recording, changed: @escaping () -> Void) {
-        self.recording = recording
+    init(subject: Taggable, changed: @escaping () -> Void) {
+        self.subject = subject
         self.changed = changed
         super.init(nibName: nil, bundle: nil)
     }
@@ -389,7 +426,7 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         ])
         view = container
 
-        carried = Tags.of(recording)
+        carried = subject.tags
         render()
     }
 
@@ -402,10 +439,21 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         for view in rows.arrangedSubviews { view.removeFromSuperview() }
 
         let typed = Tags.canonical(field.stringValue)
+        // Derived once for the whole list, not once per row.
+        //
+        // Each row shows how much carries its tag, and it used to ask
+        // `Tags.find` for that, which walks the library. Cheap enough when the
+        // library was the only thing a tag could be on, and no longer: the
+        // vocabulary spans the notes directory too, so a twenty row list was
+        // about to read every recording folder and every note file twenty
+        // times, on every keystroke.
+        let vocabulary = Tags.all()
+        counts = Dictionary(uniqueKeysWithValues: vocabulary.map { ($0.name.lowercased(),
+                                                                   $0.total) })
         // Carried tags first however the list is filtered, because untagging is
         // the other half of what this popover is for and a tag that scrolled
         // out of sight cannot be unticked.
-        let known = Tags.suggestions(for: field.stringValue).map(\.name)
+        let known = Tags.suggestions(for: field.stringValue, among: vocabulary).map(\.name)
         let shown = carried.filter { typed.isEmpty || Tags.matches($0, typed)
             || $0.lowercased().contains(typed.lowercased()) }
             + known.filter { name in !carried.contains { Tags.matches($0, name) } }
@@ -451,7 +499,11 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let count = Tags.find(name)?.count ?? 0
+        // Everything carrying it, recordings and notes together. One number,
+        // because the row is answering "is this tag in use" rather than
+        // breaking down what uses it, and two numbers in an 11 point label at
+        // the end of a row would need a legend.
+        let count = counts[name.lowercased()] ?? 0
         let detail = NSTextField(labelWithString: count > 0 ? "\(count)" : "")
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .tertiaryLabelColor
@@ -474,8 +526,8 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         guard let name = sender.identifier?.rawValue else { return }
         apply {
             carried.contains { Tags.matches($0, name) }
-                ? try Tags.remove([name], from: recording)
-                : try Tags.add([name], to: recording)
+                ? try subject.removing([name])
+                : try subject.adding([name])
         }
     }
 
@@ -483,7 +535,7 @@ private final class TagPickerController: NSViewController, NSTextFieldDelegate {
         let typed = Tags.canonical(field.stringValue)
         guard !typed.isEmpty else { return }
         field.stringValue = ""
-        apply { try Tags.add([typed], to: recording) }
+        apply { try subject.adding([typed]) }
     }
 
     /// Write, keep what the recording now carries, and tell the pane.

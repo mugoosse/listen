@@ -636,3 +636,33 @@ carries one, and that deleting a recording deletes its master.
 
 It is hermetic and repeatable: run it twice against the same `--at` directory
 before believing it.
+
+## Two paths delete a note on somebody else's say-so, and only one trashed it
+
+`deleteLocally` states the rule for the pull side: a deletion arriving over sync
+was made on some other device, and this one cannot tell a deliberate one from a
+bug or from a library that briefly looked empty, so the file is **moved, not
+removed**, and `Trash` holds it for a fortnight.
+
+The push side has its own branch for the same event, the one for a pass whose
+pull failed on the network and whose push ran anyway. Its own comment calls it
+"somebody else's deletion". It called `library.deleteNote`, which is a bare
+`removeItem` with nothing behind it.
+
+**Found on the real library, not by reading.** `activity.jsonl` held
+`{"at":"2026-08-18T19:33:29Z","count":4,"event":"sync_deleted"}`, the library
+had gone from four notes to none, and `listen sync trash` listed two recordings
+and no notes at all. The backups still had them, which is the only reason they
+were recoverable. `sync_deleted` is logged only for `report.deletedLocally`, and
+`CloudSyncHost` justifies logging counts rather than ids by saying "the trash
+holds the folders for a fortnight", which was true of recordings and false of
+notes.
+
+The trash's own instruction had been wrong for as long: `listen sync trash`
+prints "Put one back by moving it into recordings/ or notes/", and nothing ever
+put a note there.
+
+`FakeSync` now drives that branch on purpose, by deleting the record behind the
+receiving device's back so its pull has nothing to react to, and asserts the
+`.md` is in the trash. Checked both ways: with `deleteNote` back in place the
+assertion fails, which is what makes it a test rather than a decoration.

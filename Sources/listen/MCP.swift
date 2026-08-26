@@ -4,7 +4,8 @@ import Foundation
 /// writable surface.
 ///
 /// Hand-rolled rather than pulled from the SDK. The surface is thirteen tools
-/// and two resources over files already on disk, and the official Swift SDK
+/// and two resources over files already on disk, though one session may be
+/// given fewer: see `serve(_:)` and `--tools`. The official Swift SDK
 /// brings a dependency tree and a concurrency model into a binary that already
 /// carries MLX, CoreML and Sparkle. The protocol needed here is a few hundred
 /// lines of JSON-RPC with no streaming and no subscriptions.
@@ -38,7 +39,23 @@ import Foundation
 enum MCP {
     static let protocolVersion = "2024-11-05"
 
-    static func serve() -> Never {
+    /// `listen mcp [--tools a,b,c]`.
+    ///
+    /// Without `--tools` the server offers everything it has, which is what a
+    /// hand-configured client such as Claude Desktop or Hermes gets. With it,
+    /// the named tools are the whole surface: `tools/list` shows those and
+    /// `tools/call` refuses the rest by name.
+    ///
+    /// The flag exists because **the allowlist could not be enforced from the
+    /// client side, and two of the three backends were not enforcing it at
+    /// all.** Codex has no way to filter an MCP server's tools (measured against
+    /// codex-cli 0.147.0: a server takes a command, args, env, cwd and two
+    /// timeouts, and nothing else), and an OpenAI-compatible endpoint only
+    /// decides which schemas to *advertise*, so a model that invented a tool
+    /// name reached the library anyway. See `AgentRun.tools(allowWrites:)`,
+    /// which is still the one place that decides what a question may call.
+    static func serve(_ arguments: [String] = []) -> Never {
+        allowed = parseAllowed(arguments)
         transport = "stdio"
         // Line-delimited JSON-RPC on stdin. Nothing else may write to stdout
         // for the lifetime of the process: a stray print corrupts the stream
@@ -54,6 +71,70 @@ enum MCP {
             handle(request)
         }
         exit(0)
+    }
+
+    /// The allowlist this *process* is serving under, or nil for all of them.
+    ///
+    /// A static here and a parameter on `call`, which is not a contradiction:
+    /// one `listen mcp` process serves exactly one client under exactly one
+    /// allowlist, so for the stdio transport this is as much a property of the
+    /// process as `transport` is. The in-app agent is the other caller, and it
+    /// has as many live allowlists as there are conversations, which is why
+    /// `call` takes it rather than reading this.
+    private static var allowed: Set<String>?
+
+    /// `--tools a,b,c`, repeatable, or a refusal on stderr.
+    ///
+    /// Comma-separated, which is not this CLI's usual rule. The rule against it
+    /// exists because a user's text may contain a comma, which is exactly why
+    /// `Tags.check` refuses one; a tool name is an identifier out of a fixed
+    /// list compiled into this binary. Claude's own `--allowedTools` has this
+    /// shape, and one flag is what keeps `listen ask --print-command` readable
+    /// enough to reproduce a failure by hand.
+    ///
+    /// **Every refusal goes to stderr and exits.** `serve` owns stdout for the
+    /// life of the process, so a usage line there corrupts the stream before
+    /// the client has finished connecting, and the client reports a parse error
+    /// rather than the thing that is actually wrong.
+    private static func parseAllowed(_ arguments: [String]) -> Set<String>? {
+        var wanted: Set<String>?
+        var i = 0
+        while i < arguments.count {
+            switch arguments[i] {
+            case "--tools":
+                i += 1
+                guard i < arguments.count else { refuse("--tools needs a list of tool names.") }
+                let names = arguments[i].split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                // An empty value is almost always a quoting accident, and it
+                // would otherwise produce a server that refuses everything and
+                // says nothing about why.
+                guard !names.isEmpty else { refuse("--tools was given no tool names.") }
+                let known = Set(tools.compactMap { $0["name"] as? String })
+                for name in names where !known.contains(name) {
+                    // Refused rather than dropped. The only thing that produces
+                    // this list is `AgentRun.tools`, so a name that is not a
+                    // tool is a bug in this repo, and a tool silently missing
+                    // from an agent's surface is a capability lost with nothing
+                    // anywhere to explain it.
+                    refuse("no tool named `\(name)`. The tools are: "
+                           + known.sorted().joined(separator: ", "))
+                }
+                wanted = (wanted ?? []).union(names)
+            default:
+                // Until now `listen mcp --anything` started an ordinary server
+                // and ignored the argument, which is its own trap.
+                refuse("unknown option `\(arguments[i])`. Try `listen help`.")
+            }
+            i += 1
+        }
+        return wanted
+    }
+
+    private static func refuse(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("listen mcp: \(message)\n".utf8))
+        exit(2)
     }
 
     private static func handle(_ request: [String: Any]) {
@@ -76,14 +157,15 @@ enum MCP {
             return
 
         case "tools/list":
-            send(result(id: id, ["tools": tools]))
+            send(result(id: id, ["tools": tools(allowing: allowed)]))
 
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             do {
                 send(result(id: id, [
-                    "content": [["type": "text", "text": try call(name, arguments)]],
+                    "content": [["type": "text",
+                                 "text": try call(name, arguments, allowing: allowed)]],
                 ]))
             } catch {
                 // An error inside a tool call is reported as content with
@@ -241,28 +323,44 @@ enum MCP {
             ],
             [
                 "name": "list_tags",
-                "description": "Every tag in the library, with how many recordings "
-                    + "carries it, most first. A tag is the user's own filing of a "
-                    + "meeting, in their own words, so this is the vocabulary a "
-                    + "question can be asked in and there is nothing else to derive "
-                    + "it from. **Read this before filtering on tags**: the names "
-                    + "are invented rather than drawn from a fixed list, and a tag "
-                    + "nobody uses does not exist.",
+                "description": "Every tag in the library, with how many "
+                    + "recordings and how many notes carry it, most first. A tag "
+                    + "is the user's own filing of a meeting or of a write-up, in "
+                    + "their own words, so this is the vocabulary a question can "
+                    + "be asked in and there is nothing else to derive it from. "
+                    + "**Read this before filtering on tags**: the names are "
+                    + "invented rather than drawn from a fixed list, and a tag "
+                    + "nobody uses does not exist. Recordings and notes share one "
+                    + "vocabulary, so a tag may have notes and no recordings.",
                 "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
             ],
             [
                 "name": "add_tags",
-                "description": "Tag a recording. Adds to what it already carries "
-                    + "rather than replacing it. A tag already in the library is "
-                    + "matched however it was capitalised, so reuse the exact names "
-                    + "from list_tags rather than coining a near-duplicate: "
-                    + "\"job hunt\" and \"job-hunt\" are two tags and neither has "
-                    + "all the recordings. Returns everything the recording carries "
-                    + "afterwards.",
+                "description": "Tag a recording or a note. Adds to what it already "
+                    + "carries rather than replacing it. A tag already in the "
+                    + "library is matched however it was capitalised, so reuse the "
+                    + "exact names from list_tags rather than coining a "
+                    + "near-duplicate: \"job hunt\" and \"job-hunt\" are two tags "
+                    + "and neither has everything. Returns everything that "
+                    + "recording or note carries afterwards.\n\n"
+                    + "**Tagging a recording does not tag the notes about it.** A "
+                    + "note carries only what is put on it, so filing a subject "
+                    + "means tagging both. This is the one write that may touch "
+                    + "the user's own note: a tag is filing rather than wording, "
+                    + "and it is one click to remove in the window.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
-                        "recording_id": ["type": "string"],
+                        "recording_id": [
+                            "type": "string",
+                            "description": "The recording to tag. Give this or "
+                                + "`note`, never both.",
+                        ],
+                        "note": [
+                            "type": "string",
+                            "description": "The slug or title of the note to tag. "
+                                + "Give this or `recording_id`, never both.",
+                        ],
                         "tags": [
                             "type": "array",
                             "items": ["type": "string"],
@@ -270,23 +368,31 @@ enum MCP {
                                 + "commas. A space is fine: \"job hunt\" is one tag.",
                         ],
                     ],
-                    "required": ["recording_id", "tags"],
+                    "required": ["tags"],
                 ],
             ],
             [
                 "name": "remove_tags",
-                "description": "Take tags off a recording. Tags not on it are "
-                    + "ignored rather than refused. Nothing else about the recording "
+                "description": "Take tags off a recording or a note. Tags not on "
+                    + "it are ignored rather than refused. Nothing else about it "
                     + "changes, and a tag that ends up on nothing simply stops "
-                    + "existing: there is no separate list to tidy. Returns what the "
-                    + "recording carries afterwards.",
+                    + "existing: there is no separate list to tidy. Returns what "
+                    + "it carries afterwards.",
                 "inputSchema": [
                     "type": "object",
                     "properties": [
-                        "recording_id": ["type": "string"],
+                        "recording_id": [
+                            "type": "string",
+                            "description": "Give this or `note`, never both.",
+                        ],
+                        "note": [
+                            "type": "string",
+                            "description": "Slug or title. Give this or "
+                                + "`recording_id`, never both.",
+                        ],
                         "tags": ["type": "array", "items": ["type": "string"]],
                     ],
-                    "required": ["recording_id", "tags"],
+                    "required": ["tags"],
                 ],
             ],
             [
@@ -302,6 +408,16 @@ enum MCP {
                         "recording_id": ["type": "string",
                                          "description": "Optional. Omit for the "
                                              + "whole library."],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Only notes carrying **all** of these "
+                                + "tags, combined with recording_id by AND. A note "
+                                + "carries only what was put on it: it does not "
+                                + "inherit a tag from a meeting it is about, so "
+                                + "this and list_recordings with the same tag "
+                                + "answer two different questions.",
+                        ],
                     ],
                 ],
             ],
@@ -353,6 +469,12 @@ enum MCP {
                                        + "the note so somebody reading it in a month "
                                        + "knows what it was answering. Strongly "
                                        + "recommended."],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Optional. What to file this note under, "
+                                + "from list_tags where one already fits.",
+                        ],
                     ],
                     "required": ["recordings", "title", "body"],
                 ],
@@ -381,6 +503,14 @@ enum MCP {
                                 + "changed: adding a paragraph is not a claim about "
                                 + "which meetings a note is about.",
                         ],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"],
+                            "description": "Optional, and replaces the list rather "
+                                + "than adding to it, the way `recordings` does. "
+                                + "Omit to leave the filing alone; use add_tags to "
+                                + "add one without restating the rest.",
+                        ],
                         "prompt": ["type": "string", "description": "Optional."],
                     ],
                     "required": ["note", "body", "was"],
@@ -403,6 +533,16 @@ enum MCP {
         ]
     }
 
+    /// The subset of `tools` one caller may see, or all of them for nil.
+    ///
+    /// nil is not the same as an empty set, and the difference is the whole
+    /// point: nil is "nobody restricted this", which is a hand-configured
+    /// client, and an empty set is a caller that may call nothing.
+    static func tools(allowing allowed: Set<String>?) -> [[String: Any]] {
+        guard let allowed else { return tools }
+        return tools.filter { ($0["name"] as? String).map(allowed.contains) == true }
+    }
+
     /// The same tools, in the shape OpenAI's function calling wants them.
     ///
     /// A mechanical translation, and that is the whole reason this feature is
@@ -414,6 +554,10 @@ enum MCP {
     /// flag, because the allowlist is the agent's decision and lives on
     /// `AgentRun.tools(allowWrites:)`. This file knows what the tools *are*;
     /// it has never known who is permitted to call them.
+    ///
+    /// **Advertising a shorter list is not enforcing it**, which is what this
+    /// function was doing alone until `call` learned to refuse: a model that
+    /// named a tool it had never been offered was handed it. See `call`.
     static func toolSchemas(_ allowed: Set<String>) -> [[String: Any]] {
         tools.compactMap { tool in
             guard let name = tool["name"] as? String, allowed.contains(name) else {
@@ -435,6 +579,12 @@ enum MCP {
     /// stamps it `stdio` at startup; everything in-process stays `in-app`.
     /// One static rather than a parameter, because `call` has many callers
     /// and exactly two transports.
+    ///
+    /// **`allowing:` looks like this and is not**, so do not follow this one.
+    /// A transport is a property of the process. An allowlist is a property of
+    /// the caller, and the window can have two conversations running at once
+    /// with different answers to whether writes are on, so a static would hand
+    /// the second one the first one's permissions.
     static var transport = "in-app"
 
     /// Run one tool and return what it would have sent back over the wire.
@@ -445,8 +595,21 @@ enum MCP {
     /// line make the whole surface auditable. The log carries the tool name
     /// and recording ids, never arguments: a query names what a meeting was
     /// about, and the log must stay safe to read aloud.
-    static func call(_ name: String, _ args: [String: Any]) throws -> String {
+    ///
+    /// `allowed` nil means unrestricted, which is what the CLI's own commands
+    /// and a hand-configured MCP client get. Being the one choke point is what
+    /// makes this the right place for the check: `AgentRun.tools` decides, and
+    /// every route into the library asks the same function whether the caller
+    /// may.
+    static func call(_ name: String, _ args: [String: Any],
+                     allowing allowed: Set<String>? = nil) throws -> String {
         do {
+            // Inside the `do`, so a refusal is logged the way every other
+            // failure is. A refused call that leaves no trace is the one an
+            // audit most wants to find.
+            if let allowed, !allowed.contains(name) {
+                throw MCPError.notAllowed(name)
+            }
             let out = try perform(name, args)
             ActivityLog.append("mcp_call", [
                 "tool": name, "transport": transport,
@@ -506,21 +669,34 @@ enum MCP {
             return json(out)
 
         case "list_tags":
+            // Both counts on every row, always, including the zeroes. A key
+            // that appears only sometimes reads as a tag of a different kind,
+            // and there is only one kind.
             return json(["tags": Tags.all().map {
-                ["name": $0.name, "recordings": $0.count]
+                ["name": $0.name, "recordings": $0.count, "notes": $0.noteCount]
             }])
 
         case "add_tags":
-            let recording = try find(args)
             let tags = try wanted(args["tags"], for: "add_tags")
-            return json(["recording_id": recording.id,
-                         "tags": try Tags.add(tags, to: recording)])
+            switch try subject(args, for: "add_tags") {
+            case .recording(let recording):
+                return json(["recording_id": recording.id,
+                             "tags": try Tags.add(tags, to: recording)])
+            case .note(let note):
+                return json(["note": note.slug,
+                             "tags": try Tags.add(tags, to: note)])
+            }
 
         case "remove_tags":
-            let recording = try find(args)
             let tags = try wanted(args["tags"], for: "remove_tags")
-            return json(["recording_id": recording.id,
-                         "tags": try Tags.remove(tags, from: recording)])
+            switch try subject(args, for: "remove_tags") {
+            case .recording(let recording):
+                return json(["recording_id": recording.id,
+                             "tags": try Tags.remove(tags, from: recording)])
+            case .note(let note):
+                return json(["note": note.slug,
+                             "tags": try Tags.remove(tags, from: note)])
+            }
 
         case "get_transcript":
             let recording = try find(args)
@@ -599,15 +775,21 @@ enum MCP {
         // and the detail pane also go through, so an agent cannot reach a note
         // by a path a human never takes.
         case "list_notes":
+            // ANDed with `recording_id` below, and applied to both branches, so
+            // `tags` alone asks the library and the two together ask one
+            // meeting. Nothing here consults the recordings' own tags: a note
+            // carries what was put on it. See `list_tags`.
+            let filed = try strings(args["tags"], field: "tags")
             // Optional, unlike everywhere else: a note can be about four
             // meetings, so "every note" is a question worth being able to ask.
             guard args["recording_id"] != nil else {
-                return json(["notes": Notes.all().map(brief)])
+                return json(["notes": Notes.all().filter { $0.carries(filed) }.map(brief)])
             }
             let recording = try find(args)
             return json([
                 "recording_id": recording.id,
-                "notes": Notes.list(about: recording).map(brief),
+                "notes": Notes.list(about: recording)
+                    .filter { $0.carries(filed) }.map(brief),
             ])
 
         case "read_note":
@@ -633,7 +815,8 @@ enum MCP {
             let note = try Notes.create(title: title, body: body, source: .agent,
                                         prompt: args["prompt"] as? String,
                                         recordings: try ids(args["recordings"],
-                                                            field: "recordings"))
+                                                            field: "recordings"),
+                                        tags: try strings(args["tags"], field: "tags"))
             // The slug back, because it may not be the one the title implies:
             // a colliding title is numbered rather than refused, and an agent
             // that assumed otherwise would edit the wrong note next.
@@ -661,6 +844,9 @@ enum MCP {
                 prompt: args["prompt"] as? String, source: .agent,
                 recordings: args["recordings"] == nil
                     ? nil : try ids(args["recordings"], field: "recordings"),
+                // Absent means unchanged, the same as `recordings` above.
+                tags: args["tags"] == nil
+                    ? nil : try strings(args["tags"], field: "tags"),
                 expecting: was)
             return json(["edited": brief(note)])
 
@@ -686,8 +872,16 @@ enum MCP {
             "recordings": note.recordings,
         ]
         if let prompt = note.prompt, !prompt.isEmpty { out["prompt"] = prompt }
+        // Only when there are any, which is `brief(_ recording:)`'s rule for
+        // the same key.
+        if !note.tags.isEmpty { out["tags"] = note.tags }
         // Only when it is true, so its presence is the signal. A note somebody
         // has been into by hand is one to rewrite carefully or not at all.
+        //
+        // Tagging a note does not set this, because `Notes.setTags` leaves
+        // `updated` alone on purpose: filing a note is not editing its words,
+        // and an agent's own add_tags marking it hand-edited would be a lie it
+        // reads back next turn.
         if note.updated != note.created { out["edited_by_hand"] = true }
         // An id the library no longer has, listed rather than dropped. A note
         // about four meetings must not quietly claim it was about three because
@@ -695,6 +889,38 @@ enum MCP {
         let unresolved = Notes.sources(of: note).filter { $0.title == nil }.map(\.id)
         if !unresolved.isEmpty { out["unresolved_recordings"] = unresolved }
         return out
+    }
+
+    /// Which of the two `add_tags` and `remove_tags` were pointed at.
+    ///
+    /// Both errors name the tool and say what to do, because both are things a
+    /// model does. Giving neither is the ordinary slip; giving both is the
+    /// interesting one, and it is refused rather than resolved in some order,
+    /// because a tag on a meeting and a tag on the write-up of it are two
+    /// different claims and guessing which was meant would make one of them
+    /// silently.
+    ///
+    /// **Not `writable`, so the user's own note can be tagged.** That note is
+    /// unwritable because its words were not derived from anything and cannot
+    /// be got back. A tag is filing rather than wording: it takes one click to
+    /// remove in the window, and the argument for tags being writable at all
+    /// applies hardest to the note an agent most wants to find again.
+    private static func subject(_ args: [String: Any], for tool: String) throws -> Taggable {
+        let id = args["recording_id"] as? String
+        let name = args["note"] as? String
+        switch (id, name) {
+        case (.some, .some):
+            throw MCPError.badArguments(
+                "\(tool) takes recording_id or note, not both: a tag on a "
+                    + "recording and a tag on a note are two different claims.")
+        case (.none, .none):
+            throw MCPError.badArguments(
+                "\(tool) needs recording_id or note, saying what to tag.")
+        case (.some, .none):
+            return .recording(try find(args))
+        case (.none, .some):
+            return .note(try note(args))
+        }
     }
 
     private static func note(_ args: [String: Any]) throws -> Note {
@@ -922,11 +1148,22 @@ enum MCP {
 enum MCPError: Error, LocalizedError {
     case badArguments(String)
     case notFound(String)
+    /// A tool that exists, asked for by somebody who may not have it.
+    ///
+    /// Distinct from `badArguments("unknown tool: …")` on purpose. That one
+    /// means the name is not a tool at all and the model should stop trying;
+    /// this one means the name is real and this session does not have it, and
+    /// the difference is the whole of what a model needs to know to do
+    /// something else instead.
+    case notAllowed(String)
 
     var errorDescription: String? {
         switch self {
         case .badArguments(let m): return m
         case .notFound(let m):     return m
+        case .notAllowed(let name):
+            return "\(name) is not one of the tools this session may call. "
+                + "tools/list is the whole list."
         }
     }
 }

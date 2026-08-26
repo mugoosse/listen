@@ -120,7 +120,20 @@ final class NoteCell: NSView {
             f.timeStyle = .none
             facts.append(f.string(from: date))
         }
+        // **Text in the existing line, not pills, and not a third line.**
+        // `Sidebar.heightOfRow` returns a flat 52 for every row, so pills would
+        // need variable heights. The stronger reason is that a *recording* row
+        // shows no tags at all: giving notes pills and meetings nothing would
+        // have the list say a note is more filed than the meeting it is about,
+        // which is the opposite of what one shared vocabulary means. Pills on
+        // both cells, with a height that moves for both, is a real change and
+        // it is a separate one.
+        facts += note.tags.map { "#" + $0 }
         detail.stringValue = facts.joined(separator: " · ")
+        // The whole list in the tooltip, because the line truncates and the
+        // tags are at the end of it, so they are the first thing to go.
+        detail.toolTip = note.tags.isEmpty ? nil : note.tags.map { "#" + $0 }
+            .joined(separator: ", ")
     }
 }
 
@@ -154,6 +167,15 @@ final class NotePane: NSViewController {
     /// sentence with commas in it is a list, which is what they are, and it
     /// wraps, underlines on hover and turns the pointer into a hand for free.
     private let sources = LinkLine()
+    /// What this note is filed under, and the way to change it.
+    ///
+    /// The same `TagChips` the transcript header uses, which is the point: the
+    /// popover, its type-to-filter behaviour and the pill menu are one
+    /// implementation, so a tag is added to a note exactly the way it is added
+    /// to a meeting. Under the sources rather than beside the heading, because
+    /// it is the same kind of fact as "what this note is about" and reads as
+    /// the last line of the provenance block.
+    private let tagChips = TagChips()
     private let text = NSTextView()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "Select a note.")
@@ -200,7 +222,18 @@ final class NotePane: NSViewController {
         empty.font = .systemFont(ofSize: 13)
         empty.textColor = .secondaryLabelColor
 
-        for v in [heading, info, sources, scroll, empty] as [NSView] {
+        // Six rather than three, so the strip is as wide as it likes here.
+        // The defaults were measured for the transcript header, where the row
+        // is shared with the speaker chips; this row is the pane's own and has
+        // nothing competing for it.
+        tagChips.widen(maxChips: 6, maxChipWidth: 220)
+        tagChips.onTag = { name, _, _ in LibraryWindow.shared.filter(byTag: name) }
+        tagChips.onAdd = { [weak self] anchor, rect in
+            self?.editTags(from: anchor, rect: rect)
+        }
+        tagChips.onChanged = { [weak self] in self?.refreshTags() }
+
+        for v in [heading, info, sources, tagChips, scroll, empty] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(v)
         }
@@ -215,7 +248,15 @@ final class NotePane: NSViewController {
             sources.topAnchor.constraint(equalTo: info.bottomAnchor, constant: 6),
             sources.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
             sources.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: sources.bottomAnchor, constant: 14),
+            tagChips.topAnchor.constraint(equalTo: sources.bottomAnchor, constant: 8),
+            // Leading, unlike the transcript header's trailing pin. There is
+            // nothing to its left to grow towards it here, and a row of pills
+            // hard against the right edge of an otherwise left-aligned page
+            // reads as a different pane's furniture.
+            tagChips.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            tagChips.trailingAnchor.constraint(lessThanOrEqualTo: heading.trailingAnchor),
+            tagChips.heightAnchor.constraint(equalToConstant: 24),
+            scroll.topAnchor.constraint(equalTo: tagChips.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                              constant: -24),
@@ -251,7 +292,7 @@ final class NotePane: NSViewController {
         loadViewIfNeeded()
         self.note = note
         let hidden = note == nil
-        for v in [heading, info, sources, scroll] as [NSView] {
+        for v in [heading, info, sources, tagChips, scroll] as [NSView] {
             v.isHidden = hidden
         }
         empty.isHidden = !hidden
@@ -340,6 +381,45 @@ final class NotePane: NSViewController {
         text.textStorage?.setAttributedString(
             MarkdownText.attributed(note.body, without: note.title))
         text.scroll(NSPoint(x: 0, y: 0))
+
+        tagChips.configure(.note(note))
+    }
+
+    /// Cmd-T over a note. The strip is always on this page when a note is
+    /// showing, so unlike the transcript header there is no collapsed case to
+    /// find an anchor for.
+    func beginEditingTags() {
+        loadViewIfNeeded()
+        guard note != nil else { return }
+        editTags(from: tagChips, rect: tagChips.bounds)
+    }
+
+    /// The add popover, anchored the way `DetailView.editTags` anchors it.
+    ///
+    /// The rect is converted while the button is still in the window. Nothing
+    /// on this page commits an edit first, so the sequence is shorter than the
+    /// transcript header's, but the conversion still has to happen before
+    /// anything can reload the strip out from under it.
+    private func editTags(from anchor: NSView, rect: NSRect) {
+        guard let note else { return }
+        let target = view.convert(rect, from: anchor)
+        TagPopover.show(for: .note(note), from: view, rect: target) { [weak self] in
+            self?.refreshTags()
+        }
+    }
+
+    /// Redraw the strip after a tag changed, and nothing else.
+    ///
+    /// Not `show(_:)`, which would scroll a note somebody is halfway down back
+    /// to the top: filing something is done while reading it. The note is
+    /// re-read from disk because the copy this pane is holding still has the
+    /// tags it had, and the sidebar is told because a tag can be the lens the
+    /// list is under, so this row may belong somewhere else now.
+    private func refreshTags() {
+        guard let note, let updated = Notes.find(note.slug) else { return }
+        self.note = updated
+        tagChips.configure(.note(updated))
+        LibraryWindow.shared.reload()
     }
 }
 

@@ -1152,6 +1152,114 @@ public enum FakeSync {
                   "a YAML block sequence lost its recordings")
         ok("hand-written notes sync with no frontmatter or a YAML block sequence")
 
+        // MARK: tags on a note, and the digest that carries them
+
+        // **The assertion that says the library does not all re-sync.**
+        //
+        // `Note.version` gained `tags`, and two devices computing it by
+        // different formulas push and pull the same note for ever: `pullNote`
+        // stamps the sender's digest into the base while push stamps its own,
+        // so neither side ever agrees with itself. Appending the tags only when
+        // there are any is what bounds that to notes which actually carry one,
+        // and this constant is what says it stayed bounded. It was taken from
+        // the build before the field existed; if it changes, every untagged
+        // note in every library on every device is about to be re-sent, and
+        // that is a decision rather than a refactor.
+        //
+        // Every field is a literal, including the recording id, so the constant
+        // does not move when this harness changes what it seeds.
+        let untagged = Note(slug: "digest-probe", title: "Quarterly review",
+                            created: "", updated: "", source: "you",
+                            recordings: ["2026-08-20-090000-AAAA"],
+                            body: "What we agreed.")
+        try check(untagged.version
+                  == "e73500f3277774a26c473edea2f9852220fbd470ca93862e5b887b66d750e7ad",
+                  "the digest of an untagged note moved: \(untagged.version)")
+        ok("an untagged note's digest is unchanged, so nothing already on disk re-syncs")
+
+        var tagged = untagged
+        tagged.tags = ["kinsight"]
+        try check(tagged.version != untagged.version,
+                  "tags are not in the digest, so a tag-only change would never push")
+        ok("a tag changes the digest, so filing travels")
+
+        // Through the whole sync, not only through `version`: a note that
+        // parses locally and is dropped by the record path is a note whose
+        // tags do not sync.
+        let filedSlug = "filed-note"
+        try macLib.writeNote(Note(slug: filedSlug, title: "Filed", created: "",
+                                  updated: "", source: "you", recordings: [id],
+                                  body: "Body.", tags: ["kinsight", "acme"]),
+                             expecting: nil)
+        var filedPush = CloudReport()
+        await mac.push(into: &filedPush)
+        var filedPull = CloudReport()
+        await phone.pull(into: &filedPull)
+        let landedFiled = try checkNote(phoneLib.note(filedSlug), named: filedSlug)
+        try check(landedFiled.tags == ["kinsight", "acme"],
+                  "the tags did not cross: \(landedFiled.tags)")
+        ok("a tagged note crosses with its filing intact")
+
+        // A second pass sends nothing. This is the churn check: with the two
+        // devices computing the same formula it is zero, and the day it is not,
+        // the digest has moved on one side only.
+        var settle = CloudReport()
+        await mac.push(into: &settle)
+        try check(settle.pushedNotes == 0,
+                  "a settled library pushed \(settle.pushedNotes) notes on a second pass")
+        ok("and a second pass pushes nothing, so tagged notes do not ping-pong")
+
+        // Clearing the last tag has to reach the other side. It is why the
+        // `tags:` key is written even when the list is empty: `Library.writeNote`
+        // merges `extra` with "absent means unchanged", so a clear spelled as a
+        // missing key would be put straight back by a peer still holding them.
+        var cleared = try checkNote(macLib.note(filedSlug), named: filedSlug)
+        // The digest *before* the edit, which is what the swap is against. Taken
+        // after mutating, it is the new one, and the write is refused against
+        // its own change.
+        let wasFiled = cleared.version
+        cleared.tags = []
+        try macLib.writeNote(cleared, expecting: wasFiled, stamp: false)
+        var clearPush = CloudReport()
+        await mac.push(into: &clearPush)
+        var clearPull = CloudReport()
+        await phone.pull(into: &clearPull)
+        let landedClear = try checkNote(phoneLib.note(filedSlug), named: filedSlug)
+        try check(landedClear.tags.isEmpty,
+                  "clearing the tags did not cross: \(landedClear.tags)")
+        ok("and taking every tag off crosses too, rather than being merged back")
+
+        // The hole modelling `tags` closed on the way past. An unknown key with
+        // an empty value used to take both routes at once: into `extra` as a
+        // bare scalar, and its `- ` lines into a sequence nothing read, so
+        // writing the note back left `tags:` with nothing after it.
+        let filedBlockSlug = "filed-by-hand"
+        let filedBlock = """
+        ---
+        title: "Filed in Finder"
+        created: 2026-08-12T12:00:00Z
+        updated: 2026-08-12T12:00:00Z
+        source: you
+        tags:
+          - alpha
+          - "beta gamma"
+        recordings: []
+        ---
+
+        Body.
+        """
+        try filedBlock.write(to: macLib.notes.appendingPathComponent(filedBlockSlug + ".md"),
+                             atomically: true, encoding: .utf8)
+        var blockTagPush = CloudReport()
+        await mac.push(into: &blockTagPush)
+        var blockTagPull = CloudReport()
+        await phone.pull(into: &blockTagPull)
+        let landedFiledBlock = try checkNote(phoneLib.note(filedBlockSlug),
+                                             named: filedBlockSlug)
+        try check(landedFiledBlock.tags == ["alpha", "beta gamma"],
+                  "a hand-written tag list was lost crossing: \(landedFiledBlock.tags)")
+        ok("a YAML block sequence of tags survives a whole sync")
+
         try await store.delete(CloudNaming.recordName(.note, noteSlug, key: key), in: .library)
         var deletion = CloudReport()
         await phone.pull(into: &deletion)
@@ -1279,6 +1387,38 @@ public enum FakeSync {
         try check(!after15.contains { $0.hasSuffix(victim) },
                   "the trash never empties")
         ok("a deletion obeyed here is recoverable for a fortnight")
+
+        // **And so is a note, which it was not.**
+        //
+        // Two paths apply somebody else's note deletion, and only one of them
+        // trashed it. The pull side goes through `deleteLocally`, which does.
+        // The push side is the branch for a pass whose pull failed on the
+        // network, and it called `deleteNote`, a bare `removeItem`. That is the
+        // path a real library took: `sync_deleted count: 4`, four notes gone,
+        // and nothing in the trash to put back.
+        //
+        // Driven through the push branch on purpose, by deleting the record
+        // behind the phone's back so its pull has nothing to react to.
+        let doomed = "note-worth-keeping"
+        try macLib.writeNote(Note(slug: doomed, title: "Worth keeping", created: "",
+                                  updated: "", source: "you", recordings: [id],
+                                  body: "Something somebody typed."), expecting: nil)
+        var sendNote = CloudReport()
+        await mac.push(into: &sendNote)
+        var takeNote = CloudReport()
+        await phone.pull(into: &takeNote)
+        try check(phoneLib.note(doomed) != nil, "the note never reached the phone")
+
+        try await store.delete(CloudNaming.recordName(.note, doomed, key: key), in: .library)
+        var phonePush = CloudReport()
+        await phone.push(into: &phonePush)
+        try check(phoneLib.note(doomed) == nil, "the phone kept a deleted note")
+        let notesKept = Trash.root(in: phoneLib)
+        let notesFound = (try? FileManager.default
+            .subpathsOfDirectory(atPath: notesKept.path)) ?? []
+        try check(notesFound.contains { $0.hasSuffix(doomed + ".md") },
+                  "a note deleted on the push side was removed outright, not trashed")
+        ok("and a note deleted on somebody else's say-so is recoverable too")
 
         // The case a real container will not stage on demand, and the one that
         // silently resurrects deleted meetings.

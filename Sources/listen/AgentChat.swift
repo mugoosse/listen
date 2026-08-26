@@ -893,15 +893,19 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
         return out
     }
 
-    /// The tools this question may call, by their bare names.
+    /// The tools this question may call.
     ///
     /// `AgentRun.tools` is the one owner of that decision, including keeping
-    /// `delete_note` off both lists. The prefix it adds is Claude's naming for
-    /// an MCP tool and means nothing here.
+    /// `delete_note` off both lists.
+    ///
+    /// **Used twice, and it used to be used once.** It shapes the schemas in
+    /// `requestBody`, and it is passed to `MCP.call` in `runTool`. Advertising
+    /// a shorter list was the whole of the enforcement here until now, which
+    /// works against a model that only calls what it was offered and against no
+    /// other kind: a 7B model that invents a tool name also invents one that
+    /// exists, and `delete_note` was reachable from a question with writes off.
     private var allowedTools: Set<String> {
-        Set(AgentRun.tools(allowWrites: question.allowWrites).map {
-            $0.replacingOccurrences(of: "mcp__listen__", with: "")
-        })
+        Set(AgentRun.tools(allowWrites: question.allowWrites))
     }
 
     /// The POST body for the next round.
@@ -1271,7 +1275,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
 
         emit(.toolCall(name: call.name, detail: AgentRun.detail(arguments)))
         do {
-            text = try MCP.call(call.name, arguments)
+            text = try MCP.call(call.name, arguments, allowing: allowedTools)
         } catch {
             ok = false
             text = error.localizedDescription

@@ -208,10 +208,11 @@ which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`, `DeviceTitle`,
 - Unnaming goes back to the floor, not to the placeholder
 - What is deliberately not here: no model title
 
-### `.agents/notes/notes-tags-dictionary.md` (25k)
+### `.agents/notes/notes-tags-dictionary.md` (48k)
 
-The three things written about a recording rather than extracted from it.
-`Notes`, `Tags`, `CustomDictionary`, `RecordingFilter`, `MarkdownText`.
+The three things written about a recording rather than extracted from it, and
+the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
+`CustomDictionary`, `RecordingFilter`, `MarkdownText`.
 
 - The dictionary rewrites the library, and only the library
 - Adding a field to `StoredTranscript` needs `init(from:)` by hand
@@ -229,6 +230,13 @@ The three things written about a recording rather than extracted from it.
 - The outline was built, measured and deleted
 - The user's own note is the thing no transcript contains
 - A note remembers the conversation it came from, and the older ones are found by their question
+- One vocabulary, two kinds of thing, and no inheritance
+- A note's tags are in the digest only when it has any
+- The empty list is written for a note and omitted for a recording
+- Tagging a note does not touch `updated`
+- `pageless` only earns its keep while recordings are in the list too
+- The tags are text in the note row, and pills everywhere else
+- An agent may tag the user's own note, and still may not rewrite it
 
 ### `.agents/notes/window.md` (71k)
 
@@ -347,7 +355,7 @@ that repo is being archived.**
 - Signing decides whether the Accessibility grant survives a rebuild
 - What is deliberately not here: no MCP tool, no import from Speak
 
-### `.agents/notes/cli-mcp.md` (6k)
+### `.agents/notes/cli-mcp.md` (12k)
 
 `CLI`, `Settings`, `AppInfo`, `CLIInstall`, `MCP`.
 
@@ -360,8 +368,9 @@ that repo is being archived.**
 - The MCP server owns stdout completely
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
+- `listen mcp --tools` is what makes the allowlist true (see `agent.md`)
 
-### `.agents/notes/cloud-sync.md` (3k)
+### `.agents/notes/cloud-sync.md` (40k)
 
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
@@ -386,8 +395,9 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - `LISTEN_LIBRARY` scopes the library, and never the container
 - The activity log is one line, appended with O_APPEND
 - Nothing ever created the key, and both sides said "waiting"
+- Two paths delete a note on somebody else's say-so, and only one trashed it
 
-### `.agents/notes/agent.md` (144k)
+### `.agents/notes/agent.md` (148k)
 
 Asking questions about the library, through an agent CLI the user already has
 or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
@@ -403,7 +413,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Codex has two approval gates, and the second one is the one that matters
 - The working directory is a choice, not a leftover
 - The brief is the retrieval ladder, and without it the first move is wrong
-- `delete_note` is on neither tool list
+- `delete_note` is on neither tool list, and for a long time that was only true of Claude
 - No cost is shown anywhere, and that is a decision rather than an omission
 - The Ask pane is a third mode, not a panel
 - The record button is hidden while it is up, except when it is Stop
@@ -496,6 +506,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The chats home page is the library's home page, and three numbers said otherwise
 - An empty page needs the greeting the home page has
 - The toolbar's History is gone, and the menu under the card is the one that stays
+- The allowlist is an argument, because only one of three backends honoured it
 
 ### `.agents/notes/release.md` (16k)
 
@@ -549,7 +560,17 @@ One script stands in for one, over the app built in the working directory:
                         # backup-permission and activity-log claims
 ./verify_speakers.sh    # every size of speaker edit, and the turn window that
                         # used to move two paragraphs when asked for one
+./verify_note_tags.sh   # tags on a note: the file on disk, files written by
+                        # hand or by an older build, the shared vocabulary in
+                        # both directions, no inheritance, and `listen mcp
+                        # --tools` refusing a tool by name
 ```
+
+`listen sync --fake` is the other half of the note-tag story and runs offline in
+about a second. It holds the pre-change `Note.version` digest as a hard-coded
+constant, which is the assertion that says the whole library does not re-sync,
+and a second consecutive pass asserting `pushedNotes == 0` is the churn check.
+See `.agents/notes/notes-tags-dictionary.md`.
 
 It builds a scratch `LISTEN_LIBRARY` out of copies of five real recordings and
 never opens the real one for writing, which is the shape described below. It

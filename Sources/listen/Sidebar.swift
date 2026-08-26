@@ -365,9 +365,18 @@ final class SidebarViewController: NSViewController {
         let live = Capture.shared.current.map { Recording.load($0.folder) ?? $0 }
         let library = Recording.all()
 
+        // Read once and passed down, rather than derived again inside
+        // `Tags.all` and again in the note rows below. The vocabulary spans
+        // both kinds now, so this list is needed to parse the search field as
+        // well as to build the rows.
+        let everyNote = Notes.all()
+
         // `tag:` in the search field is a lens typed rather than clicked, so it
         // is parsed against the tags that exist: see `RecordingFilter.parse`.
-        var filter = RecordingFilter.parse(q, knownTags: Tags.all(in: library).map(\.name))
+        // A tag only a note carries is one of those, which is what makes
+        // `tag:` over a note-only subject complete in the field at all.
+        var filter = RecordingFilter.parse(
+            q, knownTags: Tags.all(in: library, notes: everyNote).map(\.name))
         for lens in lenses {
             switch lens {
             case .tag(let name): filter.tags.append(name)
@@ -386,23 +395,53 @@ final class SidebarViewController: NSViewController {
         let matching = kind == nil || kind == .recordings ? filter.apply(to: library) : []
 
         // Notes stand alongside recordings, sorted into the same days, because
-        // a note is a page that happens to have no audio. Only the ones with no
-        // single page to live on: see `Row`.
+        // a note is a page that happens to have no audio. Ordinarily only the
+        // ones with no single page to live on: see `Row`.
         //
-        // Hidden entirely while a tag or the unnamed lens is on. Both ask
-        // something only a recording can answer, so a note surviving a filter
-        // for "the calls tagged #kinsight" would be a row the filter did not
-        // consider rather than a row it kept.
+        // **A tag lens no longer hides notes, it filters them.** It used to,
+        // and the reason it used to was that a note had no tags, so one
+        // surviving a filter for "the calls tagged #kinsight" would have been a
+        // row the filter did not consider rather than one it kept. A note
+        // carries tags now, so hiding a note that is filed under #kinsight from
+        // the answer to "what is filed under #kinsight" would be the wrong
+        // answer rather than the tidier one.
         //
-        // **The kind lens is the exception, and it has to be**, because it is
-        // the one lens that is about notes as well: `kind:notes` narrowing the
-        // list to nothing would be the Notes tab's empty screen with an extra
-        // step.
-        let noteLensesAllow = !lenses.contains { if case .kind = $0 { return false }
-                                                 return true }
-        let noteRows = noteLensesAllow && !filter.needsSpeakers
-            && (kind == nil || kind == .notes)
-            ? Notes.all().filter { Self.pageless($0) && Self.matches($0, query: filter.query) }
+        // **`pageless` only earns its keep while recordings are in the list
+        // too.** It exists so a meeting and the note about that one meeting are
+        // not two rows saying the same thing, which is a rule about a list of
+        // everything and about nothing else.
+        //
+        // Two lists are not that, and both were hiding notes with nothing on
+        // screen to say so:
+        //
+        // - **The Notes collection.** `kind:notes` puts no recordings in the
+        //   list at all, so there is nothing for a note to double up with, and
+        //   yet every note about exactly one meeting was dropped from it. On a
+        //   real library that is most of them: a list called Notes showed five
+        //   of fourteen and looked like a library with almost no notes in it.
+        // - **A tag lens.** The list is then not everything, it is what
+        //   matches, and dropping a match because it also has a home elsewhere
+        //   is a wrong answer rather than a tidier one. That reverses the rule
+        //   this comment used to carry, which was right only while a note had
+        //   no tags to match on.
+        //
+        // Either way the row's second line already names the meeting it belongs
+        // to, so a reader can see why it is there.
+        //
+        // `is:unnamed` still hides notes entirely, and that half of the old rule
+        // stands: a note has no speakers for that question to be about.
+        //
+        // `lenses` is not consulted any more. `filter` already carries both the
+        // typed operators and the clicked lenses, which is what the loop above
+        // is for, and reading the two separately was how a typed `tag:` and a
+        // clicked one could behave differently.
+        let listingRecordings = kind == nil || kind == .recordings
+        let mayDoubleUp = listingRecordings && filter.tags.isEmpty
+        let noteRows = !filter.needsSpeakers && (kind == nil || kind == .notes)
+            ? everyNote.filter {
+                (Self.pageless($0) || !mayDoubleUp)
+                    && Self.matches($0, query: filter.query, tags: filter.tags)
+              }
             : []
 
         var items: [(date: Date?, row: Row)] =
@@ -423,7 +462,7 @@ final class SidebarViewController: NSViewController {
 
         // The magnifier lists the tags that exist and how much labelling is
         // outstanding, so it is rebuilt when either changes. See `menuTags`.
-        let tags = Tags.all(in: library).map(\.name)
+        let tags = Tags.all(in: library, notes: everyNote).map(\.name)
         let waiting = waitingCount(in: library)
         if tags != menuTags || waiting != menuWaiting {
             searchField.searchMenuTemplate = buildSearchMenu(tags: tags, waiting: waiting)
@@ -622,12 +661,24 @@ final class SidebarViewController: NSViewController {
     /// which is the case the library-level note store exists for.
     private static func pageless(_ note: Note) -> Bool { note.recordings.count != 1 }
 
-    /// Free text against a note, which is title and body and nothing else.
+    /// Free text and tags against a note, ANDed.
     ///
-    /// `RecordingFilter` cannot be reused here: its cheap-first ordering is
-    /// built around reading `turns.json` per recording, and a note has neither
-    /// speakers, tags nor a duration for any of its predicates to test.
-    private static func matches(_ note: Note, query: String) -> Bool {
+    /// `RecordingFilter` is still not reused, and the reason has changed. It
+    /// used to be that a note had nothing for its predicates to test; now it is
+    /// the shape. `apply(to:)` is a function over a *list* rather than a
+    /// per-item predicate because `person` and `query` read every `turns.json`
+    /// and the cheap fields have to run first, and only something seeing the
+    /// whole list can arrange that. A note has nothing expensive to defer, so
+    /// that machinery would buy nothing here.
+    ///
+    /// What the two do share is the parser and `Tags.matches`, which is where
+    /// they could actually come apart, and neither is duplicated.
+    ///
+    /// Free text stays title and body. Typing `job hunt` should not surface a
+    /// note because it is *filed* under it; `tag:job hunt` is how that question
+    /// is asked, and the field turns it into a lens.
+    private static func matches(_ note: Note, query: String, tags: [String]) -> Bool {
+        guard note.carries(tags) else { return false }
         let wanted = query.trimmingCharacters(in: .whitespaces)
         guard !wanted.isEmpty else { return true }
         return note.title.localizedCaseInsensitiveContains(wanted)
@@ -996,6 +1047,12 @@ final class SidebarViewController: NSViewController {
     }
 
     /// The tag vocabulary, which both the parser and the completion read.
+    ///
+    /// Both lists, because a tag only a note carries is one somebody can type.
+    /// This is read per keystroke while a `tag:` is being finished, so it walks
+    /// the notes directory as well as the recordings now. It is the same order
+    /// of work as the transcript search already on that path, and the
+    /// alternative is a cache with nothing to invalidate it.
     private var knownTags: [String] { Tags.all().map(\.name) }
 
     /// What the magnifier offers, which is this window's "show search options".

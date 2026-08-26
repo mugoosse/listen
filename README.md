@@ -693,9 +693,15 @@ the source of truth.
 
 **Notes and tags are the only things an agent can write.** Everything else is
 read-only, and that is a boundary rather than a milestone. An agent can add,
-rewrite and delete the notes it wrote, and tag and untag a recording; it can
-read your own note and not change it; and it cannot rename a speaker, correct a
-transcript, retitle a recording or delete one.
+rewrite and delete the notes it wrote, and tag and untag a recording or a note;
+it can read your own note and tag it but not change a word of it; and it cannot
+rename a speaker, correct a transcript, retitle a recording or delete one.
+
+Recordings and notes share one set of tag names, and nothing is inherited:
+tagging a meeting `kinsight` does not tag the write-ups of it, so filing a
+subject means doing both. That keeps two questions apart that are worth asking
+separately, what was said in meetings filed under this and what has been written
+up about it.
 
 The line is between evidence and opinion. The transcript is a record of what was
 said. A note is somebody's reading of it and a tag is somebody's filing of it,

@@ -185,12 +185,68 @@ Claude takes it through `--append-system-prompt`. Codex has no equivalent flag,
 so it rides in front of the first question and is left off resumed threads,
 where it is already in the history.
 
-## `delete_note` is on neither tool list
+## `delete_note` is on neither tool list, and for a long time that was only true of Claude
 
 The server offers it, because the CLI and a human at an MCP client should be
 able to undo a note. An agent answering a question in a chat box should not,
 and the asymmetry is the point: everything else it can write is reversible by
 hand in the window, and a deleted note is not.
+
+**That was a claim with no measurement behind it, and it was false for two of
+the three backends.** `AgentRun.tools(allowWrites:)` says in its own comment
+that it is the one owner of this decision, and only `.claude` ever passed it on,
+as `--allowedTools`:
+
+- `.codex` was handed nothing of the sort. Measured against the shipped 0.20.0
+  binary, `listen mcp` answered `tools/list` with all thirteen tools however it
+  was invoked, so a read-only `listen ask --codex` could delete a note.
+- `.endpoint` computed the allowlist and used it only to choose which schemas to
+  *advertise*. `AgentChat.runTool` called `MCP.call` with no membership check,
+  so a model that named a tool it had never been offered was handed it. That is
+  a defence against a model that only calls what it was shown, and against no
+  other kind, which is the opposite of the population it was protecting from: a
+  7B model that invents a tool name also invents one that exists.
+
+## The allowlist is an argument, because only one of three backends honoured it
+
+The fix cannot be on the client side, because one of the clients cannot do it.
+Codex has no equivalent of `--allowedTools`: measured against codex-cli 0.147.0,
+`codex mcp list --json` renders a server as a command, args, env, cwd and two
+timeouts, and there is no tool-allowlist key anywhere in it.
+
+So the list goes into the server's own argv, `listen mcp --tools a,b,c`, which
+is the one place all three backends have in common. `MCP.call` refuses anything
+outside it and `tools/list` advertises only what is inside it, and because
+`call` is already the single choke point for both transports, the in-app tool
+loop is covered by the same check as the stdio server. Claude is given
+`--allowedTools` as well: the client filters and the server refuses, so all
+three now fail the same way rather than one failing differently.
+
+Three details worth keeping:
+
+- **The refusal is a distinct error.** `notAllowed` and not
+  `badArguments("unknown tool")`: one means the name is not a tool and the model
+  should stop, the other means the name is real and this session does not have
+  it, and that difference is the whole of what a model needs to do something
+  else instead.
+- **It is logged like any other failure**, inside `call`'s existing `do`, so a
+  refused call appears in `activity.jsonl` with `"ok":false`. A refusal that
+  leaves no trace is the one an audit most wants.
+- **`allowed` is a parameter on `call` and a static only for `serve`.**
+  `MCP.transport` looks like a precedent and is one for the opposite thing: a
+  transport is a property of the process, while an allowlist is a property of
+  the caller, and the window can have two conversations running at once with
+  different answers to whether writes are on. One `listen mcp` process serves
+  one client under one allowlist, which is why the stdio side may hold it in a
+  static.
+
+Before this, `listen mcp --anything` started an ordinary server and ignored the
+argument. Every unrecognised option is now refused on stderr with `exit(2)`, as
+is a `--tools` naming something that is not a tool: the only thing that produces
+that list is `AgentRun.tools`, so a name that is not a tool is a bug in this
+repo, and a tool silently missing from an agent's surface is a capability lost
+with nothing anywhere to explain it. Stderr and never stdout, because `serve`
+owns stdout from the first line.
 
 ## No cost is shown anywhere, and that is a decision rather than an omission
 

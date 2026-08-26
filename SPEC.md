@@ -402,8 +402,9 @@ surface on `docs/reference/mcp.mdx` in the Anarlog repo.
 
 **Notes and tags are the only writable surface.** Everything else is read-only
 and idempotent. An agent may create, rewrite and delete a note artifact, and tag
-and untag a recording; it may not rename a speaker, edit a transcript, retitle a
-recording or delete one. The line is evidence against opinion: a transcript
+and untag a recording or a note; it may not rename a speaker, edit a transcript,
+retitle a recording or delete one. Recordings and notes draw on one tag
+vocabulary and neither inherits the other's. The line is evidence against opinion: a transcript
 records what was said, while a note is a reading of it and a tag is a filing of
 it. Changing the evidence stays with a human, in the window or at the CLI.
 
@@ -416,13 +417,13 @@ Tools:
 | `get_transcript` | `recording_id`, `offset`, `limit` (default 200, clamp 1..500), returns `pagination` with `next_offset` |
 | `search_transcripts` | `query`, `person`, `tags`, `limit`. Full-text across the library, returns matching turns with recording IDs. |
 | `list_people` | Everyone in the voice bank, with recording counts. |
-| `list_tags` | Every tag, with recording counts. The vocabulary a tag filter can be asked in. |
-| `add_tags` | `recording_id`, `tags` (array). Adds rather than replaces; adopts a spelling the library already holds. |
-| `remove_tags` | `recording_id`, `tags` (array). Tags not on the recording are ignored. |
-| `list_notes` | `recording_id` optional. Provenance only, no bodies. |
+| `list_tags` | Every tag, with recording and note counts. One vocabulary over both, and the one a tag filter can be asked in. |
+| `add_tags` | `recording_id` **or** `note`, and `tags` (array). Adds rather than replaces; adopts a spelling the library already holds. Both is refused. |
+| `remove_tags` | `recording_id` **or** `note`, and `tags` (array). Tags not carried are ignored. |
+| `list_notes` | `recording_id` and `tags` both optional, ANDed. Provenance only, no bodies. A note carries only its own tags. |
 | `read_note` | `note` (slug or title), `recording_id` optional to narrow a shared title. |
-| `write_note` | `recordings` (array, at least one), `title`, `body`, `prompt`. Never overwrites; a colliding slug is numbered. |
-| `edit_note` | `note`, `body`, `was`, optional `title`/`recordings`/`prompt`. `was` is required and is a compare-and-swap. |
+| `write_note` | `recordings` (array, at least one), `title`, `body`, `prompt`, `tags`. Never overwrites; a colliding slug is numbered. |
+| `edit_note` | `note`, `body`, `was`, optional `title`/`recordings`/`tags`/`prompt`. `was` is required and is a compare-and-swap. |
 | `delete_note` | `note`. |
 
 `edit_note` and `delete_note` refuse a note whose `source` is `you`: an agent

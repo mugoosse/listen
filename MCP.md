@@ -68,10 +68,10 @@ binary, which is why the installed command is a symlink rather than a copy.
 | `get_transcript` | the speaker turns, paginated |
 | `search_transcripts` | which turns anywhere contain a phrase |
 | `list_people` | everyone the voice bank knows, and how much they talk |
-| `list_tags` | every tag you have used, and how many recordings carries it |
-| `add_tags` | tag a recording. Adds to what it has rather than replacing it. |
-| `remove_tags` | take tags off a recording |
-| `list_notes` | the notes on one recording, or all of them, without their text |
+| `list_tags` | every tag you have used, and how many recordings and notes carry it |
+| `add_tags` | tag a recording or a note. Adds to what it has rather than replacing it. |
+| `remove_tags` | take tags off a recording or a note |
+| `list_notes` | the notes on one recording, or all of them, or the ones with a tag, without their text |
 | `read_note` | one note in full |
 | `write_note` | add a note. Markdown body, free-text title, one or more recordings |
 | `edit_note` | rewrite one, refused if it changed since you read it |
@@ -92,6 +92,37 @@ finds all three.
 
 The names are invented by the user rather than drawn from a fixed list, so call
 `list_tags` first instead of guessing. Matching ignores case.
+
+### One vocabulary, and nothing inherited
+
+Recordings and notes share one set of tag names. `list_tags` returns each name
+once, with a count of the recordings carrying it and a count of the notes, and
+either can be zero: a tag that only notes carry is still a tag. Adding one
+adopts whatever spelling the library already has, so `add_tags` with `Kinsight`
+onto a library holding `kinsight` files it under the one that is there, whether
+you are tagging a meeting or a note.
+
+**A note does not inherit its recording's tags.** Tagging a meeting `kinsight`
+does not tag the notes about it, so filing a subject means doing both. This
+keeps the two questions apart, and they are different questions:
+
+```json
+list_recordings {"tags": ["kinsight"]}   what was said in meetings filed under it
+list_notes      {"tags": ["kinsight"]}   what has been written up and filed under it
+```
+
+`add_tags` and `remove_tags` take `recording_id` **or** `note`, never both.
+Giving both is refused rather than resolved in some order, because a tag on a
+meeting and a tag on the write-up of it are two different claims.
+
+`write_note` takes an optional `tags`, and `edit_note` takes one that replaces
+the list rather than adding to it, exactly as its `recordings` does. Omit it and
+the filing is left alone.
+
+The one write that may touch the user's own note is a tag. Its words cannot be
+changed from here, for the reason a transcript cannot: they were not derived
+from anything and there is no way to get them back. A tag is filing, and it is
+one click to remove in the window.
 
 `after` and `before` take `YYYY-MM-DD` or a full ISO 8601 timestamp. A bare day
 covers the whole of it, so `before: "2026-07-14"` includes everything recorded

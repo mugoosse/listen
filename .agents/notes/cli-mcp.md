@@ -140,6 +140,27 @@ a failed write throws.
 derived from an event rather than one a person typed, under its own `isUntitled`
 guard, and trimming input nobody typed is a rule borrowed from the wrong caller.
 
+## `listen mcp --tools` is what makes the allowlist true
+
+`MCP.serve` takes arguments now, and `case "mcp"` passes `rest` instead of
+dropping it. The reasoning belongs to the agent surface and is in
+`.agents/notes/agent.md` under "The allowlist is an argument, because only one
+of three backends honoured it". What matters at this layer:
+
+- Without the flag the server offers everything, which is what a
+  hand-configured client such as Claude Desktop or Hermes gets. nil is not an
+  empty set: nil is "nobody restricted this" and an empty set is a caller that
+  may call nothing.
+- Every refusal, including an unknown option and a `--tools` naming something
+  that is not a tool, goes to **stderr** and exits 2. `serve` owns stdout for
+  the life of the process, so a usage line there corrupts the stream before the
+  client has finished connecting and it reports a parse error instead.
+- Comma-separated, which breaks this CLI's repeat-the-flag rule on purpose. The
+  rule exists because user text may contain a comma, which is exactly why
+  `Tags.check` refuses one; a tool name is an identifier from a list compiled
+  into this binary. `listen notes write --tag` is repeatable, and it is user
+  text, so the two are consistent about the thing the rule is actually for.
+
 ## The MCP server owns stdout completely
 
 `listen mcp` speaks line-delimited JSON-RPC on stdout. Any stray `print` for

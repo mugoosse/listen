@@ -46,12 +46,32 @@ struct Note {
     /// neither is a conversation this library holds, and absent on every note
     /// written before this field existed. `Chat.wrote(_:)` is what covers those.
     var chat: String?
+    /// What this note is filed under, in the user's own words.
+    ///
+    /// The same vocabulary a recording's `metadata.tags` draws on, and
+    /// `Tags.all()` derives it from both. Carried explicitly and never
+    /// inherited: a note about a meeting tagged `kinsight` is not itself
+    /// tagged `kinsight` until somebody says so, which is the rule this file
+    /// already keeps for `recordings`.
+    ///
+    /// A default value, so the memberwise initialiser keeps every existing
+    /// construction site compiling. `Tags.tidy` has already run on anything in
+    /// here: it is sorted, deduplicated and canonically spelled, because every
+    /// route in goes through `Notes.create`, `Notes.replace` or
+    /// `Notes.setTags`.
+    var tags: [String] = []
     var body: String
 
     /// The whole file as it sits on disk, frontmatter included.
     var fileText: String { Notes.encode(self) }
 
     func isAbout(_ id: String) -> Bool { recordings.contains(id) }
+
+    /// Whether this note carries every one of these tags, matched the way a
+    /// recording's are. Empty is true, so an unfiltered list is unchanged.
+    func carries(_ wanted: [String]) -> Bool {
+        wanted.allSatisfy { name in tags.contains { Tags.matches($0, name) } }
+    }
 }
 
 /// Reading and writing the note artifacts in the library.
@@ -313,20 +333,22 @@ enum Notes {
     @discardableResult
     static func create(title: String, body: String, source: Source,
                        prompt: String? = nil, recordings: [String],
-                       chat: String? = nil,
+                       chat: String? = nil, tags: [String] = [],
                        requiringSources: Bool = true) throws -> Note {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw Failure.emptyTitle }
         guard !body.isEmpty else { throw Failure.emptyBody }
         let recordings = try checked(recordings, requiring: requiringSources)
+        let tags = try filed(tags)
 
         let now = Metadata.iso(Date())
         let note = Note(slug: unique(slug(for: title)), title: title,
                         created: now, updated: now, source: source.rawValue,
                         prompt: prompt?.isEmpty == true ? nil : prompt,
                         recordings: recordings,
-                        chat: chat?.isEmpty == true ? nil : chat, body: body)
+                        chat: chat?.isEmpty == true ? nil : chat,
+                        tags: tags, body: body)
         try save(note)
         return note
     }
@@ -347,11 +369,12 @@ enum Notes {
     /// `created` and the slug survive. An edit is the same artifact, and a note
     /// whose filename moved when its title was corrected would break every link
     /// to it. `recordings` survives too unless it is given: adding a paragraph
-    /// is not a claim about what the note is about.
+    /// is not a claim about what the note is about, and `tags` is the same
+    /// again, for the same reason.
     @discardableResult
     static func replace(_ name: String, body: String, title: String? = nil,
                         prompt: String? = nil, source: Source? = nil,
-                        recordings: [String]? = nil,
+                        recordings: [String]? = nil, tags: [String]? = nil,
                         expecting: String? = nil) throws -> Note {
         guard var note = find(name) else { throw Failure.noSuchNote(name) }
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -375,9 +398,48 @@ enum Notes {
         if let prompt { note.prompt = prompt.isEmpty ? nil : prompt }
         if let source { note.source = source.rawValue }
         if let recordings { note.recordings = try checked(recordings) }
+        if let tags { note.tags = try filed(tags) }
         note.updated = Metadata.iso(Date())
         try save(note)
         return note
+    }
+
+    /// Put a note's tags where they are told, and say what it carries after.
+    ///
+    /// The only route that writes tags without touching anything else, and the
+    /// one thing it deliberately does not do is move `updated`.
+    ///
+    /// **Filing a note is not editing its words.** `updated != created` is what
+    /// `MCP.brief` reports as `edited_by_hand`, which is how an agent knows a
+    /// note is one to rewrite carefully or leave alone. An agent's own
+    /// `add_tags` setting that flag would be a lie it reads back on its next
+    /// turn. Nothing downstream needs the clock either: `Note.version` is
+    /// content and tags are in it, so the sync sees this without a timestamp.
+    /// `DetailView.signature` is the one thing that keyed a redraw on `updated`
+    /// and it now reads the tags too.
+    /// The vocabulary is a parameter for the reason `Tags.all` says: a caller
+    /// sweeping the whole library has already read both lists, and deriving
+    /// them again per note turns one rename into a directory walk per file.
+    /// Adoption is idempotent, so a caller that has already adopted may pass
+    /// its own lists and pay nothing to go through the rule twice.
+    @discardableResult
+    static func setTags(_ names: [String], on note: Note,
+                        in library: [Recording] = Recording.all(),
+                        notes: [Note] = Notes.all()) throws -> [String] {
+        guard var stored = find(note.slug) else { throw Failure.noSuchNote(note.slug) }
+        stored.tags = try Tags.adopted(names, in: library, notes: notes)
+        try save(stored)
+        return stored.tags
+    }
+
+    /// Tags as the library spells them, or a refusal.
+    ///
+    /// `Tags.adopted` is the whole of it, and going through here means no
+    /// writer can forget it: the same rule that stops `Job Hunt` becoming a
+    /// second row beside `job hunt` on a recording applies to a note, because
+    /// there is one vocabulary and it is derived from both.
+    private static func filed(_ names: [String]) throws -> [String] {
+        try Tags.adopted(names)
     }
 
     /// Delete a note, and say which one went.
@@ -567,8 +629,16 @@ enum Notes {
         if let chat = note.chat, !chat.isEmpty {
             out += "chat: \(quoted(chat))\n"
         }
-        // A flow sequence on one line, so `grep -l 2026-08-05 notes/*.md`
-        // answers "which notes are about this meeting" without a parser.
+        // Flow sequences on one line, so `grep -l 2026-08-05 notes/*.md` and
+        // `grep -l kinsight notes/*.md` answer "which notes are about this
+        // meeting" and "which notes are filed under this" without a parser.
+        //
+        // **`tags` is written even when it is empty**, which is the opposite of
+        // `Tags.write`'s rule for a recording. `Note.serialised` in ListenKit
+        // has the reason and this must stay in step with it: a note is the one
+        // sidecar two devices both write, and an absent key there means
+        // "unchanged" rather than "none".
+        out += "tags: [\(note.tags.map(quoted).joined(separator: ", "))]\n"
         out += "recordings: [\(note.recordings.map(quoted).joined(separator: ", "))]\n"
         out += "---\n\n"
         return out + note.body + "\n"
@@ -626,6 +696,11 @@ enum Notes {
                     recordings: listed["recordings"]
                         ?? sequence(fields["recordings"] ?? ""),
                     chat: fields["chat"],
+                    // Tidied on the way in, because this is the one route a
+                    // hand-written file takes and nothing else will normalise
+                    // it: somebody typing `#Kinsight` and `kinsight ` into
+                    // Finder gets one tag rather than two that look the same.
+                    tags: Tags.tidy(listed["tags"] ?? sequence(fields["tags"] ?? "")),
                     body: body)
     }
 

@@ -34,10 +34,35 @@ list_people
 list_recordings  {"person": "Edgar", "after": "2026-07-01", "before": "2026-07-31"}
 ```
 
-`list_recordings` takes `query`, `person`, `after`, `before`, `limit` and
+`list_recordings` takes `query`, `person`, `tags`, `after`, `before`, `limit` and
 `offset`, and they combine with AND. Dates are `YYYY-MM-DD` or a full ISO 8601
 timestamp; a bare day covers the whole of it, so `before: "2026-07-14"` includes
 everything recorded on the 14th. `person` here means **was in the room**.
+
+### Tags are how a subject is named, and they are the user's own words
+
+Three meetings about one thing often share no word, no attendee and no week: a
+recruiter screen, a hiring manager chat and a referral catch-up have nothing in
+common but what they are about. A tag is the only thing that says so.
+
+```
+list_tags
+list_recordings  {"tags": ["job hunt"], "person": "Edgar"}
+```
+
+Call `list_tags` before filtering. The names are invented rather than drawn from
+a fixed list, so a guessed one matches nothing and says nothing. Matching
+ignores case; a recording has to carry every tag in the list.
+
+**Recordings and notes share one vocabulary and neither inherits the other's.**
+`list_tags` gives each name a recording count and a note count, and either can
+be zero. A meeting tagged `kinsight` does not make the write-ups of it tagged,
+so these are two questions and both are worth asking:
+
+```
+list_recordings {"tags": ["kinsight"]}   what was said in meetings filed under it
+list_notes      {"tags": ["kinsight"]}   what has been written up and filed under it
+```
 
 Two things about names, both of which return an empty list rather than an error
 when you get them wrong:

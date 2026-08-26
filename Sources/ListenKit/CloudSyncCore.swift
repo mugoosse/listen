@@ -932,8 +932,25 @@ public struct CloudSyncCore: Sendable {
                 // Ordinarily the pull earlier in the same pass has already
                 // applied the deletion. This is for the pass whose pull failed
                 // on the network and whose push ran anyway.
+                //
+                // **Moved, not removed**, which this branch did not do and cost
+                // somebody their notes. `deleteLocally` states the rule for the
+                // pull side: a deletion arriving over sync was made on some
+                // other device, and this one cannot tell a deliberate one from
+                // a bug or from a library that briefly looked empty, so it goes
+                // to the trash for a fortnight. This is the same class of event
+                // by its own comment above, and it was calling `deleteNote`,
+                // which is a bare `removeItem` with nothing behind it.
+                //
+                // Found on a real library: `sync_deleted count: 4` in the
+                // activity log on 2026-08-18, four notes gone, and `listen sync
+                // trash` holding two recordings and no notes at all. The trash
+                // even tells the reader to "put one back by moving it into
+                // recordings/ or notes/", which was a promise only the pull
+                // path kept.
                 if existing == nil, let agreed = base[note: note.slug], agreed == note.version {
-                    library.deleteNote(note.slug)
+                    Trash.accept(library.notes.appendingPathComponent(note.slug + ".md"),
+                                 in: library)
                     base[note: note.slug] = nil
                     report.deletedLocally += 1
                     continue

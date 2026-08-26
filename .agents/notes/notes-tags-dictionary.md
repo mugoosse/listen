@@ -64,19 +64,23 @@ getting a merge. Import and export carry the list across instead: `encode`
 deliberately writes **Speak's** shape, and `decode` is deliberately liberal
 (Speak's, a bare array, TypeWhisper's key names), so the two apps read each
 other's exports and the trip works in both directions. `listen dictionary import
---from-speak`, and the Speak section of the pane, are the one-press version.
+--from-speak` is the one-press version.
 
 Measured: importing Speak's real dictionary brought over 5 terms and 35
 corrections and skipped 3 already present.
 
-**It is a migration now, not an integration.** Speak's dictation is part of
-Listen, so a Mac with that file has a list left behind rather than a companion
-app to stay in step with. The section is therefore shown **only when the file is
-actually there**: the "Get Speak" button, the paragraph explaining what Speak
-was, and the empty-state that offered both are gone, because a pane that
-advertises another download for a feature this app already has sends people away
-for nothing. The import itself stays, and so does `encode` writing Speak's
-shape: somebody who has that file still wants their terms.
+**The pane no longer mentions Speak at all.** It went in stages, and the last
+one is the one to remember. First the integration became a migration: Speak's
+dictation is part of Listen, so a Mac with that file has a list left behind
+rather than a companion app to stay in step with, and the "Get Speak" button,
+the paragraph explaining what Speak was, and the empty-state that offered both
+went. Then the section itself went, shown-only-when-the-file-exists and all,
+because Speak is not a project anybody works on now and a settings pane naming a
+dead app makes the reader ask what it is. `listen dictionary import
+--from-speak` is what is left, and it is enough: the file is not going anywhere,
+the migration is a thing somebody does once, and a CLI flag costs no screen
+space. `encode` still writes Speak's shape, and `decode` still reads it, because
+somebody who has that file still wants their terms.
 
 A term too short to be matched by sound is stored and does nothing, which from
 the outside is indistinguishable from the feature being broken. `eligible` is

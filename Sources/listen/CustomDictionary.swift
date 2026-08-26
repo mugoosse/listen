@@ -93,10 +93,12 @@ enum CustomDictionary {
     /// shared-mutable-state half.
     static let file = Library.root.appendingPathComponent("dictionary.json")
 
-    /// Where Speak keeps its own, for the one-press import.
+    /// Where Speak keeps its own, for `listen dictionary import --from-speak`.
     ///
-    /// Read, never written. Speak is a separate app and its dictionary is its
-    /// own; Listen offers to copy from it and nothing more.
+    /// Read, never written, and no longer offered anywhere in the window: Speak
+    /// is not a companion app being kept in step with, it is a list left behind
+    /// on a Mac that once ran it. The CLI keeps the one-off migration because a
+    /// path somebody used once a year costs nothing to leave in place.
     static let speakFile = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support/speak/dictionary.json")
 

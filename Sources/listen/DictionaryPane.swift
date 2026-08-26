@@ -6,11 +6,10 @@ import AppKit
 /// sound and a correction is matched exactly, and neither is comprehensible on
 /// its own: split across two tabs, neither half says what it is relative to.
 ///
-/// The section at the bottom is the part that is not in Speak. Listen applies
-/// this list at transcription time, to an archive nobody may read for a week, so
-/// the pane has to be able to answer "what has this actually changed" with
-/// numbers rather than an assurance. It reads the counts every transcript
-/// carries.
+/// "What it changed" is the section that earns the pane. Listen applies this
+/// list at transcription time, to an archive nobody may read for a week, so the
+/// pane has to be able to answer "what has this actually changed" with numbers
+/// rather than an assurance. It reads the counts every transcript carries.
 @MainActor
 final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
                             NSTextFieldDelegate {
@@ -84,7 +83,6 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
                  + "\"category\" alone. The longest match wins, so a rule for a full name "
                  + "beats one for the first name.")
 
-        buildSpeak()
         buildTry()
         buildEffect()
     }
@@ -284,10 +282,6 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
         take(from: url, source: url.lastPathComponent)
     }
 
-    @objc private func importFromSpeak() {
-        take(from: CustomDictionary.speakFile, source: "Speak's dictionary")
-    }
-
     private func take(from url: URL, source: String) {
         guard let data = try? Data(contentsOf: url),
               let incoming = CustomDictionary.decode(data) else {
@@ -321,33 +315,6 @@ final class DictionaryPane: Pane, NSTableViewDataSource, NSTableViewDelegate,
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? data.write(to: url, options: .atomic)
-    }
-
-    /// The one-press copy from Speak, shown only when there is one to copy.
-    ///
-    /// A button that is always there and usually does nothing would be worse
-    /// than no button: the whole reason to offer this is that the list already
-    /// exists, and there is no way to tell that from a disabled control.
-    ///
-    /// **This is a migration and no longer an integration.** Speak's dictation
-    /// is part of Listen now, so a Mac with that file has a list left behind
-    /// rather than a companion app to stay in step with. What went with that:
-    /// the "Get Speak" button, the paragraph explaining what Speak was, and the
-    /// section itself on a Mac that never ran it. A pane that advertises
-    /// another download for a feature this app already has is a pane that sends
-    /// people away for nothing.
-    private func buildSpeak() {
-        guard CustomDictionary.speakDictionaryExists else { return }
-        separator()
-        heading("Imported from Speak")
-        note("This Mac has a dictionary from Speak, the dictation app Listen grew "
-             + "out of. Copying brings those terms across. The file is not shared, "
-             + "deliberately: two apps rewriting one document whole means the loser "
-             + "of a race loses entries.")
-        row([
-            NSButton(title: "Import from Speak", target: self,
-                     action: #selector(importFromSpeak)),
-        ])
     }
 
     private func count(_ n: Int, _ noun: String, plural: String? = nil) -> String {

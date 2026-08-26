@@ -370,7 +370,7 @@ that repo is being archived.**
 - A bare date is a day, and a day has two ends
 - `listen mcp --tools` is what makes the allowlist true (see `agent.md`)
 
-### `.agents/notes/cloud-sync.md` (40k)
+### `.agents/notes/cloud-sync.md` (44k)
 
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
@@ -396,6 +396,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - The activity log is one line, appended with O_APPEND
 - Nothing ever created the key, and both sides said "waiting"
 - Two paths delete a note on somebody else's say-so, and only one trashed it
+- An editor that rebuilds a note drops the field nobody told it about
 
 ### `.agents/notes/agent.md` (148k)
 

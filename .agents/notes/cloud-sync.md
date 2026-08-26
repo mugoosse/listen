@@ -666,3 +666,33 @@ put a note there.
 receiving device's back so its pull has nothing to react to, and asserts the
 `.md` is in the trash. Checked both ways: with `deleteNote` back in place the
 assertion fails, which is what makes it a test rather than a decoration.
+
+## An editor that rebuilds a note drops the field nobody told it about
+
+`Note` is shared source, not a copy: `listen-ios` compiles 21 files straight out
+of `../listen/Sources/ListenKit/`, `Sidecars.swift` among them. So a field added
+here appears on the phone the moment it is rebuilt, with no porting step. That is
+the good half.
+
+The bad half is that every place which **constructs** a `Note` rather than
+editing one silently resets whatever it does not name, because the memberwise
+initialiser gives the newer fields defaults. `AppModel.saveNote` owned a title
+and a body and rebuilt the whole note around them, hand-carrying `prompt`,
+`chat`, `recordings` and `extra` across. Adding `tags` did not break it, which is
+the problem: it compiled, said nothing, and unfiled the note on every edit made
+on the phone.
+
+**It would have been worse than the loss that pattern was already fixed for
+once.** `prompt` and `chat` sit outside `Note.version`, so losing them leaves the
+two sides agreeing on a digest while holding different files, and the damage sits
+there until something else writes. `tags` is *in* the digest, so a wipe reads as
+a deliberate edit and pushes: the device that dropped them hands that to the
+other as the new truth.
+
+The fix is not to name `tags` in the list. It is to stop rebuilding: start from
+the note on disk, change the two fields the screen owns, write it back. A field
+added next year is then carried by a line nobody has to remember to write.
+
+`FakeSync` asserts the invariant from the sync's side, as "an edit that only
+knows title and body keeps the filing", and checks the body really crossed so
+the case cannot pass by moving nothing.

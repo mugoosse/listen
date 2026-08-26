@@ -1200,6 +1200,36 @@ public enum FakeSync {
                   "the tags did not cross: \(landedFiled.tags)")
         ok("a tagged note crosses with its filing intact")
 
+        // **An editor that knows only a title and a body must not unfile the
+        // note.** The phone's note screen owns those two fields and nothing
+        // else, and it used to rebuild a whole `Note` around them, carrying
+        // `prompt`, `chat`, `recordings` and `extra` across by hand. `tags`
+        // arrived with a memberwise default of `[]`, so leaving it out of that
+        // list compiled and said nothing.
+        //
+        // It would have been worse than the `prompt` and `chat` loss that
+        // pattern was already fixed for once. Those are outside `version`, so
+        // the damage stays put until something else writes; tags are in it, so
+        // a wipe reads as a deliberate edit and pushes, and the device that
+        // dropped them hands that to the other as the new truth.
+        //
+        // Written the way the fixed editor writes: start from what is on disk
+        // and change the two fields it owns.
+        var edited = try checkNote(phoneLib.note(filedSlug), named: filedSlug)
+        let wasEdited = edited.version
+        edited.body = "Body, rewritten on the phone."
+        try phoneLib.writeNote(edited, expecting: wasEdited)
+        var filedEditPush = CloudReport()
+        await phone.push(into: &filedEditPush)
+        var filedEditPull = CloudReport()
+        await mac.pull(into: &filedEditPull)
+        let backOnMac = try checkNote(macLib.note(filedSlug), named: filedSlug)
+        try check(backOnMac.tags == ["kinsight", "acme"],
+                  "a title-and-body edit unfiled the note: \(backOnMac.tags)")
+        try check(backOnMac.body.contains("rewritten on the phone"),
+                  "the edit itself did not cross")
+        ok("an edit that only knows title and body keeps the filing")
+
         // A second pass sends nothing. This is the churn check: with the two
         // devices computing the same formula it is zero, and the day it is not,
         // the digest has moved on one side only.

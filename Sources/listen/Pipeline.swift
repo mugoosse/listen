@@ -364,6 +364,28 @@ actor Pipeline {
         // their clocks agree and sorting is all the alignment needed.
         labelled.sort { $0.start < $1.start }
 
+        // Before the letters are handed out, not after: a cluster too small to
+        // be a person must never be given one, or the alphabet skips a letter
+        // and the transcript still says three people were here. See
+        // `Merge.foldCrumbs` for the measurement and for why this folds rather
+        // than dropping, which is the opposite of what `bleedClusters` does.
+        let folded = Merge.foldCrumbs(&labelled, embeddings: embeddings,
+                                      keeping: [Self.userLabel])
+        for (crumb, target) in folded {
+            // Added, not remapped: `remap` overwrites on a collision and this
+            // is a sum. The voiceprint is dropped rather than averaged in,
+            // because a crumb is the evidence that made the model wrong once
+            // already and the target's own print is built from minutes.
+            speech[target, default: 0] += speech[crumb] ?? 0
+            speech[crumb] = nil
+            embeddings[crumb] = nil
+        }
+        if !folded.isEmpty {
+            log("\(folded.count) voice(s) folded into the speaker they most "
+                + "resemble: too little speech to be a person")
+            trace("  folded: \(folded)")
+        }
+
         // One alphabet for the whole meeting, handed out after the merge rather
         // than per track. Both tracks can now arrive holding a cluster called 1,
         // and letters given out per track would either collide or number the
@@ -570,6 +592,10 @@ actor Pipeline {
 
         var assigned = Merge.assign(transcript.segments, to: diarization.turns,
                                     fallback: "unknown")
+        // Same fold as the two-track path, and before the letters for the same
+        // reason. Nothing here is namespaced, so every label shares one track
+        // and a crumb is compared against the whole file.
+        Merge.foldCrumbs(&assigned, embeddings: diarization.embeddings)
         Merge.relabel(&assigned)
         let (cleaned, fired) = Merge.clean(assigned)
         return StoredTranscript(segments: cleaned, duration: transcript.duration,

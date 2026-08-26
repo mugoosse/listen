@@ -222,8 +222,18 @@ echo "moving every turn of a speaker takes the speaker with it"
 # when the label has gone from the transcript entirely.
 reset
 before=$(tally $MEETING)
+# Counted off the fixture rather than written down, for the reason `delta` and
+# `NEW` already give: this is a copy of a library somebody keeps correcting, and
+# how many turns Rita holds is theirs to change. It was 2 when this was written
+# and 7 the morning it next failed, which read as a regression in whatever change
+# was in front of the runner. What is being asserted is that **every** one of her
+# turns moves and none is left behind, so the number belongs to the fixture.
+rita=$(python3 -c "
+import json
+turns = json.load(open('$LISTEN_LIBRARY/recordings/$MEETING/turns.json'))
+print(sum(1 for t in turns if t['speaker'] == 'Rita'))")
 "$BIN" label $MEETING Rita --merge-into Beile >/dev/null 2>&1
-check "merged away, and gone from the transcript" "Beile+2 Rita-2" \
+check "merged away, and gone from the transcript" "Beile+$rita Rita-$rita" \
                                                   "$(delta "$before" "$(tally $MEETING)")"
 check "and gone from the voice bank"              "0" \
       "$(python3 -c "

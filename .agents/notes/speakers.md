@@ -931,6 +931,104 @@ has no face: on screen it is exactly an ordinary solo memo. If somebody reports
 a meeting filed under one name, that line says whether the diarizer saw one
 voice or was never asked.
 
+## Three words are not a person, and one of them withheld a title for ever
+
+A threshold that separates real voices well still answers, now and then, with a
+cluster holding a backchannel: two "Yeah."s and a half-question, clipped off
+somebody already in the recording. `Merge.foldCrumbs` folds one of those into the
+voice it most resembles, before the letters are handed out.
+
+The case it was written for is a 37-minute Telegram call. The system track
+separated into two, and the second cluster was **2.6 seconds across three
+turns**: "Yeah." at 6:13, then "Yeah." and "What were you saying?" at 29:26. It
+cost three things at once, and only the first is visible:
+
+- a `Speaker B · 1%` chip on the meeting,
+- `needs_labelling` for ever, because nobody will ever name it,
+- and **no title**, because `AutoTitle.fromPeople` waits for every speaker to be
+  named and one letter is enough to make it wait. See `titles.md`, where waiting
+  is measured and right: the two recordings that rule was derived from were
+  workshops with a real second participant still unnamed.
+
+So the fix is not to make the titler more forgiving. It is to stop handing a
+letter to something that is not a person.
+
+### Where the number came from
+
+Measured over every placeholder speaker in the development library, as seconds
+of assigned transcript and as a share of its track:
+
+| seconds | share | recording | |
+|---|---|---|---|
+| 2.0 | 0.08% | workshop 1, E | fold |
+| 2.6 | 0.10% | Telegram call, B | fold |
+| 6.7 | 0.77% | workshop 4, D | keep |
+| 38.1 | 1.55% | workshop 1, D | keep |
+| 29.1 | 3.34% | workshop 4, A | keep |
+| 80.9 and up | 9.45% and up | nine more | keep |
+
+The crumbs and the people are separated by a gap from 2.6 to 6.7 seconds, and
+`crumbSeconds` is 5, in the middle of it. `crumbShare` is 1%, in the matching gap
+from 0.10% to 0.77%.
+
+**Both, not either.** The seconds do the work; the share keeps them honest on a
+short recording. Four seconds is a crumb in an hour and is somebody's whole
+contribution to a three-minute call, so a bare seconds cut would fold a real
+speaker out of the transcript the moment the meeting was brief. The share is the
+looser guard, and deliberately: workshop 4's D passes it at 0.77% and is kept on
+seconds alone, which is the direction to be wrong in.
+
+### Folded, never dropped
+
+`bleedClusters` deletes, and is right to: the far end coming back in through the
+speakers is a duplicate, and those words are already in the transcript on the
+other track. A crumb is not a duplicate. "What were you saying?" was said once,
+by somebody, and deleting it would lose transcript to tidy up a label. The two
+functions sit next to each other in the pipeline doing opposite things, which is
+worth knowing before editing either.
+
+### Within a track, never across one
+
+The labels arriving at the fold are still namespaced by `Merge.namespaced`, and
+that prefix is the one hard fact about who a cluster can be. A crumb on the
+system track is a fragment of somebody on the far end, and folding it into a
+voice in the room would say the two were one person. `keeping` bars `Me` at the
+other end for the same reason: it is a track rather than a cluster.
+
+`runFile`, which is `listen transcribe --diarize`, namespaces nothing. That is
+why a label with no colon groups with every other label with no colon instead of
+being its own track. The first version made each its own track, every share came
+out at exactly 1, and the whole function was silently off for that path.
+
+### Before the letters, not after
+
+`foldCrumbs` runs immediately before `Merge.relabel`. Folding afterwards would
+leave a gap in the alphabet, and a transcript that runs A, B, D still says three
+people were here. Confirmed on workshop 1: eight clusters in, one folded, and the
+seven that came out are A through G with nothing missing.
+
+### What was measured after the change
+
+All three on real audio, re-transcribed into a scratch `LISTEN_LIBRARY` while the
+originals were left alone:
+
+| recording | before | after | |
+|---|---|---|---|
+| Telegram call, 37 min | 2 far-end clusters | 1 | `system:S2` into `system:S1` |
+| workshop 1, 47 min, room | 8 clusters | 7 | `room:S8` into `room:S5` |
+| workshop 4, 16 min, room | 3 clusters | 3 | nothing folded |
+
+The Telegram call is the whole claim end to end: the three sentences are still
+there and now belong to the person who said them, the turns match the hand merge
+exactly at 92 turns and 1475.0 s, and naming the one remaining speaker wrote
+`Call with Edgar` with `title_source` `people` and state `done`.
+
+Workshop 4 is the guard, and it is a closer thing than the table above suggests:
+re-transcribed today its smallest speaker is **9.5 s at 1.09%**, above both cuts
+and kept. Workshop 1's smallest survivor is 41.7 s at 1.69%. So the margin is
+real but it is not large, and anybody lowering `crumbSeconds` should re-run
+workshop 4 before believing it is safe.
+
 ## The bank knew everybody except its owner
 
 `Me` was the one label in the library with **no voice behind it**. Nothing

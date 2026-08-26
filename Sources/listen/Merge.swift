@@ -142,6 +142,169 @@ enum Merge {
         track + ":" + label
     }
 
+    // MARK: - Crumbs
+
+    /// How little speech a cluster may hold before it stops being a person,
+    /// and how small a part of its own track it may be.
+    ///
+    /// **Both, not either.** The seconds do the work and the share is what
+    /// keeps them honest on a short recording: four seconds is a crumb in an
+    /// hour and is somebody's whole contribution to a three-minute call, so a
+    /// bare seconds cut would fold a real speaker out of the transcript the
+    /// moment the meeting was brief.
+    ///
+    /// Measured over every placeholder speaker in the development library, as
+    /// seconds of assigned transcript and as a share of the track:
+    ///
+    ///     2.0s  0.08%   workshop 1, E     fold
+    ///     2.6s  0.10%   Telegram call, B  fold
+    ///     6.7s  0.77%   workshop 4, D     keep
+    ///     38.1s 1.55%   workshop 1, D     keep
+    ///     29.1s 3.34%   workshop 4, A     keep
+    ///      ... and nine more from 80.9s / 9.45% upwards
+    ///
+    /// So the crumbs and the people are separated by a gap from 2.6 to 6.7
+    /// seconds, and five sits in the middle of it. 1% sits in the matching gap
+    /// in share, 0.10% to 0.77%, and is the looser of the two guards: workshop
+    /// 4's D passes it and is kept on seconds alone, which is the direction to
+    /// be wrong in.
+    ///
+    /// The two that fold are three words each. The Telegram call's B was
+    /// "Yeah.", "Yeah." and "What were you saying?", spread over 37 minutes,
+    /// and it was enough to withhold the recording's title for ever: see
+    /// `AutoTitle.fromPeople`, which waits for every speaker to be named, and
+    /// .agents/notes/titles.md for why waiting is right when the speaker is a
+    /// person.
+    static let crumbSeconds: Double = 5
+    static let crumbShare: Double = 0.01
+
+    /// Fold a cluster too small to be a person into the voice it most
+    /// resembles.
+    ///
+    /// A diarizer asked to separate voices will occasionally answer with a
+    /// third one holding a backchannel: two "Yeah."s and a half-question,
+    /// clipped off somebody who is already in the recording. It is not a person
+    /// and it costs three things at once. It puts a "Speaker B · 1%" chip on
+    /// the meeting, it holds the recording in `needs_labelling` for ever, and
+    /// through `AutoTitle.fromPeople` it withholds the title from the two
+    /// people who did the talking.
+    ///
+    /// **Folded, never dropped.** `bleedClusters` deletes, and is right to: the
+    /// far end coming back in through the speakers is a duplicate, and the
+    /// words are already in the transcript on the other track. A crumb is not a
+    /// duplicate. "What were you saying?" was said once, by somebody, and
+    /// deleting it loses transcript to tidy up a label.
+    ///
+    /// **Within a track, never across one.** The labels arriving here are
+    /// namespaced by `namespaced(_:_:)`, and that prefix is the one hard fact
+    /// about who a cluster can be: a crumb on the system track is a fragment of
+    /// somebody on the far end, and folding it into a voice in the room would
+    /// say the two were one person. `keeping` is spared for the same reason at
+    /// the other end, and it carries `Me`, which is a track rather than a
+    /// cluster.
+    ///
+    /// **Nearest by voice, and by time only when there is no voice to compare.**
+    /// The embedding is the principled signal and it is also the one that just
+    /// failed, which is why the crumb exists, so it is worth saying what it is
+    /// still good for: on the Telegram call the three-word B sat at cosine
+    /// 0.088 from Edgar and 0.037 from the microphone, which is weak evidence
+    /// pointing the right way rather than none. A crumb the diarizer produced
+    /// no embedding for falls back to whoever was talking nearest to it, which
+    /// on a backchannel is nearly always the person being agreed with.
+    ///
+    /// Returns the folds it made, crumb to target, so the caller can move the
+    /// voiceprints and the speech totals with them. Empty is the common case.
+    @discardableResult
+    static func foldCrumbs(_ segments: inout [LabelledSegment],
+                           embeddings: [String: [Float]] = [:],
+                           keeping: Set<String> = []) -> [String: String] {
+        var spoken: [String: Double] = [:]
+        var spans: [String: [(start: Double, end: Double)]] = [:]
+        for segment in segments {
+            let length = max(0, segment.end - segment.start)
+            spoken[segment.speaker, default: 0] += length
+            spans[segment.speaker, default: []].append((segment.start, segment.end))
+        }
+
+        // The track a label came off, which is everything before the colon
+        // `namespaced` put there. Labels with no colon share one group rather
+        // than each being their own: `runFile` never namespaces anything, and a
+        // per-label group would make every share exactly 1 and quietly turn
+        // this whole function off for `listen transcribe --diarize`. In the
+        // two-track path the only un-namespaced label is `Me`, which `keeping`
+        // already bars from folding and which nothing can fold into while it is
+        // alone in its group.
+        func track(_ label: String) -> String {
+            guard let colon = label.firstIndex(of: ":") else { return "" }
+            return String(label[..<colon])
+        }
+
+        var total: [String: Double] = [:]
+        for (label, seconds) in spoken { total[track(label), default: 0] += seconds }
+
+        let crumbs = spoken.filter { label, seconds in
+            guard !keeping.contains(label) else { return false }
+            guard seconds < crumbSeconds else { return false }
+            let whole = total[track(label)] ?? 0
+            return whole > 0 && seconds / whole < crumbShare
+        }
+        guard !crumbs.isEmpty else { return [:] }
+
+        var folds: [String: String] = [:]
+        for crumb in crumbs.keys.sorted() {
+            // Another crumb is not somewhere to fold to. Two of them on one
+            // track stay as they are rather than being merged into each other,
+            // which would invent a speaker out of two fragments.
+            // Sorted, so a tie breaks the same way twice. Dictionary order is
+            // not stable in Swift, and two targets can genuinely tie on the
+            // fallback below: a backchannel over crosstalk overlaps both, and
+            // both score a gap of zero. Re-transcribing a recording must not
+            // hand its sentences to a different person than last time.
+            let targets = spoken.keys.filter {
+                $0 != crumb && crumbs[$0] == nil && track($0) == track(crumb)
+            }.sorted()
+            guard !targets.isEmpty else { continue }
+
+            if let mine = embeddings[crumb], !mine.isEmpty {
+                let scored = targets.compactMap { label -> (String, Float)? in
+                    guard let theirs = embeddings[label], !theirs.isEmpty else { return nil }
+                    return (label, VoiceBank.cosine(mine, theirs))
+                }
+                if let best = scored.max(by: { $0.1 < $1.1 })?.0 {
+                    folds[crumb] = best
+                    continue
+                }
+            }
+            // No embedding to compare, so whoever was speaking closest to it.
+            // Distance from the crumb's own spans to the target's, zero for an
+            // overlap, which is what a backchannel over an answer produces.
+            let mine = spans[crumb] ?? []
+            let nearest = targets.min { a, b in
+                gap(mine, spans[a] ?? []) < gap(mine, spans[b] ?? [])
+            }
+            if let nearest { folds[crumb] = nearest }
+        }
+        guard !folds.isEmpty else { return [:] }
+
+        for i in segments.indices {
+            if let target = folds[segments[i].speaker] { segments[i].speaker = target }
+        }
+        return folds
+    }
+
+    /// The closest either set of spans comes to the other, zero if they touch.
+    private static func gap(_ a: [(start: Double, end: Double)],
+                            _ b: [(start: Double, end: Double)]) -> Double {
+        var best = Double.greatestFiniteMagnitude
+        for one in a {
+            for other in b {
+                let overlap = min(one.end, other.end) - max(one.start, other.start)
+                best = min(best, overlap >= 0 ? 0 : -overlap)
+            }
+        }
+        return best
+    }
+
     /// A, B, C... in order of first appearance.
     ///
     /// The diarizer's own labels are arbitrary and not stable between runs, so

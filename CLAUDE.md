@@ -127,7 +127,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - A copy of the right size that will not load has to be replaceable
 - MLX keeps every buffer it ever freed, until it is told a limit
 
-### `.agents/notes/speakers.md` (37k)
+### `.agents/notes/speakers.md` (77k)
 
 Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 `SpeakerName`, `VoiceBank`, `Enroll`, `Diarizer`, the legacy import.
@@ -168,6 +168,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - The prior outlived its pass, and every meeting after it had one voice
 - The clustering threshold is a similarity, and the comment said distance
 - A room needs a higher threshold than a call, and 0.6 filed two people as one
+- Three words are not a person, and one of them withheld a title for ever
 - The bank knew everybody except its owner
 
 ### `.agents/notes/calendar.md` (15k)
@@ -189,7 +190,7 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Onboarding has to ask, because nothing else will
 - `listen calendar` exists because matching leaves nothing behind
 
-### `.agents/notes/titles.md` (14k)
+### `.agents/notes/titles.md` (16k)
 
 What a recording is called, and which of the things that name it may write over
 which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`, `DeviceTitle`,
@@ -198,6 +199,7 @@ which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`, `DeviceTitle`,
 - One bit could not hold two titlers
 - The placeholder is a key on disk and a word on screen
 - The people title waits for the last speaker, and that is measured
+- Waiting is right, and a crumb is not somebody to wait for
 - It is a view over the speakers, not a decision taken once
 - "Call with" is a claim, and `app_bundle_id` is the evidence
 - The backfill exists because the deriver is driven by edits

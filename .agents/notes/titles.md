@@ -106,6 +106,28 @@ one, 4 with two, and one each with three, four and five. The last three are
 those workshops. Nothing in the library has ever reached the "and 2 others"
 branch of `AutoTitle.list`.
 
+## Waiting is right, and a crumb is not somebody to wait for
+
+The rule above holds. What it could not tell apart is a speaker who is a person
+from a cluster holding three words, and one of the second kind withheld a title
+indefinitely: a 37-minute Telegram call whose second far-end cluster was 2.6
+seconds of "Yeah.", "Yeah." and "What were you saying?". `fromPeople` refused,
+`title backfill` said "waiting on 1 unnamed speaker", and it was right to. There
+was nothing here to fix.
+
+So the fix is upstream, in `Merge.foldCrumbs`, which folds a cluster too small to
+be a person into the voice it most resembles before any letter is handed out.
+Nothing in this file changed, and that is the point: by the time `AutoTitle` sees
+a recording, the speakers in it are people. `.agents/notes/speakers.md` has the
+measurement and the two thresholds.
+
+The reason to record it here as well is that the symptom appears here. A
+recording stuck at "New recording" with a named speaker in it is now much more
+likely to be a real unnamed participant, which is what the backfill's "waiting on
+a speaker" already says, and much less likely to be a diarization crumb. If it is
+a crumb, the recording predates the fold and re-transcribing is what clears it,
+at the cost this file's neighbours describe.
+
 ## It is a view over the speakers, not a decision taken once
 
 The hook is `TranscriptEditor.change`, which every rename, merge and discard in

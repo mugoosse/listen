@@ -8,6 +8,71 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.19.0 (2026-08-26)
+
+### Release notes are in the app
+
+Until now the only place release notes ever appeared was the pane Sparkle
+draws in front of an update, and that pane is dismissed and gone once you have
+acted on it. With automatic updates on by default, the ordinary path is a
+version landing on the next quit with its notes never having been on screen at
+all. A Release Notes window shows them now, reachable from Help, from the
+version number in About, and from Settings, Updates. It runs back through
+every past release and stops at whichever build you are running;
+`listen changelog` reads the same file from the terminal.
+
+### A pull no longer overwrites an edit nobody has sent
+
+A speaker corrected on one device could be silently reverted by a sync pull
+from another, with `metadata.json`'s own timestamp giving no sign anything had
+happened: the pull runs before the push that would tell the container about
+the edit, so a pull landing in between sees the container's old value against
+a local one that has already changed, and two values alone cannot tell
+"behind" from "edited but not yet sent". Recording sidecars are tracked per
+file now, the way the rest of sync already tracks conflicts, so an edit in
+flight survives a pull that runs while it is still on its way out.
+
+### The speaker menu asks how much it is about to change
+
+Correcting a name from the transcript offered two similarly worded menu
+items, one renaming every turn a speaker has and the other moving a single
+paragraph, with nothing on either saying which was which; reported as
+confusing, and then reported again as a name that had vanished by the time
+its author looked back at the transcript. There is one item now: it opens
+with a checkbox that states the size of the edit in its own words, "All 63
+turns by Nick change" or "Only this turn changes. Nick keeps the other 62",
+ticked by default.
+
+Building that surfaced a real bug behind the second report. Moving a single
+paragraph to a new name could silently move whichever paragraph followed it
+too, because two turns from the same speaker can start at the exact instant
+the other track's interruption between them ends, and a window matched only
+on where a turn starts cannot tell them apart. Measured on a 1h29m call,
+correcting one paragraph silently moved the paragraph right after it as well.
+Fixed together with a second issue that made any speaker correction jump the
+transcript back to the top of the meeting, however far into it you were
+reading.
+
+### Smaller fixes
+
+The transcript's sentence-edit menu acted on whichever sentence was under the
+pointer even when several were selected, leaving the rest labelled wrong; it
+now acts on the whole selection, states the count, and can delete a sentence
+outright, which a line one track picked up twice with an overlapping
+timestamp needed. Selecting text to open that menu no longer starts playback
+and scrolls the transcript out from under you, which used to happen because
+selecting begins with a click and a click on a paragraph normally seeks and
+plays. A room recording with a silent system track showed no transcribing
+progress at all, stuck at zero for the whole job because the percentage was
+reading from a track with nothing on it. An 89-minute webinar's system track
+was once clustered down to a single far-end voice, because a call with a
+microphone track had already run earlier in the same app session and the
+tuned diarizer meant for the mic track was left in the slot the system
+track's own pass reads from. The sidebar's transcribing row could wrap onto a
+second line and push its activity bar past the card's edge; it stays on one
+line now, giving up the clock and length for the stage description while a
+job is running.
+
 ## 0.18.2 (2026-08-25)
 
 ### Listen notices a new version sooner

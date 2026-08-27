@@ -203,10 +203,12 @@ final class AboutWindow: NSObject, NSWindowDelegate {
         // the network. Shorter than the paragraph the settings pane carried:
         // the same four claims, and this window is read standing up.
         stack.addArrangedSubview(text(
-            "Free software under the AGPL 3.0. No account and no telemetry: on its "
-            + "own Listen uses the network to fetch the model you chose and to ask "
-            + "whether a newer version exists. iCloud sync and a hosted Ask "
-            + "provider add a connection only if you turn them on.",
+            "Free software under the AGPL 3.0. No account, and your recordings, "
+            + "transcripts and notes never leave your devices. On its own Listen "
+            + "uses the network to fetch the model you chose and to ask whether a "
+            + "newer version exists; iCloud sync, a hosted Ask provider and "
+            + "anonymous usage statistics each add a connection only if you turn "
+            + "them on.",
             size: 11, color: .secondaryLabelColor))
 
         let content = NSView()

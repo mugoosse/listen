@@ -32,6 +32,9 @@ final class CloudSyncHost {
     /// What the last pass did, for the Devices pane to show. A sync that
     /// reports nothing is indistinguishable from one that silently failed.
     private(set) var lastReport: CloudReport?
+    /// Whether the previous pass ended with errors, so the telemetry event
+    /// below fires on the onset of a failure rather than on every retry.
+    private var lastPassFailed = false
     private(set) var lastRun: Date?
     /// Where the key stands, so the pane can say what to do rather than
     /// printing the same sentence as both status and error. `.unknown` until
@@ -291,6 +294,15 @@ final class CloudSyncHost {
 
         lastReport = report
         trace("cloud sync: \(report.summary)")
+        // Edge-triggered, one event per onset. The poll retries every two
+        // minutes, so an event per failing pass would be one broken container
+        // repeating the same fact all day into the quota. The report's error
+        // strings never travel; the code is the whole message.
+        let failed = !report.errors.isEmpty
+        if failed, !lastPassFailed {
+            Telemetry.failure(.sync, code: "sync.pass_failed", retryable: true)
+        }
+        lastPassFailed = failed
         // Deletions applied on another device's say-so are the one write here
         // the user did not make on this Mac, so they are the one thing a pass
         // leaves in the activity log. Counts only: `CloudReport` carries no

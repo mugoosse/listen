@@ -3,6 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Rybbit: self-hosted, cookieless, privacy-first page-view analytics.
+     Guarded by hostname rather than a build flag, because this is static
+     HTML with no build step: tools/serve_docs.py serves these same files
+     for local preview, and that traffic must never land in the real count. -->
+<script>
+if (location.hostname === "mugoosse.github.io") {
+  var s = document.createElement("script");
+  s.defer = true;
+  s.src = "https://cdn.zebralabs.org/api/script.js";
+  s.setAttribute("data-site-id", "0c285fdaf9b0");
+  document.head.appendChild(s);
+}
+</script>
 <title>Record FaceTime calls on your Mac | Listen</title>
 <meta name="description" content="Record FaceTime calls on a Mac and get a transcript with names on it. No bot joins the call, no account, and nothing is uploaded.">
 <link rel="canonical" href="https://mugoosse.github.io/listen/facetime.html">
@@ -386,12 +399,27 @@ figure.quote {
   margin: 0; border: 1px solid var(--rule); border-radius: 14px;
   background: var(--paper-warm); padding: 24px 26px;
 }
-figure.quote blockquote { margin: 0 0 16px; }
+#voices .cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+figure.quote { display: flex; flex-direction: column; }
+figure.quote blockquote { margin: 0 0 20px; flex: 1 1 auto; }
 figure.quote blockquote p {
   font-family: var(--serif); font-size: 19px; line-height: 1.4;
   color: var(--ink); margin: 0;
 }
-figure.quote figcaption { font-size: 14.5px; color: var(--ink-faint); margin: 0; }
+figure.quote figcaption {
+  display: flex; align-items: center; gap: 12px; margin: 0;
+  font-size: 14.5px; color: var(--ink-faint); line-height: 1.35;
+}
+figure.quote figcaption img {
+  width: 44px; height: 44px; flex: 0 0 auto;
+  border-radius: 50%; object-fit: cover; display: block;
+}
+figure.quote figcaption b {
+  display: block; font-weight: 600; color: var(--ink);
+}
+figure.quote figcaption a { color: var(--ink-faint); }
+figure.quote figcaption a:hover { color: var(--ink); }
 
 footer {
   padding: 56px 0 96px; border-top: 1px solid var(--rule-soft);
@@ -606,7 +634,7 @@ header.hero figure.demo { max-width: 820px; }
       <h2>Your calls stay yours.</h2>
       <p class="lead">There is no Listen server, because there are no servers.
       The recording, the transcript and the names on it are all made on your own
-      computer. No account, and nothing reports back.</p>
+      computer. No account, and none of it ever reports back.</p>
       <p>Listen is open source under the AGPL, so none of that has to be taken on
       trust. <a href="security.html">What runs where</a> sets out every
       connection it can make and how to check each one yourself, and there are

@@ -23,6 +23,13 @@ enum Links {
     static let source = URL(string: "https://github.com/mugoosse/listen")!
     static let issues = URL(string: "https://github.com/mugoosse/listen/issues")!
 
+    /// The public dictionary of every telemetry event and property, which is
+    /// what "see exactly what is shared" means by exactly. The setup step,
+    /// the one-time prompt and the Privacy pane all point here, and the iOS
+    /// app carries the same address in its own Links.
+    static let telemetry = URL(
+        string: "https://github.com/mugoosse/listen/blob/main/TELEMETRY.md")!
+
     /// The changelog on GitHub.
     ///
     /// Listen ships its own copy of this file and draws it in

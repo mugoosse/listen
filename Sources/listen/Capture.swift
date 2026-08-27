@@ -356,6 +356,13 @@ final class Capture {
 
         try? recording.save()
 
+        // Counted here because every way a capture ends passes through this
+        // point, whatever started it: detection, the record button, the CLI.
+        // Imports count themselves in `Import`, and a recording arriving over
+        // sync is never counted on this Mac at all; the device that made it
+        // already did.
+        Telemetry.recordingCompleted(recording)
+
         current = nil
         startedAt = nil
         trace("capture stopped \(recording.id), \(Int(recording.metadata.duration))s")

@@ -23,7 +23,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Blaizzy/mlx-audio-swift.git",
       "state" : {
-        "branch" : "main",
         "revision" : "4266f988d170a83017d1e82e2e4654602f277f1d"
       }
     },
@@ -43,6 +42,15 @@
       "state" : {
         "revision" : "bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57",
         "version" : "3.31.4"
+      }
+    },
+    {
+      "identity" : "posthog-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PostHog/posthog-ios.git",
+      "state" : {
+        "revision" : "4cf77c21b424ca16ec827da2fb3f0c61ee90d2aa",
+        "version" : "3.69.12"
       }
     },
     {

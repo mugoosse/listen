@@ -104,6 +104,11 @@ final class ModelDownload {
             } catch {
                 guard !Task.isCancelled else { return }
                 log("model download failed: \(error)")
+                // The code and nothing else: `describe` below is allowed to
+                // name paths for the human reading the pane, and exactly that
+                // is why it may never cross the telemetry boundary.
+                Telemetry.failure(.modelDownload, code: "model_download.failed",
+                                  retryable: true)
                 self?.failedID = choice.id
                 self?.finish(.failed(ModelStatus.describe(error)))
             }

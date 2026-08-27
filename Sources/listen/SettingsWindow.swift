@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import ListenKit
 
 /// Which section, by name.
 ///
@@ -9,7 +10,7 @@ import AppKit
 /// sections live in the library window's sidebar now, so it is gone rather than
 /// left lying around for someone to index by again.
 enum SettingsTab: CaseIterable {
-    case general, storage, permissions
+    case general, storage, permissions, privacy
     case meetings, audio
     case models, dictionary
     case dictation
@@ -22,6 +23,9 @@ enum SettingsTab: CaseIterable {
         case .general:     return "General"
         case .storage:     return "Storage"
         case .permissions: return "Permissions"
+        // What the section decides is what leaves the machine, and Privacy is
+        // the word somebody scans for when that is their question.
+        case .privacy:     return "Privacy"
         case .meetings:    return "Meetings"
         case .audio:       return "Audio"
         case .models:      return "Models"
@@ -52,6 +56,7 @@ enum SettingsTab: CaseIterable {
         case .general:     return "gearshape"
         case .storage:     return "internaldrive"
         case .permissions: return "lock.shield"
+        case .privacy:     return "hand.raised"
         case .meetings:    return "video"
         case .audio:       return "mic"
         case .models:      return "cpu"
@@ -73,6 +78,7 @@ enum SettingsTab: CaseIterable {
         case .general:     pane = GeneralPane()
         case .storage:     pane = StoragePane()
         case .permissions: pane = PermissionsPane()
+        case .privacy:     pane = PrivacyPane()
         case .meetings:    pane = MeetingsPane()
         case .audio:       pane = AudioPane()
         case .models:      pane = ModelsPane()
@@ -122,8 +128,8 @@ enum SettingsGroup: CaseIterable {
         // section was About. Whether the app is current is not an advanced
         // question, and Advanced is where things go that most people never
         // open.
-        case .app:           return [.general, .storage, .permissions, .devices,
-                                     .updates]
+        case .app:           return [.general, .storage, .permissions, .privacy,
+                                     .devices, .updates]
         case .recording:     return [.meetings, .audio]
         case .transcription: return [.models, .dictionary]
         // A group of one, and worth the header. Dictation is a second thing the
@@ -1342,6 +1348,85 @@ final class UpdatesPane: Pane {
 }
 
 // ---------------------------------------------------------------------------
+
+/// The opt-in telemetry switch, and everything needed to judge it: what is
+/// sent, where it goes, and the complete public dictionary one click away.
+///
+/// The checkbox is the same tri-state consent the setup step and the one-time
+/// prompt write. Unset draws as off, because "never asked" must not look like
+/// a yes; unticking after a yes is an explicit no, and `Telemetry` deletes
+/// the queue and the install identity on that transition.
+final class PrivacyPane: Pane {
+    private var shareBox: NSButton?
+    private var channelPopup: NSPopUpButton?
+
+    override func build() {
+        heading("Anonymous usage statistics")
+
+        let forced = Settings.forcedBool("telemetryDisabled") == true
+        let box = checkbox("Share anonymous usage statistics and crash reports",
+                           Telemetry.consent == true) { on in
+            Telemetry.consent = on
+        }
+        box.isEnabled = !forced
+        shareBox = box
+        if forced {
+            note("Telemetry is off, set by your organisation's device profile.")
+        }
+
+        note("On, Listen sends anonymous counts: how many recordings, how long "
+             + "in rough buckets, which app a call was in, and crash reports. "
+             + "They go to PostHog in the EU under a random install ID that is "
+             + "created when you opt in and deleted when you opt out. Your "
+             + "recordings, transcripts, titles, names and searches never "
+             + "leave this Mac either way.")
+
+        let dictionary = NSButton(title: "See exactly what is shared",
+                                  target: nil, action: nil)
+        dictionary.isBordered = false
+        dictionary.contentTintColor = .linkColor
+        dictionary.font = .systemFont(ofSize: 12)
+        let handler = ActionHandler { _ in Links.open(Links.telemetry) }
+        dictionary.target = handler
+        dictionary.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(dictionary, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+        stack.addArrangedSubview(dictionary)
+
+        separator()
+        heading("How did you hear about Listen?")
+        note("Optional, and the only marketing question in the app. The answer "
+             + "travels with the statistics above, so it is only ever sent if "
+             + "sharing is on.")
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItem(withTitle: "Prefer not to say")
+        for channel in TelemetrySchema.AcquisitionChannel.allCases {
+            popup.addItem(withTitle: channel.label)
+        }
+        let pick = ActionHandler { sender in
+            guard let popup = sender as? NSPopUpButton else { return }
+            let channels = TelemetrySchema.AcquisitionChannel.allCases
+            let index = popup.indexOfSelectedItem - 1
+            Telemetry.setChannel(
+                channels.indices.contains(index) ? channels[index] : nil)
+        }
+        popup.target = pick
+        popup.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(popup, "handler", pick, .OBJC_ASSOCIATION_RETAIN)
+        channelPopup = popup
+        row([popup])
+    }
+
+    override func refresh() {
+        shareBox?.state = Telemetry.consent == true ? .on : .off
+        if let stored = Settings.telemetryChannel,
+           let index = TelemetrySchema.AcquisitionChannel.allCases
+               .firstIndex(where: { $0.rawValue == stored }) {
+            channelPopup?.selectItem(at: index + 1)
+        } else {
+            channelPopup?.selectItem(at: 0)
+        }
+    }
+}
 
 final class DevelopersPane: Pane {
     private var cliLabel: NSTextField?

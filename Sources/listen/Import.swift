@@ -277,6 +277,9 @@ enum LegacyImport {
                 }
 
                 try recording.save()
+                // Imports pass nowhere near `Capture.stop`, so they count
+                // themselves. The kind comes out as "import" from `source`.
+                Telemetry.recordingCompleted(recording)
                 outcome.imported.append(candidate.id)
             } catch {
                 try? FileManager.default.removeItem(at: destination)

@@ -218,7 +218,13 @@ fi
 
 if [ -z "$RESUME" ]; then
     "$ROOT/build.sh" >/dev/null
-    "$ROOT/make_app.sh"
+    # The one thing that marks a bundle as this pipeline's own product,
+    # rather than something built by hand: see make_app.sh and
+    # Telemetry.swift. `--resume` skips this deliberately, in the branch
+    # below: it reuses a bundle a previous release.sh run already stamped,
+    # and rebuilding here would both waste the notarization ticket and be
+    # redundant with what is already on disk.
+    LISTEN_RELEASE_BUILD=1 "$ROOT/make_app.sh"
 else
     # A notarization ticket is keyed to the cdhash of the exact bundle that was
     # submitted. Rebuilding produces a different hash, so stapling would fail
@@ -259,6 +265,37 @@ if [ -f "$CHANGELOG" ] && [ "$(changelog_version)" = "$VERSION" ]; then
 else
     echo "warning: CHANGELOG.md has no $VERSION section at the top, so this" >&2
     echo "         build gets no release notes and no Sparkle description." >&2
+fi
+
+# --- crash symbols ----------------------------------------------------------
+#
+# Uploaded once per release, from the exact dSYM `build.sh` just produced, so
+# a crash reported through the opt-in telemetry can be symbolicated rather
+# than read as a list of addresses. Same shape as notarization above: absent
+# credentials degrade to a warning rather than a failure, because a release
+# with unreadable stack traces still ships, it is just harder to act on.
+#
+# One-time setup (a personal API key, not the project token compiled into the
+# app):
+#   export POSTHOG_CLI_API_KEY=phx_...
+#   export POSTHOG_CLI_PROJECT_ID=...
+#   export POSTHOG_CLI_HOST=https://eu.posthog.com
+DSYM="$ROOT/.xcbuild/Build/Products/Release/listen.dSYM"
+if command -v posthog-cli >/dev/null 2>&1 && [ -n "${POSTHOG_CLI_API_KEY:-}" ]; then
+    if [ -d "$DSYM" ]; then
+        echo "uploading crash symbols…"
+        posthog-cli symbol-sets upload --directory "$ROOT/.xcbuild/Build/Products/Release"
+    else
+        echo "warning: no dSYM at $DSYM, skipping crash symbol upload." >&2
+    fi
+else
+    echo "warning: skipping crash symbol upload." >&2
+    command -v posthog-cli >/dev/null 2>&1 || \
+        echo "         posthog-cli not found. npm install -g @posthog/cli" >&2
+    [ -n "${POSTHOG_CLI_API_KEY:-}" ] || \
+        echo "         POSTHOG_CLI_API_KEY not set." >&2
+    echo "         A crash reported through telemetry will show raw addresses" >&2
+    echo "         instead of a symbolicated stack." >&2
 fi
 
 # --- notarize --------------------------------------------------------------

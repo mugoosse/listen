@@ -3,6 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Rybbit: self-hosted, cookieless, privacy-first page-view analytics.
+     Guarded by hostname rather than a build flag, because this is static
+     HTML with no build step: tools/serve_docs.py serves these same files
+     for local preview, and that traffic must never land in the real count. -->
+<script>
+if (location.hostname === "mugoosse.github.io") {
+  var s = document.createElement("script");
+  s.defer = true;
+  s.src = "https://cdn.zebralabs.org/api/script.js";
+  s.setAttribute("data-site-id", "0c285fdaf9b0");
+  document.head.appendChild(s);
+}
+</script>
 <title>Listen, security</title>
 <meta name="description" content="What runs where, what leaves the machine, and how to check it.">
 <link rel="icon" href="icon.png">
@@ -118,8 +131,11 @@ footer a { color: var(--ink-soft); }
 
 <section>
   <h2>The shape of the thing</h2>
-  <p class="lead">Listen has no server, no account, and no telemetry. There is
-  nothing of yours for us to hold, lose, or be compelled to hand over.</p>
+  <p class="lead">Listen has no server and no account. There is nothing of
+  yours for us to hold, lose, or be compelled to hand over: the only thing it
+  can ever send is opt-in anonymous statistics whose complete dictionary is
+  <a href="https://github.com/mugoosse/listen/blob/main/TELEMETRY.md">public</a>,
+  and never your content.</p>
   <p>Recording, transcription, speaker identification and search all run on
   your own hardware. The source is public under the AGPL 3.0, so none of this
   page has to be taken on trust: the code is the claim.</p>
@@ -155,8 +171,15 @@ footer a { color: var(--ink-soft); }
     <li><strong>The Ask endpoint you configure</strong>, if you configure one.
     Nothing is set out of the box, and the local Ollama default sends nothing
     anywhere.</li>
+    <li><strong>eu.i.posthog.com</strong>, only if you opt in to anonymous
+    usage statistics. Counts and durations in rough buckets plus crash
+    reports, under a random install ID; never recordings, transcripts, titles
+    or names.
+    <a href="https://github.com/mugoosse/listen/blob/main/TELEMETRY.md">TELEMETRY.md</a>
+    is the complete dictionary, and the filter that enforces it is public
+    code.</li>
   </ul>
-  <p>An organisation can force the last two off with a device profile: see
+  <p>An organisation can force the last three off with a device profile: see
   <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>.</p>
 </section>
 

@@ -42,6 +42,12 @@
                                 <!-- No plaintext dictation history file. -->
                                 <key>dictationHistoryDisabled</key>
                                 <true/>
+                                <!-- The opt-in anonymous statistics are off
+                                     by default and never carry content; this
+                                     removes even the option, and the consent
+                                     question is never shown. -->
+                                <key>telemetryDisabled</key>
+                                <true/>
                                 <!-- Optional: move the daily backups, for
                                      example onto an encrypted volume.
                                 <key>backupsPath</key>

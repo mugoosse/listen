@@ -99,6 +99,20 @@
             <key>DenyConsequences</key>
             <string>The model download stalls partway through.</string>
         </dict>
+        <dict>
+            <key>IsIncoming</key>
+            <false/>
+            <key>Host</key>
+            <string>eu.i.posthog.com</string>
+            <key>NetworkProtocol</key>
+            <string>TCP</string>
+            <key>Port</key>
+            <string>443</string>
+            <key>Purpose</key>
+            <string>Anonymous usage statistics and crash reports, only if you opted in during setup or in Settings, Privacy. Counts and durations in rough buckets, under a random install ID, never recordings, transcripts, titles or names. TELEMETRY.md in the repository lists every event this can carry.</string>
+            <key>DenyConsequences</key>
+            <string>Nothing stops working. Listen behaves identically; the statistics simply do not arrive.</string>
+        </dict>
         <!--
           The one connection this file cannot name a host for, because you
           choose it: Settings › Agent takes an OpenAI-compatible base URL, and

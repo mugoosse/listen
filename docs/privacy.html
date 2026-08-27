@@ -3,6 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Rybbit: self-hosted, cookieless, privacy-first page-view analytics.
+     Guarded by hostname rather than a build flag, because this is static
+     HTML with no build step: tools/serve_docs.py serves these same files
+     for local preview, and that traffic must never land in the real count. -->
+<script>
+if (location.hostname === "mugoosse.github.io") {
+  var s = document.createElement("script");
+  s.defer = true;
+  s.src = "https://cdn.zebralabs.org/api/script.js";
+  s.setAttribute("data-site-id", "0c285fdaf9b0");
+  document.head.appendChild(s);
+}
+</script>
 <title>Listen, privacy</title>
 <meta name="description" content="What the maker of Listen receives about you: as close to nothing as software can get.">
 <link rel="icon" href="icon.png">
@@ -113,20 +126,52 @@ footer a { color: var(--ink-soft); }
   <a class="home" href="index.html">← Listen</a>
   <h1>Privacy</h1>
   <p class="tagline">What the maker of Listen receives about you, which is as
-  close to nothing as software can get. Last updated 14 August 2026.</p>
+  close to nothing as software can get. Last updated 26 August 2026.</p>
 </header>
 
 <section>
   <h2>The product</h2>
   <p class="lead">Listen runs entirely on your devices. Jacaranda Labs
-  operates no server for it, requires no account, and collects no telemetry,
-  analytics, or crash reports. Your recordings, transcripts, notes and
-  voiceprints are yours, on hardware you control, and we cannot see them.</p>
+  operates no server for it and requires no account. Your recordings,
+  transcripts, notes and voiceprints are yours, on hardware you control, and
+  we cannot see them. Nothing about you is collected unless you opt in to the
+  anonymous statistics described below, and those never contain your
+  content.</p>
   <p>If you enable iCloud sync, data moves between <em>your own</em> devices
   through <em>your own</em> Apple account, sealed with a key we never hold.
   If you point the Ask feature at a hosted AI provider, the transcripts you
   ask about go to that provider under your agreement with them, not ours.
   Both are off until you turn them on.</p>
+</section>
+
+<section>
+  <h2>Opt-in usage statistics and crash reports</h2>
+  <p>Both apps can send anonymous usage statistics and crash reports, and
+  only if you say yes: nothing is sent, and no identifier even exists, until
+  you opt in during setup or in Settings, Privacy. What can be sent is counts
+  and durations in rough buckets, which app a call was in from a fixed list,
+  stable failure codes, and crash stack traces. Never recordings,
+  transcripts, notes, titles, names, tags, searches, questions, file paths,
+  or raw error text.
+  <a href="https://github.com/mugoosse/listen/blob/main/TELEMETRY.md">TELEMETRY.md</a>
+  is the complete dictionary of every event and property, and the filter that
+  enforces it is public code both apps compile in.</p>
+  <ul>
+    <li><strong>Processor:</strong> PostHog Cloud, hosted in the EU
+    (<code>eu.i.posthog.com</code>), configured to discard IP addresses at
+    ingestion and to keep events for at most 12 months.</li>
+    <li><strong>Identity:</strong> a random per-install ID, never synced
+    between your devices, deleted when you opt out. Opting back in later
+    creates a fresh one.</li>
+    <li><strong>Opting out:</strong> the switch in Settings, Privacy. It
+    stops the sending, deletes anything queued, and deletes the install ID.
+    Organisations can force the whole feature off; see
+    <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>.</li>
+    <li><strong>Deletion requests:</strong> events are anonymous, so we
+    cannot look up which are yours. Opting out deletes the identifier that
+    would connect future events; for anything beyond that, open an issue and
+    we will work with PostHog's deletion tooling.</li>
+  </ul>
 </section>
 
 <section>
@@ -136,7 +181,9 @@ footer a { color: var(--ink-soft); }
   <ul>
     <li><strong>GitHub</strong> serves the update check (every two days), the
     downloads, and this website (GitHub Pages). GitHub's own privacy policy
-    governs its logs; we run no analytics on any of it.</li>
+    governs its logs. This website counts page views with a self-hosted,
+    cookieless counter that stores no personal data and follows nobody across
+    sites; there is no third-party analytics service on it.</li>
     <li><strong>Hugging Face</strong> serves the one-time speech model
     download.</li>
     <li><strong>Apple</strong> handles App Store and TestFlight distribution

@@ -126,7 +126,25 @@ rm sparkle_private_key.txt
 `sparkle_private_key.txt` is gitignored, which is a backstop and not a plan.
 Delete it once it is in the password manager.
 
-### 4. Repository secrets, for CI
+### 4. posthog-cli, for symbolicated crash reports
+
+Optional. Without it `release.sh` still ships, it just warns and a crash
+reported through the opt-in telemetry shows raw addresses instead of a
+symbolicated stack.
+
+```sh
+npm install -g @posthog/cli
+export POSTHOG_CLI_API_KEY=phx_...        # a personal API key, not the
+                                           # project token compiled into the app
+export POSTHOG_CLI_PROJECT_ID=...
+export POSTHOG_CLI_HOST=https://eu.posthog.com
+```
+
+The personal API key comes from your PostHog account, not from `TelemetrySchema.projectToken`:
+that constant is a write-only ingestion token, and cannot list or upload
+anything.
+
+### 5. Repository secrets, for CI
 
 | Secret | What | Set |
 |---|---|---|
@@ -167,7 +185,7 @@ used one.
 Without them the build still runs and produces artifacts, unsigned and
 unpublished, so a fork can build with no setup at all.
 
-### 5. A public repository, before the first release and not after
+### 6. A public repository, before the first release and not after
 
 `mugoosse/listen` is private. Everything above works while it is, and a release
 published from it does not: `releases/latest/download/appcast.xml` and every
@@ -188,6 +206,19 @@ installed.
 increases without anyone maintaining it. **Sparkle compares `CFBundleVersion`**
 to decide whether an update exists, so anything that makes it go backwards
 strands every installed copy: they will never see another update.
+
+### Only this script's own build ever counts as a real install
+
+`release.sh` is the only caller that sets `LISTEN_RELEASE_BUILD=1` before
+`make_app.sh`, which is the only thing that writes `ListenReleaseBuild` into
+`Info.plist`, which is the one thing `Telemetry.blocked` checks before it
+will ever let a consented install reach PostHog. A plain `./build.sh &&
+./make_app.sh`, run by hand for day-to-day development, carries no such key
+and stays blocked whatever consent says: otherwise every rebuild on this
+machine while working on the app would count as a fresh install in the real
+project. `--resume` does not touch this either, because it skips
+`make_app.sh` entirely and reuses the bundle a previous run already stamped.
+See `TELEMETRY.md` and `verify_telemetry.sh`'s case 6.
 
 ### Notarization is not a synchronous step
 

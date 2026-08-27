@@ -306,6 +306,18 @@ final class Queue {
         }
         finished.markTranscribeFinished()
 
+        // The one funnel every run passes through, success and failure alike,
+        // which is what makes it the whole telemetry story for transcription:
+        // a failure's stable code rides this event's outcome rather than a
+        // separate `operation_failed`, or every failed run would count twice.
+        switch result {
+        case .success:
+            Telemetry.recordingTranscribed(finished, outcome: "ok")
+        case .failure(let error):
+            Telemetry.recordingTranscribed(finished,
+                                           outcome: Telemetry.code(for: error))
+        }
+
         // The tracks this run made out of the master go with it.
         if splitHere { finished.removeSplitTracks() }
 

@@ -1498,6 +1498,9 @@ final class AskView: NSView {
         answering = answer
         addTurn(answer)
         answer.begin(with: chosen.name)
+        // The fact of a question, never the question. The text stays between
+        // the user and the backend they chose.
+        Telemetry.featureUsed(.askQuestion)
         updateSendButton()
         scrollToEnd()
 

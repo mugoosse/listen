@@ -394,6 +394,7 @@ final class DevicesPane: Pane {
         // meetings" has to mean all of them.
         Settings.cloudSync = sender.state == .on
         ActivityLog.append(Settings.cloudSync ? "sync_enabled" : "sync_disabled")
+        if Settings.cloudSync { Telemetry.featureUsed(.syncEnabled) }
         if Settings.cloudSyncApplies { CloudSyncHost.shared.startIfEnabled() }
         else { CloudSyncHost.shared.stop() }
         rebuild()

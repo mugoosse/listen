@@ -3481,6 +3481,7 @@ extension LibraryWindow: NSMenuDelegate {
         // The id and the format, not the destination: a filename is the
         // user's own words about the meeting.
         ActivityLog.append("export", ["recording_id": recording.id, "format": "md"])
+        Telemetry.featureUsed(.shareExport)
     }
 
     /// The open page, through the Mac's own share sheet.
@@ -3500,12 +3501,14 @@ extension LibraryWindow: NSMenuDelegate {
             // ids so that the log is safe to read aloud, and a note is the one
             // artifact here whose title is often the question somebody asked.
             ActivityLog.append("share", ["note": note.slug, "format": "md"])
+            Telemetry.featureUsed(.shareExport)
             return
         }
         guard let recording = selected, !recording.isLive else { return }
         ShareRecording.present(ShareRecording.document(for: recording),
                                from: anchor.view, rect: anchor.rect)
         ActivityLog.append("share", ["recording_id": recording.id, "format": "md"])
+        Telemetry.featureUsed(.shareExport)
     }
 
     /// What the share sheet appears to come out of.

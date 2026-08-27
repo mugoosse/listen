@@ -19,6 +19,12 @@ let package = Package(
         // Diarization and speaker embeddings, CoreML on the Neural Engine.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.6.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.9.4"),
+        // Opt-in analytics and crash reports; Telemetry.swift is the only
+        // importer and TELEMETRY.md is the contract. Pinned exactly for the
+        // same reason mlx-audio is: an analytics SDK that can update itself
+        // under a release is exactly the dependency to move deliberately.
+        // The iOS app pins the same version through tools/make_xcodeproj.py.
+        .package(url: "https://github.com/PostHog/posthog-ios.git", exact: "3.69.12"),
         // Present transitively through mlx-audio-swift, declared explicitly so
         // we can drive the model download ourselves and get a progress
         // callback: STT.loadModel does not forward one.
@@ -45,6 +51,7 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "PostHog", package: "posthog-ios"),
             ],
             path: "Sources/listen",
             linkerSettings: [

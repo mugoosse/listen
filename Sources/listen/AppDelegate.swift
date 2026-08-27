@@ -173,6 +173,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // last step is what calls this the first time.
             Dictation.shared.activate()
         }
+
+        // After the window branch so a consent sheet has a window to sit on,
+        // and never on a preview launch, which returned above. The SDK is only
+        // constructed when consent is already yes; everyone else sends
+        // nothing. The prompt is the one-time question for installs that
+        // predate the setup step; its own guards decide whether this launch
+        // is one it should ask.
+        Telemetry.startIfConsented()
+        TelemetryPrompt.showIfNeeded()
+        // Stamped last so anything above that wants "what did this app run as
+        // last time" reads the previous launch's answer.
+        Settings.lastSeenVersion = AppInfo.version
+
         // Constructed, and then left alone. Sparkle runs its own cycle one
         // runloop turn after this, and if the last check is older than
         // `SUScheduledCheckInterval` that cycle is a real background check:

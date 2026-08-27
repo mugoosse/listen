@@ -338,6 +338,12 @@ final class Dictation {
                                               text: text,
                                               raw: text == raw ? nil : raw,
                                               fired: fired))
+                // Buckets only. The history line above keeps the words, on
+                // this Mac; the event keeps the fact that dictation happened.
+                Telemetry.dictationCompleted(
+                    duration: seconds,
+                    wordCount: text.split(separator: " ").count,
+                    engine: Settings.dictationEngineChoice.rawValue)
                 trace("dictated \(text.split(separator: " ").count) words")
             } else {
                 Cue.failed()

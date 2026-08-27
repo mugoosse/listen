@@ -782,7 +782,7 @@ With everything at its defaults, two things, both declared in
 - **huggingface.co**, once, to download the speech model.
 - **github.com**, at launch and every six hours after, to check for an update.
 
-Two more exist only if you turn them on, and are in the same policy file:
+Three more exist only if you turn them on, and are in the same policy file:
 
 - **iCloud sync**, off by default. Everything Listen puts in your private
   CloudKit database is sealed on your devices with a key Apple never holds, so
@@ -792,16 +792,24 @@ Two more exist only if you turn them on, and are in the same policy file:
   hosted provider, transcripts of the meetings you ask about are sent to it,
   at the moment you ask and never in the background. An endpoint on this Mac,
   which is what Ollama gives you, sends nothing anywhere.
+- **Anonymous usage statistics**, off until you opt in, in setup or in
+  Settings, Privacy. Counts and durations in rough buckets, plus crash
+  reports, sent to PostHog in the EU under a random install ID, and never
+  your recordings, transcripts, titles, names or searches.
+  [`TELEMETRY.md`](TELEMETRY.md) is the complete dictionary of what can be
+  sent, and the filter that enforces it is public code in
+  [`Sources/ListenKit/TelemetrySchema.swift`](Sources/ListenKit/TelemetrySchema.swift).
 
-A managed deployment can force both of them off. See
+A managed deployment can force all three off. See
 [Deploying it somewhere regulated](#deploying-it-somewhere-regulated).
 
 Audio leaves only through sync, sealed, and only to your own devices: as a
 lossless master when Keep audio is on, and as a phone-to-Mac transfer when a
-memo recorded on the iPhone comes over to be transcribed. There is no
-telemetry. Reading your calendar adds nothing to this list: it is
-the local calendar store, not a network call, which is the reason the feature
-needs no account.
+memo recorded on the iPhone comes over to be transcribed. Telemetry is the
+opt-in above and nothing else: until you say yes nothing is sent, no identity
+even exists, and saying no is never asked about again. Reading your calendar
+adds nothing to this list: it is the local calendar store, not a network
+call, which is the reason the feature needs no account.
 
 The MCP server adds nothing either, because it opens no port and speaks over a
 pipe. What it does do is hand transcript text to whatever is on the other end of
@@ -864,6 +872,7 @@ must also be AGPL 3.0 and ship its source.
 
 The licence is deliberate rather than incidental. The claim this app makes is
 that your audio never leaves your Mac, and a privacy claim nobody can check is
-a marketing sentence. Being able to read the code, and to see
-[`InternetAccessPolicy.plist`](InternetAccessPolicy.plist) name the only two
-hosts it ever talks to, is the evidence.
+a marketing sentence. Being able to read the code, to see
+[`InternetAccessPolicy.plist`](InternetAccessPolicy.plist) name every host it
+can talk to and what declining each one costs, and to check the opt-in
+statistics against [`TELEMETRY.md`](TELEMETRY.md), is the evidence.

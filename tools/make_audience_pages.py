@@ -478,6 +478,19 @@ def render(audience, others):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Rybbit: self-hosted, cookieless, privacy-first page-view analytics.
+     Guarded by hostname rather than a build flag, because this is static
+     HTML with no build step: tools/serve_docs.py serves these same files
+     for local preview, and that traffic must never land in the real count. -->
+<script>
+if (location.hostname === "mugoosse.github.io") {
+  var s = document.createElement("script");
+  s.defer = true;
+  s.src = "https://cdn.zebralabs.org/api/script.js";
+  s.setAttribute("data-site-id", "0c285fdaf9b0");
+  document.head.appendChild(s);
+}
+</script>
 <title>%(title)s</title>
 <meta name="description" content="%(desc)s">
 <link rel="canonical" href="https://mugoosse.github.io/listen/%(slug)s.html">
@@ -584,7 +597,7 @@ def render(audience, others):
       <p class="eyebrow">Privacy</p>
       <h2>Your recordings stay yours.</h2>
       <p class="lead">There is no Listen server, because there are no servers.
-      No account, and nothing reports back.</p>
+      No account, and nothing you record ever reports back.</p>
       <p>Listen is open source under the AGPL, so none of that has to be taken
       on trust. <a href="security.html">What runs where</a> sets out every
       connection it can make and how to check each one yourself, and there are

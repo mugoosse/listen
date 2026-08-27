@@ -44,6 +44,19 @@ BUILD="${LISTEN_BUILD:-$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || ech
 # apart.
 . "$ROOT/sparkle.conf"
 
+# Whether this is a build `release.sh` produced, for `Telemetry.swift` to
+# read. Only `release.sh` sets `LISTEN_RELEASE_BUILD`, so a build made by
+# hand for day-to-day development never claims to be one, however
+# convincingly it is signed: telemetry has to stay off for a developer's own
+# daily use of their own build, or "how many installs" starts counting the
+# same machine every time it is rebuilt. Absent is the answer for local
+# builds, the same presence-of-key idiom `Settings.onboarded` uses.
+if [ "${LISTEN_RELEASE_BUILD:-0}" = "1" ]; then
+    RELEASE_KEY="    <key>ListenReleaseBuild</key><true/>"
+else
+    RELEASE_KEY=""
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -127,8 +140,10 @@ if [ -n "$SPARKLE_PUBLIC_KEY" ]; then
          check, stores the answer per-user, and a copy that was told no never
          checks again and never says so: the only way back is a checkbox in
          Settings, which nobody opens unless they already suspect they are
-         stale. That is an unbounded staleness path and it is invisible from
-         here, because Listen has no telemetry to notice it with. Checking is
+         stale. That is an unbounded staleness path, and largely still
+         invisible from here: opt-in telemetry only ever hears from an
+         install that consented, which a copy stuck on a suppressed prompt
+         has no more reason to have done than before. Checking is
          a GET of a signed feed over HTTPS that sends no profile information
          (SUSendProfileInfo is off and never turned on), so there is nothing
          in the check itself that warrants a consent prompt. Whether updates
@@ -195,6 +210,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>Listen reads the calendars already on this Mac, to name a recording after the meeting it belongs to and to suggest who was in it. Nothing is sent anywhere.</string>
 ${SPARKLE_KEYS}
+${RELEASE_KEY}
 </dict>
 </plist>
 PLIST

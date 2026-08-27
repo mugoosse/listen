@@ -58,6 +58,7 @@ public struct CloudActivity: Sendable, Equatable {
         case uploadingAudio
         case waitingForMac
         case downloadingAudio
+        case downloadingTranscript
         case queued
         case startingTranscription
         case transcribing
@@ -86,6 +87,7 @@ public struct CloudActivity: Sendable, Equatable {
         case .uploadingAudio: return "Uploading audio"
         case .waitingForMac: return detail ?? "Waiting for your Mac"
         case .downloadingAudio: return "Downloading audio"
+        case .downloadingTranscript: return "Downloading transcript"
         case .queued: return "Queued for transcription"
         case .startingTranscription: return "Starting transcription"
         case .transcribing: return detail ?? "Transcribing"
@@ -105,8 +107,9 @@ public struct CloudActivity: Sendable, Equatable {
 
     public var isMoving: Bool {
         switch stage {
-        case .uploadingAudio, .downloadingAudio, .startingTranscription,
-             .transcribing, .sendingTranscript, .transcribingElsewhere, .retrying:
+        case .uploadingAudio, .downloadingAudio, .downloadingTranscript,
+             .startingTranscription, .transcribing, .sendingTranscript,
+             .transcribingElsewhere, .retrying:
             return true
         case .waitingForMac, .queued, .ready, .failed:
             return false
@@ -131,6 +134,17 @@ public struct CloudSyncCore: Sendable {
     /// Whether this device may ingest a phone recording at all. A phone cannot:
     /// it is the one uploading.
     let ingests: Bool
+    /// Take the change feed in two halves: the rows first, the contents
+    /// after, so a library appears while it is still arriving.
+    ///
+    /// **Off for a device that ingests.** Between the two halves this device
+    /// holds a recording whose transcript is in the container and not on this
+    /// disk, and a push in that window would replace the record with the half
+    /// it has. A phone is safe from that twice over, by `addingPhoneContent`
+    /// and by the `owed` skip in `push`; a Mac has only the second, and the
+    /// Mac is not the device anybody is watching a first sync on.
+    let progressive: Bool
+
     /// True when this device has been asked to keep a copy of the audio.
     ///
     /// Two things at once, and they are the same switch seen from each side.
@@ -149,18 +163,28 @@ public struct CloudSyncCore: Sendable {
     let progress: (@Sendable (String) -> Void)?
     /// Per-recording progress for the library row and recording page.
     let activity: (@Sendable (CloudActivity) -> Void)?
+    /// Something is on disk that was not there a moment ago, said **during**
+    /// the pass rather than at the end of it.
+    ///
+    /// The report at the end is what decides whether anything happened; this
+    /// is what makes a first sync a library filling up rather than a spinner
+    /// followed by seventy rows at once.
+    let arrived: (@Sendable () -> Void)?
 
     public init(library: Library, state: EngineState, store: any RecordStore,
                 key: PairingKey, policy: DevicePolicy, device: String,
-                ingests: Bool, keepAudio: Bool = false,
+                ingests: Bool, keepAudio: Bool = false, progressive: Bool = false,
                 progress: (@Sendable (String) -> Void)? = nil,
-                activity: (@Sendable (CloudActivity) -> Void)? = nil) {
+                activity: (@Sendable (CloudActivity) -> Void)? = nil,
+                arrived: (@Sendable () -> Void)? = nil) {
         state.repairSuppressedRecordingPushesOnce()
         self.library = library; self.state = state; self.store = store
         self.key = key; self.policy = policy; self.device = device
         self.ingests = ingests; self.keepAudio = keepAudio
+        self.progressive = progressive && !ingests
         self.progress = progress
         self.activity = activity
+        self.arrived = arrived
     }
 
     private func reportActivity(_ id: String, _ stage: CloudActivity.Stage,
@@ -178,13 +202,26 @@ public struct CloudSyncCore: Sendable {
     /// `Library.all` is a compactMap over `load`, so a recording arriving is
     /// invisible rather than half-present and a pull that dies halfway leaves
     /// nothing to clean up.
+    ///
+    /// **A progressive pull inverts that on purpose**, and pays for it. It
+    /// takes the feed without the asset bodies, so metadata is all there is to
+    /// write and a recording becomes visible with no transcript behind it.
+    /// What used to be "invisible until whole" becomes "listed, and still
+    /// arriving", which is a state the screen has to be able to say out loud:
+    /// see `CloudActivity.downloadingTranscript`. The debt is written down in
+    /// `SyncState.owed` before the token moves, because the change feed will
+    /// not mention that record again, and it is settled by
+    /// `collectOwedSidecars` at the end of this same pass. A pass that dies
+    /// halfway leaves rows with no contents and a note of what to go back for,
+    /// rather than nothing to clean up.
     public func pull(into report: inout CloudReport, now: Date = Date()) async {
         var seen = state.everSeen
         var base = state.base
         defer { state.everSeen = seen; state.base = base }
 
         do {
-            let changes = try await store.changes(in: .library, since: base[file: "token"])
+            let changes = try await store.changes(in: .library, since: base[file: "token"],
+                                                  withAssets: !progressive)
 
             let total = changes.changed.count
             if total > 4 { progress?("Fetching \(total) items") }
@@ -259,11 +296,77 @@ public struct CloudSyncCore: Sendable {
             }
 
             base[file: "token"] = changes.token
+            if report.didSomething { arrived?() }
         } catch {
             report.errors.append(error.localizedDescription)
         }
 
+        // Contents after rows, and inside the same pass, so one pull is still
+        // one pull as far as its report and its caller are concerned.
+        await collectOwedSidecars(&base, into: &report)
         await askWhoHoldsTheWaiting(&base)
+    }
+
+    /// Go back for the contents of every recording whose row has already
+    /// arrived.
+    ///
+    /// The second half of a progressive pull, and the reason the first half is
+    /// allowed to write a recording with nothing in it. One fetch per
+    /// recording, newest first, each one reported as it moves so the row it
+    /// belongs to can say what it is doing rather than the whole screen saying
+    /// it once.
+    ///
+    /// Uncapped, unlike `askWhoHoldsTheWaiting`. That one asks a question it
+    /// can afford to ask again next pass; this one is a debt, and the bytes it
+    /// fetches are the same bytes a single-phase pull would have fetched
+    /// before showing anything at all. A pass cut short leaves the rest owed,
+    /// and the next pass picks them up in the same order.
+    ///
+    /// Nothing is cleared on failure. A recording whose fetch fails is still
+    /// owed, which is what makes this self-repairing across passes; the two
+    /// things that do clear a debt are a record that has gone from the
+    /// container and a folder that has gone from this device.
+    private func collectOwedSidecars(_ base: inout SyncState,
+                                     into report: inout CloudReport) async {
+        let owing = base.owing
+        guard !owing.isEmpty else { return }
+        if owing.count > 1 { progress?("Fetching \(owing.count) transcripts") }
+        for (index, id) in owing.enumerated() {
+            guard FileManager.default.fileExists(atPath: library.folder(for: id).path) else {
+                base[owed: id] = false
+                continue
+            }
+            if owing.count > 1 { progress?("Transcript \(index + 1) of \(owing.count)") }
+            reportActivity(id, .downloadingTranscript, fraction: 0)
+            let name = CloudNaming.recordName(.recording, id, key: key)
+            do {
+                let record = try await store.fetch(name, in: .library, progress: { value in
+                    activity?(CloudActivity(recordingID: id,
+                                            stage: .downloadingTranscript,
+                                            fraction: value))
+                })
+                guard let record else {
+                    // Deleted while this device was holding its row. The
+                    // deletion itself arrives through the feed; there is
+                    // simply nothing left to collect.
+                    base[owed: id] = false
+                    reportActivity(id, .ready, fraction: 1)
+                    continue
+                }
+                let blob = try CloudRecords.openRecording(record, key: key)
+                let outcome = try writeSidecars(blob, from: record, base: &base, into: &report)
+                // Whatever the manifest still names and this record still did
+                // not carry is not a debt any more: the record came whole this
+                // time, so anything absent is absent from the container.
+                base[owed: id] = false
+                base[audioOn: id] = record.audioOn
+                if outcome.written > 0 { arrived?() }
+                reportActivity(id, .ready, fraction: 1)
+            } catch {
+                report.errors.append("\(id): \(error.localizedDescription)")
+                reportActivity(id, .retrying, detail: error.localizedDescription)
+            }
+        }
     }
 
     /// Ask, for the few recordings this device is waiting on, which device
@@ -310,56 +413,13 @@ public struct CloudSyncCore: Sendable {
         let folder = library.folder(for: blob.id)
         let isNew = Recording.load(folder) == nil
 
-        // Sidecars first, metadata last, and only what this device keeps.
-        for file in policy.files(for: blob.id) where file != "metadata.json" {
-            // On disk it keeps its real name; in the record it may not. See
-            // `CloudRecords.assetKey`.
-            let stored = CloudRecords.assetKey(file, id: blob.id)
-            guard let want = blob.digests[stored] else { continue }
-            let local = folder.appendingPathComponent(file)
-            let have = (try? Data(contentsOf: local)).map(sha256Hex)
-            if have == want {
-                // Agreement, which is worth writing down: it is the base every
-                // later disagreement is read against.
-                base[sidecar: blob.id, file: file] = want
-                continue
-            }
-
-            // **A local file that differs from the container is not
-            // automatically the older one.**
-            //
-            // This is a three-way decision and it used to be a two-way one, so
-            // a transcript corrected on this Mac was overwritten by the
-            // container's copy of it on the next pull. The pull runs before the
-            // push, so until the push lands the container still holds what this
-            // device had before the edit, and a second Mac pushing its own copy
-            // is enough to bring that record round again. Measured on a real
-            // library: a speaker corrected at 21:27:19, `transcript.json` and
-            // `turns.json` rewritten at 21:28:14 with the pre-edit copy, and
-            // `metadata.json` left at 21:27 because it had not changed. See
-            // `SyncState`, which is the file that already knew this about
-            // notes.
-            //
-            // So: local matches what we last agreed, take the remote; local has
-            // moved since then, keep it and let the push carry it. Unknown is
-            // the migration case and takes the remote, which is what this did
-            // before per-file bases existed.
-            if let have, let agreed = base[sidecar: blob.id, file: file], agreed != have {
-                report.conflicts.append("\(blob.id)/\(file): edited here and not yet sent")
-                continue
-            }
-            let data: Data?
-            if file == DevicePolicy.sourceIcon {
-                data = blob.sourceIcon
-            } else {
-                data = try CloudRecords.openAsset(record, stored, key: key)
-            }
-            guard let data else { continue }
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try data.write(to: local, options: .atomic)
-            base[sidecar: blob.id, file: file] = want
-            report.pulledSidecars += 1
-        }
+        // Sidecars first, metadata last. See `pull` for what a progressive
+        // pull does to that order and what it writes down instead.
+        let outcome = try writeSidecars(blob, from: record, base: &base, into: &report)
+        // Written down before the token moves, because the change feed will
+        // never mention this record again and this is the only thing that
+        // will remember the transcript is still out there.
+        base[owed: blob.id] = outcome.owed
 
         let metadataURL = folder.appendingPathComponent("metadata.json")
         let have = try? Data(contentsOf: metadataURL)
@@ -417,8 +477,98 @@ public struct CloudSyncCore: Sendable {
         let finished: Set<Metadata.State> = [.needs_labelling, .done, .failed]
         let delivered = blob.digests["transcript.json"] != nil
             || state.map(finished.contains) == true
-        if delivered { reportActivity(blob.id, .ready, fraction: 1) }
+        if outcome.owed {
+            // Listed, and still arriving. This is what the row says until
+            // `collectOwedSidecars` reaches it, which is in this same pass.
+            reportActivity(blob.id, .downloadingTranscript, fraction: 0)
+        } else if delivered {
+            reportActivity(blob.id, .ready, fraction: 1)
+        }
         return Pulled(id: blob.id, delivered: delivered)
+    }
+
+    /// What one record's sidecars did.
+    struct Sidecars {
+        var written = 0
+        /// A file the container holds, that this device keeps, and that this
+        /// record arrived without. Only a progressive pull produces one.
+        var owed = false
+    }
+
+    /// Write every sidecar in this record that this device keeps and does not
+    /// already hold, and say what was left behind.
+    ///
+    /// Shared by both halves of a progressive pull deliberately. The second
+    /// half runs exactly this against the same record fetched whole, so there
+    /// is one three-way decision about a transcript rather than two that can
+    /// drift apart.
+    private func writeSidecars(_ blob: CloudRecords.RecordingBlob,
+                               from record: StoredRecord,
+                               base: inout SyncState,
+                               into report: inout CloudReport) throws -> Sidecars {
+        var outcome = Sidecars()
+        let folder = library.folder(for: blob.id)
+        // Only what this device keeps.
+        for file in policy.files(for: blob.id) where file != "metadata.json" {
+            // On disk it keeps its real name; in the record it may not. See
+            // `CloudRecords.assetKey`.
+            let stored = CloudRecords.assetKey(file, id: blob.id)
+            guard let want = blob.digests[stored] else { continue }
+            let local = folder.appendingPathComponent(file)
+            let have = (try? Data(contentsOf: local)).map(sha256Hex)
+            if have == want {
+                // Agreement, which is worth writing down: it is the base every
+                // later disagreement is read against.
+                base[sidecar: blob.id, file: file] = want
+                continue
+            }
+
+            // **A local file that differs from the container is not
+            // automatically the older one.**
+            //
+            // This is a three-way decision and it used to be a two-way one, so
+            // a transcript corrected on this Mac was overwritten by the
+            // container's copy of it on the next pull. The pull runs before the
+            // push, so until the push lands the container still holds what this
+            // device had before the edit, and a second Mac pushing its own copy
+            // is enough to bring that record round again. Measured on a real
+            // library: a speaker corrected at 21:27:19, `transcript.json` and
+            // `turns.json` rewritten at 21:28:14 with the pre-edit copy, and
+            // `metadata.json` left at 21:27 because it had not changed. See
+            // `SyncState`, which is the file that already knew this about
+            // notes.
+            //
+            // So: local matches what we last agreed, take the remote; local has
+            // moved since then, keep it and let the push carry it. Unknown is
+            // the migration case and takes the remote, which is what this did
+            // before per-file bases existed.
+            if let have, let agreed = base[sidecar: blob.id, file: file], agreed != have {
+                report.conflicts.append("\(blob.id)/\(file): edited here and not yet sent")
+                continue
+            }
+            let data: Data?
+            if file == DevicePolicy.sourceIcon {
+                data = blob.sourceIcon
+            } else {
+                data = try CloudRecords.openAsset(record, stored, key: key)
+            }
+            guard let data else {
+                // The manifest names a file this record did not carry, which
+                // is what the feed looks like when it was asked for without
+                // its asset bodies. Not the icon: that travels inside the
+                // payload and is never the half left behind, so treating a
+                // missing one as a debt would mean re-fetching the record on
+                // every pass for ever.
+                if file != DevicePolicy.sourceIcon { outcome.owed = true }
+                continue
+            }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: local, options: .atomic)
+            base[sidecar: blob.id, file: file] = want
+            outcome.written += 1
+            report.pulledSidecars += 1
+        }
+        return outcome
     }
 
     private func pullNote(_ record: StoredRecord, base: inout SyncState,
@@ -475,6 +625,7 @@ public struct CloudSyncCore: Sendable {
             Trash.accept(recording.folder, in: library)
             base[sent: recording.id] = nil
             base.forgetSidecars(recording.id)
+            base[owed: recording.id] = false
             base[audioOn: recording.id] = nil
             base[master: recording.id] = nil
             base[pinned: recording.id] = false
@@ -843,7 +994,20 @@ public struct CloudSyncCore: Sendable {
         // costs a read; see `CloudRecords.recordingStamp` for what is in it and
         // why `hasAudio` had to be.
         let stamps = library.all().map { ($0, CloudRecords.recordingStamp($0, policy: policy)) }
-        let mine = stamps.filter { base[sent: $0.0.id] != $0.1 }
+        // **Never push half a recording.**
+        //
+        // Between the two halves of a progressive pull this device holds a
+        // recording whose transcript is in the container and not on this disk.
+        // Its local stamp therefore disagrees with what was sent, which is
+        // exactly the condition this filter selects on, so without this line
+        // the pass that made the row visible would offer the container the
+        // version without the transcript. On a phone `addingPhoneContent`
+        // would merge the remote copy back over it and the damage would be a
+        // wasted round trip; on any device that ingests it is the transcript
+        // erased for everybody. One line, and it is the invariant the whole
+        // two-phase pull rests on, so it is not written as an `if progressive`
+        // anywhere: an empty debt makes it free.
+        let mine = stamps.filter { base[sent: $0.0.id] != $0.1 && !base[owed: $0.0.id] }
         if mine.count > 4 { progress?("Checking \(mine.count) recordings") }
         for (index, pair) in mine.enumerated() {
             let (recording, stamp) = pair

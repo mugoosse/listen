@@ -106,6 +106,18 @@ public struct SyncState: Codable, Sendable {
     /// disjoint from `sent:` and `note:`, because `pushDeletions` walks those
     /// two and treats a stamp whose folder has gone as a deletion to send.
     public static func audioOnKey(_ id: String) -> String { "audioOn:" + id }
+    /// A recording whose row has arrived and whose sidecars have not.
+    ///
+    /// The two-phase pull takes the change feed without its asset bodies, so
+    /// the title is on the screen while the transcript is still in the
+    /// container. The change token has moved on by then, and the feed will
+    /// never mention that record again, so this is the only thing that knows
+    /// the transcript is still owed. It is cleared by the fetch that collects
+    /// it, and it is what stops a push sending the half of the recording this
+    /// device happens to hold. Its own prefix, disjoint from `sent:` and
+    /// `note:`, because `pushDeletions` walks those two and reads a stamp with
+    /// no folder as a deletion to send.
+    public static func owedKey(_ id: String) -> String { "owed:" + id }
 
     public subscript(note slug: String) -> String? {
         get { base[SyncState.noteKey(slug)] }
@@ -164,6 +176,25 @@ public struct SyncState: Codable, Sendable {
     public subscript(pinned id: String) -> Bool {
         get { base[SyncState.pinKey(id)] != nil }
         set { base[SyncState.pinKey(id)] = newValue ? "1" : nil }
+    }
+
+    /// Whether this recording's sidecars are still in the container.
+    public subscript(owed id: String) -> Bool {
+        get { base[SyncState.owedKey(id)] != nil }
+        set { base[SyncState.owedKey(id)] = newValue ? "1" : nil }
+    }
+
+    /// Every recording still waiting for its contents, newest first.
+    ///
+    /// An id starts with the moment it was recorded, so sorting them backwards
+    /// is chronological, and the order matters on a first sync: the recording
+    /// somebody is waiting to read is the one at the top of the library, not
+    /// the meeting from eleven months ago that happens to sort first.
+    public var owing: [String] {
+        base.keys
+            .filter { $0.hasPrefix(SyncState.owedKey("")) }
+            .map { String($0.dropFirst(SyncState.owedKey("").count)) }
+            .sorted(by: >)
     }
 
     // MARK: - Coding

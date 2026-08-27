@@ -375,6 +375,88 @@ public enum FakeSync {
                   "pulling the earlier cloud record hid the Mac's new turns")
         ok("pulling an earlier record does not suppress newer local sidecars")
 
+        // MARK: rows before contents
+
+        // **The ordering a two-phase pull exists for.** One change feed used
+        // to bring the rows and the transcripts together, so a first sync was
+        // a spinner until the last transcript in the library had landed and
+        // then seventy rows at once. Taking the feed without its asset bodies
+        // puts every row on the screen in one small request and leaves the
+        // contents to a fetch each.
+        //
+        // What is proved here is the ordering, because that is the whole
+        // claim: the library is reported once with a recording in it and no
+        // transcript behind it, and again once the transcript has landed. A
+        // single-phase pull cannot produce the first of those, because it
+        // writes sidecars before `metadata.json` and a folder without
+        // `metadata.json` does not load at all.
+        let progressiveLib = try scratchLibrary(root.appendingPathComponent("progressive-phone"))
+        try? FileManager.default.removeItem(at: EngineState(library: progressiveLib).root)
+        let progressiveState = EngineState(library: progressiveLib)
+        let arrivals = Arrivals()
+        let progressivePhone = CloudSyncCore(
+            library: progressiveLib, state: progressiveState,
+            store: store, key: key, policy: .phone,
+            device: "phone-5", ingests: false, progressive: true,
+            arrived: {
+                let all = progressiveLib.all()
+                arrivals.note(rows: all.count,
+                              transcripts: all.filter(\.hasTranscript).count)
+            })
+        var progressivePull = CloudReport()
+        await progressivePhone.pull(into: &progressivePull)
+
+        let snapshots = arrivals.snapshots
+        try check(snapshots.count >= 2,
+                  "a progressive pull reported the library \(snapshots.count) time(s), "
+                  + "so nothing was shown until everything had arrived")
+        try check(snapshots[0].rows > 0,
+                  "the first thing a progressive pull reported had no rows in it")
+        try check(snapshots[0].transcripts == 0,
+                  "the rows a progressive pull showed first already had their transcripts, "
+                  + "so the feed was fetched whole after all")
+        try check(snapshots[snapshots.count - 1].transcripts > 0,
+                  "the second half of a progressive pull never delivered a transcript")
+        try check(FileManager.default.fileExists(
+            atPath: progressiveLib.folder(for: lateID)
+                .appendingPathComponent("transcript.json").path),
+                  "a progressive pull left the transcript in the container")
+        try check(FileManager.default.fileExists(
+            atPath: progressiveLib.folder(for: lateID)
+                .appendingPathComponent("turns.json").path),
+                  "a progressive pull collected the transcript and not the turns")
+        try check(progressiveState.base.owing.isEmpty,
+                  "a progressive pull that collected everything still owes "
+                  + "\(progressiveState.base.owing)")
+        ok("a progressive pull lists a recording before its transcript exists, "
+           + "then fills it in")
+
+        // **Never push half a recording.** Between the two halves this device
+        // holds a recording whose transcript is in the container and not on
+        // this disk, which is precisely the state whose local stamp disagrees
+        // with what was sent, which is what `push` selects on. A phone would
+        // survive it through `addingPhoneContent`; nothing else would, and the
+        // rule belongs to the state rather than to the device that happens to
+        // be in it. Staged by hand, because the window it lives in is one
+        // statement wide.
+        try FileManager.default.removeItem(at: progressiveLib.folder(for: lateID)
+            .appendingPathComponent("transcript.json"))
+        var half = progressiveState.base
+        half[owed: lateID] = true
+        progressiveState.base = half
+        let stampBefore = progressiveState.base[sent: lateID]
+        var owedPush = CloudReport()
+        await progressivePhone.push(into: &owedPush)
+        let stillThere = try await store.fetch(
+            CloudNaming.recordName(.recording, lateID, key: key), in: .library)
+        try check(stillThere?.assets["transcript.json"] != nil,
+                  "a push from a device holding half a recording took the transcript "
+                  + "out of the container")
+        try check(progressiveState.base[sent: lateID] == stampBefore,
+                  "a push stamped a recording it only had half of as sent, which is "
+                  + "how the missing half stops being asked for")
+        ok("a recording whose contents are still owed is not pushed")
+
         // A phone can still hold the sparse copy it originally uploaded while
         // the Mac has already added the transcript. Its next push may add new
         // local files, but it must not replace the richer record with the old
@@ -1477,6 +1559,29 @@ public enum FakeSync {
     /// refusing, because Listen works with the network off and a Mac must
     /// still transcribe its own recording. What that costs, and what the
     /// second deterrent is, is the thing this store exists to make provable.
+    /// Where a synchronous callback leaves what it saw.
+    ///
+    /// A plain captured array cannot: `arrived` is `@Sendable` because the
+    /// core is, and this suite is compiled under strict concurrency by the
+    /// iPhone app whether or not the Mac asks for it. An actor would be the
+    /// obvious answer and is the wrong one, because reaching it means an
+    /// `await` and the note would then be filed after the pass it is
+    /// describing had ended.
+    final class Arrivals: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [(rows: Int, transcripts: Int)] = []
+
+        func note(rows: Int, transcripts: Int) {
+            lock.lock(); defer { lock.unlock() }
+            seen.append((rows, transcripts))
+        }
+
+        var snapshots: [(rows: Int, transcripts: Int)] {
+            lock.lock(); defer { lock.unlock() }
+            return seen
+        }
+    }
+
     actor UnreachableStore: RecordStore {
         func save(_ record: StoredRecord) async throws -> StoredRecord {
             throw StoreError.unavailable("the network is off")

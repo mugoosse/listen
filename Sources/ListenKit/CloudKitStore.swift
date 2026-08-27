@@ -199,6 +199,25 @@ public actor CloudKitStore: RecordStore {
 
     public func changes(in zone: CloudNaming.Zone,
                         since token: String?) async throws -> StoreChanges {
+        try await changes(in: zone, since: token, withAssets: true)
+    }
+
+    /// The fields that are not asset bodies, which is the whole record bar the
+    /// sidecars: the sealed blob with `metadata.json` inside it, the three
+    /// typed fields a device that did not write the content has to read, and
+    /// the list naming the assets that were left behind.
+    ///
+    /// Every one of these is small. A recording's row comes out of `payload`
+    /// and the transcript never leaves the container until somebody asks.
+    ///
+    /// Only a recording is affected at all. A note and a library blob keep
+    /// their whole contents in `payload`, so they arrive complete through this
+    /// route and there is never anything owed for them.
+    private static let keysWithoutAssets: [CKRecord.FieldKey] =
+        ["payload", "claimedBy", "claimExpires", "audioOn", "assetNames"]
+
+    public func changes(in zone: CloudNaming.Zone, since token: String?,
+                        withAssets: Bool) async throws -> StoreChanges {
         try await prepare(zone)
         var serverToken = decode(token)
         var expired = false
@@ -209,11 +228,22 @@ public actor CloudKitStore: RecordStore {
 
         while more {
             do {
-                let result = try await database.recordZoneChanges(inZoneWith: zoneID(zone),
-                                                                  since: serverToken)
+                let result = try await database.recordZoneChanges(
+                    inZoneWith: zoneID(zone), since: serverToken,
+                    desiredKeys: withAssets ? nil : Self.keysWithoutAssets)
                 for (_, outcome) in result.modificationResultsByID {
                     guard let record = try? outcome.get().record else { continue }
-                    lastKnown[record.recordID.recordName] = record
+                    // **A partial record is never cached.** `lastKnown` exists
+                    // so a save can compare change tags without a round trip,
+                    // and it hands the cached `CKRecord` to the save as the
+                    // subject to modify. A record fetched without its assets
+                    // is the wrong subject: the one thing this whole route
+                    // must never do is put a recording back with its
+                    // transcript missing. Without the cache the save reads the
+                    // record back first, which is the path a relaunch already
+                    // takes and costs one fetch on a push this device is
+                    // making anyway.
+                    if withAssets { lastKnown[record.recordID.recordName] = record }
                     if let stored = try? translate(record) { changed.append(stored) }
                 }
                 for deletion in result.deletions {

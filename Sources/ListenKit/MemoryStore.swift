@@ -107,6 +107,28 @@ public actor MemoryStore: RecordStore {
 
     public func changes(in zone: CloudNaming.Zone,
                         since token: String?) async throws -> StoreChanges {
+        try await changes(in: zone, since: token, withAssets: true)
+    }
+
+    /// Stripping rather than never loading, because a dictionary has no
+    /// transport to save. What the fake has to reproduce is not the saving:
+    /// it is what the *caller* then does with a record whose assets are
+    /// absent, which is the half of the two-phase pull that can be wrong.
+    public func changes(in zone: CloudNaming.Zone, since token: String?,
+                        withAssets: Bool) async throws -> StoreChanges {
+        var result = try await fullChanges(in: zone, since: token)
+        if !withAssets {
+            result.changed = result.changed.map { record in
+                var stripped = record
+                stripped.assets = [:]
+                return stripped
+            }
+        }
+        return result
+    }
+
+    private func fullChanges(in zone: CloudNaming.Zone,
+                             since token: String?) async throws -> StoreChanges {
         if expireNextToken {
             expireNextToken = false
             // Everything, and no deletions, which is exactly what a real

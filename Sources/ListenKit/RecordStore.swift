@@ -103,6 +103,22 @@ public protocol RecordStore: Sendable {
               progress: StoreProgress?) async throws -> StoredRecord
     func delete(_ name: String, in zone: CloudNaming.Zone) async throws
     func changes(in zone: CloudNaming.Zone, since token: String?) async throws -> StoreChanges
+    /// The same feed with the asset bodies left behind, for a device that
+    /// wants to know what exists before it spends the bytes on the contents.
+    ///
+    /// A recording's title lives in `payload`, which is a field of a few
+    /// hundred bytes, and its transcript is an asset of up to a few hundred
+    /// kilobytes. Asking for both is why a first sync shows nothing at all
+    /// until every transcript in the library has landed. Asking for the first
+    /// alone puts every row on the screen in one small request, and leaves
+    /// the contents to `fetch`, one recording at a time, with progress.
+    ///
+    /// The change token still advances, so what is skipped here is skipped
+    /// for good as far as this feed is concerned: a caller that takes this
+    /// route owes itself a record of what it has yet to collect. See
+    /// `SyncState.owed` and `CloudSyncCore.collectOwedSidecars`.
+    func changes(in zone: CloudNaming.Zone, since token: String?,
+                 withAssets: Bool) async throws -> StoreChanges
     /// Fetch one, for the case where a claim has to be re-read before acting.
     func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord?
     /// The same fetch, with transport progress when the store can report it.
@@ -113,6 +129,13 @@ public protocol RecordStore: Sendable {
 /// Stores without a byte-aware transport still expose honest endpoints. The
 /// real CloudKit store overrides these methods with operation progress.
 public extension RecordStore {
+    /// A store that cannot separate the two brings everything, which is
+    /// wasteful and never wrong.
+    func changes(in zone: CloudNaming.Zone, since token: String?,
+                 withAssets: Bool) async throws -> StoreChanges {
+        try await changes(in: zone, since: token)
+    }
+
     func save(_ record: StoredRecord,
               progress: StoreProgress?) async throws -> StoredRecord {
         progress?(0)

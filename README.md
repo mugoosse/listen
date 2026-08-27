@@ -409,6 +409,8 @@ decision:
   Together, Fireworks, Mistral, DeepInfra and xAI off it. Any other URL can be
   typed in, several can be configured at once, and the composer switches between
   them. A provider is one stateless request, so Listen runs the tool loop itself.
+  The built-in OpenRouter route requires Zero Data Retention, denies data
+  collection and retains OpenRouter's reliability-aware provider fallback.
 
 **A model on this Mac is the case this app should be best at**, and it is the
 only one that costs nothing to try. Measured on four questions with checkable

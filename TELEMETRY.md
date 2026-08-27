@@ -64,7 +64,7 @@ everything outside the tables below, and the filter's source is public.
 | `os_major` | the OS major version, e.g. `26` |
 | `install_age_bucket` | `day_0`, `week_1`, `month_1`, `month_2_3`, `over_3_months`, measured from the day you opted in |
 | `acquisition_channel` | only if you answered "How did you hear about Listen?": `github`, `homebrew`, `app_store`, `search`, `reddit`, `hacker_news`, `youtube_podcast`, `friend`, `other` |
-| `schema_version` | this dictionary's version, currently 1 |
+| `schema_version` | this dictionary's version, currently 2 |
 
 The SDK also stamps its own context: OS name and version, app version and
 build, and SDK name and version. Nothing else of its automatic context
@@ -113,9 +113,31 @@ When a dictation lands. `duration_bucket` (`under_5_s`, `5_15_s`, `15_30_s`,
 `30_60_s`, `over_1_min`), `word_count_bucket` (`1_5`, `6_20`, `21_50`,
 `51_100`, `over_100`), `engine` (`parakeet` or `apple`). Never the words.
 
+### `ask_completed`
+One event after one Ask question succeeds or fails. It never contains the
+question, answer, transcript, title, source ids, quotes, or a conversation/run
+identifier. The event is deliberately a performance summary rather than a
+trace: exact timings and fixed tool names stay in the device's unified log.
+
+| Property | Values |
+|---|---|
+| `outcome` | `ok`, `timeout`, `offline`, `provider_error`, `ungrounded`, `invalid_evidence`, `too_many_rounds` |
+| `backend` | `openrouter`, `claude_code`, `codex`, `local_endpoint`, `remote_endpoint` |
+| `model` | a model id the selected backend advertised, `default`, or `custom`. User-authored custom model text is never sent |
+| `scope` | `library`, `recording`, `person`, `note` |
+| `latency_bucket` | `under_2_s`, `2_5_s`, `5_15_s`, `15_30_s`, `30_60_s`, `60_90_s`, `over_90_s`, or `unknown` |
+| `round_count` | provider rounds, capped at 24; absent when a CLI harness does not expose it |
+| `retry_count` | provider retries, capped at 24; absent when the harness does not expose it |
+| `tool_call_count` | tool calls, capped at 24 |
+| `local_read_count` | local library reads, capped at 24; currently available on iPhone |
+| `request_size_bucket` | `under_16_kb`, `16_32_kb`, `32_64_kb`, `64_128_kb`, `over_128_kb`, or `unknown` |
+| `prompt_tokens_bucket`, `completion_tokens_bucket` | `under_1k`, `1_4k`, `4_16k`, `16_64k`, `over_64k`, or `unknown` |
+| `cost_bucket` | `under_0_001_usd`, `0_001_0_005_usd`, `0_005_0_02_usd`, `0_02_0_10_usd`, `over_0_10_usd`, or `unknown` |
+| `reference_count_bucket` | `0`, `1`, `2_4`, `5_plus`, or `unknown` |
+| `zdr` | bool; present for OpenRouter, whose requests require Zero Data Retention |
+
 ### `feature_used`
-A closed list, and the fact only: `ask_question` (never the question),
-`note_saved` (never the note), `sync_enabled`, `dictation_enabled`,
+A closed list, and the fact only: `note_saved` (never the note), `sync_enabled`, `dictation_enabled`,
 `calendar_connected`, `share_export`, `import`, `iphone_capture`,
 `keep_audio_toggle`.
 

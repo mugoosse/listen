@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 
 /// The Ask pane: a conversation with an agent about one recording.
 ///
@@ -1498,9 +1499,6 @@ final class AskView: NSView {
         answering = answer
         addTurn(answer)
         answer.begin(with: chosen.name)
-        // The fact of a question, never the question. The text stays between
-        // the user and the backend they chose.
-        Telemetry.featureUsed(.askQuestion)
         updateSendButton()
         scrollToEnd()
 
@@ -1602,6 +1600,14 @@ final class AskView: NSView {
                     self.start(text, status: status, path: path, resuming: nil)
                     return
                 }
+                Telemetry.askCompleted(
+                    outcome: Self.telemetryOutcome(outcome.failure),
+                    backend: Self.telemetryBackend(status),
+                    model: Self.telemetryModel(status),
+                    scope: self.recording != nil ? "recording"
+                        : (self.person != nil ? "person" : "library"),
+                    run: outcome,
+                    zdr: status.provider?.isOpenRouter == true ? true : nil)
                 self.finish(outcome, answer)
             }
         }
@@ -1623,6 +1629,35 @@ final class AskView: NSView {
                        answering)
             }
         }
+    }
+
+    /// Model ids are useful performance dimensions, but a custom endpoint also
+    /// accepts arbitrary user-authored text in that field. Only values the
+    /// backend itself advertised may leave the Mac; everything else collapses.
+    private static func telemetryModel(_ status: AgentStatus) -> String {
+        guard let selected = Settings.agentModel(status.key), !selected.isEmpty else {
+            return "default"
+        }
+        return status.models.contains { $0.id == selected } ? selected : "custom"
+    }
+
+    private static func telemetryBackend(_ status: AgentStatus) -> TelemetrySchema.AskBackend {
+        switch status.backend {
+        case .claude: return .claudeCode
+        case .codex: return .codex
+        case .endpoint:
+            if status.provider?.isOpenRouter == true { return .openrouter }
+            return status.provider?.isLoopback == true ? .localEndpoint : .remoteEndpoint
+        }
+    }
+
+    private static func telemetryOutcome(_ failure: String?) -> TelemetrySchema.AskOutcome {
+        guard let failure else { return .ok }
+        let value = failure.lowercased()
+        if value.contains("timed out") || value.contains("timeout") { return .timeout }
+        if value.contains("offline") || value.contains("not connected")
+            || value.contains("could not connect") { return .offline }
+        return .providerError
     }
 
     /// Ask a failed turn's question again, in place.

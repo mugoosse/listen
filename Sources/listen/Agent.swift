@@ -990,6 +990,11 @@ final class AgentRun {
         /// business keeping one.
         var promptTokens: Int?
         var completionTokens: Int?
+        /// Provider-loop diagnostics. Nil for CLI harnesses, which do not expose
+        /// their internal request count or encoded request bodies.
+        var providerRounds: Int? = nil
+        var providerRetries: Int? = nil
+        var largestRequestBytes: Int? = nil
         /// nil on success. Present means the answer is not to be trusted.
         var failure: String?
     }

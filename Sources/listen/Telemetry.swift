@@ -289,6 +289,42 @@ enum Telemetry {
         capture(.featureUsed, ["feature": feature.rawValue])
     }
 
+    /// One content-free performance summary for one completed Ask turn. Exact
+    /// timings remain in the local logs; PostHog receives only the public model
+    /// choice, fixed backend/scope labels, counts and coarse buckets.
+    static func askCompleted(outcome: TelemetrySchema.AskOutcome,
+                             backend: TelemetrySchema.AskBackend,
+                             model: String,
+                             scope: String,
+                             run: AgentRun.Outcome,
+                             zdr: Bool?) {
+        var properties: [String: Any] = [
+            "outcome": outcome.rawValue,
+            "backend": backend.rawValue,
+            "model": model,
+            "scope": scope,
+            "latency_bucket": run.durationMS.map {
+                TelemetrySchema.askLatencyBucket(milliseconds: $0)
+            } ?? "unknown",
+            "tool_call_count": TelemetrySchema.cappedAskCount(run.toolCalls),
+            "request_size_bucket": TelemetrySchema.askRequestSizeBucket(
+                bytes: run.largestRequestBytes),
+            "prompt_tokens_bucket": TelemetrySchema.askTokenBucket(run.promptTokens),
+            "completion_tokens_bucket": TelemetrySchema.askTokenBucket(
+                run.completionTokens),
+            "cost_bucket": TelemetrySchema.askCostBucket(usd: run.costUSD),
+            "reference_count_bucket": "unknown",
+        ]
+        if let rounds = run.providerRounds {
+            properties["round_count"] = TelemetrySchema.cappedAskCount(rounds)
+        }
+        if let retries = run.providerRetries {
+            properties["retry_count"] = TelemetrySchema.cappedAskCount(retries)
+        }
+        if let zdr { properties["zdr"] = zdr }
+        capture(.askCompleted, properties)
+    }
+
     static func failure(_ subsystem: TelemetrySchema.Subsystem, code: String,
                         retryable: Bool = false) {
         capture(.operationFailed, [
@@ -314,7 +350,7 @@ enum Telemetry {
         guard ProcessInfo.processInfo.environment["LISTEN_TELEMETRY_SELFTEST"] == "1"
         else { return }
         PostHogSDK.shared.capture(TelemetrySchema.Event.featureUsed.rawValue,
-                                  properties: ["feature": "ask_question",
+                                  properties: ["feature": "note_saved",
                                                "smuggled_title": "must not survive"])
         PostHogSDK.shared.capture("off_schema_event",
                                   properties: ["anything": "must not arrive"])

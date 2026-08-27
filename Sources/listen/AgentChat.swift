@@ -914,13 +914,33 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     /// prints it without running anything, which is this backend's answer to
     /// `--print-command`.
     static func body(model: String, messages: [[String: Any]],
-                     tools: [[String: Any]], stream: Bool) -> [String: Any] {
+                     tools: [[String: Any]], stream: Bool,
+                     openRouter: Bool = false) -> [String: Any] {
         var out: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": stream,
         ]
         if !tools.isEmpty { out["tools"] = tools }
+        if openRouter {
+            // Keep the hosted path on the same privacy policy as the iPhone.
+            // Do not force a sort order: that disables OpenRouter's normal
+            // reliability-aware load balancing, and a live Ask fixture showed
+            // the lowest-latency route exhausting the tool loop ungrounded.
+            out["provider"] = [
+                "zdr": true,
+                "data_collection": "deny",
+                "require_parameters": true,
+            ]
+            // Listen's questions are retrieval and summarisation tasks, not
+            // long-form deliberation. Keep OpenAI's reasoning models on their
+            // smallest supported budget so a short, grounded answer does not
+            // spend most of its latency thinking invisibly. Other vendors keep
+            // their own defaults rather than receiving an unsupported field.
+            if model.hasPrefix("openai/gpt-5") {
+                out["reasoning"] = ["effort": "minimal"]
+            }
+        }
         // Ollama, vLLM and OpenAI all understand this and it is the only way to
         // learn the token counts from a streamed answer. A server that does not
         // is free to ignore it, and none has been seen to refuse it.
@@ -944,7 +964,8 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
                   tools: MCP.toolSchemas(allowedTools),
                   // Always. See `startRound`: the connection is streamed
                   // whatever the caller asked for.
-                  stream: true)
+                  stream: true,
+                  openRouter: provider.isOpenRouter)
     }
 
     // MARK: One round
@@ -996,6 +1017,8 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
             return
         }
         request.httpBody = data
+        outcome.providerRounds = max(outcome.providerRounds ?? 0, round)
+        outcome.largestRequestBytes = max(outcome.largestRequestBytes ?? 0, data.count)
 
         task = session?.dataTask(with: request)
         task?.resume()
@@ -1166,6 +1189,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
         guard (200..<300).contains(httpStatus) else {
             if Self.retryable(httpStatus), attempt < Self.maxAttempts - 1 {
                 attempt += 1
+                outcome.providerRetries = (outcome.providerRetries ?? 0) + 1
                 // Linear, matching the spike: 3s then 6s. Not exponential,
                 // because there are only three attempts and the point is to
                 // ride out a moment of load rather than to back off politely

@@ -1565,6 +1565,83 @@ It is also the cheapest possible confirmation that the grounding check earns its
 place: the refusal was ungrounded, was flagged as such, and the flag is what
 made the cause obvious.
 
+## OpenRouter is ZDR first and reliability-routed second
+
+The built-in provider now sends `provider.zdr: true`,
+`data_collection: deny` and `require_parameters: true` on every request. It
+deliberately does not force `sort`: doing so disables OpenRouter's normal
+load-balancing and fallback. Privacy still narrows the eligible endpoints; a
+fast endpoint that retains the meeting is never an eligible optimisation.
+
+The first library-wide repeated-turn fixture took 26 seconds with GPT-5 Mini
+and 15 with GPT-5.4 Mini; DeepSeek V4 Flash initially exhausted all seven
+rounds because Listen rejected its repeated valid evidence ID. After fixing
+that validator, a direct recording-scope fixture large enough to fill the 64 KB
+preload took 7 seconds with GPT-5.4 Mini, 18 with GPT-4.1 Mini, 21 with a failing
+GPT-4.1 Nano and 116 with a failing GPT-5 Nano. Claude Haiku 4.5 had no eligible
+ZDR endpoint. A corrected DeepSeek V4 Flash library run was grounded but took
+about 80 seconds and four rounds. That is why GPT-5.4 Mini is the phone's
+new-install default and why a `Flash` name is not a latency guarantee under a
+strict ZDR plus tool-calling contract. An existing model preference is never
+rewritten: opening a pane must not edit settings, as the measurement later in
+this file already proved.
+
+Forcing `sort: latency` later selected Azure and reduced the same GPT-5.4 Mini
+run to 13 seconds, but it too exhausted all seven rounds without answering.
+Reliability-aware routing is therefore part of the correctness contract, not
+just a speed choice. The same live probe also caught a parameter spelling trap:
+`max_tokens` plus `require_parameters` removed every ZDR endpoint, while the
+current `max_completion_tokens` spelling retained the Azure endpoint.
+
+Library and person questions now run the local recording and note searches
+before their first request, just as recording and note scopes already preload a
+bounded read. A deterministic test proves those results are in request one. A
+live GPT-5.4 Mini run over the 500-turn fixture completed grounded in 7 seconds
+of script wall time; the script includes app launch and two-second result
+polling. OpenAI GPT-5 requests also use `reasoning.effort: minimal`: these are
+retrieval and summary turns, and there is no reason to pay for a large invisible
+reasoning budget before returning short cited prose. This is a cap, not a magic
+latency fix: a second grounded run took 9 seconds, which is normal route
+variance. OpenRouter's `:nitro` variant was also grounded but took 8 seconds on
+the identical fixture, so prioritising output throughput did not improve this
+small structured response enough to replace reliability-aware routing.
+
+GPT-5.6 Luna later completed two small-context library runs in 5 and 8 seconds,
+but took 12 seconds when a selected 500-turn recording filled the 64 KB preload;
+GPT-5.4 Mini had completed that long shape in 7. The iPhone's new-install
+`listen/automatic` choice therefore selects Luna below 24 KB of encoded provider
+messages and GPT-5.4 Mini at or above it. The split is based on bytes, not the
+scope label, so a long note and a short recording take the measured route too.
+Concrete and custom model choices bypass this routing, and old explicit choices
+are never rewritten.
+
+While a request is in flight, the phone mirrors the Mac's inline activity
+language and 1.6-second linear glimmer instead of leaving a generic spinner.
+Reduce Motion receives the same status as a still accessible label. Capturing
+successive simulator frames proved the highlight crosses “Drafting from 6
+local excerpts…” while a monospaced elapsed timer advances, rather than merely
+compiling an unused animation.
+
+The slowest real-phone failure was not an OpenRouter timeout. A selected
+42-minute recording reached round seven in 70,477 ms because the model cited
+`ev-19` with a quote that did not exactly match its app-issued excerpt. Listen
+returned only that generic error, so the model repeated the same bad quote and
+the encoded request grew to 127,975 bytes. The phone now treats casing and
+punctuation-only quote differences as the same contiguous words. A genuinely
+invented quote receives one guided repair containing the exact local line, and
+that repair request exposes only `submit_answer`; if it still fails, Listen
+stops instead of permitting another read. A 300-turn scoped summary then
+completed grounded in one provider round and eight seconds of script wall time.
+
+Do not copy the Mac's visible token streaming mechanically. The phone requires
+the final turn to be a `submit_answer` tool call, so OpenRouter streams chunks of
+incomplete JSON arguments. Its answer text cannot be trusted until the complete
+citations array has arrived and every evidence ID and quote validates. Showing
+that field early would expose prose that Listen may then reject. Keep the final
+answer atomic; the truthful perceived-progress surface is the changing shimmer.
+A future SSE transport can measure time to first byte or switch the activity to
+“Drafting answer…” without rendering unverified prose.
+
 ## OpenRouter is a case, not a preset
 
 It began as one of five presets in the single endpoint slot, and that was wrong

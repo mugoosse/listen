@@ -41,7 +41,7 @@ public enum TelemetrySchema {
     /// Stamped on every event. Bucket boundaries are forever once shipped,
     /// because moving one silently would make week 12 incomparable with week
     /// 11; this number is the escape hatch when one genuinely has to move.
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     // MARK: - Events
 
@@ -63,6 +63,11 @@ public enum TelemetrySchema {
         /// exist until the diarizer has run.
         case recordingTranscribed = "recording_transcribed"
         case dictationCompleted = "dictation_completed"
+        /// One content-free performance summary for one user question. It is
+        /// emitted after success or failure, never while the question is being
+        /// written, and carries buckets and closed identifiers rather than any
+        /// prompt, answer, transcript, title or source id.
+        case askCompleted = "ask_completed"
         case featureUsed = "feature_used"
         case operationFailed = "operation_failed"
     }
@@ -97,6 +102,12 @@ public enum TelemetrySchema {
         Event.dictationCompleted.rawValue: [
             "duration_bucket", "word_count_bucket", "engine",
         ],
+        Event.askCompleted.rawValue: [
+            "outcome", "backend", "model", "scope", "latency_bucket",
+            "round_count", "retry_count", "tool_call_count", "local_read_count",
+            "request_size_bucket", "prompt_tokens_bucket", "completion_tokens_bucket",
+            "cost_bucket", "reference_count_bucket", "zdr",
+        ],
         Event.featureUsed.rawValue: ["feature"],
         Event.operationFailed.rawValue: ["subsystem", "code", "retryable"],
     ]
@@ -107,7 +118,6 @@ public enum TelemetrySchema {
     /// than a string parameter so a new call site has to come here, and
     /// therefore into TELEMETRY.md, before it can ship.
     public enum Feature: String, Sendable {
-        case askQuestion = "ask_question"
         case noteSaved = "note_saved"
         case syncEnabled = "sync_enabled"
         case dictationEnabled = "dictation_enabled"
@@ -124,6 +134,24 @@ public enum TelemetrySchema {
         case sync
         case dictation
         case library
+    }
+
+    public enum AskOutcome: String, Sendable {
+        case ok
+        case timeout
+        case offline
+        case providerError = "provider_error"
+        case ungrounded
+        case invalidEvidence = "invalid_evidence"
+        case tooManyRounds = "too_many_rounds"
+    }
+
+    public enum AskBackend: String, Sendable {
+        case openrouter
+        case claudeCode = "claude_code"
+        case codex
+        case localEndpoint = "local_endpoint"
+        case remoteEndpoint = "remote_endpoint"
     }
 
     /// The answers the one-time "How did you hear about Listen?" picker can
@@ -234,6 +262,69 @@ public enum TelemetrySchema {
         case ..<101: return "51_100"
         default: return "over_100"
         }
+    }
+
+    /// Wall-clock time for one question, including local tool calls and every
+    /// provider round. Exact milliseconds stay in the local unified log.
+    public static func askLatencyBucket(milliseconds: Int) -> String {
+        switch max(milliseconds, 0) {
+        case ..<2_000: return "under_2_s"
+        case ..<5_000: return "2_5_s"
+        case ..<15_000: return "5_15_s"
+        case ..<30_000: return "15_30_s"
+        case ..<60_000: return "30_60_s"
+        case ..<90_000: return "60_90_s"
+        default: return "over_90_s"
+        }
+    }
+
+    /// Largest encoded provider request in a run. This tells a slow model from
+    /// a long-context request without revealing a byte of that context.
+    public static func askRequestSizeBucket(bytes: Int?) -> String {
+        guard let bytes else { return "unknown" }
+        switch max(bytes, 0) {
+        case ..<16_384: return "under_16_kb"
+        case ..<32_768: return "16_32_kb"
+        case ..<65_536: return "32_64_kb"
+        case ..<131_072: return "64_128_kb"
+        default: return "over_128_kb"
+        }
+    }
+
+    public static func askTokenBucket(_ count: Int?) -> String {
+        guard let count else { return "unknown" }
+        switch max(count, 0) {
+        case ..<1_000: return "under_1k"
+        case ..<4_000: return "1_4k"
+        case ..<16_000: return "4_16k"
+        case ..<64_000: return "16_64k"
+        default: return "over_64k"
+        }
+    }
+
+    public static func askCostBucket(usd: Double?) -> String {
+        guard let usd, usd >= 0 else { return "unknown" }
+        switch usd {
+        case ..<0.001: return "under_0_001_usd"
+        case ..<0.005: return "0_001_0_005_usd"
+        case ..<0.02: return "0_005_0_02_usd"
+        case ..<0.10: return "0_02_0_10_usd"
+        default: return "over_0_10_usd"
+        }
+    }
+
+    public static func askReferenceCountBucket(_ count: Int?) -> String {
+        guard let count else { return "unknown" }
+        switch max(count, 0) {
+        case 0: return "0"
+        case 1: return "1"
+        case 2...4: return "2_4"
+        default: return "5_plus"
+        }
+    }
+
+    public static func cappedAskCount(_ count: Int) -> Int {
+        min(max(count, 0), 24)
     }
 
     /// Transcription speed as a fraction of the recording's own length, so a

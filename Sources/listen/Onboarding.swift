@@ -35,13 +35,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// and the feature is silently off for them. Its buttons say so: the way
     /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        // Telemetry sits between sync and done: late, so saying no is nearly
-        // the last tap of setup, and before done, so `finish()` stays the one
-        // terminus. Closing the window mid-setup stamps `onboarded` without
-        // reaching it, which is fine on purpose: consent stays unset and the
-        // one-time prompt in the app delegate asks later.
-        case welcome, microphone, systemAudio, calendar, model, dictation, sync,
-             telemetry, done
+        case welcome, microphone, systemAudio, calendar, model, dictation, sync, done
     }
 
     private var window: NSWindow?
@@ -70,14 +64,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// opens Settings and then runs setup again.
     private var awaitingModel = false
 
-    /// True while the window is showing only the telemetry step, for an
-    /// install that already finished setup. Changes what a press on that
-    /// step does (close rather than advance toward steps that ask about
-    /// permissions or a model an existing install has already decided) and
-    /// what the chrome around it shows (no rail, no back button: there is
-    /// no journey here, only one question).
-    private var singleStepMode = false
-
     /// Start again from the first step.
     ///
     /// From the top, not from wherever the last visit ended: reaching for this
@@ -85,13 +71,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// where the answer is. Speak's About pane offers the same thing for the
     /// same reason.
     func restart() {
-        singleStepMode = false
         step = .welcome
         show()
     }
 
     func show() {
-        singleStepMode = false
         if window == nil { build() }
         // Restarted here, not only in `build`. Both `finish` and
         // `windowWillClose` invalidate it, and `build` runs once for the life
@@ -99,21 +83,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
         // otherwise come back with a dead timer: permissions land
         // asynchronously and nothing else notices them, so every pane would sit
         // on whatever it said when it was drawn.
-        startPolling()
-        render()
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-    }
-
-    /// The one-time telemetry question for an install that already finished
-    /// setup, raised from `TelemetryPrompt`. Reuses the wizard's own
-    /// `.telemetry` step rather than a second implementation of the same
-    /// screen: an existing install sees exactly what a new one does, just
-    /// with nothing before or after it to navigate through.
-    func showTelemetryOnly() {
-        singleStepMode = true
-        if window == nil { build() }
-        step = .telemetry
         startPolling()
         render()
         NSApp.activate(ignoringOtherApps: true)
@@ -236,12 +205,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
             String(Settings.model.isDownloaded),
             // The sync step's tick, which the button on that step changes.
             String(Settings.cloudSyncApplies),
-            // The telemetry step's tick, three-valued because "never asked"
-            // is a real state its pane renders differently. The channel
-            // choice is deliberately absent: it changes only a popup's
-            // selection, and rule 2 is about not rebuilding controls under
-            // the cursor for changes that are not structural.
-            Telemetry.consent.map(String.init) ?? "unasked",
             // The phase, never the byte count. Starting, finishing and failing
             // each change what the pane contains; a percentage only changes
             // what one label says, and rule 2 is why that distinction matters.
@@ -407,60 +370,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
                        + "Mac alone, and Settings, Sync can turn it on later.")
             }
 
-        case .telemetry:
-            titleLabel.stringValue = "Help improve Listen?"
-            // The trade-off first, per the copy rule: what is sent, where it
-            // goes, and the way back out. Buckets and counts are named
-            // because "anonymous statistics" alone is the sentence every app
-            // uses while sending rather more than that.
-            paragraph("If you opt in, Listen sends anonymous counts: how many "
-                      + "recordings, how long in rough buckets, which app a call "
-                      + "was in, and crash reports. Never your audio, transcripts, "
-                      + "titles or names, and nothing that identifies you.")
-            paragraph("Sent to PostHog in the EU under a random install ID. You "
-                      + "can change your mind any time in Settings, Privacy.")
-            if Settings.forcedBool("telemetryDisabled") == true {
-                status(false, "", "Telemetry is off, set by your organisation's "
-                       + "device profile.")
-            } else {
-                // The channel question rides the same pane because it is only
-                // worth asking once, and only means anything to somebody who
-                // has just read what would carry the answer. No selection is
-                // an answer too, and it is the default.
-                let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-                popup.addItem(withTitle: "Prefer not to say")
-                for channel in TelemetrySchema.AcquisitionChannel.allCases {
-                    popup.addItem(withTitle: channel.label)
-                }
-                if let stored = Settings.telemetryChannel,
-                   let index = TelemetrySchema.AcquisitionChannel.allCases
-                       .firstIndex(where: { $0.rawValue == stored }) {
-                    popup.selectItem(at: index + 1)
-                }
-                popup.target = self
-                popup.action = #selector(pickChannel(_:))
-                let question = NSTextField(labelWithString: "How did you hear about Listen?")
-                question.font = .systemFont(ofSize: 12)
-                let row = NSStackView(views: [question, popup])
-                row.orientation = .horizontal
-                row.spacing = 8
-                body.addArrangedSubview(row)
-
-                let dictionary = NSButton(title: "See exactly what is shared",
-                                          target: self,
-                                          action: #selector(openTelemetryDictionary))
-                dictionary.isBordered = false
-                dictionary.contentTintColor = .linkColor
-                dictionary.font = .systemFont(ofSize: 12)
-                body.addArrangedSubview(dictionary)
-
-                if let consent = Telemetry.consent {
-                    status(consent, "Sharing anonymous statistics",
-                           "Not sharing anything. Settings, Privacy can turn it "
-                           + "on later.")
-                }
-            }
-
         case .done:
             titleLabel.stringValue = "You are set"
             body.addArrangedSubview(BrandIcon.view(size: 44, accessibilityLabel: "Listen is ready"))
@@ -495,14 +404,10 @@ final class Onboarding: NSObject, NSWindowDelegate {
             return
         }
 
-        // Nothing to go back to from the first step, or ever, in single-step
-        // mode: there is no earlier step here to return to.
-        backButton.isHidden = step == .welcome || singleStepMode
-        // The rail says how far through a journey you are, and single-step
-        // mode is not one: showing "step 8 of 9" to somebody who only ever
-        // sees this one screen would claim a journey that did not happen.
-        rail.isHidden = singleStepMode
-        if !singleStepMode { buildRail() }
+        // Nothing to go back to from the first step.
+        backButton.isHidden = step == .welcome
+        rail.isHidden = false
+        buildRail()
 
         // The rule for the second button, and it is one sentence: **it appears
         // only when it does something the primary does not.**
@@ -632,18 +537,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
             primary.isEnabled = true
             secondary.isHidden = on || Settings.isForced("cloudSync")
             secondary.title = "Not now"
-        case .telemetry:
-            // Like the sync step: the press is the consent, and an answer
-            // already given (or a forced value) gets Continue alone. Nothing
-            // is pre-ticked and there is no way through without the question
-            // having been on screen.
-            let answered = Telemetry.consent != nil
-            let forced = Settings.forcedBool("telemetryDisabled") == true
-            primary.title = answered || forced
-                ? "Continue" : "Share anonymous statistics"
-            primary.isEnabled = true
-            secondary.isHidden = answered || forced
-            secondary.title = "No thanks"
         case .done:
             primary.title = "Start using Listen"
             primary.isEnabled = true
@@ -694,18 +587,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
     }
 
     @objc private func next() {
-        // One press answers the question and closes, rather than the full
-        // wizard's two-step confirm-then-advance: there is no next step here
-        // to advance into, so asking again for the same tap would be asking
-        // why the window has not gone away yet.
-        if singleStepMode {
-            if Telemetry.consent == nil, Settings.forcedBool("telemetryDisabled") != true {
-                Telemetry.consent = true
-                Settings.telemetryPrompted = true
-            }
-            closeSingleStep()
-            return
-        }
         switch step {
         case .microphone where !Permissions.microphone:
             Permissions.requestMicrophone { _ in
@@ -762,17 +643,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
             render()
             return
 
-        case .telemetry where Telemetry.consent == nil
-            && Settings.forcedBool("telemetryDisabled") != true:
-            // The press is the consent, exactly as the sync step's is. The
-            // window stays on this step so the tick can appear where it was
-            // promised, and `prompted` is stamped so the one-time sheet for
-            // existing installs can never ask somebody setup already asked.
-            Telemetry.consent = true
-            Settings.telemetryPrompted = true
-            render()
-            return
-
         case .done:
             // One summary of the choices made here, sent only if the step
             // before said yes; `Telemetry` drops it silently otherwise.
@@ -792,15 +662,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
     }
 
     @objc private func skip() {
-        if singleStepMode {
-            // "No thanks" is an answer, and it is recorded as one: an unset
-            // consent would be re-asked, and asking somebody who just
-            // declined is the thing this prompt must never do.
-            Telemetry.consent = false
-            Settings.telemetryPrompted = true
-            closeSingleStep()
-            return
-        }
         switch step {
         case .microphone:
             if Permissions.microphoneDenied { Permissions.openMicrophoneSettings() }
@@ -812,28 +673,9 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // means not now, and Settings, Permissions has the switch whenever
             // it does become now.
             advance()
-        case .telemetry:
-            // "No thanks" is an answer, and it is recorded as one: an unset
-            // consent would be re-asked by the one-time prompt, and asking
-            // somebody who just declined is the thing that prompt must never
-            // do.
-            Telemetry.consent = false
-            Settings.telemetryPrompted = true
-            advance()
         default:
             advance()
         }
-    }
-
-    @objc private func pickChannel(_ sender: NSPopUpButton) {
-        // Item 0 is "Prefer not to say", which stores nothing.
-        let channels = TelemetrySchema.AcquisitionChannel.allCases
-        let index = sender.indexOfSelectedItem - 1
-        Telemetry.setChannel(channels.indices.contains(index) ? channels[index] : nil)
-    }
-
-    @objc private func openTelemetryDictionary() {
-        NSWorkspace.shared.open(Links.telemetry)
     }
 
     private func advance() {
@@ -945,27 +787,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
         LibraryWindow.shared.show()
     }
 
-    /// Closes the single-question presentation. Unlike `finish()`, nothing
-    /// here is a first-run completion: `onboarded` is already true, dictation
-    /// is already whatever this install decided, and there is no library
-    /// window to raise that was not already showing behind this one.
-    private func closeSingleStep() {
-        singleStepMode = false
-        stopPolling()
-        window?.orderOut(nil)
-    }
-
     func windowWillClose(_ notification: Notification) {
-        if singleStepMode {
-            // The red button is also an answer: silence. Stamped so the
-            // one-time question stays one-time; consent itself is left
-            // unset, exactly as declining any other way leaves it, so
-            // Settings, Privacy remains the one path back.
-            Settings.telemetryPrompted = true
-            singleStepMode = false
-            stopPolling()
-            return
-        }
         // Closing the window counts as finishing. Leaving `onboarded` false
         // would show setup again on the next launch, which reads as the app
         // having forgotten.

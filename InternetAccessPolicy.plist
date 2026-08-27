@@ -109,7 +109,7 @@
             <key>Port</key>
             <string>443</string>
             <key>Purpose</key>
-            <string>Anonymous usage statistics and crash reports, only if you opted in during setup or in Settings, Privacy. Counts and durations in rough buckets, under a random install ID, never recordings, transcripts, titles or names. TELEMETRY.md in the repository lists every event this can carry.</string>
+            <string>Anonymous usage statistics and crash reports, on by default and turned off in Settings, Privacy. Counts and durations in rough buckets, under a random install ID, never recordings, transcripts, titles or names. TELEMETRY.md in the repository lists every event this can carry.</string>
             <key>DenyConsequences</key>
             <string>Nothing stops working. Listen behaves identically; the statistics simply do not arrive.</string>
         </dict>

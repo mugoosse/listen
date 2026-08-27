@@ -20,9 +20,10 @@ enum Telemetry {
 
     // MARK: - Consent
 
-    /// nil is "never asked", and it is a real state: setup asks new users,
-    /// the one-time prompt asks existing ones, and until one of them has
-    /// answered nothing is sent and no identity exists.
+    /// nil is "never decided". Telemetry is on by default now: nothing asks
+    /// any more, and `migrateToDefaultOnIfNeeded()` is what turns nil (and,
+    /// once, an existing no) into yes. Settings, Privacy is the only place
+    /// left that writes here afterward.
     static var consent: Bool? {
         get { Settings.defaults.object(forKey: Settings.telemetryConsentKey) as? Bool }
         set {
@@ -34,6 +35,24 @@ enum Telemetry {
             }
             apply(from: old, to: newValue)
         }
+    }
+
+    /// Once, ever, per install: turns telemetry on. It overrides a `false`
+    /// from before this build existed as well as a `nil` from never having
+    /// been asked, and never runs a second time, so turning the Settings
+    /// toggle off afterward is the last word. Called at launch, before
+    /// `startIfConsented()`, on both platforms.
+    ///
+    /// Skipped, and left to try again next launch, while an organisation's
+    /// device profile forces telemetry off: a forced Mac must never end up
+    /// with `consent == true` recorded, even though `blocked` would keep it
+    /// silent either way, because the day the profile is lifted this is what
+    /// decides whether that Mac goes quiet-but-consented or genuinely unset.
+    static func migrateToDefaultOnIfNeeded() {
+        guard !Settings.telemetryDefaultOnMigrated else { return }
+        guard Settings.forcedBool("telemetryDisabled") != true else { return }
+        Settings.telemetryDefaultOnMigrated = true
+        consent = true
     }
 
     /// Off for everyone when any of these says so, whatever consent says:
@@ -365,7 +384,7 @@ enum Telemetry {
 extension Settings {
     fileprivate static let telemetryConsentKey = "telemetryConsent"
     private static let telemetryChannelKey = "telemetryChannel"
-    private static let telemetryPromptedKey = "telemetryPrompted"
+    private static let telemetryDefaultOnMigratedKey = "telemetryDefaultOnMigrated"
     private static let telemetryConsentedAtKey = "telemetryConsentedAt"
     private static let lastSeenVersionKey = "lastSeenVersion"
 
@@ -383,12 +402,12 @@ extension Settings {
         }
     }
 
-    /// The one-time prompt for existing installs has fired. Written whatever
-    /// the answer was, including the sheet being closed: one-time is a
-    /// promise, and the Settings toggle is the only path back.
-    static var telemetryPrompted: Bool {
-        get { defaults.bool(forKey: telemetryPromptedKey) }
-        set { defaults.set(newValue, forKey: telemetryPromptedKey) }
+    /// Whether `Telemetry.migrateToDefaultOnIfNeeded()` has already run on
+    /// this install. Written once, on the launch it flips consent to yes, so
+    /// a later "no" in Settings is never overwritten by a second migration.
+    static var telemetryDefaultOnMigrated: Bool {
+        get { defaults.bool(forKey: telemetryDefaultOnMigratedKey) }
+        set { defaults.set(newValue, forKey: telemetryDefaultOnMigratedKey) }
     }
 
     /// When consent was granted, driving the install age bucket. Cleared on

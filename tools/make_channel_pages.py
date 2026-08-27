@@ -753,7 +753,8 @@ if (location.hostname === "mugoosse.github.io") {
       <h2>Your calls stay yours.</h2>
       <p class="lead">There is no Listen server, because there are no servers.
       The recording, the transcript and the names on it are all made on your own
-      computer. No account, and none of it ever reports back.</p>
+      computer. No account, and nothing reports back beyond anonymous usage
+      statistics, on by default and turned off in Settings whenever you like.</p>
       <p>Listen is open source under the AGPL, so none of that has to be taken on
       trust. <a href="security.html">What runs where</a> sets out every
       connection it can make and how to check each one yourself, and there are

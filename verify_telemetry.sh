@@ -1,11 +1,15 @@
 #!/bin/bash
-# Asserts the telemetry consent machine from outside the process: an unset or
-# denied consent produces ZERO requests (not zero events, zero requests), the
-# managed kill switch, LISTEN_NO_TELEMETRY, and a build nobody released all
-# silence a consented install, and the beforeSend allowlist drops off-schema
-# events and smuggled properties. Run ./build.sh && ./make_app.sh first, or
-# this tests the last build (and case 6 specifically wants that build to be
-# a plain local one, without LISTEN_RELEASE_BUILD=1: that is the point of it).
+# Asserts the telemetry consent machine from outside the process: a fresh
+# install migrates itself on with no question ever asked (case 1), the same
+# one-time migration overrides even an explicit prior no (case 2), a no
+# recorded AFTER migration has already run is respected and produces ZERO
+# requests (case 3, not zero events, zero requests), the managed kill switch,
+# LISTEN_NO_TELEMETRY, and a build nobody released all silence a consented
+# install regardless of consent (4-6), and the beforeSend allowlist drops
+# off-schema events and smuggled properties (case 1). Run ./build.sh &&
+# ./make_app.sh first, or this tests the last build (and case 6 specifically
+# wants that build to be a plain local one, without LISTEN_RELEASE_BUILD=1:
+# that is the point of it).
 #
 # The app under test is a copy with its own bundle identifier, per the
 # CLAUDE.md setup-rerun recipe, so nothing here touches the real preferences.
@@ -108,34 +112,17 @@ launch_no_endpoint() {  # launch_no_endpoint <seconds>
     wait "$APP_PID" 2>/dev/null
 }
 
-# --- case 1: consent unset sends nothing ------------------------------------
-say "1. consent never asked"
+# --- case 1: a fresh install migrates itself on, no question asked ---------
+say "1. fresh install: migrates to on, no question asked, allowlist filters"
 defaults delete "$DOMAIN" >/dev/null 2>&1
-launch 10
-if [ "$(requests)" = "0" ]; then pass "zero requests before consent"
-else fail "requests arrived with consent unset:"; head -c 400 "$CAPTURE"; echo; fi
-
-# --- case 2: consent denied sends nothing ------------------------------------
-say "2. consent denied"
-defaults delete "$DOMAIN" >/dev/null 2>&1
-defaults write "$DOMAIN" telemetryConsent -bool false
-defaults write "$DOMAIN" onboarded -bool true
-defaults write "$DOMAIN" telemetryPrompted -bool true
-launch 10
-if [ "$(requests)" = "0" ]; then pass "zero requests after an explicit no"
-else fail "requests arrived with consent denied"; fi
-
-# --- case 3: consented, the allowlist filters -------------------------------
-say "3. consented, self-test events"
-defaults delete "$DOMAIN" >/dev/null 2>&1
-defaults write "$DOMAIN" telemetryConsent -bool true
-defaults write "$DOMAIN" onboarded -bool true
-defaults write "$DOMAIN" telemetryPrompted -bool true
 launch 15
 if [ "$(requests)" = "0" ]; then
-    fail "nothing arrived from a consented install (selftest flushes explicitly)"
+    fail "nothing arrived from a fresh install (migration should have turned it on)"
 else
-    pass "a consented install sends"
+    pass "a fresh install migrates itself to consented and sends"
+    if grep -q "installation_activated" "$CAPTURE"; then
+        pass "installation_activated fired on the migration"
+    else fail "installation_activated missing from the batch"; fi
     if grep -q "feature_used" "$CAPTURE"; then pass "the known-good event arrived"
     else fail "feature_used missing from the batch"; fi
     if grep -q "off_schema_event" "$CAPTURE"; then fail "an off-schema event escaped"
@@ -145,6 +132,40 @@ else
     if grep -q '\$device_name' "$CAPTURE"; then fail "\$device_name escaped"
     else pass "\$device_name never travels"; fi
 fi
+if [ "$(defaults read "$DOMAIN" telemetryConsent 2>/dev/null)" = "1" ]; then
+    pass "consent is recorded as yes after migration"
+else fail "consent was not left as yes after migration"; fi
+
+# --- case 2: the migration overrides even a prior no ------------------------
+# telemetryDefaultOnMigrated is deliberately left unset here: this is what an
+# install that said no under an earlier build looks like on the first launch
+# of a build carrying the migration, and "Everyone, including prior no's" is
+# the point of it, not just installs that were never asked.
+say "2. a build-predates-this no is overridden once, unconditionally"
+defaults delete "$DOMAIN" >/dev/null 2>&1
+defaults write "$DOMAIN" telemetryConsent -bool false
+defaults write "$DOMAIN" onboarded -bool true
+launch 10
+if [ "$(requests)" = "0" ]; then
+    fail "a prior no was not overridden by the migration"
+else pass "a prior no is overridden and the install starts sending"; fi
+if [ "$(defaults read "$DOMAIN" telemetryConsent 2>/dev/null)" = "1" ]; then
+    pass "consent reads yes after the override"
+else fail "consent was not flipped to yes"; fi
+
+# --- case 3: a no recorded AFTER migration is respected ---------------------
+# telemetryDefaultOnMigrated is set here, which is what distinguishes this
+# from case 2: the migration already ran once on this install, so this no is
+# the Settings toggle speaking, not a leftover from before the feature
+# existed, and it has to be the last word.
+say "3. an explicit no after migration sends nothing"
+defaults delete "$DOMAIN" >/dev/null 2>&1
+defaults write "$DOMAIN" telemetryDefaultOnMigrated -bool true
+defaults write "$DOMAIN" telemetryConsent -bool false
+defaults write "$DOMAIN" onboarded -bool true
+launch 10
+if [ "$(requests)" = "0" ]; then pass "zero requests after a post-migration no"
+else fail "requests arrived after an explicit no"; fi
 
 # --- case 4: the managed kill switch ----------------------------------------
 say "4. managed telemetryDisabled"
@@ -168,7 +189,6 @@ say "6. a consented local build, no override"
 defaults delete "$DOMAIN" >/dev/null 2>&1
 defaults write "$DOMAIN" telemetryConsent -bool true
 defaults write "$DOMAIN" onboarded -bool true
-defaults write "$DOMAIN" telemetryPrompted -bool true
 : > "$GATE_LOG"
 launch_no_endpoint 8
 if grep -q "TELEMETRY_SELFTEST isReleaseBuild=false blocked=true" "$GATE_LOG"; then

@@ -1,7 +1,8 @@
 # What Listen's telemetry sends, exactly
 
-Listen can send anonymous usage statistics and crash reports, and only if you
-opt in. This file is the complete dictionary: every event, every property,
+Listen sends anonymous usage statistics and crash reports by default, and
+Settings, Privacy is where you turn it off. This file is the complete
+dictionary: every event, every property,
 every bucket boundary. An event or property that is not written down here is
 not merely undocumented, it is dropped before it leaves your device, by a
 filter compiled from the same file both apps share:
@@ -23,27 +24,29 @@ everything outside the tables below, and the filter's source is public.
 - Host: `eu.i.posthog.com` (PostHog Cloud, EU region). PostHog is the
   processor; the project is configured to discard client IP addresses at
   ingestion, so location is kept only as a country.
-- Identity: a random install ID the PostHog SDK generates the moment you opt
-  in. It is not derived from anything, it is never synced between your
-  devices (a Mac and an iPhone are two installs, deliberately), it is deleted
-  when you opt out, and opting in again later creates a fresh one.
+- Identity: a random install ID the PostHog SDK generates the moment
+  telemetry turns on. It is not derived from anything, it is never synced
+  between your devices (a Mac and an iPhone are two installs, deliberately),
+  it is deleted the moment you turn telemetry off, and turning it back on
+  later creates a fresh one.
 - There are no accounts, no person profiles, no cookies, no session replay,
   no cross-site or cross-app tracking, and no advertising identifiers.
 
 ## Consent
 
-- New installs are asked at the end of setup, with nothing pre-ticked.
-- Installs that predate the question are asked once, after updating. Closing
-  the prompt counts as an answer; it never asks again.
+- Every install is on by default. A one-time, unconditional migration turns
+  it on the first time a build carrying this behaviour launches, overriding
+  even an earlier no from before that build existed. There is no question on
+  either platform any more; the migration is the whole mechanism.
 - The switch afterwards is Settings, Privacy on both platforms. Turning it
   off stops the sending, deletes anything still queued, and deletes the
-  install ID.
+  install ID. Turning it back on later creates a fresh one.
 - Organisations can force it off for managed Macs with the `telemetryDisabled`
-  key; see `docs/MANAGED.md`. A forced-off Mac never asks the question.
-- A build with no project token configured sends nothing regardless of any
-  answer.
+  key; see `docs/MANAGED.md`. A forced-off Mac never runs the migration.
+- A build with no project token configured sends nothing regardless of the
+  switch.
 - **A build made for day-to-day development, on either platform, never sends
-  to the real project, whatever consent says.** On the Mac this means a build
+  to the real project, whatever the switch says.** On the Mac this means a build
   from `./build.sh && ./make_app.sh` run by hand: only `release.sh` marks a
   build as released, by asking `make_app.sh` to stamp `ListenReleaseBuild`
   into `Info.plist`, and `Telemetry.blocked` requires that key. On iOS this
@@ -151,7 +154,7 @@ than one per retry.
 
 ### `$exception`
 A crash report: stack trace, app build, OS version. Captured by the PostHog
-SDK, only while opted in, so a crash before consent is never reported. The
+SDK, only while turned on, so a crash before that is never reported. The
 `$device_name` the SDK would attach is stripped.
 
 ## Bucket midpoints
@@ -164,15 +167,17 @@ silently; a change bumps `schema_version` and is noted here.
 
 Event data is retained in PostHog for at most 12 months. Anything published
 from it (a "users transcribed X hours" style statistic) is aggregate only,
-says it comes from opted-in installs, and uses no cohort smaller than 50
-installs.
+says it comes from installs with telemetry on, and uses no cohort smaller
+than 50 installs.
 
 ## Verifying all of this
 
 - The allowlist is code, in `Sources/ListenKit/TelemetrySchema.swift`, and
   both apps compile it in.
 - `verify_telemetry.sh` in this repository launches the built app against a
-  local listener and asserts that an unset or denied consent produces zero
-  requests, and that off-schema events and properties never arrive.
+  local listener and asserts that a fresh install migrates itself on with no
+  question asked, that the migration overrides even a prior no, that a no
+  recorded after migration produces zero requests, and that off-schema
+  events and properties never arrive.
 - `InternetAccessPolicy.plist` declares the PostHog host to firewalls such as
   Little Snitch, with what blocking it costs: nothing but the statistics.

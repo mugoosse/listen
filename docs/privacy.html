@@ -126,7 +126,7 @@ footer a { color: var(--ink-soft); }
   <a class="home" href="index.html">← Listen</a>
   <h1>Privacy</h1>
   <p class="tagline">What the maker of Listen receives about you, which is as
-  close to nothing as software can get. Last updated 26 August 2026.</p>
+  close to nothing as software can get. Last updated 27 August 2026.</p>
 </header>
 
 <section>
@@ -134,9 +134,9 @@ footer a { color: var(--ink-soft); }
   <p class="lead">Listen runs entirely on your devices. Jacaranda Labs
   operates no server for it and requires no account. Your recordings,
   transcripts, notes and voiceprints are yours, on hardware you control, and
-  we cannot see them. Nothing about you is collected unless you opt in to the
-  anonymous statistics described below, and those never contain your
-  content.</p>
+  we cannot see them. Nothing about you is collected beyond the anonymous
+  statistics described below, which are on by default, yours to turn off any
+  time, and never contain your content.</p>
   <p>If you enable iCloud sync, data moves between <em>your own</em> devices
   through <em>your own</em> Apple account, sealed with a key we never hold.
   If you point the Ask feature at a hosted AI provider, the transcripts you
@@ -147,10 +147,9 @@ footer a { color: var(--ink-soft); }
 </section>
 
 <section>
-  <h2>Opt-in usage statistics and crash reports</h2>
-  <p>Both apps can send anonymous usage statistics and crash reports, and
-  only if you say yes: nothing is sent, and no identifier even exists, until
-  you opt in during setup or in Settings, Privacy. What can be sent is counts
+  <h2>Usage statistics and crash reports, on by default</h2>
+  <p>Both apps send anonymous usage statistics and crash reports by default,
+  and Settings, Privacy is where you turn it off. What can be sent is counts
   and durations in rough buckets, which app a call was in from a fixed list,
   stable failure codes, and crash stack traces. Never recordings,
   transcripts, notes, titles, names, tags, searches, questions, file paths,
@@ -163,16 +162,16 @@ footer a { color: var(--ink-soft); }
     (<code>eu.i.posthog.com</code>), configured to discard IP addresses at
     ingestion and to keep events for at most 12 months.</li>
     <li><strong>Identity:</strong> a random per-install ID, never synced
-    between your devices, deleted when you opt out. Opting back in later
-    creates a fresh one.</li>
-    <li><strong>Opting out:</strong> the switch in Settings, Privacy. It
+    between your devices, deleted the moment you turn it off. Turning it
+    back on later creates a fresh one.</li>
+    <li><strong>Turning it off:</strong> the switch in Settings, Privacy. It
     stops the sending, deletes anything queued, and deletes the install ID.
     Organisations can force the whole feature off; see
     <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>.</li>
     <li><strong>Deletion requests:</strong> events are anonymous, so we
-    cannot look up which are yours. Opting out deletes the identifier that
-    would connect future events; for anything beyond that, open an issue and
-    we will work with PostHog's deletion tooling.</li>
+    cannot look up which are yours. Turning it off deletes the identifier
+    that would connect future events; for anything beyond that, open an
+    issue and we will work with PostHog's deletion tooling.</li>
   </ul>
 </section>
 

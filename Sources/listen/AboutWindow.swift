@@ -205,10 +205,11 @@ final class AboutWindow: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(text(
             "Free software under the AGPL 3.0. No account, and your recordings, "
             + "transcripts and notes never leave your devices. On its own Listen "
-            + "uses the network to fetch the model you chose and to ask whether a "
-            + "newer version exists; iCloud sync, a hosted Ask provider and "
-            + "anonymous usage statistics each add a connection only if you turn "
-            + "them on.",
+            + "uses the network to fetch the model you chose, to ask whether a "
+            + "newer version exists, and to send anonymous usage statistics and "
+            + "crash reports, on by default and turned off in Settings, Privacy; "
+            + "iCloud sync and a hosted Ask provider each add a connection only "
+            + "if you turn them on.",
             size: 11, color: .secondaryLabelColor))
 
         let content = NSView()

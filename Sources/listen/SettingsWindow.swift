@@ -1349,13 +1349,16 @@ final class UpdatesPane: Pane {
 
 // ---------------------------------------------------------------------------
 
-/// The opt-in telemetry switch, and everything needed to judge it: what is
-/// sent, where it goes, and the complete public dictionary one click away.
+/// The telemetry switch, on by default, and everything needed to judge it:
+/// what is sent, where it goes, and the complete public dictionary one click
+/// away.
 ///
-/// The checkbox is the same tri-state consent the setup step and the one-time
-/// prompt write. Unset draws as off, because "never asked" must not look like
-/// a yes; unticking after a yes is an explicit no, and `Telemetry` deletes
-/// the queue and the install identity on that transition.
+/// The checkbox mirrors `Telemetry.consent`, which every install is migrated
+/// to true exactly once by `migrateToDefaultOnIfNeeded()`, unconditionally,
+/// overriding even a prior no: there is no separate question anywhere else
+/// any more, only this switch. Unticking is an explicit no, and `Telemetry`
+/// deletes the queue and the install identity on that transition; re-ticking
+/// later creates a fresh one.
 final class PrivacyPane: Pane {
     private var shareBox: NSButton?
     private var channelPopup: NSPopUpButton?
@@ -1374,12 +1377,12 @@ final class PrivacyPane: Pane {
             note("Telemetry is off, set by your organisation's device profile.")
         }
 
-        note("On, Listen sends anonymous counts: how many recordings, how long "
-             + "in rough buckets, which app a call was in, and crash reports. "
-             + "They go to PostHog in the EU under a random install ID that is "
-             + "created when you opt in and deleted when you opt out. Your "
-             + "recordings, transcripts, titles, names and searches never "
-             + "leave this Mac either way.")
+        note("On by default. Listen sends anonymous counts: how many recordings, "
+             + "how long in rough buckets, which app a call was in, and crash "
+             + "reports. They go to PostHog in the EU under a random install ID "
+             + "that exists only while this is on, created the moment it turns on "
+             + "and deleted the moment it turns off. Your recordings, transcripts, "
+             + "titles, names and searches never leave this Mac either way.")
 
         let dictionary = NSButton(title: "See exactly what is shared",
                                   target: nil, action: nil)

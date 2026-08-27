@@ -133,7 +133,7 @@ footer a { color: var(--ink-soft); }
   <h2>The shape of the thing</h2>
   <p class="lead">Listen has no server and no account. There is nothing of
   yours for us to hold, lose, or be compelled to hand over: the only thing it
-  can ever send is opt-in anonymous statistics whose complete dictionary is
+  can ever send is anonymous statistics whose complete dictionary is
   <a href="https://github.com/mugoosse/listen/blob/main/TELEMETRY.md">public</a>,
   and never your content.</p>
   <p>Recording, transcription, speaker identification and search all run on
@@ -172,8 +172,8 @@ footer a { color: var(--ink-soft); }
     Nothing is set out of the box, and the local Ollama default sends nothing
     anywhere. The built-in OpenRouter connection requires a Zero Data Retention
     endpoint and denies provider data collection on every request.</li>
-    <li><strong>eu.i.posthog.com</strong>, only if you opt in to anonymous
-    usage statistics. Counts and durations in rough buckets plus crash
+    <li><strong>eu.i.posthog.com</strong>, on by default and turned off in
+    Settings, Privacy. Counts and durations in rough buckets plus crash
     reports, under a random install ID; never recordings, transcripts, titles
     or names.
     <a href="https://github.com/mugoosse/listen/blob/main/TELEMETRY.md">TELEMETRY.md</a>
@@ -273,7 +273,8 @@ footer a { color: var(--ink-soft); }
   no personal data reaches the maker of the software. Erasure is real
   deletion propagated across devices, voiceprints included; portability is
   the file layout itself, open WAV and JSON on disk; and privacy by design is
-  the architecture on this page, with everything off by default.</p>
+  the architecture on this page: every network connection is declared, and
+  every one of them is yours to turn off.</p>
 </section>
 
 <section>

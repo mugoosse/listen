@@ -24,12 +24,14 @@ without recording the question, answer, transcript, people, titles or file
 names. This also gives the app enough evidence to choose a faster route instead
 of hiding a long wait behind one generic activity message.
 
-### Anonymous usage statistics are opt-in
+### Anonymous usage statistics, on by default
 
-Listen can now report anonymous feature counts, coarse duration buckets and
-crashes when a person explicitly chooses **Share anonymous statistics**. The
-choice is asked once, is visible and reversible in Settings, and defaults to no.
-Nothing is sent while the choice is unknown or declined.
+Listen now reports anonymous feature counts, coarse duration buckets and
+crashes by default, with no question asked: a one-time migration turns it on
+for every install, including one that had earlier said no, and **Share
+anonymous usage statistics** in Settings, Privacy is the one place left to
+turn it off. Turning it off deletes anything queued and the install identity
+with it.
 
 The schema is deliberately content-free: no recordings, transcripts, notes,
 questions, answers, titles, people, file paths, model output or stable library

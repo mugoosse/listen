@@ -1,7 +1,7 @@
 import Foundation
 
-/// The complete vocabulary of Listen's opt-in telemetry, and the proof that it
-/// is complete.
+/// The complete vocabulary of Listen's telemetry, and the proof that it is
+/// complete.
 ///
 /// Every event name, every property either app may attach, and every bucket
 /// boundary lives in this one file. Both apps' send paths are filtered against
@@ -49,9 +49,9 @@ public enum TelemetrySchema {
         /// Exactly once, the moment consent first becomes yes. The install ID
         /// is created at the same moment, which is what makes "once" true.
         case installationActivated = "installation_activated"
-        /// One summary at the end of setup, not a step-by-step trail. Consent
-        /// is granted late in setup, and sending nothing before consent is a
-        /// cleaner promise than buffering milestones on the chance of a yes.
+        /// One summary at the end of setup, not a step-by-step trail: what
+        /// was chosen, never a trace of walking through the wizard to get
+        /// there.
         case setupCompleted = "setup_completed"
         /// A capture this install made landed in the library. Only the
         /// authoring install sends it; a recording arriving over sync was

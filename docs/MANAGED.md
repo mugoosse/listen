@@ -21,7 +21,7 @@ is a complete sample.
 | `dictationHistoryDisabled` | boolean | `true` stops `dictations.jsonl` being written. Dictation itself keeps working; the plaintext history file is the part a managed deployment usually does not want. |
 | `backupsDisabled` | boolean | `true` stops the daily copies under `~/Backups/Listen`. |
 | `backupsPath` | string | Moves the daily copies, for example onto an encrypted volume. |
-| `telemetryDisabled` | boolean | `true` switches the opt-in anonymous usage statistics off for good: the PostHog SDK is never constructed, the consent question is never shown, and the Privacy pane's checkbox is disabled with a note naming the profile. Telemetry is off by default anyway and never carries content (see [TELEMETRY.md](../TELEMETRY.md)); forcing it removes even the option, which is the posture a regulated deployment usually wants. |
+| `telemetryDisabled` | boolean | `true` switches the anonymous usage statistics off for good: the PostHog SDK is never constructed, and the Privacy pane's checkbox is disabled with a note naming the profile. Telemetry is on by default and never carries content (see [TELEMETRY.md](../TELEMETRY.md)); forcing it off removes even the option, which is the posture a regulated deployment usually wants. |
 
 ## Installing the sample
 

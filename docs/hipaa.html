@@ -174,9 +174,10 @@ footer a { color: var(--ink-soft); }
     automatic-logoff, provided by the OS.</li>
     <li><strong>Install the device profile.</strong>
     <a href="https://github.com/mugoosse/listen/blob/main/docs/listen-managed.mobileconfig">listen-managed.mobileconfig</a>
-    forces sync off, Ask to loopback only, the dictation history off, and the
-    opt-in anonymous usage statistics off, so the consent question is never
-    even shown.
+    forces sync off, Ask to loopback only, the dictation history off, and
+    anonymous usage statistics off. Telemetry is on by default elsewhere, so
+    this is the key that matters here: it disables the Settings, Privacy
+    toggle rather than merely pre-declining it.
     <a href="https://github.com/mugoosse/listen/blob/main/docs/MANAGED.md">MANAGED.md</a>
     documents every key and how to verify it took.</li>
     <li><strong>Backups on encrypted storage.</strong> Listen's daily copies
@@ -234,9 +235,9 @@ Is it encrypted in transit? Nothing transits by default. Optional sync is
 Vendor access to PHI?       None. No server, no account, no remote support.
 Audit logging?              activity.jsonl, ids only, listen activity to read.
 Subprocessors?              None for product data. PostHog (EU) receives
-                            opt-in anonymous usage counts that can never
-                            contain PHI; the managed profile forces even
-                            that off.</code></pre>
+                            anonymous usage counts, on by default, that can
+                            never contain PHI; the managed profile forces
+                            it off entirely.</code></pre>
 </section>
 
 <section>

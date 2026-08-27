@@ -174,14 +174,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Dictation.shared.activate()
         }
 
-        // After the window branch so a consent sheet has a window to sit on,
-        // and never on a preview launch, which returned above. The SDK is only
-        // constructed when consent is already yes; everyone else sends
-        // nothing. The prompt is the one-time question for installs that
-        // predate the setup step; its own guards decide whether this launch
-        // is one it should ask.
+        // Never on a preview launch, which returned above. Migration runs
+        // once per install and turns telemetry on; after that the SDK is
+        // constructed whenever consent is yes, which is every launch from
+        // here unless Settings, Privacy turns it back off.
+        Telemetry.migrateToDefaultOnIfNeeded()
         Telemetry.startIfConsented()
-        TelemetryPrompt.showIfNeeded()
         // Stamped last so anything above that wants "what did this app run as
         // last time" reads the previous launch's answer.
         Settings.lastSeenVersion = AppInfo.version

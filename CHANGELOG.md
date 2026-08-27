@@ -8,6 +8,36 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.22.0 (2026-08-27)
+
+### Hosted Ask is private by construction, and failures are measurable
+
+Questions sent through OpenRouter now require Zero Data Retention, explicitly
+deny provider data collection and disable provider plug-ins. Listen still sends
+only the locally selected excerpts needed to answer a question: the library and
+its encryption key never leave the device, and Listen runs no relay server for
+the conversation.
+
+The request path now records content-free timing, routing and outcome buckets,
+so a slow model, a failed request and a citation-repair loop can be told apart
+without recording the question, answer, transcript, people, titles or file
+names. This also gives the app enough evidence to choose a faster route instead
+of hiding a long wait behind one generic activity message.
+
+### Anonymous usage statistics are opt-in
+
+Listen can now report anonymous feature counts, coarse duration buckets and
+crashes when a person explicitly chooses **Share anonymous statistics**. The
+choice is asked once, is visible and reversible in Settings, and defaults to no.
+Nothing is sent while the choice is unknown or declined.
+
+The schema is deliberately content-free: no recordings, transcripts, notes,
+questions, answers, titles, people, file paths, model output or stable library
+identifier. Development builds never send telemetry either; only an app made by
+the release pipeline can pass that gate. `TELEMETRY.md` documents every event
+and property, and the Privacy and Security pages now describe the same contract
+the shipped app enforces.
+
 ## 0.21.0 (2026-08-26)
 
 ### Notes can be tagged

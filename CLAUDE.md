@@ -510,7 +510,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The toolbar's History is gone, and the menu under the card is the one that stays
 - The allowlist is an argument, because only one of three backends honoured it
 
-### `.agents/notes/release.md` (16k)
+### `.agents/notes/release.md` (20k)
 
 `make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`, `Changelog`,
 `ChangelogWindow`, `Updater`.
@@ -527,6 +527,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Sparkle needs the notes embedded, not linked
 - The notes are in the app now, and they stop at the version you have
 - `/release` is the shortcut, and it publishes nothing itself
+- CI runs a different Xcode from the machine you are on, and only one of them ships
 
 ## Conventions
 

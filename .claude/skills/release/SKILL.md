@@ -25,6 +25,8 @@ git status --short
 git rev-parse --abbrev-ref HEAD
 cat VERSION
 git log "$(git describe --tags --abbrev=0)"..HEAD --format='%s'
+gh run list --workflow=build.yml --branch=main --limit 3 \
+    --json headSha,conclusion -q '.[] | "\(.headSha[0:8]) \(.conclusion)"'
 ```
 
 Stop and say so, rather than continuing, if:
@@ -35,6 +37,16 @@ Stop and say so, rather than continuing, if:
 - The working tree holds something that should not be committed: credentials,
   a stray key file, a large binary, debug leftovers. Say what you found and
   wait.
+- **`Build` is red on the commit being released.** This step used to ask about
+  the branch, the commits and the tree and never about CI, and 0.21.0 went out
+  over three consecutive red runs because nothing here said to look. Say which
+  run and let the user decide.
+
+  A local build is not the check, and that is the whole reason this line
+  exists. CI runs whatever Xcode its runner image carries and a developer
+  machine runs whatever is installed: on 0.21.0 those were 26.3.0 and 26.6, and
+  the failure only existed on one of them. `./build.sh` passing here says
+  nothing about the build that ships from CI.
 
 ## 2. Commit and push
 

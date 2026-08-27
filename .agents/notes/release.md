@@ -73,9 +73,11 @@ answer per-user. The important half is what happens to somebody who declines:
 `SPUUpdater.m` suppresses the prompt whenever `boolNumberForKey:` is non-nil,
 so a stored `NO` means that copy never checks again and never says so, and the
 only way back is a checkbox in a settings pane nobody opens unless they already
-suspect they are stale. Unbounded staleness, invisible from here because Listen
-has no telemetry. The check is a GET of a signed feed that sends no profile
-information, so there is nothing in it that needed consent.
+suspect they are stale. Unbounded staleness, and largely still invisible from here: the update check
+itself is a GET of a signed feed that sends no profile information, so there
+was nothing in it that needed consent, and opt-in telemetry (`Telemetry.swift`)
+only ever hears from an install that said yes, which a copy stuck on a
+suppressed prompt has no more reason to have done than before.
 
 **`SUAutomaticallyUpdate` is now set, so a found update installs on the next
 quit** instead of waiting behind a dialog somebody has to notice and click.
@@ -318,3 +320,30 @@ second publisher to keep in agreement with the first.
 It must run `release.sh` in the background: the build is about ten minutes and
 Apple's notarization queue has taken over an hour, so a foreground call hits
 the ten minute tool timeout and reads as a hang.
+
+## CI runs a different Xcode from the machine you are on, and only one of them ships
+
+`build.yml` picks the newest Xcode on the runner image on purpose, so it does
+not age out with a pinned version. The consequence is that **there is no version
+agreement between CI and a developer machine, and neither is told about it.**
+Measured on 0.21.0: CI was on Xcode 26.3.0 and this Mac on 26.6.
+
+That is not a detail. `FakeSync.run` had grown to 1,775 lines in one function
+under whole-module-optimization, which 26.6 compiled without a word and 26.3
+could not: the frontend died and the driver reported `unable to open
+dependencies file (ListenKit-primary.d)`, which names nothing about the cause.
+Three runs failed identically on the same commit, so it was not transient, and
+every local clean build succeeded, so local builds could not see it.
+
+Two things follow, and both cost time before they were written down:
+
+- **A green `./build.sh` is not evidence about CI.** It was used as evidence
+  three times during that diagnosis and was worthless each time. Check
+  `xcodebuild -version` on both sides before comparing anything.
+- **The only way to test a toolchain-sensitive change is CI.** Reverting the
+  223 lines on a branch and watching it go green is what established the cause;
+  nothing local could have.
+
+`/release` step 1 now reads the last few `Build` runs for this reason. 0.21.0
+was published over three red ones because that step asked about the branch, the
+commits and the working tree, and never about CI.

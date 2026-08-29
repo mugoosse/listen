@@ -92,6 +92,19 @@ xcrun notarytool store-credentials listen-notary \
 
 App-specific passwords come from appleid.apple.com, not your Apple ID password.
 
+Which Apple ID a stored profile holds is readable back off the machine, and this
+is the only way to ask: the account is half the keychain item's id, and nothing
+but `--verbose` prints it.
+
+```sh
+xcrun notarytool history --keychain-profile listen-notary --verbose 2>&1 | head -1
+# Debug [KEYCHAIN] Found Keychain password item "listen-notary" with ID TEAMID:you@example.com.
+```
+
+The address is deliberately not written down here. This repository is public, and
+an Apple ID beside the team it administers is the addressed half of a phishing
+attempt. The machine already knows it, and the line above is how to ask.
+
 `--publish` checks this profile in preflight, before it builds, and refuses with
 the command above if nothing is stored under that name. It is checked every run
 rather than assumed: on 0.24.1 the profile that had published 0.24.0 the same

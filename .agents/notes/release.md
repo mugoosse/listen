@@ -389,13 +389,21 @@ keychain. **Why it went is not known.** The Sparkle key in the same keychain was
 read normally in the same run, so the keychain was neither locked nor
 unreadable.
 
-**The cost is a whole build, because the credential is checked after it.**
-`HAS_CREDS` is computed at the notarize step, so a missing profile is ten
-minutes of xcodebuild before anything is said, and what it says at the end is
-`REJECTED` twice with the real cause fifteen lines further up. If this happens
-again, that pair of lines is the one to read up from. A preflight check beside
-the Sparkle-key one would turn it into a five second failure and is worth
-doing.
+**It cost a whole build, because the credential was checked after it.**
+`HAS_CREDS` was computed at the notarize step, so a missing profile was ten
+minutes of xcodebuild before anything was said, and what it said at the end was
+`REJECTED` twice with the real cause fifteen lines further up. It is now asked
+for in preflight beside the Sparkle key, so it fails in about a second and
+prints the `store-credentials` line to fix it. The probe is the same
+`notarytool history` call, made once a run rather than twice: preflight settles
+`HAS_CREDS` and the notarize step only asks when preflight did not, which is a
+plain build.
+
+**The probe is a network call, so its failure is two different things.** The
+old warning said "no notarytool profile stored" whatever went wrong, which over
+a dropped connection is a wrong answer somebody would act on by re-storing a
+credential that was never missing. Both paths now keep what `notarytool` said
+and match on `No Keychain password item` to tell setup from everything else.
 
 Recovery is the one-time setup in `RELEASING.md` §2, run again, and then
 `./release.sh --publish` from the top. `--resume` is no help: nothing was

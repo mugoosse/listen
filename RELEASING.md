@@ -92,6 +92,12 @@ xcrun notarytool store-credentials listen-notary \
 
 App-specific passwords come from appleid.apple.com, not your Apple ID password.
 
+`--publish` checks this profile in preflight, before it builds, and refuses with
+the command above if nothing is stored under that name. It is checked every run
+rather than assumed: on 0.24.1 the profile that had published 0.24.0 the same
+afternoon was gone from the login keychain by the evening, and before the check
+existed that cost a ten minute build to discover.
+
 ### 3. A Sparkle keypair
 
 **Done.** The public half is in `sparkle.conf` and ends up in `Info.plist` as

@@ -212,6 +212,52 @@ if [ "$PUBLISH" -eq 1 ]; then
         echo "       selected produces exactly this, and it looks fine." >&2
         exit 1
     fi
+
+    # The notarization credentials, asked for here rather than met after the
+    # build.
+    #
+    # Without them the run still builds and still packages, and --publish then
+    # refuses at the Gatekeeper check: ten minutes of xcodebuild spent to be
+    # told "REJECTED" twice, with the cause fifteen lines further up the log.
+    # Measured on 0.24.1, whose profile had published 0.24.0 the same afternoon
+    # and was gone from the login keychain by the evening. A credential is
+    # machine state, so it is asked about on every run rather than inferred
+    # from the last one having worked.
+    HAS_DEVID=$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -c "Developer ID Application" || true)
+    if [ "$HAS_DEVID" -eq 0 ]; then
+        echo "error: no Developer ID Application certificate in this keychain," >&2
+        echo "       so nothing could be notarized and Gatekeeper would block" >&2
+        echo "       the result. See RELEASING.md, signing." >&2
+        exit 1
+    fi
+    # `notarytool history` is the cheapest call that proves the stored profile
+    # both exists and still authenticates, and it is the one the notarize step
+    # already made on its own account. It talks to Apple, so its failure is two
+    # different things and the message has to say which: a missing item is
+    # setup, and anything else is usually the network or an app-specific
+    # password that has been revoked.
+    if ! NOTARY_ERROR=$(xcrun notarytool history \
+            --keychain-profile "$KEYCHAIN_PROFILE" 2>&1); then
+        echo "error: notarytool profile '$KEYCHAIN_PROFILE' cannot be used, so" >&2
+        echo "       nothing could be notarized and Gatekeeper would block the" >&2
+        echo "       result." >&2
+        case "$NOTARY_ERROR" in
+            *"No Keychain password item"*)
+                echo "       Nothing is stored under that name. Store it once:" >&2
+                echo "         xcrun notarytool store-credentials $KEYCHAIN_PROFILE \\" >&2
+                echo "             --apple-id <apple id> --team-id <team id>" >&2
+                echo "       Leave --password off and it prompts for it. See" >&2
+                echo "       RELEASING.md, notarytool credentials." >&2
+                ;;
+            *)
+                echo "       notarytool said:" >&2
+                printf '%s\n' "$NOTARY_ERROR" | sed 's/^/         /' >&2
+                ;;
+        esac
+        exit 1
+    fi
+    HAS_CREDS=1
 fi
 
 # --- build -----------------------------------------------------------------
@@ -303,11 +349,17 @@ fi
 # Apple staples the ticket to the .app, so notarize before packaging and the
 # ticket travels inside both the zip and the dmg.
 
-HAS_DEVID=$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep -c "Developer ID Application" || true)
-HAS_CREDS=0
-xcrun notarytool history --keychain-profile "$KEYCHAIN_PROFILE" >/dev/null 2>&1 \
-    && HAS_CREDS=1
+# Settled in preflight for a --publish run, where a missing credential is an
+# error rather than a warning. A plain build is allowed to produce unnotarized
+# artifacts, so it is the only one that still asks here: two probes a run would
+# be two calls to Apple to establish one fact.
+if [ -z "${HAS_CREDS:-}" ]; then
+    HAS_DEVID=$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -c "Developer ID Application" || true)
+    HAS_CREDS=0
+    NOTARY_ERROR=$(xcrun notarytool history \
+        --keychain-profile "$KEYCHAIN_PROFILE" 2>&1) && HAS_CREDS=1
+fi
 
 # Submit a path and print the submission id. Submit and wait are separate
 # calls: `submit --wait` polls over the network for as long as Apple's queue
@@ -385,8 +437,19 @@ else
     echo "warning: skipping notarization." >&2
     [ "$HAS_DEVID" -eq 0 ] && \
         echo "         no Developer ID Application certificate found." >&2
-    [ "$HAS_CREDS" -eq 0 ] && \
-        echo "         no notarytool profile '$KEYCHAIN_PROFILE' stored." >&2
+    # Which of the two it was, because "no profile stored" over what is really
+    # a dropped network is a wrong answer somebody will act on.
+    if [ "$HAS_CREDS" -eq 0 ]; then
+        case "${NOTARY_ERROR:-}" in
+            *"No Keychain password item"*)
+                echo "         no notarytool profile '$KEYCHAIN_PROFILE' stored." >&2
+                ;;
+            *)
+                echo "         notarytool profile '$KEYCHAIN_PROFILE' did not answer:" >&2
+                printf '%s\n' "${NOTARY_ERROR:-}" | sed 's/^/           /' >&2
+                ;;
+        esac
+    fi
     echo "         Users will have to bypass Gatekeeper on first launch." >&2
 fi
 

@@ -294,6 +294,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The first run has no close button, and the re-run keeps one
 - The record capsule asked for 36 points on a toolbar that had 28 to give
 - The Ask settings pane opened blank twice a day, and the picker sat empty
+- Discard Recording was targeted at the window, and red hid that it was dead
 
 ### `.agents/notes/appkit.md` (35k)
 

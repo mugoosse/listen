@@ -1641,6 +1641,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
     }
 
+    /// Throw away the recording being made.
+    ///
+    /// A forwarder rather than the delegate's own selector, because everything
+    /// `menuNeedsUpdate` adds is targeted at this object and this verb belongs
+    /// to `App`: capture is not owned here. Targeted at a window that does not
+    /// respond to it, AppKit disabled the item, and the red `attributedTitle`
+    /// went on drawing it as though it were live, because an attributed title
+    /// keeps its colour when an item is greyed. So the one item the menu offers
+    /// mid-call looked available and did nothing at all when pressed.
+    @objc private func discardRecordingSelected() {
+        NSApp.sendAction(#selector(App.discardRecordingFromUI), to: nil, from: self)
+    }
+
     /// Called by the delegate whenever capture starts or stops.
     func recordingChanged() {
         updateRecordFAB()
@@ -1766,6 +1779,11 @@ extension LibraryWindow: NSMenuItemValidation {
         // transcript to re-run and every reason to name a model. The item is
         // built nowhere else, so this is belt and braces.
         case #selector(chooseModelSelected(_:)):
+            return selected?.isLive == true
+        // The other half of the same state, and the same belt and braces. It is
+        // built only under `isLive`, and it is the item that has to be right:
+        // red, destructive, and the only thing this menu offers during a call.
+        case #selector(discardRecordingSelected):
             return selected?.isLive == true
         case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)),
              #selector(toggleRoomSelected):
@@ -3175,7 +3193,7 @@ extension LibraryWindow: NSMenuDelegate {
                 "character.bubble").submenu = modelSubmenu(for: recording)
             menu.addItem(.separator())
             let discard = add(menu, "Discard Recording",
-                              #selector(App.discardRecordingFromUI), "trash")
+                              #selector(discardRecordingSelected), "trash")
             discard.attributedTitle = NSAttributedString(
                 string: "Discard Recording", attributes: [.foregroundColor: NSColor.systemRed])
             return

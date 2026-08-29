@@ -1856,3 +1856,33 @@ sweep land over them; the wipe-and-look state survives only for a genuinely
 cold cache, where it gained a spinner and a pre-filled "Automatic" so an
 empty popup never reads as a broken one. Asserted in `verify_ask_states.sh`
 against the warm-cache open.
+
+## Discard Recording was targeted at the window, and red hid that it was dead
+
+The toolbar's actions menu is built by `menuNeedsUpdate` through one `add(...)`
+helper, and that helper sets `item.target = self`. The one item offered during a
+call was written as `#selector(App.discardRecordingFromUI)`: the selector belongs
+to the app delegate, and `LibraryWindow` does not answer it. The menu leaves
+`autoenablesItems` on, so AppKit validated the item against a target that does
+not respond to it and disabled it.
+
+A disabled item draws greyed, **except that this one carries an
+`attributedTitle` in `systemRed`** because it is destructive, and an attributed
+string's own foreground colour wins over the greying, the same rule `Hover`
+records for buttons in `appkit.md`. So the item looked exactly as live as it
+would have if it worked, opened its menu normally, and did nothing at all when
+pressed. Found by a user mid-meeting who wanted to throw a recording away, not
+by anything here.
+
+`discardRecordingSelected` on `LibraryWindow` forwards with
+`NSApp.sendAction(#selector(App.discardRecordingFromUI), to: nil, from: self)`,
+which is how the record capsule already reaches `startRecordingFromUI` and
+`stopRecordingFromUI` from this same class, and it is validated on
+`selected?.isLive` beside `chooseModelSelected` so it cannot come back enabled
+over a finished recording. The other two `#selector(App.…)` uses in the app were
+checked at the same time and are both nil-target `sendAction` calls already.
+
+**The general shape is worth more than the fix**: an item with an
+`attributedTitle` cannot look disabled, so it is the one kind of menu item whose
+target and validation have to be read rather than trusted to the screen. Every
+red item in this app is in that class.

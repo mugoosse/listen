@@ -10,8 +10,8 @@ headings inside an entry can be anything that is not one of those.
 
 ## 0.24.0 (2026-08-29)
 
-One thing: the model that will read a meeting can now be chosen while the
-meeting is still running.
+Two things: the model that will read a meeting can now be chosen while the
+meeting is still running, and a person's card says what it can be asked.
 
 ### Say a call is not in English before it is transcribed
 
@@ -40,6 +40,22 @@ transcribed once, by v3. Parakeet v3 works out the language as it goes, so a
 mostly-Dutch call can still come out with the occasional line decoded as
 English; that is the model, and it is still the difference between a transcript
 with mistakes in it and one that was invented from end to end.
+
+### Four questions to ask about a person
+
+The composer on a person's card opened as an empty field. The library screen
+and a meeting page each offer four starter chips there; a person offered none,
+on the argument that a card with somebody's name at the top has the question in
+it already. It does not: knowing who a pane is about is not knowing what it can
+be asked.
+
+A person's card now offers Catch me up, Open items, Next call and Their views.
+They are the four questions only a person makes answerable: what you have
+talked about lately, what is still outstanding in either direction, what to
+raise before you speak to them again, and what they think about the subjects
+that keep coming back. Each one names them in the question and asks for the
+meeting behind every claim, so an answer can be traced to the call it came
+from.
 
 ### Smaller corrections
 

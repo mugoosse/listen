@@ -8,6 +8,46 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.24.0 (2026-08-29)
+
+One thing: the model that will read a meeting can now be chosen while the
+meeting is still running.
+
+### Say a call is not in English before it is transcribed
+
+Parakeet v2 is the default and it only reads English. Handed a call in another
+language it does not fail or warn: it writes fluent English sentences that
+nobody said, and the first sign anything went wrong is somebody reading the
+transcript. The only control over that was Transcribe Again, which comes after
+an hour has already been read once and is paid for by reading it a second time.
+
+The recording screen now names the model on the row that names your
+microphone, at the opposite end: "Parakeet v2 · English only". Click it at any
+point during the call and pick "Parakeet v3 · 25 languages", and that is the
+model Listen uses when you press Stop. The coverage is in the button rather
+than only in the menu, because the fact worth acting on is the second half.
+The same list is under Transcribe With in the ⋯ menu while a recording runs,
+which is the only item that menu offers mid-call besides Discard.
+
+Nothing is transcribed or downloaded until the meeting ends, so it costs
+nothing to change your mind, and the choice stays with that recording the way
+Transcribe Again's does: a later re-run uses it too. If the model you pick is
+not on your disk, the menu says what it will cost to fetch, and the fetch
+happens when the meeting is over rather than during it.
+
+Checked on a 41 minute Telegram call held in Dutch: chosen while it ran,
+transcribed once, by v3. Parakeet v3 works out the language as it goes, so a
+mostly-Dutch call can still come out with the occasional line decoded as
+English; that is the model, and it is still the difference between a transcript
+with mistakes in it and one that was invented from end to end.
+
+### Smaller corrections
+
+- Transcribe Again in the File menu could be pressed while a recording was
+  still being made, which queued a job over a track the recorder still had
+  open. It is disabled until the recording stops. The ⋯ menu and the sidebar's
+  right-click menu never offered it mid-call.
+
 ## 0.23.0 (2026-08-29)
 
 This release is what the first install on a stranger's Mac taught. Most of it

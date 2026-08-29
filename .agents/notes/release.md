@@ -347,3 +347,19 @@ Two things follow, and both cost time before they were written down:
 `/release` step 1 now reads the last few `Build` runs for this reason. 0.21.0
 was published over three red ones because that step asked about the branch, the
 commits and the working tree, and never about CI.
+
+## Double-clicking the icon in the DMG window launches the image's copy
+
+Drag to Applications, then double-click the icon still in the DMG window: one
+of the most natural first-run gestures there is, and it runs the read-only
+copy on the mounted image. Sparkle cannot update it, the login item registers
+a path that vanishes on eject, and Gatekeeper may run it translocated
+besides. Nothing said any of it; the first outside install did exactly this.
+`InstallGuard` runs at launch **before** `LoginItem.applyDefaultIfNeeded` (so
+the login item never records the image's path), notices `/Volumes/…`,
+`/AppTranslocation/` or a read-only volume, and offers the Applications copy,
+copying one there first if none exists and stripping quarantine best-effort,
+LetsMove's shape. "Not now" always continues: the diagnosis is heuristic and
+must not be able to lock somebody out of their own recorder.
+`verify_install_guard.sh` builds a scratch UDZO, launches from the mount, and
+asserts the alert and the decline path against the real thing.

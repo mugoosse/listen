@@ -72,11 +72,22 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// same reason.
     func restart() {
         step = .welcome
-        show()
+        // Closable, unlike the first run: somebody reviewing setup from
+        // Settings must be able to leave without walking every step.
+        show(closable: true)
     }
 
-    func show() {
+    /// `closable` decides whether the window has a close button at all.
+    ///
+    /// On a first run it does not. Every step already has its own way past
+    /// (Skip, Not now, Later), so nothing blocks; what the close button added
+    /// was a way to *vanish* the flow mid-download, which the first outside
+    /// install took, and then met the library with no model chosen and no idea
+    /// the wizard had counted that as finishing. The flow is quick and
+    /// skippable; it is just no longer optional to walk.
+    func show(closable: Bool = false) {
         if window == nil { build() }
+        window?.styleMask = closable ? [.titled, .closable] : [.titled]
         // Restarted here, not only in `build`. Both `finish` and
         // `windowWillClose` invalidate it, and `build` runs once for the life
         // of the process, so running setup a second time from Settings would
@@ -790,7 +801,9 @@ final class Onboarding: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         // Closing the window counts as finishing. Leaving `onboarded` false
         // would show setup again on the next launch, which reads as the app
-        // having forgotten.
+        // having forgotten. A first run has no close button any more (see
+        // `show(closable:)`), so this now fires for the Settings re-run and
+        // for quitting mid-setup, and both of those do mean "stop asking".
         Settings.onboarded = true
         stopPolling()
         Dictation.shared.activate()

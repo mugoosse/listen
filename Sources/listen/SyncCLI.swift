@@ -104,6 +104,16 @@ enum SyncCLI {
                                  ? "from iCloud Keychain" : "none yet"))
         print("environment: \(CloudAccount.environment)")
         print("container:   \(CloudAccount.containerID)")
+        // What the last pass actually said, because this command is what a
+        // stalled install gets asked to run and the app's in-memory report
+        // dies with the app. Written by `CloudSyncHost` at the end of every
+        // pass; absent on an install that has never completed one.
+        if let pass = EngineState(library: library).lastPass {
+            let when = DateFormatter.localizedString(from: pass.when,
+                                                     dateStyle: .short,
+                                                     timeStyle: .short)
+            print("last pass:   \(when): \(pass.error ?? pass.summary)")
+        }
         let semaphore = DispatchSemaphore(value: 0)
         var line = "unknown"
         CloudAccount.status { line = $0; semaphore.signal() }

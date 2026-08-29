@@ -1817,3 +1817,42 @@ insets and nothing else, so it is `transcriptSides` now and derived from the one
 place the insets are written. Adding a margin to a stack view does not narrow
 what it arranges: `NSStackView` lays its arranged views out inside `edgeInsets`
 but does not size them.
+
+## The first run has no close button, and the re-run keeps one
+
+Onboarding was `.closable` and `windowWillClose` counted as finishing, so
+closing at the model step marked the install onboarded and a Dock click
+raised the library: the first outside install did that mid-download and met
+the app with no model chosen and no idea the wizard had counted it as done.
+Every step already has its own way past (Skip, Not now, Later; the model
+download continues in the background), so the close button's only real power
+was vanishing the flow half-way. `show(closable:)` now drops it on a first
+run and keeps it for the Settings re-run, where someone reviewing setup must
+be able to leave without walking every step. `verify_onboarding.sh` walks the
+whole flow on the uitest copy pressing only safe buttons (its `advance`
+prefers Later/Skip/Not now and never presses anything that grants, opens
+System Settings or turns sync on, because what each step shows depends on
+what the machine has already granted).
+
+## The record capsule asked for 36 points on a toolbar that had 28 to give
+
+`RecordButton` is 36 points tall inside the macOS 26 glass toolbar. Pre-26
+unified toolbars give a custom view item less, so the same number drew a
+squeezed pill on a Sequoia Mac (seen on the first outside install, photo
+against a Tahoe screenshot of the same window). `M.height` is now an
+availability split, 36 on 26+ and 28 before, radius following. The 28 is
+inferred from the standard control height, not yet measured on hardware: no
+pre-26 Mac was reachable (mb-flame is on 26.6), so the first session that has
+one should read the drawn height and write the measurement into the constant's
+comment.
+
+## The Ask settings pane opened blank twice a day, and the picker sat empty
+
+`AgentPane` wiped its list and showed a bare "Looking…" on every open, with
+the "Which one to use" popup empty until detection finished: a second or two
+of the pane reading as broken, every time, for facts the process already
+held. It now seeds rows and picker from `AgentCLI.cached` and lets the fresh
+sweep land over them; the wipe-and-look state survives only for a genuinely
+cold cache, where it gained a spinner and a pre-filled "Automatic" so an
+empty popup never reads as a broken one. Asserted in `verify_ask_states.sh`
+against the warm-cache open.

@@ -1561,6 +1561,102 @@ public enum FakeSync {
                   "the tombstone list reached the phone")
         ok("the voiceprint zone, tombstones included, never reaches the phone")
 
+        out += try await activitySeam(root: root)
+
+        return out
+    }
+
+    /// What a pass says about a recording while it works, which is what every
+    /// sidebar row and recording page draws.
+    ///
+    /// The suite asserted reports and never the activity stream, and that gap
+    /// shipped: the report said nothing wrong while "Syncing transcript" sat
+    /// on a non-syncing Mac's rows for ever (the emitter was the app's queue,
+    /// but the vocabulary and the lifecycle are this module's). These are the
+    /// two claims the stream makes: a pushed transcript ends `.ready`, and a
+    /// refused save says `.retrying` with a sentence a person can act on.
+    ///
+    /// Its own library, store and key, so the assertions cannot depend on the
+    /// order of the seams above. Split out of `run` for the compiler-size
+    /// reason `noteTagSeams` records.
+    private static func activitySeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        // The callbacks are synchronous and cross-actor, so the recorder is a
+        // locked box rather than an actor: an actor would make `add` async and
+        // the core's `activity` slot is not.
+        final class Seen: @unchecked Sendable {
+            private let lock = NSLock()
+            private var log: [(stage: CloudActivity.Stage, detail: String?)] = []
+            func add(_ activity: CloudActivity) {
+                lock.lock(); defer { lock.unlock() }
+                log.append((activity.stage, activity.detail))
+            }
+            var stages: [CloudActivity.Stage] {
+                lock.lock(); defer { lock.unlock() }
+                return log.map(\.stage)
+            }
+            var reasons: [String] {
+                lock.lock(); defer { lock.unlock() }
+                return log.compactMap(\.detail)
+            }
+        }
+
+        let lib = try scratchLibrary(root.appendingPathComponent("activity"))
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let seen = Seen()
+        let core = CloudSyncCore(library: lib, state: EngineState(library: lib),
+                                 store: store, key: key, policy: .mac,
+                                 device: "mac-activity", ingests: true,
+                                 activity: { seen.add($0) })
+
+        func plant(_ id: String) throws {
+            try seed(lib, id: id, metadata: """
+                {"id":"\(id)","title":"Activity","source":"mac","state":"done",\
+                "duration":60,"recorded_at":"2026-08-29T09:00:00Z"}
+                """,
+                transcript: #"{"segments":[],"duration":60,"model":"parakeet-v3"}"#)
+        }
+
+        // A transcript that pushes cleanly says it is syncing and then that it
+        // is done. `.ready` is what lets the row go back to being a row.
+        try plant("2026-08-29-090000-ACT1")
+        var clean = CloudReport()
+        await core.push(into: &clean)
+        try check(clean.errors.isEmpty, "the clean push failed: \(clean.errors)")
+        let first = seen.stages
+        guard let started = first.firstIndex(of: .sendingTranscript) else {
+            throw Failure(description: "a pushed transcript never said it was syncing")
+        }
+        try check(first[started...].contains(.ready),
+                  "a pushed transcript never came back to ready")
+
+        // A refused save is the loud kind of failure, and it has to reach the
+        // screen with a sentence attached: `.retrying`, with a non-empty
+        // detail, is what the row's tool tip and the page's status line show.
+        try plant("2026-08-29-091000-ACT2")
+        await store.setFailNextSave(true)
+        var refused = CloudReport()
+        await core.push(into: &refused)
+        try check(!refused.errors.isEmpty, "a refused save vanished from the report")
+        try check(seen.stages.contains(.retrying),
+                  "a refused save never reported retrying")
+        try check(seen.reasons.contains { $0.contains("refused this save") },
+                  "the retry carried no reason a person could read")
+
+        // And the failure leaves no stamp, so the very next pass heals it.
+        var healed = CloudReport()
+        await core.push(into: &healed)
+        try check(healed.errors.isEmpty, "the retry pass failed: \(healed.errors)")
+        try check(seen.stages.last == .ready,
+                  "the healed recording did not come back to ready")
+        ok("the activity stream says syncing, then ready; a refusal says why and heals")
+
         return out
     }
 

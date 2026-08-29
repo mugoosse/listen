@@ -1457,12 +1457,32 @@ final class DevelopersPane: Pane {
              + "retitle a meeting or delete one. It also reads your transcripts, "
              + "so if the agent runs in the cloud, that text leaves this Mac.")
 
+        // The full text-view-in-a-scroll-view plumbing, same shape as
+        // `ChangelogWindow`. A bare `NSTextView()` handed to a scroll view
+        // rendered as an empty white box on an older macOS (measured on the
+        // first outside install): with no frame, no autoresizing and no
+        // container tracking, the document view never takes the clip view's
+        // width there, and the text is drawn into zero space. The explicit
+        // `textColor` is for the same trip: a text view built this way is not
+        // guaranteed the semantic default on every macOS this app runs on.
         let field = NSTextView()
+        field.frame = NSRect(x: 0, y: 0, width: 400, height: 120)
         field.string = MCPConfig.json
         field.isEditable = false
+        field.isSelectable = true
         field.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        field.textColor = .textColor
         field.drawsBackground = true
         field.backgroundColor = .textBackgroundColor
+        field.minSize = NSSize(width: 0, height: 0)
+        field.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                               height: CGFloat.greatestFiniteMagnitude)
+        field.isVerticallyResizable = true
+        field.isHorizontallyResizable = false
+        field.autoresizingMask = [.width]
+        field.textContainer?.widthTracksTextView = true
+        field.textContainer?.containerSize = NSSize(
+            width: 0, height: CGFloat.greatestFiniteMagnitude)
         let box = NSScrollView()
         box.documentView = field
         box.hasVerticalScroller = true
@@ -1474,6 +1494,65 @@ final class DevelopersPane: Pane {
         button("Copy configuration") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(MCPConfig.json, forType: .string)
+        }
+
+        // The Claude app, connected by a button rather than by hand. The JSON
+        // above stays as the floor for every other MCP client; this is the one
+        // client common enough to deserve its own verb, and the person most
+        // likely to own it is the person least likely to paste JSON. See
+        // `ClaudeDesktop` for the failure modes the button owns.
+        separator()
+        heading("Claude app")
+        desktopLabel = note("")
+        let add = button("Add to Claude Desktop") { [weak self] in
+            self?.connectDesktop()
+        }
+        desktopButton = add
+        let restart = button("Restart Claude Desktop") { [weak self] in
+            self?.restartDesktop()
+        }
+        restart.isHidden = true
+        desktopRestart = restart
+    }
+
+    private var desktopLabel: NSTextField?
+    private var desktopButton: NSButton?
+    private var desktopRestart: NSButton?
+
+    private func connectDesktop() {
+        do {
+            let outcome = try ClaudeDesktop.connect()
+            // The entry is only worth having if the binary it names serves.
+            // Checked after the write, off the main thread, because it spawns
+            // a process; the label updates when it answers.
+            desktopLabel?.stringValue = outcome.message
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let answers = ClaudeDesktop.serves()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if !answers {
+                        self.desktopLabel?.stringValue = outcome.message
+                            + " One check failed though: `listen mcp` did not "
+                            + "answer from \(MCPConfig.command). Reinstall the "
+                            + "CLI above, then press the button again."
+                    }
+                    self.refresh()
+                }
+            }
+        } catch {
+            desktopLabel?.stringValue = error.localizedDescription
+        }
+        refresh()
+    }
+
+    private func restartDesktop() {
+        desktopRestart?.isEnabled = false
+        ClaudeDesktop.restart { [weak self] opened in
+            self?.desktopRestart?.isEnabled = true
+            self?.desktopLabel?.stringValue = opened
+                ? "The Claude app is starting with Listen connected."
+                : "The Claude app did not restart; quit and reopen it yourself "
+                    + "when convenient. The connection is already written."
         }
     }
 
@@ -1501,6 +1580,37 @@ final class DevelopersPane: Pane {
         // pointing at another copy is to repoint it here. Removing stays one
         // press away: it becomes `.installed` and the button says Remove.
         case .stale:        installButton?.title = "Reinstall"
+        }
+
+        // The Claude app block. Restart is only offered while the app is
+        // running and the connection is written, because that is the one
+        // moment a restart does anything.
+        let desktop = ClaudeDesktop.state()
+        let connected = desktop == .connected
+        desktopButton?.isHidden = desktop == .notInstalled
+        desktopButton?.isEnabled = !connected
+        desktopRestart?.isHidden = !(connected && ClaudeDesktop.running != nil)
+        switch desktop {
+        case .notInstalled:
+            desktopLabel?.stringValue = "The Claude app is not installed, so "
+                + "there is nothing to connect. The block above works for any "
+                + "other MCP client."
+        case .notConnected:
+            desktopLabel?.stringValue = "The Claude app is installed. One press "
+                + "writes the block above into its configuration, with a backup "
+                + "of the file beside it, and then Claude can read your library "
+                + "through `listen mcp`: same tools, same limits."
+        case .connected:
+            desktopLabel?.stringValue = "Connected. The Claude app reads this "
+                + "at launch, so restart it if Listen is not listed there yet."
+        case .connectedElsewhere(let command):
+            desktopLabel?.stringValue = "Connected, but to \(command), which is "
+                + "not where Listen is now. One press repoints it."
+            desktopButton?.isEnabled = true
+        case .brokenConfig(let why):
+            desktopLabel?.stringValue = "The Claude app's configuration file "
+                + "could not be read (\(why)), and Listen will not overwrite a "
+                + "file it cannot parse. Fix or delete it, then press the button."
         }
     }
 

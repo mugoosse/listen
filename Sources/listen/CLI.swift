@@ -165,6 +165,12 @@ enum CLI {
         case "edit":
             edit(rest)
         case "mcp":
+            // A subcommand, not a flag: `connect-desktop` edits a config file
+            // and exits, while everything else under `mcp` is the stdio
+            // server, which owns stdout for the life of the process.
+            if rest.first == "connect-desktop" {
+                ClaudeDesktop.runCLI(Array(rest.dropFirst()))
+            }
             MCP.serve(rest)
         case "ask":
             ask(rest)
@@ -1551,6 +1557,9 @@ enum CLI {
       mcp [--tools a,b,c]        stdio MCP server. Notes and tags are the only
                                  things an agent can write. --tools serves only
                                  those, and refuses the rest by name.
+      mcp connect-desktop        add Listen to the Claude app's MCP
+                                 configuration, backing the file up first.
+                                 --dry-run says what it would write.
       changelog [<version>]      what changed, from the notes that shipped in
                                  this copy. --list for the versions alone.
       activity [--limit N]       what has touched the library: tool calls,

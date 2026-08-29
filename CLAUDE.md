@@ -290,6 +290,9 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The transcript stack is unflipped, and its frames are zero until layout runs
 - Open at the top is the clip view's origin, not a point in the stack
 - A reload that does not scroll still loses the reader's place
+- The first run has no close button, and the re-run keeps one
+- The record capsule asked for 36 points on a toolbar that had 28 to give
+- The Ask settings pane opened blank twice a day, and the picker sat empty
 
 ### `.agents/notes/appkit.md` (35k)
 
@@ -325,6 +328,7 @@ this app, so read them before building any new window, menu or popover.
 - Scroller insets are added to content insets, not instead of them
 - A shot has to paint its own background, and drawing the cache over one wipes it
 - Liquid Glass photographs as a white block, and nothing inside it draws
+- A bare `NSTextView()` handed to a scroll view can draw nothing at all
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -369,6 +373,7 @@ that repo is being archived.**
 - A person filter has to match the name nobody stored
 - A bare date is a day, and a day has two ends
 - `listen mcp --tools` is what makes the allowlist true (see `agent.md`)
+- `listen mcp connect-desktop` edits the Claude app's config, and refuses broken JSON
 
 ### `.agents/notes/cloud-sync.md` (48k)
 
@@ -398,6 +403,9 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - Two paths delete a note on somebody else's say-so, and only one trashed it
 - An editor that rebuilds a note drops the field nobody told it about
 - A pass never re-offers an unchanged record, so `listen sync refetch` exists
+- "Syncing transcript" outlived sync being off at all
+- A retry that never says why is a stall nobody can fix
+- Which environment a build reaches is a property of how it was installed
 
 ### `.agents/notes/agent.md` (148k)
 
@@ -509,6 +517,11 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - An empty page needs the greeting the home page has
 - The toolbar's History is gone, and the menu under the card is the one that stays
 - The allowlist is an argument, because only one of three backends honoured it
+- "Install with npm" under an installed CLI reads as "not installed"
+- An unknown sign-in state was trusted for the life of the process
+- Ask setup is a choice, and the settings pane only ever stated facts
+- The provider migration reads the Keychain, and an ad-hoc copy hangs on it
+- The wizard's save path is not scripted, and the reason is the Keychain service
 
 ### `.agents/notes/release.md` (20k)
 
@@ -528,6 +541,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The notes are in the app now, and they stop at the version you have
 - `/release` is the shortcut, and it publishes nothing itself
 - CI runs a different Xcode from the machine you are on, and only one of them ships
+- Double-clicking the icon in the DMG window launches the image's copy
 
 ## Conventions
 
@@ -567,7 +581,27 @@ One script stands in for one, over the app built in the working directory:
                         # hand or by an older build, the shared vocabulary in
                         # both directions, no inheritance, and `listen mcp
                         # --tools` refusing a tool by name
+./verify_desktop_connect.sh  # `listen mcp connect-desktop` over scratch
+                        # configs: merge, backup, idempotence, refusals
+./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying
+                        # "Syncing transcript"; sync status names its
+                        # environment (AX-driven, display awake)
+./verify_onboarding.sh  # first run not dismissable, every step passable
+                        # without granting anything, Settings re-run closable
+                        # (uitest copy; expect the Keychain prompt, Deny it)
+./verify_ask_states.sh  # the Ask surfaces against stub CLIs: signed-out
+                        # wording, the wizard, the plain no-agent card, and a
+                        # failed run correcting the chip (uitest copy)
+./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
+                        # declining continues
 ```
+
+The AX-driven ones share `tools/axprobe.swift`, compiled on demand into
+`.xcbuild/tools/axprobe`: texts, press, focus, settext, selectrow, hasclose,
+all through `AXUIElementCreateApplication(pid)` per the rule above. It exits
+specially when the terminal lacks Accessibility permission and when the tree
+comes back empty, because a sleeping display empties every window's subtree
+and a script grepping for absence would pass on nothing.
 
 `listen sync --fake` is the other half of the note-tag story and runs offline in
 about a second. It holds the pre-change `Note.version` digest as a hard-coded

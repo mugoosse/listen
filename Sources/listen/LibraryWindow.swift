@@ -19,6 +19,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     static let shared = LibraryWindow()
 
     private var window: NSWindow?
+    /// The window, read-only, for the one caller that presents a sheet over
+    /// it (`AskSetupWizard`). Everything else about the window stays this
+    /// type's business.
+    var sheetHost: NSWindow? { window }
     private var split: LibrarySplitViewController?
     private var sidebarItem: NSSplitViewItem?
     private let sidebar = SidebarViewController()

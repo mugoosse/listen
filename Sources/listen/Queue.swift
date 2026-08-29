@@ -295,8 +295,14 @@ final class Queue {
         switch result {
         case .success(let transcript):
             finished.markTranscribed(transcript)
+            // "Syncing transcript" only when a sync pass is actually going to
+            // run and clear it. On a Mac that never enabled sync no pass ever
+            // does (`syncSoon` refuses), so this stage stayed on every row and
+            // every page for ever, which is how the first outside install read
+            // a finished recording as stuck. See `.agents/notes/cloud-sync.md`.
             CloudSyncHost.shared.setActivity(CloudActivity(
-                recordingID: id, stage: .sendingTranscript))
+                recordingID: id,
+                stage: Settings.cloudSyncApplies ? .sendingTranscript : .ready))
         case .failure(let error):
             finished.metadata.state = Metadata.State.failed.rawValue
             CloudSyncHost.shared.setActivity(CloudActivity(

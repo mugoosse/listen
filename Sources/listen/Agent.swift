@@ -140,6 +140,27 @@ enum AgentBackend: String, CaseIterable {
         }
     }
 
+    /// What to tell somebody who has it and never signed in.
+    ///
+    /// Separate from `installHint`, and the separation was paid for: the
+    /// settings row used `installHint` for this state, and the first outside
+    /// install read "Install with `npm install …`" under an installed CLI as
+    /// "not installed". The Claude app puts `claude` in `~/.local/bin` on
+    /// machines whose owner never chose a CLI, so installed-and-never-signed-in
+    /// is the normal state out there, not a developer's edge case.
+    var signInHint: String? {
+        switch self {
+        case .claude:
+            return "Installed. Run `claude auth login` in a terminal and sign in, "
+                 + "then check again."
+        case .codex:
+            return "Installed. Run `codex login` in a terminal and sign in, "
+                 + "then check again."
+        case .endpoint:
+            return nil
+        }
+    }
+
     /// The host its answers come from, which `Reachability.answers(_:)` asks
     /// when a run has gone quiet.
     ///
@@ -772,6 +793,43 @@ extension AgentCLI {
         return cache
     }
 
+    /// A run just said this backend is signed out, more authoritatively than
+    /// any probe: the CLI itself refused to answer for credentials.
+    ///
+    /// The cache is corrected so the caller's next `updateStatus` shows the
+    /// sign-in card instead of offering a second identical failure. CLIs only:
+    /// an endpoint that refuses a key already has `refused` and its own
+    /// sentence. A wrong match upstream costs one "Check again", not a lie
+    /// that sticks, because the pane's detection re-derives this from the CLI.
+    /// Whether a run's failure text reads as "signed out" rather than as a
+    /// network or model problem.
+    ///
+    /// Prose matching, so deliberately conservative in what it triggers: the
+    /// only consumer is `noteSignedOut`, which only touches CLIs and is
+    /// undone by the next real probe. Both CLIs phrase credential failures
+    /// with one of these words, and none of them appears in their timeout or
+    /// network sentences.
+    static func looksSignedOut(_ failure: String) -> Bool {
+        let value = failure.lowercased()
+        return value.contains("log in") || value.contains("login")
+            || value.contains("sign in") || value.contains("signed out")
+            || value.contains("credential") || value.contains("unauthorized")
+            || value.contains("authentication") || value.contains("api key")
+    }
+
+    static func noteSignedOut(_ backendKey: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let index = cache?.firstIndex(where: { $0.key == backendKey }),
+              let old = cache?[index], old.backend.isCLI, old.signedIn != false
+        else { return }
+        var fresh = AgentStatus(backend: old.backend, path: old.path,
+                                version: old.version, signedIn: false,
+                                account: nil, models: old.models)
+        fresh.provider = old.provider
+        cache?[index] = fresh
+    }
+
     /// The backend Listen would use, from the cache only.
     ///
     /// Returns nil both when nothing is usable and when nothing has looked yet,
@@ -850,8 +908,42 @@ extension AgentCLI {
             let age = probedAt[provider.id].map { now.timeIntervalSince($0) } ?? .infinity
             return age >= staleAfter(provider)
         }
+        // A CLI whose sign-in state came back unknown is re-asked too, on a
+        // slower clock. Unknown is what a fresh machine gets when the CLI is
+        // slow to answer its own status probe, and it used to be trusted for
+        // the life of the process: the composer said "Claude Code" all day on
+        // a Mac where nobody had ever signed in, and the first question then
+        // failed on credentials. Only the unknowns: a resolved yes or no
+        // stays put, and "Check again" stays the way to re-ask those. Five
+        // minutes, because this is two process launches, not an HTTP GET.
+        let unknowns = (cache ?? [])
+            .filter { $0.backend.isCLI && $0.path != nil && $0.signedIn == nil }
+            .map(\.backend)
+            .filter { backend in
+                let age = probedAt["cli:\(backend.rawValue)"]
+                    .map { now.timeIntervalSince($0) } ?? .infinity
+                return age >= 300
+            }
         lock.unlock()
-        guard !due.isEmpty else { completion(); return }
+        guard !due.isEmpty || !unknowns.isEmpty else { completion(); return }
+        if !unknowns.isEmpty {
+            DispatchQueue.global(qos: .utility).async {
+                for backend in unknowns {
+                    let fresh = status(backend)
+                    lock.lock()
+                    probedAt["cli:\(backend.rawValue)"] = Date()
+                    if let index = cache?.firstIndex(where: { $0.key == backend.rawValue }) {
+                        cache?[index] = fresh
+                    }
+                    lock.unlock()
+                }
+                DispatchQueue.main.async { completion() }
+            }
+            // The provider refresh below runs on its own; when both lists are
+            // busy the completion fires once per list, which callers survive
+            // because it only ever means "read the cache again".
+            guard !due.isEmpty else { return }
+        }
 
         DispatchQueue.global(qos: .utility).async {
             var fresh = [String: AgentStatus]()

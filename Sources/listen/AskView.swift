@@ -1600,6 +1600,15 @@ final class AskView: NSView {
                     self.start(text, status: status, path: path, resuming: nil)
                     return
                 }
+                // The run itself is the most authoritative sign-in probe there
+                // is: the CLI just refused its own credentials. Corrected in
+                // the cache before `finish` runs `updateStatus`, so the setup
+                // card with the sign-in command replaces the offer of a second
+                // identical failure.
+                if let failure = outcome.failure, status.backend.isCLI,
+                   AgentCLI.looksSignedOut(failure) {
+                    AgentCLI.noteSignedOut(status.key)
+                }
                 Telemetry.askCompleted(
                     outcome: Self.telemetryOutcome(outcome.failure),
                     backend: Self.telemetryBackend(status),
@@ -2269,12 +2278,11 @@ final class SendButton: NSView {
 /// CLI was removed or logged out, and those are still worth reading. A block in
 /// the middle of the pane would cover them.
 ///
-/// Both buttons earn their space. Every state this appears in is fixed in a
-/// terminal rather than in Listen, and `AgentCLI` caches its answer for the life
-/// of the process, so without "Check again" the reward for installing something
-/// is having to quit the app. "Open Agent settings" goes to the pane that
-/// already lists both commands with a copy button beside each, which is why this
-/// card does not try to be that pane.
+/// Both buttons earn their space. `AgentCLI` caches its answer for the life
+/// of the process, so without "Check again" the reward for installing
+/// something is having to quit the app. "Set up Ask…" opens the wizard, which
+/// lays the options out with their trade-offs and finishes each one; the
+/// settings pane stays a gear-click away for whoever wants the facts instead.
 private final class SetupNotice: NSView {
     var onCheckAgain: (() -> Void)?
 
@@ -2294,7 +2302,12 @@ private final class SetupNotice: NSView {
     private let heading = NSTextField(wrappingLabelWithString: "")
     private let body = NSTextField(wrappingLabelWithString: "")
     private let check = NSButton(title: "Check again", target: nil, action: nil)
-    private let settings = NSButton(title: "Open Agent settings",
+    // The wizard, not the settings pane. The pane states facts about what is
+    // installed, which is the right surface for checking on a thing and the
+    // wrong one for choosing: the first outside install stared at accurate
+    // facts and had no path to a working composer. `AskSetupWizard` is the
+    // path, and the pane stays one gear-click away for whoever wants facts.
+    private let settings = NSButton(title: "Set up Ask…",
                                     target: nil, action: nil)
 
     override init(frame: NSRect) {
@@ -2362,12 +2375,14 @@ private final class SetupNotice: NSView {
         isHidden = false
         let out = statuses.filter { $0.path != nil && $0.signedIn == false }
         guard !out.isEmpty else {
-            heading.stringValue = "Ask needs an agent"
-            say("Neither Claude Code nor Codex is installed, and no model endpoint "
-                + "is set up. A CLI answers on a subscription you already have. An "
-                + "endpoint can be a model running on this Mac, through Ollama, "
-                + "which needs no account at all.\n\n"
-                + "Agent settings has both.")
+            // Plain language first: this card is most often read by somebody
+            // who never chose a CLI and never will. The npm and ollama
+            // sentences that used to live here moved into the wizard, where
+            // each appears only under the option that needs it.
+            heading.stringValue = "Ask needs an AI to answer with"
+            say("Recording and transcription are already working; this is only "
+                + "about answering questions. Set up takes about a minute, and "
+                + "the options are laid out with what each one costs.")
             return
         }
         let signedOut = out.filter { $0.backend.isCLI }
@@ -2377,7 +2392,8 @@ private final class SetupNotice: NSView {
             say("Run " + signedOut.compactMap { status in
                     status.backend.signInCommand.map { "`\($0)`" }
                 }.joined(separator: " or ")
-                + " in a terminal, then check again.")
+                + " in a terminal and check again, or Set up Ask to see every "
+                + "option.")
             return
         }
         // Only the endpoint is left, and it is configured and silent.
@@ -2408,7 +2424,7 @@ private final class SetupNotice: NSView {
         body.attributedStringValue = text
     }
 
-    @objc private func openSettings() { LibraryWindow.shared.showSettings(.agent) }
+    @objc private func openSettings() { AskSetupWizard.shared.present() }
 
     @objc private func checkAgain() { onCheckAgain?() }
 

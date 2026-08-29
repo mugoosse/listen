@@ -89,7 +89,21 @@ final class RecordButton: NSView {
     private let action: Selector
 
     private enum M {
-        static let height: CGFloat = 36
+        /// 36 in the macOS 26 toolbar, which is tall glass with room to give;
+        /// 28 before it, the standard control height of the shorter unified
+        /// toolbar. One number for both drew the capsule squeezed on a
+        /// Sequoia Mac (seen on the first outside install, photo against a
+        /// Tahoe screenshot of the same window): the item asked for 36 and
+        /// the toolbar laid it out in less. Choosing the pre-26 height
+        /// deliberately keeps it a capsule there instead of whatever the
+        /// clamp leaves. 28 is the inferred number, not yet a measured one:
+        /// no pre-26 Mac was reachable when this was written, so the first
+        /// session on one should read the drawn height and replace this
+        /// sentence with the measurement.
+        static var height: CGFloat {
+            if #available(macOS 26.0, *) { return 36 }
+            return 28
+        }
         /// Half the height, so the capsule is a capsule at any label length.
         static var radius: CGFloat { height / 2 }
         static let pad: CGFloat = 14

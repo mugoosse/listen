@@ -1708,10 +1708,22 @@ final class DetailView: NSView {
             return
         }
 
-        activityLabel.stringValue = activity.title
+        // The reason beside the verb for the two states where the verb alone
+        // sends somebody hunting: a retry that never seems to end, and a
+        // failure. `detail` is a sentence thanks to `SyncTrouble`, so it can
+        // stand on the page rather than hide in the tool tip. Everything else
+        // keeps the short title: a percentage is its own explanation.
+        let says: String
+        if let why = activity.detail, !why.isEmpty,
+           activity.stage == .retrying || activity.isFailure {
+            says = "\(activity.title): \(why)"
+        } else {
+            says = activity.title
+        }
+        activityLabel.stringValue = says
         activityLabel.textColor = activity.isFailure ? .systemOrange : .secondaryLabelColor
         activityLabel.toolTip = activity.detail
-        activityLabel.setAccessibilityLabel(activity.title)
+        activityLabel.setAccessibilityLabel(says)
         activityValue.stringValue = activity.percentage ?? ""
         activityLabel.isHidden = false
         activityValue.isHidden = activity.percentage == nil

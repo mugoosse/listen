@@ -75,6 +75,15 @@ public actor MemoryStore: RecordStore {
 
     public func setBusyNextCall(_ value: Bool) { busyNextCall = value }
 
+    /// Set to make the next `save` fail outright, the way a container does
+    /// when the account is the problem rather than the pacing. A throttle is
+    /// `busyNextCall` and stays quiet by design; this is the loud kind, and it
+    /// exists so the suite can prove the loud kind reaches a screen with a
+    /// sentence attached. Cleared by that save, so the retry after it works.
+    public var failNextSave = false
+
+    public func setFailNextSave(_ value: Bool) { failNextSave = value }
+
     private func refuseIfThrottled() throws {
         guard busyNextCall else { return }
         busyNextCall = false
@@ -90,6 +99,10 @@ public actor MemoryStore: RecordStore {
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
         try refuseIfThrottled()
+        if failNextSave {
+            failNextSave = false
+            throw StoreError.unavailable("the fake container refused this save")
+        }
         saveCount += 1
         // The record's own zone, not its type's. One type lives in two zones:
         // see `StoredRecord.zone`.

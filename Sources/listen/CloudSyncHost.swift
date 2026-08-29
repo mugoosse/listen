@@ -101,6 +101,21 @@ final class CloudSyncHost {
         soon?.invalidate()
         soon = nil
         LibraryWatch.shared.stop()
+        // The per-recording sync lines go with the engine. "Syncing
+        // transcript" or "Retrying sync" over a library that no longer syncs
+        // is a promise nobody is going to keep, and only a pass could have
+        // cleared them. The queue's own stages stay: a job that is queued or
+        // transcribing is still true with sync off, and the queue is what
+        // ends those.
+        let syncOwned: Set<CloudActivity.Stage> = [
+            .sendingTranscript, .retrying, .uploadingAudio, .downloadingAudio,
+            .downloadingTranscript, .waitingForMac, .transcribingElsewhere,
+        ]
+        let cleared = activities.filter { syncOwned.contains($0.value.stage) }.map(\.key)
+        for id in cleared {
+            activities.removeValue(forKey: id)
+            onActivity?(id)
+        }
         trace("cloud sync: off")
     }
 
@@ -293,6 +308,12 @@ final class CloudSyncHost {
         await core.reclaim(devices, protecting: Queue.shared.activeIDs, into: &report)
 
         lastReport = report
+        // On disk as well as in memory, because `listen sync status` is a
+        // fresh process: the one command a stalled install gets asked to run
+        // could name the account and the container and not the thing actually
+        // wrong. See `EngineState.LastPass`.
+        EngineState(library: library).lastPass = EngineState.LastPass(
+            when: Date(), summary: report.summary, error: report.errors.first)
         trace("cloud sync: \(report.summary)")
         // A throttled pass is not a failed one: the server asked for a pause
         // measured in fractions of a second, the store already waited once,

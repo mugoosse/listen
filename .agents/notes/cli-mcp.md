@@ -216,3 +216,19 @@ calendar, and that only ever fails on somebody else's Mac.
 Date bounds are applied **before** `person` and `query`, which is not cosmetic:
 those two read every `turns.json` in the library and the date bounds read only
 the metadata already in hand.
+
+## `listen mcp connect-desktop` edits the Claude app's config, and refuses broken JSON
+
+The Developers pane's copy-the-JSON block works for every MCP client and is a
+wall for the person most likely to own the Claude app. `ClaudeDesktop` does
+the paste itself: detect the app, back the config up once (never rewritten:
+the backup's value is being the file from before Listen touched it), write
+only `mcpServers.listen`, keep every other key and server, and refuse a file
+that does not parse rather than clobbering somebody's other servers. The CLI
+twin exists so the logic is provable headless (`verify_desktop_connect.sh`,
+23 assertions over scratch configs) and so the window action has a route
+outside the window; `--config` and `LISTEN_CLAUDE_CONFIG` are the same
+override. It dispatches before `MCP.serve`, because everything else under
+`mcp` owns stdout for the life of the process. The Claude app reads the file
+at launch and nothing re-reads it, so the pane says "quit and reopen" and
+offers the restart itself.

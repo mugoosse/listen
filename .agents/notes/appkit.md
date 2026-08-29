@@ -789,3 +789,16 @@ hierarchy from the content) for a view whose `accessibilityLabel()` is
 `Actions`, with the top right of the content view as the fallback: a sheet a
 few points off is worth having, and a Share that does nothing because a private
 view could not be found is not.
+
+## A bare `NSTextView()` handed to a scroll view can draw nothing at all
+
+The Developers pane's MCP block was `NSTextView()` straight into
+`NSScrollView.documentView`: no frame, no min/max size, no autoresizing mask,
+no `widthTracksTextView`. On this Mac it happened to lay out; on the first
+outside install's older macOS it rendered as an empty white box, text
+invisible, no error anywhere. The plumbing `ChangelogWindow` documents (frame,
+min/max, `isVerticallyResizable`, autoresizing `.width`, container tracking)
+is not optional politeness, it is what makes the document view take the clip
+view's width at all, and which macOS versions survive its absence is not a
+thing to bet on. Set `textColor` explicitly in the same breath: a text view
+built this way is not guaranteed the semantic default everywhere either.

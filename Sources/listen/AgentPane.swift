@@ -62,6 +62,11 @@ final class AgentPane: Pane {
              + "than Listen's.\n\n"
              + "There is no Listen account and no server of ours in between.")
 
+        // The wizard, for choosing; this pane, for checking. The guided path
+        // sits above the facts because the person who needs it most reads
+        // nothing below it.
+        button("Set up Ask…") { AskSetupWizard.shared.present() }
+
         separator()
         heading("What is set up")
 
@@ -449,12 +454,34 @@ final class AgentPane: Pane {
 
     private func detect() {
         guard let listStack else { return }
-        for view in listStack.arrangedSubviews { view.removeFromSuperview() }
-        let looking = NSTextField(labelWithString: "Looking…")
-        looking.font = .systemFont(ofSize: 11)
-        looking.textColor = .secondaryLabelColor
-        listStack.addArrangedSubview(looking)
-        tryButton?.isEnabled = false
+        // Whatever is already known goes up first. The pane used to open on
+        // "Looking…" over an empty picker every single time, spending the
+        // second detection takes to redraw facts the process already held;
+        // the cache makes reopening the pane instant, and the fresh sweep
+        // lands over it when it arrives.
+        if latest.isEmpty, let cached = AgentCLI.cached, !cached.isEmpty {
+            latest = cached
+            fillList()
+        }
+        if latest.isEmpty {
+            for view in listStack.arrangedSubviews { view.removeFromSuperview() }
+            let spinner = NSProgressIndicator()
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.startAnimation(nil)
+            let looking = NSTextField(labelWithString: "Looking…")
+            looking.font = .systemFont(ofSize: 11)
+            looking.textColor = .secondaryLabelColor
+            let row = NSStackView(views: [spinner, looking])
+            row.orientation = .horizontal
+            row.spacing = 6
+            listStack.addArrangedSubview(row)
+            tryButton?.isEnabled = false
+            // The picker is not left empty while detection runs: "Automatic"
+            // is true whatever the sweep finds, and an empty popup reads as
+            // broken rather than busy.
+            fillChoice()
+        }
 
         AgentCLI.statuses { [weak self] found in
             guard let self else { return }
@@ -585,7 +612,10 @@ final class AgentPane: Pane {
         var lines = [[status.version, where_].compactMap { $0 }.joined(separator: "   ")]
         switch status.signedIn {
         case true?:  if let account = status.account { lines.append("Signed in as \(account)") }
-        case false?: lines.append(status.backend.installHint)
+        // The sign-in sentence, never the install one: the path is two lines
+        // up, so "Install with npm…" here reads as "not installed" to anybody
+        // not parsing the row like a developer. See `signInHint`.
+        case false?: lines.append(status.backend.signInHint ?? status.backend.installHint)
         case nil:    lines.append("Listen could not tell whether this is signed in. "
                                   + "It will find out the first time you ask something.")
         }

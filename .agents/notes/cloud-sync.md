@@ -728,3 +728,57 @@ hope: "an ordinary pass cannot bring back a note the container still holds", the
 "and dropping the change token does, without deleting anything". The first of
 those is the one that would quietly rot, so it asserts the note is **still
 missing** after a normal pass.
+
+## "Syncing transcript" outlived sync being off at all
+
+`Queue` finished a transcription and stamped the recording's activity
+`.sendingTranscript` unconditionally. The only thing that ever advances that
+stage to `.ready` is a sync pass, `syncSoon` refuses to run when
+`Settings.cloudSyncApplies` is false, and both the sidebar row and the
+recording page draw whatever the last activity said. So on any Mac that never
+enabled sync, every transcribed recording said "Syncing transcript" for ever,
+which is how the first outside install read a finished recording as stuck.
+
+The fix has two halves and both are needed. `Queue` now emits
+`.sendingTranscript` only when a pass is actually going to run, and `.ready`
+otherwise; and `CloudSyncHost.stop()` clears the sync-owned stages
+(`sendingTranscript`, `retrying`, the transfer stages) so turning sync off
+takes its promises off the screen with it. The queue's own stages stay through
+a stop, because a job that is queued or transcribing is still true with sync
+off and the queue is what ends those.
+
+`FakeSync` grew `activitySeam` for the vocabulary's lifecycle (a clean push
+says syncing then ready; a refused save says retrying, with a reason, and
+heals on the next pass), and `verify_sync_status.sh` drives the built app over
+a scratch library to assert the words never reach the window with sync off.
+
+## A retry that never says why is a stall nobody can fix
+
+Every `.retrying` activity always carried the error in `detail`, and no
+surface showed it: the row said "Retrying sync", the page said the same, and
+the sentence that named the actual problem existed only in memory. The first
+outside install stalled that way for a day, and the diagnosis had to wait for
+a house call.
+
+Three changes, one idea: the reason travels as far as the stall does.
+`SyncTrouble.plain` maps the CKError codes a private-database sync actually
+hits into sentences a person can act on (storage full, not signed in, no
+connection, managed account, too-old build), applied at the moment the error
+object still exists, so `CloudActivity.detail` and `CloudReport.errors` carry
+sentences everywhere they surface. The sidebar row exposes it as the row's
+tool tip and the page prints it beside the verb for `.retrying` and
+`.failed`. And the last pass is persisted (`EngineState.LastPass`,
+`last-pass.json` beside the tokens) because `listen sync status` is a fresh
+process: the one command a stalled install gets asked to run used to name the
+account and the container and not the thing actually wrong.
+
+## Which environment a build reaches is a property of how it was installed
+
+TestFlight and a Developer ID .app reach Production; an Xcode Debug install
+reaches Development (`listen-ios` sets it per configuration, `make_app.sh`
+per profile). Two devices in different environments never see each other's
+records and nothing anywhere says so. When a phone and a Mac cannot see each
+other, ask `listen sync status` on the Mac and the Sync pane on the phone
+which environment each is in before suspecting anything cleverer; the status
+command prints it precisely because this question is otherwise unanswerable
+in the field.

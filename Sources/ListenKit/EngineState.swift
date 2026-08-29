@@ -63,6 +63,43 @@ public struct EngineState: Sendable {
     private var identityFile: URL { root.appendingPathComponent("device.json") }
     private var seenFile: URL { root.appendingPathComponent("ids-seen.json") }
     private var baseFile: URL { root.appendingPathComponent("base.json") }
+    private var lastPassFile: URL { root.appendingPathComponent("last-pass.json") }
+
+    // MARK: - What the last pass said
+
+    /// The last pass's outcome, on disk, because the process that ran it and
+    /// the process asked about it are not the same one. The app holds
+    /// `lastReport` in memory; `listen sync status` is a fresh process and had
+    /// nothing, so the one command a stalled install gets asked to run could
+    /// name the account and the container and not the thing actually wrong.
+    public struct LastPass: Codable, Sendable, Equatable {
+        public var when: Date
+        public var summary: String
+        /// The first error line, already mapped by `SyncTrouble`. Nil for a
+        /// pass that worked.
+        public var error: String?
+
+        public init(when: Date, summary: String, error: String?) {
+            self.when = when
+            self.summary = summary
+            self.error = error
+        }
+    }
+
+    public var lastPass: LastPass? {
+        get {
+            guard let data = try? Data(contentsOf: lastPassFile) else { return nil }
+            return try? JSONDecoder().decode(LastPass.self, from: data)
+        }
+        nonmutating set {
+            guard let newValue else {
+                try? FileManager.default.removeItem(at: lastPassFile)
+                return
+            }
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            try? data.write(to: lastPassFile, options: .atomic)
+        }
+    }
 
     // MARK: - Engine serialization
 

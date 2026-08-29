@@ -107,6 +107,18 @@ else
   bad "backupsDisabled did not hold"
 fi
 
+# --- sync status names its environment and its last pass --------------------
+
+# The one command a stalled install gets asked to run has to say which
+# CloudKit environment this build reaches (TestFlight and Developer ID are
+# Production, an Xcode debug install is Development, and a mismatch is
+# invisible everywhere else) and, when a pass has run, what the last one said.
+if "$BIN" sync status 2>/dev/null | grep -qi "environment:"; then
+  ok "sync status names the CloudKit environment"
+else
+  bad "sync status says nothing about the environment"
+fi
+
 # --- the log rotates rather than growing without bound ----------------------
 
 python3 - "$LOG" <<'EOF'

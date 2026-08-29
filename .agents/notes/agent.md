@@ -2786,3 +2786,74 @@ about this page yet" over somebody with a stack of conversations naming them.
 Measured through accessibility on the built app: the toolbar reads Settings,
 Sidebar, Chats, Record, Actions on the home page and Settings, Sidebar, Record,
 Actions with a page open, where it used to carry History in both.
+
+## "Install with npm" under an installed CLI reads as "not installed"
+
+The settings row for a CLI that is installed and signed out printed
+`installHint`, whose first words are "Install with `npm install …`". The
+version and the path were on the line above, so to a developer the row was
+complete; to anybody else it read as "not installed", and the first outside
+install's owner concluded exactly that about a Mac that had `claude` 2.1.212
+at `~/.local/bin` the whole time. The Claude desktop app puts the CLI there,
+so installed-and-never-signed-in is the normal state on a non-developer's
+Mac, not an edge case. `signInHint` now exists beside `installHint` and the
+row for a signed-out CLI leads with "Installed. Run … and sign in".
+`verify_ask_states.sh` pins both: the sign-in sentence present, "npm install"
+absent.
+
+## An unknown sign-in state was trusted for the life of the process
+
+`usable` treats `signedIn == nil` as usable on purpose ("it will find out on
+the first question"), but nothing ever re-asked: a probe that came back
+unknown at launch stayed unknown until quit, so the composer chip named a
+backend all day on a Mac where nobody had ever signed in, and the first
+question failed on credentials. Two corrections, neither touching the benefit
+of the doubt itself. `refreshStaleProviders` now re-probes any CLI whose
+cached sign-in is nil, on a five-minute clock, and only the unknowns: a
+resolved yes or no stays put, and "Check again" stays the way to re-ask
+those. And a run that fails with sign-in-shaped text (`looksSignedOut`, prose
+matching, deliberately narrow) corrects the cache through `noteSignedOut`
+before `finish` runs `updateStatus`, so the setup card with the sign-in
+command replaces the offer of a second identical failure. The end-to-end
+case is in `verify_ask_states.sh`: a stub CLI that probes signed-in and then
+refuses the run puts the card up.
+
+## Ask setup is a choice, and the settings pane only ever stated facts
+
+A Mac with the Claude app, no signed-in CLI and no provider showed accurate
+facts on every surface and no path from "I want to ask about my meetings" to
+a working composer. `AskSetupWizard` is the path: one sheet, four cards
+(OpenRouter as the iPhone pairing, the CLIs, the Claude app, Ollama), each
+stating its trade-off in the card body per the copy rule, ending on the same
+test question the Agent pane uses so setup finishes on a real answer rather
+than on "saved". It is reachable from the setup card's "Set up Ask…" and from
+Settings › Ask, and deliberately not from first-run onboarding. It owns no
+storage: every write goes through `Settings.addProvider`, `AgentKey.save`,
+`Settings.agentChoice`, `Settings.setAgentModel`, so cancelling writes
+nothing (asserted in `verify_ask_states.sh`). Picking OpenRouter sets
+`agentChoice` explicitly, because automatic prefers a CLI and the Claude
+app's signed-out `claude` on disk would outrank the provider the sheet just
+finished setting up.
+
+## The provider migration reads the Keychain, and an ad-hoc copy hangs on it
+
+`Settings.providers` runs a one-time migration whose evidence check is
+`AgentKey.has("openrouter.ai")`, a Keychain read. On the uitest bundle copy
+that read raises the blocking permission prompt CLAUDE.md warns about, inside
+`AgentCLI.statuses()`, so detection never finishes and the composer chip says
+"Loading…" until a human answers a dialog. Measured with `sample`: the
+cooperative thread sat in `Settings.migrateProviders`. The verify scripts
+pre-plant `agentProviders` as `[]` (`defaults write … -data 5b5d`) so the
+migration is already done and no Keychain is touched. The same shape applies
+to any future launch-path Keychain read: on an ad-hoc copy it is a modal
+prompt, not a lookup.
+
+## The wizard's save path is not scripted, and the reason is the Keychain service
+
+`AgentKey` stores every key under the one service `com.mgo.listen.endpoint`
+with the host as the account, and `save` is delete-then-add. A verify script
+driving the wizard's OpenRouter card with a fake key would therefore delete
+the real OpenRouter key of whoever runs it. So `verify_ask_states.sh` drives
+the wizard up to and around the save (opens from both entry points, options
+laid out, cancel writes nothing) and leaves the save itself to the one-line
+calls it makes into machinery the settings pane already exercises.

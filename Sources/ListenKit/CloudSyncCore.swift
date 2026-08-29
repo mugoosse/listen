@@ -40,7 +40,10 @@ public struct CloudReport: Sendable, Equatable {
     /// after the work it interrupted when the caller can say.
     public mutating func note(_ error: Error, about subject: String? = nil) {
         if case StoreError.busy = error { throttled = true; return }
-        let line = error.localizedDescription
+        // Mapped to a sentence a person can act on before it is a string,
+        // because from here it is only ever a string: this line is what the
+        // Sync pane and `listen sync status` show. See `SyncTrouble`.
+        let line = SyncTrouble.plain(error)
         errors.append(subject.map { "\($0): \(line)" } ?? line)
     }
 
@@ -381,7 +384,7 @@ public struct CloudSyncCore: Sendable {
                 reportActivity(id, .ready, fraction: 1)
             } catch {
                 report.note(error, about: id)
-                reportActivity(id, .retrying, detail: error.localizedDescription)
+                reportActivity(id, .retrying, detail: SyncTrouble.plain(error))
             }
         }
     }
@@ -956,7 +959,7 @@ public struct CloudSyncCore: Sendable {
             return true
         } catch {
             report.note(error, about: "audio \(recording.id)")
-            reportActivity(recording.id, .retrying, detail: error.localizedDescription)
+            reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
             return false
         }
     }
@@ -1085,12 +1088,12 @@ public struct CloudSyncCore: Sendable {
                 if case .changedOnServer = error { report.conflicts.append(recording.id) }
                 else { report.note(error, about: recording.id) }
                 if sendingTranscript {
-                    reportActivity(recording.id, .retrying, detail: error.localizedDescription)
+                    reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
                 }
             } catch {
                 report.note(error, about: recording.id)
                 if sendingTranscript {
-                    reportActivity(recording.id, .retrying, detail: error.localizedDescription)
+                    reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
                 }
             }
         }
@@ -1733,7 +1736,7 @@ public struct CloudSyncCore: Sendable {
             reportActivity(recording.id, .waitingForMac, fraction: 1)
         } catch {
             report.note(error, about: "upload \(recording.id)")
-            reportActivity(recording.id, .retrying, detail: error.localizedDescription)
+            reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
         }
     }
 
@@ -1793,7 +1796,7 @@ public struct CloudSyncCore: Sendable {
             } catch {
                 report.note(error, about: "ingest")
                 if let blob = try? CloudRecords.openTransfer(record, key: key) {
-                    reportActivity(blob.id, .retrying, detail: error.localizedDescription)
+                    reportActivity(blob.id, .retrying, detail: SyncTrouble.plain(error))
                 }
             }
         }

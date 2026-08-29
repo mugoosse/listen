@@ -1656,6 +1656,13 @@ final class RecordingCell: NSView {
             activityTop.constant = 0
             activityHeight.constant = 0
         }
+        // The reason rides the row as a tool tip. Two points of activity bar
+        // cannot say "your iCloud storage is full", and thanks to
+        // `SyncTrouble` the detail is a sentence rather than CloudKit's
+        // phrasing. Cleared otherwise, so a recycled row does not carry the
+        // previous recording's trouble.
+        toolTip = (active?.stage == .retrying || active?.isFailure == true)
+            ? active?.detail : nil
     }
 }
 

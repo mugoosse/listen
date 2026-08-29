@@ -158,6 +158,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `Settings.onboarded` and this has to see the value from launch.
         // `applyDefaultIfNeeded` records that it ran either way, so a later
         // launch never overrides a choice made here or in System Settings.
+        // Before the login item, deliberately: launched from the DMG, the
+        // item would register the image's path and break on eject. See
+        // `InstallGuard`. True means the Applications copy is taking over and
+        // this process is on its way out, so nothing below may run.
+        if InstallGuard.offerEscapeIfNeeded() { return }
+
         LoginItem.applyDefaultIfNeeded(isNewInstallation: !Settings.onboarded)
 
         // Setup on a first run, the library otherwise. `isFirstRun` is the

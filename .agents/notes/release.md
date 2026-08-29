@@ -387,7 +387,8 @@ neither `security dump-keychain | grep -i notary` nor `security
 find-generic-password -s com.apple.gke.notary.tool` finds anything in the login
 keychain. **Why it went is not known.** The Sparkle key in the same keychain was
 read normally in the same run, so the keychain was neither locked nor
-unreadable.
+unreadable. Storing it again is what fixed it: 0.24.1 notarized at 18:39 the
+same evening, forty minutes after the run that could not find it.
 
 **It cost a whole build, because the credential was checked after it.**
 `HAS_CREDS` was computed at the notarize step, so a missing profile was ten

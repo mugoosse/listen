@@ -8,6 +8,96 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.23.0 (2026-08-29)
+
+This release is what the first install on a stranger's Mac taught. Most of it
+is the app saying true things where it used to say hopeful ones.
+
+### Sync says what is wrong, instead of repeating a verb
+
+A Mac that never turned sync on could still show "Syncing transcript" under a
+finished recording, for ever: the label was written after every transcription
+and only a sync pass could clear it. It no longer appears unless a pass is
+actually coming, and turning sync off takes the sync labels with it.
+
+When sync genuinely fails, the reason now travels as far as the stall does.
+"Retrying sync" carries a plain sentence (your iCloud storage is full, sign in
+to iCloud, no connection right now) instead of CloudKit's phrasing, on the
+row, on the recording page and in Settings. `listen sync status` now also
+prints which CloudKit environment the build reaches and what the last pass
+actually said, so a stuck install can be diagnosed from one command instead of
+a screen share.
+
+A brief iCloud throttle is no longer an alarm. CloudKit answers a burst with a
+sub-second "slow down", and that used to surface as "Sync needs attention" on
+the phone. The pass now waits out the server's own retry-after and goes again
+quietly. Passes are also cheaper: an unchanged device record republishes
+hourly instead of every two minutes, and an audio offer trusts its recorded
+transfer for fifteen minutes instead of asking the container every pass.
+
+A first sync fills the library as rows arrive, instead of holding a spinner
+until the last transcript has landed.
+
+### Setting up Ask is a guided choice
+
+Ask has always answered with an AI you bring, and the app only ever stated
+facts about what it found: accurate, and no help at all on a Mac with no
+coding tools. There is now a setup sheet, reachable from the composer's setup
+card and from Settings, laying out the four ways in with what each one costs,
+stated on the card rather than in a tooltip: OpenRouter (paste one key, what
+the iPhone app uses; the meetings you ask about leave the Mac under zero data
+retention), Claude Code or Codex (the subscription you already have, one
+terminal sign-in), the Claude app (ask there instead of here), or a model
+running on this Mac through Ollama (nothing leaves the machine, a few
+gigabytes of download). Setup ends by asking the model a real question, so it
+finishes on an answer rather than on "saved".
+
+The surfaces around it stopped lying. A CLI that is installed but never
+signed in is described that way ("Installed. Run `claude auth login`…")
+instead of with an install command, which read as "not installed" to anybody
+not parsing the row like a developer; the Claude desktop app installs that
+CLI, so this is the normal state on a Mac that never chose one. An unknown
+sign-in state is re-checked in the background instead of being trusted until
+quit, and a question that fails on credentials now puts the sign-in card up
+instead of offering to fail the same way twice.
+
+### The Claude app connects with one press
+
+Settings, Developers can now write Listen into the Claude app's connector
+configuration itself: it backs the file up first, touches only Listen's own
+entry, keeps every other server and setting, and refuses a file it cannot
+parse rather than replacing it. The same action exists as
+`listen mcp connect-desktop`. The Claude app reads that file at launch, so
+the pane says to restart it and offers to do that too. What Claude can reach
+is unchanged: the same tools, the same limits, notes and tags the only writes.
+
+### The first run holds together
+
+Setup can no longer be dismissed mid-flow. Every step still has its own way
+past (Skip, Not now, Later, and a model download continues in the background),
+so nothing blocks; the close button's only real power was vanishing the
+wizard half-way and letting the library open with no model chosen. Running
+setup again from Settings keeps its close button.
+
+Launching Listen from the installer image now says so. Dragging the icon to
+Applications and then double-clicking the one still in the DMG window runs
+the read-only copy, where updates cannot land and the login item breaks on
+eject. Listen now notices, offers the Applications copy (or puts one there),
+and never blocks if you decline.
+
+### Smaller corrections
+
+- The anonymous usage statistics described in 0.22.0's notes actually ship
+  now: the 0.22.0 build was cut without the migration that turns them on, so
+  installs of it still showed the switch off. One line in Settings, Privacy
+  turns them off, and that remains the last word.
+- The Ask settings pane opens with what it already knows instead of a blank
+  "Looking…" over an empty picker.
+- The MCP configuration block in Settings, Developers was invisible on some
+  older-macOS installs; it now draws everywhere.
+- The New Recording button no longer renders squeezed on macOS versions
+  before 26, where the toolbar gives a control less height.
+
 ## 0.22.0 (2026-08-27)
 
 ### Hosted Ask is private by construction, and failures are measurable

@@ -8,6 +8,30 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.24.1 (2026-08-29)
+
+One fix. Discard Recording did nothing when it was pressed, and had done since
+0.10.0.
+
+It is the only destructive item the ⋯ menu offers while a recording is running,
+and it was wired to the wrong object: the menu's items are addressed to the
+library window, and throwing away a recording in progress belongs to the part of
+the app that owns capture. macOS validates a menu item against the object it is
+addressed to, found nothing there that answered, and disabled it. A disabled
+item is normally greyed, which would have shown; this one is drawn red because
+it is destructive, and a coloured title keeps its colour when an item is
+disabled. So it looked exactly as available as it does when it works, opened
+with the rest of the menu, and did nothing at all when clicked, with no error
+and nothing written anywhere.
+
+It now asks "Discard this recording?" the way it always meant to: capture stops,
+the audio is deleted, and notes you typed during the call are kept under Notes
+in the sidebar.
+
+On 0.24.0 or earlier and want a recording gone now: press Stop, select the row
+and choose Delete. It asks the same question, deletes the same audio and keeps
+your own notes the same way.
+
 ## 0.24.0 (2026-08-29)
 
 Two things: the model that will read a meeting can now be chosen while the

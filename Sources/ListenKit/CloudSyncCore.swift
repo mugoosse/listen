@@ -21,6 +21,13 @@ public struct CloudReport: Sendable, Equatable {
     public var freedBytes = 0
     public var conflicts: [String] = []
     public var errors: [String] = []
+    /// The server asked mid-pass for a pause the store's own wait could not
+    /// absorb. Deliberately not an error: everything it interrupted will
+    /// finish on a quiet retry, so it stays out of `errors`, which screens
+    /// and telemetry treat as "a person should see this". The caller owns
+    /// that retry; see `CloudSync.syncNow` on the phone and
+    /// `CloudSyncHost.syncNow` on the Mac.
+    public var throttled = false
 
     public var didSomething: Bool {
         pushedRecordings + pulledRecordings + pulledSidecars + pushedNotes
@@ -28,8 +35,18 @@ public struct CloudReport: Sendable, Equatable {
             + pushedMasters + pulledMasters > 0 || freedBytes > 0
     }
 
+    /// File one failure where it belongs. A throttle marks the pass for a
+    /// quiet retry; anything else becomes a line a screen may show, named
+    /// after the work it interrupted when the caller can say.
+    public mutating func note(_ error: Error, about subject: String? = nil) {
+        if case StoreError.busy = error { throttled = true; return }
+        let line = error.localizedDescription
+        errors.append(subject.map { "\($0): \(line)" } ?? line)
+    }
+
     public var summary: String {
         if !errors.isEmpty { return errors[0] }
+        if throttled, !didSomething { return "iCloud is busy, retrying soon" }
         if !didSomething { return "Up to date" }
         var parts: [String] = []
         if pushedRecordings > 0 { parts.append("sent \(pushedRecordings)") }
@@ -268,7 +285,7 @@ public struct CloudSyncCore: Sendable {
                     default: break
                     }
                 } catch {
-                    report.errors.append("\(record.name.prefix(8)): \(error.localizedDescription)")
+                    report.note(error, about: String(record.name.prefix(8)))
                 }
             }
 
@@ -298,7 +315,7 @@ public struct CloudSyncCore: Sendable {
             base[file: "token"] = changes.token
             if report.didSomething { arrived?() }
         } catch {
-            report.errors.append(error.localizedDescription)
+            report.note(error)
         }
 
         // Contents after rows, and inside the same pass, so one pull is still
@@ -363,7 +380,7 @@ public struct CloudSyncCore: Sendable {
                 if outcome.written > 0 { arrived?() }
                 reportActivity(id, .ready, fraction: 1)
             } catch {
-                report.errors.append("\(id): \(error.localizedDescription)")
+                report.note(error, about: id)
                 reportActivity(id, .retrying, detail: error.localizedDescription)
             }
         }
@@ -819,7 +836,7 @@ public struct CloudSyncCore: Sendable {
                 base[master: recording.id] =
                     (try? CloudRecords.openMaster(theirs, key: key))?.digest ?? "theirs"
             } catch {
-                report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+                report.note(error, about: "audio \(recording.id)")
             }
         }
     }
@@ -938,7 +955,7 @@ public struct CloudSyncCore: Sendable {
                            fraction: 1)
             return true
         } catch {
-            report.errors.append("audio \(recording.id): \(error.localizedDescription)")
+            report.note(error, about: "audio \(recording.id)")
             reportActivity(recording.id, .retrying, detail: error.localizedDescription)
             return false
         }
@@ -956,7 +973,7 @@ public struct CloudSyncCore: Sendable {
                 try await store.delete(CloudRecords.masterName(id, key: self.key), in: .masters)
                 base.base[entry] = nil
             } catch {
-                report.errors.append("audio delete \(id): \(error.localizedDescription)")
+                report.note(error, about: "audio delete \(id)")
             }
         }
     }
@@ -1066,12 +1083,12 @@ public struct CloudSyncCore: Sendable {
                 }
             } catch let error as StoreError {
                 if case .changedOnServer = error { report.conflicts.append(recording.id) }
-                else { report.errors.append("\(recording.id): \(error)") }
+                else { report.note(error, about: recording.id) }
                 if sendingTranscript {
-                    reportActivity(recording.id, .retrying, detail: String(describing: error))
+                    reportActivity(recording.id, .retrying, detail: error.localizedDescription)
                 }
             } catch {
-                report.errors.append("\(recording.id): \(error.localizedDescription)")
+                report.note(error, about: recording.id)
                 if sendingTranscript {
                     reportActivity(recording.id, .retrying, detail: error.localizedDescription)
                 }
@@ -1130,9 +1147,9 @@ public struct CloudSyncCore: Sendable {
                 report.pushedNotes += 1
             } catch let error as StoreError {
                 if case .changedOnServer = error { report.conflicts.append(note.slug) }
-                else { report.errors.append("note \(note.slug): \(error)") }
+                else { report.note(error, about: "note \(note.slug)") }
             } catch {
-                report.errors.append("note \(note.slug): \(error.localizedDescription)")
+                report.note(error, about: "note \(note.slug)")
             }
         }
 
@@ -1150,7 +1167,7 @@ public struct CloudSyncCore: Sendable {
                 record.changeTag = existing?.changeTag
                 _ = try await store.save(record)
             } catch {
-                report.errors.append("\(name): \(error.localizedDescription)")
+                report.note(error, about: name)
             }
         }
 
@@ -1284,7 +1301,7 @@ public struct CloudSyncCore: Sendable {
                 base[master: id] = nil
                 base[pinned: id] = false
             } catch {
-                report.errors.append("delete \(id): \(error.localizedDescription)")
+                report.note(error, about: "delete \(id)")
             }
         }
 
@@ -1298,7 +1315,7 @@ public struct CloudSyncCore: Sendable {
                 report.deletedRemotely += 1
                 drop.append(key)
             } catch {
-                report.errors.append("delete note \(slug): \(error.localizedDescription)")
+                report.note(error, about: "delete note \(slug)")
             }
         }
 
@@ -1335,28 +1352,57 @@ public struct CloudSyncCore: Sendable {
         try await store.delete(CloudNaming.recordName(.device, id, key: key), in: .devices)
     }
 
+    /// How often an unchanged device record is republished anyway, so its
+    /// `lastSeen` keeps moving. An hour, against `isLive`'s seven days: every
+    /// reader sees the same answer either way, and the fetch-and-save pair
+    /// was most of a quiet pass's traffic when it ran every two minutes.
+    static let heartbeatRefresh: TimeInterval = 3600
+
     public func heartbeat(name: String, kind: String, appVersion: String,
                           now: Date = Date()) async -> [CloudRecords.DeviceBlob] {
         let recordName = CloudNaming.recordName(.device, device, key: key)
-        do {
-            let existing = try await store.fetch(recordName, in: .devices)
-            // Read off the disk here rather than taken from the caller. It is
-            // the sentence every other device's reclaim rule is going to
-            // believe about this one, so there must be no way for a caller to
-            // be a version behind on what it means. A stat per audio file per
-            // recording: 61 recordings is a few hundred, and the pass it rides
-            // in is a network round trip.
-            let held = library.all().filter(\.hasAudio).map(\.id)
-            var record = try CloudRecords.device(
-                CloudRecords.DeviceBlob(id: device, name: name, kind: kind,
-                                        lastSeen: Metadata.stamp(now),
-                                        appVersion: appVersion,
-                                        keepsAudio: keepAudio, holdsAudio: held), key: key)
-            record.changeTag = existing?.changeTag
-            _ = try await store.save(record)
-        } catch {
-            // A heartbeat that fails is not worth reporting: the device list is
-            // a convenience and nothing downstream depends on it being current.
+        // Read off the disk here rather than taken from the caller. It is
+        // the sentence every other device's reclaim rule is going to
+        // believe about this one, so there must be no way for a caller to
+        // be a version behind on what it means. A stat per audio file per
+        // recording: 61 recordings is a few hundred, and the pass it rides
+        // in is a network round trip.
+        let held = library.all().filter(\.hasAudio).map(\.id)
+        // Publish when the sentence changed, and hourly regardless. The one
+        // change that cannot wait is `holdsAudio` shrinking, because another
+        // device's reclaim believes it, and a shrink is a change: it
+        // publishes at once. The device id is in the signature so two
+        // devices sharing one library state cannot skip each other's turn.
+        var base = state.base
+        let signature = [device, name, kind, appVersion,
+                         keepAudio ? "keeps" : "frees",
+                         held.sorted().joined(separator: ",")]
+            .joined(separator: "|")
+        let unchanged: Bool = {
+            guard let previous = base[file: "heartbeat"] else { return false }
+            let parts = previous.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[1] == signature,
+                  let when = Metadata.parser.date(from: parts[0]) else { return false }
+            let age = now.timeIntervalSince(when)
+            return age >= 0 && age < CloudSyncCore.heartbeatRefresh
+        }()
+        if !unchanged {
+            do {
+                let existing = try await store.fetch(recordName, in: .devices)
+                var record = try CloudRecords.device(
+                    CloudRecords.DeviceBlob(id: device, name: name, kind: kind,
+                                            lastSeen: Metadata.stamp(now),
+                                            appVersion: appVersion,
+                                            keepsAudio: keepAudio, holdsAudio: held), key: key)
+                record.changeTag = existing?.changeTag
+                _ = try await store.save(record)
+                base[file: "heartbeat"] = Metadata.stamp(now) + "|" + signature
+                state.base = base
+            } catch {
+                // A heartbeat that fails is not worth reporting: the device list
+                // is a convenience and nothing downstream depends on it being
+                // current. No stamp either, so the next pass tries again.
+            }
         }
         var everyone: [CloudRecords.DeviceBlob] = []
         if let changes = try? await store.changes(in: .devices, since: nil) {
@@ -1421,8 +1467,7 @@ public struct CloudSyncCore: Sendable {
                     record.changeTag = existing?.changeTag
                     _ = try await store.save(record)
                 } catch {
-                    report.errors.append("voiceprint \(recording.id): "
-                                         + error.localizedDescription)
+                    report.note(error, about: "voiceprint \(recording.id)")
                 }
             }
         }
@@ -1457,7 +1502,7 @@ public struct CloudSyncCore: Sendable {
                 _ = try await store.save(record)
             }
         } catch {
-            report.errors.append("forgotten people: " + error.localizedDescription)
+            report.note(error, about: "forgotten people")
         }
     }
 
@@ -1476,8 +1521,7 @@ public struct CloudSyncCore: Sendable {
                                        in: .voiceprints)
                 base.base[entry] = nil
             } catch {
-                report.errors.append("voiceprint delete \(id): "
-                                     + error.localizedDescription)
+                report.note(error, about: "voiceprint delete \(id)")
             }
         }
     }
@@ -1600,10 +1644,22 @@ public struct CloudSyncCore: Sendable {
     /// only thing that frees a local copy.
     static let claimGrace: TimeInterval = 6 * 3600
 
+    /// How long a stamped offer is trusted before the container is asked
+    /// again whether the transfer is still there.
+    ///
+    /// The re-check exists for one repair: a transfer that vanished while
+    /// this phone still owns the only bytes. That is rare, and asking every
+    /// pass meant one fetch per waiting recording every two minutes for as
+    /// long as the Mac stayed asleep; a week of memos was most of a pass's
+    /// traffic, saying nothing. Fifteen minutes bounds the repair's delay
+    /// while a brand-new recording, whose marker is nil, still offers at
+    /// once.
+    static let offerRecheck: TimeInterval = 15 * 60
+
     public func upload(_ recording: Recording, into report: inout CloudReport,
                        now: Date = Date()) async {
         guard !ingests else { return }
-        guard recording.hasAudio, let audio = try? Data(contentsOf: recording.micURL) else { return }
+        guard recording.hasAudio else { return }
 
         // Remember a Mac's acknowledgement, because the transfer record is
         // deleted on purpose the moment a Mac takes the audio.
@@ -1633,18 +1689,36 @@ public struct CloudSyncCore: Sendable {
                 reportActivity(recording.id, .waitingForMac)
                 return
             }
-        default:
-            break
-        }
-
-        let metadataURL = recording.folder.appendingPathComponent("metadata.json")
-        guard let metadata = try? Data(contentsOf: metadataURL) else { return }
-        let name = CloudNaming.recordName(.audioTransfer, recording.id, key: key)
-        do {
-            if try await store.fetch(name, in: .transfer) != nil {
+        case let marker? where marker.hasPrefix("offered:"):
+            // Verified against the container inside the window, so this pass
+            // does not ask again. See `offerRecheck`.
+            let stamp = String(marker.dropFirst("offered:".count))
+            if let when = Metadata.parser.date(from: stamp),
+               now.timeIntervalSince(when) < CloudSyncCore.offerRecheck {
                 reportActivity(recording.id, .waitingForMac)
                 return
             }
+        default:
+            // Nil, or the bare "1" earlier builds stamped: both mean "ask the
+            // container", and the answer leaves a stamped offer either way.
+            break
+        }
+
+        let name = CloudNaming.recordName(.audioTransfer, recording.id, key: key)
+        do {
+            if try await store.fetch(name, in: .transfer) != nil {
+                base[sent: sentKey] = "offered:" + Metadata.stamp(now)
+                state.base = base
+                reportActivity(recording.id, .waitingForMac)
+                return
+            }
+            // Read only now that something will be sent. The offers loop
+            // walks every phone recording, and loading the WAV before the
+            // markers had a quiet pass reading the whole library into memory
+            // to decide to do nothing.
+            guard let audio = try? Data(contentsOf: recording.micURL) else { return }
+            let metadataURL = recording.folder.appendingPathComponent("metadata.json")
+            guard let metadata = try? Data(contentsOf: metadataURL) else { return }
             reportActivity(recording.id, .uploadingAudio, fraction: 0)
             _ = try await store.save(try CloudRecords.transfer(
                 id: recording.id, from: device, metadata: metadata,
@@ -1653,12 +1727,12 @@ public struct CloudSyncCore: Sendable {
                                             stage: .uploadingAudio,
                                             fraction: value))
                 })
-            base[sent: sentKey] = "1"
+            base[sent: sentKey] = "offered:" + Metadata.stamp(now)
             state.base = base
             report.pushedRecordings += 1
             reportActivity(recording.id, .waitingForMac, fraction: 1)
         } catch {
-            report.errors.append("upload \(recording.id): \(error.localizedDescription)")
+            report.note(error, about: "upload \(recording.id)")
             reportActivity(recording.id, .retrying, detail: error.localizedDescription)
         }
     }
@@ -1717,7 +1791,7 @@ public struct CloudSyncCore: Sendable {
                 // The pipe is emptied only once the library holds it.
                 try await store.delete(record.name, in: .transfer)
             } catch {
-                report.errors.append("ingest: \(error.localizedDescription)")
+                report.note(error, about: "ingest")
                 if let blob = try? CloudRecords.openTransfer(record, key: key) {
                     reportActivity(blob.id, .retrying, detail: error.localizedDescription)
                 }

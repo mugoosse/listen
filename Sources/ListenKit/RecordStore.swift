@@ -78,6 +78,26 @@ public enum StoreError: Error, Sendable, Equatable {
     case changedOnServer(StoredRecord)
     case notFound
     case unavailable(String)
+    /// The server asked this device to slow down, and for how long. Not a
+    /// failure: nothing is wrong with the record or the account, the container
+    /// is pacing its callers, and the honest response is to wait and go again.
+    /// Kept apart from `unavailable` so a report can schedule a quiet retry
+    /// instead of alarming somebody with CloudKit's internal phrasing about
+    /// http 429 replies. See `CloudKitStore.askedToWait`.
+    case busy(TimeInterval)
+}
+
+extension StoreError: LocalizedError {
+    /// Spelled out, because these are strings a report shows a person and the
+    /// default `localizedDescription` of a Swift enum is "StoreError error 2".
+    public var errorDescription: String? {
+        switch self {
+        case .changedOnServer: return "another device updated this first"
+        case .notFound: return "not in the container"
+        case .unavailable(let why): return why
+        case .busy: return "iCloud asked this device to slow down"
+        }
+    }
 }
 
 /// Progress through one record transfer, from 0 to 1.

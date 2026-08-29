@@ -36,8 +36,10 @@ public actor CloudKitStore: RecordStore {
         guard !preparedZones.contains(zone) else { return }
         let id = CKRecordZone.ID(zoneName: zone.rawValue, ownerName: CKCurrentUserDefaultName)
         do {
-            _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: id)],
+            _ = try await pacing {
+                try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: id)],
                                                      deleting: [])
+            }
         } catch let error as CKError where error.code == .serverRecordChanged {
             // Already there, which is the ordinary case on every launch but
             // the first.
@@ -47,6 +49,57 @@ public actor CloudKitStore: RecordStore {
 
     private func zoneID(_ zone: CloudNaming.Zone) -> CKRecordZone.ID {
         CKRecordZone.ID(zoneName: zone.rawValue, ownerName: CKCurrentUserDefaultName)
+    }
+
+    // MARK: - Throttling
+
+    /// How long the server asked us to wait, when what it sent was a request
+    /// to slow down rather than a failure.
+    ///
+    /// A burst of requests gets one HTTP 429, and CloudKit then refuses the
+    /// operations behind it on the spot with "Operation throttled by previous
+    /// server http 429 reply. Retry after 0.6 seconds." The wait it wants is
+    /// usually under a second, so surfacing this as an error means alarming
+    /// somebody over a pause shorter than the alert takes to read; a phone
+    /// did exactly that, verbatim, over a pull-to-refresh. The retry-after
+    /// field is asked first because the codes vary by path, and a partial
+    /// failure is opened to ask the same of the errors inside it.
+    static func askedToWait(_ error: Error) -> TimeInterval? {
+        let nsError = error as NSError
+        guard nsError.domain == CKErrorDomain else { return nil }
+        let error = CKError(_nsError: nsError)
+        if let seconds = error.retryAfterSeconds { return seconds }
+        switch error.code {
+        case .requestRateLimited, .zoneBusy, .serviceUnavailable:
+            return 1
+        case .partialFailure:
+            return error.partialErrorsByItemID?.values
+                .compactMap { askedToWait($0) }.min()
+        default:
+            return nil
+        }
+    }
+
+    /// Run one CloudKit call, absorbing a single throttle.
+    ///
+    /// The wait is the server's own number, capped at five seconds so a
+    /// misreported header cannot park a pass. One retry on purpose: a second
+    /// refusal becomes `StoreError.busy`, which the sync core records as
+    /// "come back shortly" rather than as an error anybody has to read.
+    private func pacing<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch {
+            guard let wait = Self.askedToWait(error) else { throw error }
+            try? await Task.sleep(
+                nanoseconds: UInt64(min(max(wait, 0.1), 5) * 1_000_000_000))
+            do {
+                return try await body()
+            } catch {
+                guard let wait = Self.askedToWait(error) else { throw error }
+                throw StoreError.busy(wait)
+            }
+        }
     }
 
     // MARK: - Subscriptions
@@ -76,7 +129,9 @@ public actor CloudKitStore: RecordStore {
             let info = CKSubscription.NotificationInfo()
             info.shouldSendContentAvailable = true      // silent, and the point
             subscription.notificationInfo = info
-            _ = try? await database.modifySubscriptions(saving: [subscription], deleting: [])
+            _ = try? await pacing {
+                try await database.modifySubscriptions(saving: [subscription], deleting: [])
+            }
         }
     }
 
@@ -104,10 +159,12 @@ public actor CloudKitStore: RecordStore {
         } else if record.changeTag != nil {
             // We hold a tag but not the record it came from, which happens
             // after a relaunch. Read it back so the comparison is real rather
-            // than assumed.
-            guard let fetched = try? await database.record(for: id) else {
-                throw StoreError.notFound
-            }
+            // than assumed. A throttle must not read as "not found": the
+            // record is there, the server only wants a pause first.
+            let fetched: CKRecord
+            do { fetched = try await pacing { try await database.record(for: id) } }
+            catch let busy as StoreError { throw busy }
+            catch { throw StoreError.notFound }
             guard fetched.recordChangeTag == record.changeTag else {
                 throw StoreError.changedOnServer(try translate(fetched))
             }
@@ -143,7 +200,7 @@ public actor CloudKitStore: RecordStore {
         }
 
         do {
-            let saved = try await saveRecord(subject, progress: progress)
+            let saved = try await pacing { try await saveRecord(subject, progress: progress) }
             let stored = try translate(saved)
             lastKnown[record.name] = saved
             return stored
@@ -191,7 +248,9 @@ public actor CloudKitStore: RecordStore {
     public func delete(_ name: String, in zone: CloudNaming.Zone) async throws {
         try await prepare(zone)
         let id = CKRecord.ID(recordName: name, zoneID: zoneID(zone))
-        _ = try? await database.modifyRecords(saving: [], deleting: [id])
+        _ = try? await pacing {
+            try await database.modifyRecords(saving: [], deleting: [id])
+        }
         lastKnown[name] = nil
     }
 
@@ -228,9 +287,11 @@ public actor CloudKitStore: RecordStore {
 
         while more {
             do {
-                let result = try await database.recordZoneChanges(
-                    inZoneWith: zoneID(zone), since: serverToken,
-                    desiredKeys: withAssets ? nil : Self.keysWithoutAssets)
+                let result = try await pacing {
+                    try await database.recordZoneChanges(
+                        inZoneWith: zoneID(zone), since: serverToken,
+                        desiredKeys: withAssets ? nil : Self.keysWithoutAssets)
+                }
                 for (_, outcome) in result.modificationResultsByID {
                     guard let record = try? outcome.get().record else { continue }
                     // **A partial record is never cached.** `lastKnown` exists
@@ -282,7 +343,7 @@ public actor CloudKitStore: RecordStore {
         try await prepare(zone)
         let id = CKRecord.ID(recordName: name, zoneID: zoneID(zone))
         do {
-            let record = try await fetchRecord(id, progress: progress)
+            let record = try await pacing { try await fetchRecord(id, progress: progress) }
             lastKnown[name] = record
             return try translate(record)
         } catch let error as CKError where Self.isUnknownItem(error, for: id) {

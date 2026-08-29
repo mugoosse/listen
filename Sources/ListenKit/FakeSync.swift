@@ -595,12 +595,37 @@ public enum FakeSync {
         try check(try await store.fetch(transferName, in: .transfer) != nil,
                   "the phone did not upload its audio")
 
+        // A fresh offer is trusted for a while. The pass that just uploaded
+        // does not ask the container about the same transfer two minutes
+        // later; on a phone with a week of waiting memos that was one fetch
+        // per memo per pass, saying nothing. See `offerRecheck`.
+        let offerFetches = await store.fetchCount
+        var freshOffer = CloudReport()
+        await phone.upload(phoneLib.find(memoID)!, into: &freshOffer)
+        try check(await store.fetchCount == offerFetches,
+                  "a fresh offer asked the container anyway")
+
+        // And the bare "1" earlier builds stamped still means "ask", so an
+        // upgraded install re-checks once and comes away with a stamped offer.
+        let phoneState = EngineState(library: phoneLib)
+        var legacyMark = phoneState.base
+        legacyMark[sent: "audio:" + memoID] = "1"
+        phoneState.base = legacyMark
+        var legacyOffer = CloudReport()
+        await phone.upload(phoneLib.find(memoID)!, into: &legacyOffer)
+        try check(phoneState.base[sent: "audio:" + memoID]?
+                      .hasPrefix("offered:") == true,
+                  "a legacy offer marker did not upgrade to a stamped one")
+
         // A transfer can disappear before its library record carries audioOn.
         // The phone still has the only durable copy, so a remembered upload is
-        // not enough reason to stop checking until a Mac acknowledges the bytes.
+        // not enough reason to stop checking until a Mac acknowledges the
+        // bytes. Past the recheck window, because inside it the offer is
+        // trusted on purpose.
         try await store.delete(transferName, in: .transfer)
         var retryUpload = CloudReport()
-        await phone.upload(phoneLib.find(memoID)!, into: &retryUpload)
+        await phone.upload(phoneLib.find(memoID)!, into: &retryUpload,
+                           now: Date().addingTimeInterval(CloudSyncCore.offerRecheck + 60))
         try check(try await store.fetch(transferName, in: .transfer) != nil,
                   "a missing unacknowledged transfer was not uploaded again")
         ok("unacknowledged phone audio is retried when its transfer disappears")
@@ -1956,6 +1981,69 @@ public enum FakeSync {
         try check(notesFound.contains { $0.hasSuffix(doomed + ".md") },
                   "a note deleted on the push side was removed outright, not trashed")
         ok("and a note deleted on somebody else's say-so is recoverable too")
+
+        // MARK: an unchanged heartbeat stays home
+
+        // A device record says slow-moving things, and `isLive` reads it with
+        // a seven-day window. Republishing it every two-minute pass was a
+        // fetch and a save per pass saying nothing; unchanged, it now goes at
+        // most hourly. Anything in the sentence changing, a rename included,
+        // publishes at once, because another device's reclaim believes it.
+        _ = await mac.heartbeat(name: "Studio", kind: "Mac", appVersion: "test")
+        let published = await store.saveCount
+        let heartbeatRoster = await mac.heartbeat(name: "Studio", kind: "Mac",
+                                                  appVersion: "test")
+        try check(await store.saveCount == published,
+                  "an unchanged heartbeat republished its record")
+        try check(heartbeatRoster.contains { $0.id == "mac-1" },
+                  "the skipped publish lost this device from the roster")
+        _ = await mac.heartbeat(name: "Renamed", kind: "Mac", appVersion: "test")
+        try check(await store.saveCount == published + 1,
+                  "a renamed device did not republish its record")
+        ok("an unchanged device record republishes hourly, a changed one at once")
+
+        // MARK: a throttle is a pause, not a failure
+
+        // CloudKit answers a burst with one HTTP 429 and then refuses the
+        // operations behind it for a fraction of a second. That refusal used
+        // to land in `errors` verbatim, and the phone raised "Sync needs
+        // attention" over a pause shorter than the alert takes to read. A
+        // throttled pass now marks the report for a quiet retry instead, and
+        // nothing turns red anywhere.
+        await store.setBusyNextCall(true)
+        var throttledPull = CloudReport()
+        await phone.pull(into: &throttledPull)
+        try check(throttledPull.throttled, "a throttled pull did not mark the report")
+        try check(throttledPull.errors.isEmpty, "a throttle was reported as an error")
+        var afterThrottle = CloudReport()
+        await phone.pull(into: &afterThrottle)
+        try check(!afterThrottle.throttled, "the throttle outlived the pass that hit it")
+        try check(afterThrottle.errors.isEmpty, "the retry pass reported an error")
+        ok("a throttled pass asks for a quiet retry instead of raising an alert")
+
+        // The wait is the server's own number, read from wherever CloudKit
+        // put it: the top-level error, a rate-limit code with no header, or an
+        // item inside a partial failure. A plain network failure is not a
+        // throttle, and stays the error it always was.
+        let throttled429 = NSError(
+            domain: CKErrorDomain, code: CKError.Code.requestRateLimited.rawValue,
+            userInfo: [CKErrorRetryAfterKey: 0.6])
+        try check(CloudKitStore.askedToWait(throttled429) == 0.6,
+                  "the server's retry-after was not read")
+        let throttledID = CKRecord.ID(recordName: "throttled")
+        let throttledPartial = CKError(_nsError: NSError(
+            domain: CKErrorDomain, code: CKError.Code.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: [throttledID: throttled429]]))
+        try check(CloudKitStore.askedToWait(throttledPartial) == 0.6,
+                  "a throttle inside a partial failure was missed")
+        let networkPartial = CKError(_nsError: NSError(
+            domain: CKErrorDomain, code: CKError.Code.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: [throttledID: NSError(
+                domain: CKErrorDomain,
+                code: CKError.Code.networkUnavailable.rawValue)]]))
+        try check(CloudKitStore.askedToWait(networkPartial) == nil,
+                  "a network failure was mistaken for a throttle")
+        ok("the retry-after CloudKit names is the wait the store takes")
         return out
     }
 

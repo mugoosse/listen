@@ -67,9 +67,30 @@ public actor MemoryStore: RecordStore {
 
     public func setExpireNextToken(_ value: Bool) { expireNextToken = value }
 
+    /// Set to make the next store call answer the way CloudKit does mid
+    /// throttle: refused, with a sub-second wait attached. Cleared by that
+    /// call, because that is the shape of the real thing; the request after
+    /// the pause sails.
+    public var busyNextCall = false
+
+    public func setBusyNextCall(_ value: Bool) { busyNextCall = value }
+
+    private func refuseIfThrottled() throws {
+        guard busyNextCall else { return }
+        busyNextCall = false
+        throw StoreError.busy(0.6)
+    }
+
+    /// How many times the container was asked or written, so the suite can
+    /// prove a path stayed off the network rather than merely succeeded.
+    public private(set) var fetchCount = 0
+    public private(set) var saveCount = 0
+
     // MARK: - RecordStore
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
+        try refuseIfThrottled()
+        saveCount += 1
         // The record's own zone, not its type's. One type lives in two zones:
         // see `StoredRecord.zone`.
         let zone = record.zone
@@ -99,6 +120,7 @@ public actor MemoryStore: RecordStore {
     }
 
     public func delete(_ name: String, in zone: CloudNaming.Zone) async throws {
+        try refuseIfThrottled()
         clock += 1
         zones[zone]?[name] = nil
         history[zone, default: []].append((clock, name, true))
@@ -116,6 +138,7 @@ public actor MemoryStore: RecordStore {
     /// absent, which is the half of the two-phase pull that can be wrong.
     public func changes(in zone: CloudNaming.Zone, since token: String?,
                         withAssets: Bool) async throws -> StoreChanges {
+        try refuseIfThrottled()
         var result = try await fullChanges(in: zone, since: token)
         if !withAssets {
             result.changed = result.changed.map { record in
@@ -154,7 +177,9 @@ public actor MemoryStore: RecordStore {
     }
 
     public func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
-        zones[zone]?[name]
+        try refuseIfThrottled()
+        fetchCount += 1
+        return zones[zone]?[name]
     }
 
     // MARK: - Persistence

@@ -294,6 +294,11 @@ final class CloudSyncHost {
 
         lastReport = report
         trace("cloud sync: \(report.summary)")
+        // A throttled pass is not a failed one: the server asked for a pause
+        // measured in fractions of a second, the store already waited once,
+        // and the report kept it out of `errors` so nothing turns red. What
+        // is still owed is the retry, and `syncSoon` is exactly that shape.
+        if report.throttled { syncSoon() }
         // Edge-triggered, one event per onset. The poll retries every two
         // minutes, so an event per failing pass would be one broken container
         // repeating the same fact all day into the quota. The report's error

@@ -598,8 +598,15 @@ One script stands in for one, over the app built in the working directory:
 ```
 
 The AX-driven ones share `tools/axprobe.swift`, compiled on demand into
-`.xcbuild/tools/axprobe`: texts, press, focus, settext, selectrow, hasclose,
-all through `AXUIElementCreateApplication(pid)` per the rule above. It exits
+`.xcbuild/tools/axprobe`: texts, press, showmenu, focus, settext, selectrow,
+hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
+**`showmenu` is not a nicety.** The toolbar's ellipsis is an
+`NSMenuToolbarItem` and the recording screen's two pull-downs are
+`NSPopUpButton`s, and none of them opens on `AXPress`: the call returns
+success, nothing happens, and the items read as missing from the tree
+afterwards, which is indistinguishable from a menu that was never built. A
+menu's items are in the tree **only while it is open**, so the order is always
+showmenu, read, press. It exits
 specially when the terminal lacks Accessibility permission and when the tree
 comes back empty, because a sleeping display empties every window's subtree
 and a script grepping for absence would pass on nothing.

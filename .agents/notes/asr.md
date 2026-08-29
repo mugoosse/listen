@@ -605,6 +605,39 @@ recording's `metadata.json` while the call ran, on the shipped 0.23.0 build,
 comes out as a v3 transcript after Stop. Anything in the app that wants to
 choose a model before the job exists writes that one key.
 
+### How both halves were checked, since neither is reachable without a meeting
+
+A real capture, against a scratch `LISTEN_LIBRARY`, driven by `axprobe`. The
+sequence, which is the whole test:
+
+```sh
+LISTEN_LIBRARY=$LIB Listen.app/Contents/MacOS/Listen &     # never `open`
+axprobe press    $PID "New Recording"    # ⌘N toggles record and stop
+axprobe showmenu $PID "Parakeet v2 · English only"   # the pane's pull-down
+axprobe press    $PID "25 languages"
+axprobe showmenu $PID "Actions"          # the toolbar's ellipsis
+axprobe press    $PID "Parakeet v2 · English only"   # its Transcribe With row
+axprobe press    $PID "New Recording"
+```
+
+Measured: `asr_model` absent at the start, `v3` after the pane's pick with the
+button's own title following it to "Parakeet v3 · 25 languages", `v2` after the
+menu's, and the last choice still in `metadata.json` under `recordings/` after
+Stop, on a 10 second recording that promoted to `state: done`.
+
+**`AXPress` does nothing to any of these controls**, and that is worth knowing
+before reading a failure. An `NSMenuToolbarItem` and an `NSPopUpButton` both
+answer `AXShowMenu` and both return success and do nothing at all on a press,
+so a first attempt at this reported "pressed" four times and changed no file.
+A menu's items are in the tree only while it is open, which is also what makes
+this readable: with the ellipsis open the dump holds the live menu entire, in
+order, Close then Transcribe With with its two rows then Discard Recording.
+
+That same first attempt proved the File menu half by accident. Pressing its
+Transcribe Again model row against a running recording did nothing, because AX
+goes through `NSMenu`'s own validation and `validateMenuItem` now answers false
+while live. On the build before this one it would have queued the job.
+
 ## The model is cached twice, and deleting one copy does not test anything
 
 `ModelChoice` names two directories under the same hub root, and they are not

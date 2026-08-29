@@ -11,6 +11,10 @@
 //   axprobe press <pid> <needle>     AXPress the first pressable element whose
 //                                    title, value or description contains
 //                                    <needle>, case-insensitively
+//   axprobe showmenu <pid> <needle>  AXShowMenu the first element whose title,
+//                                    value or description contains <needle>.
+//                                    The ellipsis and the recording screen's
+//                                    pull-downs open on this and ignore AXPress
 //   axprobe hasclose <pid> <title>   "yes"/"no": does the window whose title
 //                                    contains <title> expose a close button
 //
@@ -102,6 +106,38 @@ case "press":
     }
     print(pressed ? "pressed" : "not found")
     exit(pressed ? 0 : 1)
+
+case "showmenu":
+    // The same walk as `press`, performing AXShowMenu instead.
+    //
+    // Two controls in this app open a menu and nothing else: the toolbar's
+    // ellipsis, an `NSMenuToolbarItem`, and the two pull-downs on the recording
+    // screen. Neither of them does anything on AXPress: the call returns
+    // success, no menu opens, and a script reading the tree afterwards reports
+    // the items as missing, which looks exactly like a control that was never
+    // built. AXShowMenu is the action they actually have.
+    guard arguments.count >= 4 else { exit(2) }
+    let needle = arguments[3].lowercased()
+    var shown = false
+    walk(app, budget: &budget) { element in
+        guard !shown else { return false }
+        let haystack = [string(element, kAXTitleAttribute),
+                        (attribute(element, kAXValueAttribute) as? String) ?? "",
+                        string(element, kAXDescriptionAttribute)]
+            .joined(separator: " ").lowercased()
+        if haystack.contains(needle) {
+            var names: CFArray?
+            AXUIElementCopyActionNames(element, &names)
+            if let actions = names as? [String], actions.contains("AXShowMenu") {
+                AXUIElementPerformAction(element, "AXShowMenu" as CFString)
+                shown = true
+                return false
+            }
+        }
+        return true
+    }
+    print(shown ? "shown" : "not found")
+    exit(shown ? 0 : 1)
 
 case "focus":
     // axprobe focus <pid> <placeholder-needle>: give the field the caret. The

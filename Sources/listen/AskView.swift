@@ -69,6 +69,52 @@ final class AskView: NSView {
          + "meetings."),
     ]
 
+    /// And four for a person, which are neither of the sets above.
+    ///
+    /// A person used to get none, on the argument that a pane already narrowed
+    /// to one name has a question in it. That was wrong in the way the library
+    /// was wrong before it got four of its own: the chips are what say which
+    /// *kind* of question the pane can answer, and somebody standing on a card
+    /// that lists three calls has no way of knowing "what do I still owe them"
+    /// is one of them.
+    ///
+    /// The four are the shapes that are only answerable because the subject is
+    /// a person: what we last talked about, what is outstanding between us,
+    /// what to raise next time, and what they think. "Summarise" is not here
+    /// for the reason it is not in the library set, and neither is "Decisions":
+    /// summarising everything somebody has ever said summarises nothing, and a
+    /// decision belongs to the meeting it was taken in rather than to one of
+    /// the people who were in it.
+    ///
+    /// **The prompts name them, rather than leaning on the sentence `start`
+    /// prefixes.** That prefix is only added to an opening turn, so a chip whose
+    /// own text says who this is about is the one that still reads correctly
+    /// when the turn is retried, resumed from History, or edited into a
+    /// follow-up. Each one asks for the meeting behind a claim, for the reason
+    /// the library four do: a claim nobody can trace back is a claim nobody can
+    /// check.
+    private static func personStarters(for name: String) -> [(String, String)] {
+        [
+            ("Catch me up",
+             "What have I talked about with \(name) recently? Give me the "
+             + "highlights in under 150 words, and name the meeting each one is "
+             + "from."),
+            ("Open items",
+             "Go through my recordings with \(name) and list what is still "
+             + "outstanding between us: what they said they would do, what I "
+             + "said I would do, and any question neither of us answered. Say "
+             + "which meeting each one came from."),
+            ("Next call",
+             "I am speaking to \(name) again soon. What should I raise, follow "
+             + "up on, or remember from last time? A short list, with the "
+             + "meeting behind each point."),
+            ("Their views",
+             "What are \(name)'s positions on the subjects that keep coming up "
+             + "between us? For each one, say what they actually said, whether "
+             + "their view has changed, and which meeting it is from."),
+        ]
+    }
+
     private let scroll = NSScrollView()
     private let turns = NSStackView()
     private let starterRow = NSStackView()
@@ -1076,21 +1122,31 @@ final class AskView: NSView {
         // both halves at once: nothing covers the page until you mean to ask,
         // and by the time the chips are up the panel is up behind them.
         //
-        // **The library gets four of its own, and a person still gets none.**
+        // **Three sets, one for each thing a question can be about.**
         // `recording != nil` used to be the whole test, which was right about
         // the meeting chips and wrong about the screen it left bare: clicking
         // into the library composer drew a well and a frame with nothing in it,
         // on the one screen where somebody has the least idea what to ask. A
-        // person is the case still left out, because a pane narrowed to one
-        // name has a question in it already and four chips would each have to
-        // guess which.
-        guard composing, chat.turns.isEmpty, person == nil,
+        // person was left out for a while longer on the argument that a pane
+        // narrowed to one name has a question in it already, and that argument
+        // was the library's own mistake made twice: knowing who the pane is
+        // about is not knowing what it can be asked.
+        guard composing, chat.turns.isEmpty,
               AgentCLI.cachedChosen() != nil else {
             starterRow.isHidden = true
             return
         }
         starterRow.isHidden = false
-        for (label, prompt) in recording != nil ? Self.starters : Self.libraryStarters {
+        // Built per person rather than looked up, because the prompts name
+        // them. The chips are redrawn on every context change, so this runs
+        // when the card does: `show(person:)` ends in `redraw`.
+        let offered: [(String, String)]
+        if let person {
+            offered = Self.personStarters(for: person)
+        } else {
+            offered = recording != nil ? Self.starters : Self.libraryStarters
+        }
+        for (label, prompt) in offered {
             starterRow.addArrangedSubview(StarterChip(label) { [weak self] in
                 self?.ask(prompt)
             })

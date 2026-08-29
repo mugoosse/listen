@@ -2530,7 +2530,7 @@ there and the row is even with the 8 below it. No constraint conflicts in the
 run's stderr, which is the other half of the check: the old arithmetic was
 resolved silently rather than reported.
 
-## The library composer has four starters of its own, and a person still has none
+## The library composer has four starters of its own, and so does a person
 
 Clicking into the composer on the library screen drew a well and an empty frame.
 The guard in `drawStarters` was `recording != nil`, which is right about
@@ -2550,8 +2550,35 @@ rather than for the reader: the brief in `Agent.swift` is a retrieval ladder,
 and the first thing an unbounded library question costs is a round trip spent
 deciding how much to read.
 
-A person is the case still deliberately left out. A pane narrowed to one name
-has a question in it already, and four chips would each have to guess which.
+A person was left out for a while longer, on the argument that a pane narrowed
+to one name has a question in it already. That was the library's own mistake made
+a second time: knowing *who* the pane is about is not knowing what it can be
+asked, and somebody standing on a card that lists three calls has no way of
+guessing that "what do I still owe them" is one of the things it answers.
+
+So a person gets four too, built per name by `AskView.personStarters(for:)`:
+`Catch me up`, `Open items`, `Next call`, `Their views`. They are the shapes only
+a person makes answerable, which is what keeps them off the other two lists.
+There is no `Summarise` for the library's reason, and no `Decisions` either: a
+decision belongs to the meeting it was taken in rather than to one of the people
+who were in it.
+
+The prompts interpolate the name rather than leaning on the `About the person …`
+sentence `start` prefixes on. That prefix is only added to an *opening* turn, so a
+chip whose own text says who this is about is the one that still reads correctly
+when the turn is retried, resumed from History, or edited into a follow-up. Each
+one asks for the meeting behind a claim, for the reason the library four do.
+
+Measured on the built app over a scratch `LISTEN_LIBRARY` of five sidecar-only
+recordings, driven through `AXUIElementCreateApplication(pid)`: typing `Joris
+Goossens` into the search field and selecting the Person row puts `Ask about
+Joris Goossens…` on the composer, and the buttons on screen at that point are
+`cancel, Person, Recordings, Person, Sonnet 5, Ask, Settings, Sidebar, Record`,
+with no chips. Focusing the field adds `Catch me up, Open items, Next call, Their
+views`, and pressing `Open items` puts `Go through my recordings with Joris
+Goossens and list what is still outstanding between us: …` on the page as the
+question. The meeting four (`Summarise, Action items, Decisions, Catch me up`)
+and the library four are unchanged in the same run.
 
 ## A conversation full width is a mode, and the sidebar under it was live
 

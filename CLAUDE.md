@@ -508,7 +508,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Delete is a verb on the conversation, so it is not on History
 - The status line holds its slot, so a message never moves the composer
 - The bar's height has to count every gap, and the status line proved it did not
-- The library composer has four starters of its own, and a person still has none
+- The library composer has four starters of its own, and so does a person
 - A conversation full width is a mode, and the sidebar under it was live
 - The list is the sidebar, and History is what this page was asked
 - Where Back goes is where the conversation came from

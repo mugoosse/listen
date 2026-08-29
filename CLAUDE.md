@@ -118,6 +118,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - A job that saves the copy it started with erases the hour it ran for
 - A recording with no audio is not a job waiting to happen
 - The model belongs to the recording, and the language is not a setting
+- The model is chosen during the call, because afterwards it costs an hour
 - Transcribing again destroys hand corrections, and now says so
 - The model is cached twice, and deleting one copy does not test anything
 - The cache root is not always `~/.cache/huggingface`

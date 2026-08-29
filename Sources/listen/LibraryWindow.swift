@@ -1762,8 +1762,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 extension LibraryWindow: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        // Only while it is still running, which is the state that has no
+        // transcript to re-run and every reason to name a model. The item is
+        // built nowhere else, so this is belt and braces.
+        case #selector(chooseModelSelected(_:)):
+            return selected?.isLive == true
         case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)),
              #selector(toggleRoomSelected):
+            // Not on a recording that is still being captured. The audio is
+            // there and growing, so `hasAudio` alone said yes and the File
+            // menu's copy of Transcribe Again would queue a job over a WAV the
+            // recorder still has open: a transcript of half a meeting, written
+            // while the other half arrives. The toolbar and sidebar copies were
+            // never offered mid-call, which is why this only ever fired from
+            // the menu bar.
+            if selected?.isLive == true { return false }
             // Transcribing needs the audio, and on a Mac sharing a library with
             // the machine that recorded it there is none. Enabled, this would be
             // a control that does nothing and reports nothing, which is the
@@ -2902,6 +2915,22 @@ extension LibraryWindow: NSMenuDelegate {
 
     private func fill(_ menu: NSMenu, for recording: Recording?) {
         menu.removeAllItems()
+        // **While the recording is still running, picking a model files it and
+        // starts nothing.** The rows are identical and the verb is not: there
+        // is no transcript to replace and no audio that has stopped arriving,
+        // so this is the same choice made before the job instead of after it.
+        // One rule in one place, so the three copies of this menu cannot
+        // disagree about which one they are offering.
+        //
+        // Re-read from disk when it is live, because the sidebar's copy of a
+        // running recording is as old as its last reload and the pane's own
+        // picker writes this field behind it. A tick on the wrong model is
+        // worse than no tick: it is the app answering "which model is this
+        // meeting getting?" incorrectly.
+        let recording = recording.map { $0.isLive ? (Recording.load($0.folder) ?? $0) : $0 }
+        let live = recording?.isLive == true
+        let action = live ? #selector(chooseModelSelected(_:))
+                          : #selector(retranscribeWithModel(_:))
         // The tick goes on what **made** the transcript, not on what the next
         // run would use. That is the question somebody reading a wrong
         // transcript actually has, and this is the only place the app answers it
@@ -2923,9 +2952,7 @@ extension LibraryWindow: NSMenuDelegate {
             if !choice.isDownloaded {
                 title += " · downloads \(ModelChoice.humanBytes(choice.approxBytes))"
             }
-            let item = NSMenuItem(title: title,
-                                  action: #selector(retranscribeWithModel(_:)),
-                                  keyEquivalent: "")
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = choice.id
             item.state = choice.id == current?.id ? .on : .off
@@ -3131,6 +3158,22 @@ extension LibraryWindow: NSMenuDelegate {
         // Stop is not here on purpose. It is the floating button, it is in the
         // menu bar, and it is the one control that should not be two clicks deep.
         if recording.isLive {
+            // The one exception, and it is an exception on its own terms: it
+            // does not touch the capture at all. Every item above acts on audio
+            // that has stopped arriving; this files a field in `metadata.json`
+            // for a job that has not started, which is the only decision about
+            // this meeting that is cheap now and expensive afterwards. The
+            // default model is English-only and writes fluent invented English
+            // over any other language, and the fix for that after the fact is an
+            // hour of transcription done twice.
+            //
+            // Above the separator, so the destructive item keeps a gap of its
+            // own. No action of its own is needed on the parent: AppKit sends
+            // none for an item with a submenu, and validation reaches it through
+            // the selector it carries.
+            add(menu, "Transcribe With", #selector(chooseModelSelected(_:)),
+                "character.bubble").submenu = modelSubmenu(for: recording)
+            menu.addItem(.separator())
             let discard = add(menu, "Discard Recording",
                               #selector(App.discardRecordingFromUI), "trash")
             discard.attributedTitle = NSAttributedString(
@@ -3388,6 +3431,24 @@ extension LibraryWindow: NSMenuDelegate {
               let id = sender.representedObject as? String,
               let choice = ModelChoice.named(id) else { return }
         retranscribe(recording, using: choice)
+    }
+
+    /// Choose the model a recording that is still running will be read with.
+    ///
+    /// The same rows as Transcribe Again and deliberately not the same verb:
+    /// nothing is queued, nothing is overwritten and no weights are loaded, so
+    /// there is nothing to confirm either. The choice sits in `metadata.json`
+    /// until the meeting ends, and `Queue.transcribe` resolves it there.
+    ///
+    /// A reload rather than nothing visible, because the pane's own picker is
+    /// the other half of this control and somebody who used the menu should not
+    /// have to wait a tick to see the bar below agree with them.
+    @objc func chooseModelSelected(_ sender: NSMenuItem) {
+        guard let recording = selected,
+              let id = sender.representedObject as? String,
+              let choice = ModelChoice.named(id) else { return }
+        Recording.setModel(choice, on: recording.folder)
+        reload()
     }
 
     /// Say the microphone was carrying a room, or take it back.

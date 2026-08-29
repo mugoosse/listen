@@ -556,6 +556,55 @@ the first sentence edit. Its path moved onto `Recording` because that file now
 has a second reader: its existence is how the app knows somebody has corrected a
 sentence in a transcript it is about to throw away.
 
+## The model is chosen during the call, because afterwards it costs an hour
+
+Transcribe Again was the only control over the model, and it is the expensive
+one: it is offered after a meeting has been read once with the wrong model, and
+paying for it means transcribing an hour of audio twice. The person who knows a
+call will be in Dutch knows it at the start of the call, not at the end of it.
+So the choice is now on the recording screen, on the row that already names the
+microphone, and it writes the same `Metadata.asr_model` that Transcribe Again
+writes. Nothing else changed: `Capture.stop` re-reads `metadata.json` from disk
+before it saves, `keep` promotes those bytes, and `Queue.transcribe` resolves
+`Recording.asrModel` rather than the app default, so the choice made at 15:27
+is the model that runs at 16:03 without a single new hop.
+
+**Filing a model mid-capture touches nothing that is being written to.** The
+model is a field in `metadata.json`; the audio is two WAVs beside it whose
+headers are rewritten as they grow. That is the whole reason this is the one
+item the actions menu may offer during a recording, where Export, Transcribe,
+Recorded in the Room and Delete are all deliberately absent: it does not act on
+the capture at all, it files a decision about a job that has not started.
+
+Three details, each of which was a bug first or would have been.
+
+1. **Every writer re-reads the file.** `Recording.setModel` is a
+   read-modify-write of `metadata.json` and never a save of the caller's copy,
+   because both controls that reach it sit on a screen that stays up for the
+   length of a meeting: the `Recording` behind them is an hour old, and saving
+   it back would undo a rename or a calendar match made in between. That is the
+   same bug `Capture.stop` records against saving the copy it took at `start`,
+   and it is reachable here in one more way, since the two controls write the
+   same field behind each other.
+2. **The title is the coverage, not the name.** The pull-down says "Parakeet v2
+   · English only" rather than "Parakeet v2". The fact that decides anything at
+   15:27 is the second half, and it has to be legible without opening the menu,
+   because somebody who opens the menu has already had the thought this control
+   exists to prompt.
+3. **The File menu could queue a live recording, and now cannot.**
+   `validateMenuItem` gated Transcribe Again on `selected?.hasAudio == true`,
+   which is *true* while a meeting records: the WAVs exist and are growing. The
+   toolbar and sidebar copies were never built mid-call so this only ever fired
+   from the menu bar, where it would have transcribed half a meeting while the
+   other half arrived. Live is now `false` there, and the choice-only item is
+   `true` only while live.
+
+`Recording.setModel` is the shape a hand-edit can take too, which is how the
+mechanism was first proved: writing `"asr_model": "v3"` into a staging
+recording's `metadata.json` while the call ran, on the shipped 0.23.0 build,
+comes out as a v3 transcript after Stop. Anything in the app that wants to
+choose a model before the job exists writes that one key.
+
 ## The model is cached twice, and deleting one copy does not test anything
 
 `ModelChoice` names two directories under the same hub root, and they are not

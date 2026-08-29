@@ -50,6 +50,27 @@ final class RecordingView: NSView {
     /// default because it cannot record.
     private let devicePicker = NSPopUpButton(frame: .zero, pullsDown: true)
 
+    /// Which model will read this call, and the way to change it before it does.
+    ///
+    /// **The choice is worth nothing after the fact and everything before it.**
+    /// The default is English-only, and an English-only decoder handed Dutch
+    /// audio does not fail: it writes fluent, confident, invented English, and
+    /// the only evidence anything went wrong is a human reading it. Until now
+    /// the one control over that was Transcribe Again, which is an hour of work
+    /// undone and redone after the meeting. Somebody who knows at 15:27 that
+    /// this call is in Dutch can say so at 15:27.
+    ///
+    /// Titled with the coverage rather than just the name, because the fact
+    /// that decides this is not "Parakeet v2", it is "English only". The title
+    /// is the whole warning, and it is on screen for the length of the call
+    /// without anybody opening anything.
+    ///
+    /// A pull-down for the same reason as the device beside it, though not the
+    /// same disagreement: item 0 of a pull-down is a title nobody can choose,
+    /// which is what lets the button stay short while each row carries its
+    /// coverage and, if the weights are not here yet, what it will cost to
+    /// fetch them.
+    private let modelPicker = NSPopUpButton(frame: .zero, pullsDown: true)
 
     /// Why the microphone is not hearing anything, or which device Listen had to
     /// move to. One line, under the meters, and empty most of the time.
@@ -70,6 +91,10 @@ final class RecordingView: NSView {
     /// and restarting the strips on each one would clear their history a few
     /// times a second.
     private var running = false
+
+    /// The model id the picker is currently showing, so the menu is rebuilt when
+    /// the choice changes and not twice a second for an hour.
+    private var shownModel: String?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -130,6 +155,17 @@ final class RecordingView: NSView {
         devicePicker.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(devicePicker)
 
+        modelPicker.isBordered = false
+        modelPicker.font = .systemFont(ofSize: 11, weight: .medium)
+        modelPicker.controlSize = .small
+        modelPicker.target = self
+        modelPicker.action = #selector(pickModel(_:))
+        // The title names a model and the control is about transcribing, which
+        // the words alone do not say to anybody who cannot see where it sits.
+        modelPicker.setAccessibilityLabel("Transcribe this recording with")
+        modelPicker.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(modelPicker)
+
         for meter in [them, you] {
             meter.translatesAutoresizingMaskIntoConstraints = false
             bar.addSubview(meter)
@@ -138,6 +174,11 @@ final class RecordingView: NSView {
         warning.font = .systemFont(ofSize: 11, weight: .medium)
         warning.textColor = .systemOrange
         warning.lineBreakMode = .byTruncatingTail
+        // The elastic one on this row. Both pickers name something that has to
+        // be readable in full, and a warning is still useful truncated: the
+        // whole of it is one sentence about a device whose name is already on
+        // screen to its left.
+        warning.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         warning.isHidden = true
         warning.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(warning)
@@ -185,8 +226,18 @@ final class RecordingView: NSView {
 
             warning.leadingAnchor.constraint(equalTo: devicePicker.trailingAnchor,
                                              constant: 10),
-            warning.trailingAnchor.constraint(lessThanOrEqualTo: them.trailingAnchor),
+            warning.trailingAnchor.constraint(lessThanOrEqualTo: modelPicker.leadingAnchor,
+                                              constant: -10),
             warning.centerYAnchor.constraint(equalTo: devicePicker.centerYAnchor),
+
+            // The two ends of the same row: what is being recorded from on the
+            // left, what will read it on the right, and the sentence about the
+            // microphone in between. Five points past the strips' edge because
+            // a borderless pop-up insets its chevron by about that much, so the
+            // glyph lines up with the end of the meters rather than the box
+            // around it does.
+            modelPicker.trailingAnchor.constraint(equalTo: them.trailingAnchor, constant: 5),
+            modelPicker.centerYAnchor.constraint(equalTo: devicePicker.centerYAnchor),
 
             bar.heightAnchor.constraint(equalToConstant: 92),
         ])
@@ -206,6 +257,10 @@ final class RecordingView: NSView {
         if changed {
             notesText.string = Notes.yoursOrEmpty(for: recording).body
             updatePlaceholder()
+            // The menu is keyed on the choice, not on the recording, so a
+            // different meeting with the same model would otherwise keep the
+            // menu built against the last one's tick.
+            shownModel = nil
         }
         refreshWarning()
     }
@@ -319,6 +374,10 @@ final class RecordingView: NSView {
         warning.isHidden = text == nil
         warning.textColor = silent ? .systemOrange : .secondaryLabelColor
         refreshDevices()
+        // On the same tick as the device, and for the same reason: both can be
+        // changed from somewhere that is not this view, the microphone by
+        // unplugging it and the model by the ellipsis in the toolbar.
+        refreshModel()
     }
 
     /// Rebuild the device menu, and title it with the device actually in use.
@@ -369,6 +428,73 @@ final class RecordingView: NSView {
     @objc private func pickDevice(_ sender: NSMenuItem) {
         Capture.shared.switchMicrophone(to: sender.representedObject as? String)
         refreshWarning()
+    }
+
+    // MARK: - The model
+
+    /// The model this recording will be transcribed with, read from disk.
+    ///
+    /// **From the file rather than from the copy this view is holding**, because
+    /// the same choice is on the toolbar's ellipsis and the sidebar's
+    /// right-click menu, and the copy behind this screen is as old as the call.
+    /// One small JSON per tick, against a folder this view already knows: the
+    /// alternative, `Recording.find`, decodes every `metadata.json` in the
+    /// library to answer the same question.
+    ///
+    /// Rebuilt only when the answer changes. Replacing the menu of a pop-up that
+    /// is open would shut it under whoever was reading it, and this runs twice a
+    /// second for the whole meeting.
+    private func refreshModel() {
+        let choice = recording.flatMap { Recording.load($0.folder) }?.asrModel
+            ?? recording?.asrModel ?? Settings.model
+        guard choice.id != shownModel else { return }
+        shownModel = choice.id
+
+        let menu = NSMenu()
+        // Item 0 of a pull-down is its title and is never chosen. The coverage
+        // rides along with the name because it is the half that decides
+        // anything: "Parakeet v2" says nothing to somebody about to hold a
+        // meeting in Dutch and "English only" says all of it.
+        menu.addItem(withTitle: "\(choice.title) · \(choice.coverage)",
+                     action: nil, keyEquivalent: "")
+        menu.addItem(.separator())
+        for option in ModelChoice.all {
+            // The same rows as Transcribe Again's submenu, and for the same
+            // reasons: the coverage rather than the blurb, whose caveat is about
+            // short clips and is misleading in front of a meeting, and the size
+            // of the download named before the click rather than discovered
+            // inside the job.
+            var title = "\(option.title) · \(option.coverage)"
+            if !option.isDownloaded {
+                title += " · downloads \(ModelChoice.humanBytes(option.approxBytes))"
+            }
+            let item = NSMenuItem(title: title, action: #selector(pickModel(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = option.id
+            item.state = option.id == choice.id ? .on : .off
+            menu.addItem(item)
+        }
+        modelPicker.menu = menu
+        modelPicker.contentTintColor = .secondaryLabelColor
+    }
+
+    /// File the model against the recording, mid-call.
+    ///
+    /// Nothing is queued and nothing is loaded. The job starts when the meeting
+    /// ends and reads the model out of the folder then, so this can be changed
+    /// as many times as somebody likes while the call runs and costs nothing.
+    /// See `Recording.setModel`, which is what the two menus call as well.
+    @objc private func pickModel(_ sender: NSMenuItem) {
+        // Never in a preview launch, for the same reason `save` refuses: a
+        // `LISTEN_PANEL=live` window points at a real, finished recording, and
+        // filing a model against it here would queue nothing and quietly change
+        // what its next re-run uses.
+        guard let recording, previewSilent == nil,
+              let id = sender.representedObject as? String,
+              let choice = ModelChoice.named(id) else { return }
+        Recording.setModel(choice, on: recording.folder)
+        refreshModel()
     }
 
     // MARK: - Timers

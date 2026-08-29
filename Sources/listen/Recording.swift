@@ -402,6 +402,27 @@ struct Recording {
         ModelChoice.named(metadata.asr_model ?? "") ?? Settings.model
     }
 
+    /// Give this recording its own model, before anything reads it.
+    ///
+    /// **A read-modify-write of the file, never a save of the caller's copy.**
+    /// Both controls that reach this are on screens that stay up for the length
+    /// of a meeting, so the `Recording` behind them is as old as the screen:
+    /// saving that back would undo a rename, a note or a calendar match made in
+    /// the meantime, which is exactly the bug `Capture.stop` records against
+    /// saving the copy it took at `start`.
+    ///
+    /// Safe on a recording that is still being captured, and that is the point.
+    /// The model is a field in `metadata.json` and the audio is two WAVs beside
+    /// it, so choosing during the call touches nothing that is being written to,
+    /// and `Capture.stop` re-reads this file before it saves. The queue picks
+    /// the choice up on its own afterwards, because `Queue.transcribe` resolves
+    /// `Recording.asrModel` rather than the app default.
+    static func setModel(_ choice: ModelChoice, on folder: URL) {
+        guard var fresh = load(folder), fresh.metadata.asr_model != choice.id else { return }
+        fresh.metadata.asr_model = choice.id
+        try? fresh.save()
+    }
+
     /// Every track that exists, for whatever wants to read audio.
     var tracks: [URL] {
         [micURL, systemURL].filter { FileManager.default.fileExists(atPath: $0.path) }

@@ -241,6 +241,14 @@ the date and the length. To change it, open the **…** menu and hover
 produced what is on screen, and the download size on any that is not on your
 disk yet. The choice stays with that recording, so a later re-run uses it too.
 
+**Say so while the call is still running, and there is nothing to redo.** The
+recording screen names the model at the right-hand end of the row that names
+your microphone, as "Parakeet v2 · English only". Click it and pick the other
+one, at any point during the meeting, and that is the model Listen uses when
+you press Stop. The same list is under **Transcribe With** in the **…** menu
+while a recording is running. Nothing is transcribed and nothing is downloaded
+until the meeting ends, so this costs nothing to change your mind about.
+
 Transcribing again replaces the transcript, so the speaker names and any
 sentences you corrected go with it. Listen asks first when there is something
 there to lose. To change the model for *new* recordings instead, use Settings,

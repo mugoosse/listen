@@ -363,3 +363,41 @@ LetsMove's shape. "Not now" always continues: the diagnosis is heuristic and
 must not be able to lock somebody out of their own recorder.
 `verify_install_guard.sh` builds a scratch UDZO, launches from the mount, and
 asserts the alert and the decline path against the real thing.
+
+## The notarytool profile went missing between two releases on the same day
+
+0.24.1 built, signed and packaged, and then `release.sh` refused to publish:
+
+```
+warning: skipping notarization.
+         no notarytool profile 'listen-notary' stored.
+gatekeeper, app: REJECTED
+gatekeeper, dmg: REJECTED (users get a Gatekeeper dialog on open)
+error: refusing to publish a release Gatekeeper would block.
+```
+
+The refusal is the script working. What is worth writing down is that this
+machine had the credential earlier the same afternoon and did not have it two
+and a half hours later, and nothing said so in between. Measured rather than
+assumed: the published `Listen-0.24.0.dmg` downloaded from the release staples
+and validates, `source=Notarized Developer ID`, so the profile was live at
+15:42; at 17:59 `xcrun notarytool history --keychain-profile listen-notary`
+answers "No Keychain password item found for profile: listen-notary", and
+neither `security dump-keychain | grep -i notary` nor `security
+find-generic-password -s com.apple.gke.notary.tool` finds anything in the login
+keychain. **Why it went is not known.** The Sparkle key in the same keychain was
+read normally in the same run, so the keychain was neither locked nor
+unreadable.
+
+**The cost is a whole build, because the credential is checked after it.**
+`HAS_CREDS` is computed at the notarize step, so a missing profile is ten
+minutes of xcodebuild before anything is said, and what it says at the end is
+`REJECTED` twice with the real cause fifteen lines further up. If this happens
+again, that pair of lines is the one to read up from. A preflight check beside
+the Sparkle-key one would turn it into a five second failure and is worth
+doing.
+
+Recovery is the one-time setup in `RELEASING.md` §2, run again, and then
+`./release.sh --publish` from the top. `--resume` is no help: nothing was
+submitted, so there is no id to resume, and no tag was created either, so the
+re-run is clean rather than a repair.

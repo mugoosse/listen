@@ -544,6 +544,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - `/release` is the shortcut, and it publishes nothing itself
 - CI runs a different Xcode from the machine you are on, and only one of them ships
 - Double-clicking the icon in the DMG window launches the image's copy
+- The notarytool profile went missing between two releases on the same day
 
 ## Conventions
 

@@ -1384,6 +1384,21 @@ final class PrivacyPane: Pane {
              + "and deleted the moment it turns off. Your recordings, transcripts, "
              + "titles, names and searches never leave this Mac either way.")
 
+        // The paragraph above has always claimed an install ID exists and is
+        // deleted when the switch goes off. Printing it is what makes both
+        // halves checkable rather than merely stated, and it is the only way
+        // somebody with more than one Mac can tell which rows are which: the
+        // events carry no device name, on purpose. Selectable so it can be
+        // copied; absent rather than blank when nothing is being sent, because
+        // "no ID" is the honest answer then and an empty box is not.
+        if let id = Telemetry.installID {
+            let field = NSTextField(labelWithString: "Install ID: \(id)")
+            field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            field.textColor = .secondaryLabelColor
+            field.isSelectable = true
+            stack.addArrangedSubview(field)
+        }
+
         let dictionary = NSButton(title: "See exactly what is shared",
                                   target: nil, action: nil)
         dictionary.isBordered = false

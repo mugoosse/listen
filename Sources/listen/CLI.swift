@@ -15,7 +15,7 @@ enum CLI {
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts", "notes", "tags", "ask", "sync", "backup", "activity", "forget",
-        "audio", "changelog",
+        "audio", "changelog", "telemetry",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -185,6 +185,8 @@ enum CLI {
                 print(Backups.describe())
             }
             exit(0)
+        case "telemetry":
+            telemetry()
         case "sync":
             await SyncCLI.run(rest)
         case "audio":
@@ -192,6 +194,44 @@ enum CLI {
         default:
             fail("unknown command `\(command)`. Try `listen help`.")
         }
+    }
+
+    /// `listen telemetry`: whether this install is sending, and under what id.
+    ///
+    /// The settings pane shows the same id, and this exists because a pane
+    /// cannot be clicked over SSH: a second Mac in a drawer is exactly the
+    /// machine whose rows are hardest to account for, and telling it apart
+    /// from a stranger's install is the whole job. It also states the reason
+    /// when nothing is being sent, because "off" and "this build was never
+    /// released" look identical from the outside and are fixed differently.
+    private static func telemetry() -> Never {
+        if Settings.forcedBool("telemetryDisabled") == true {
+            print("telemetry: off, forced by a device profile")
+            exit(0)
+        }
+        if Telemetry.consent != true {
+            print("telemetry: off. Settings, Privacy turns it on.")
+            exit(0)
+        }
+        // Consented, so anything left is the send gate: a build nobody
+        // released, or the env seam. `Telemetry.installID` is nil until the
+        // SDK is started, and starting it is the caller's job, never a
+        // getter's.
+        Telemetry.startIfConsented()
+        guard let id = Telemetry.installID else {
+            print("telemetry: on, but this build sends nothing. Only a build "
+                  + "`release.sh` made reaches the real project.")
+            exit(0)
+        }
+        print("telemetry: on")
+        print("install id: \(id)")
+        print("schema:     v\(TelemetrySchema.schemaVersion)")
+        print("host:       \(Telemetry.destination)")
+        print("")
+        print("That id is this install and nothing else: it is not derived "
+              + "from your Mac, it is never synced between your devices, and "
+              + "turning telemetry off deletes it. See TELEMETRY.md.")
+        exit(0)
     }
 
     /// `listen calibrate`: the voiceprint threshold report.
@@ -1562,6 +1602,10 @@ enum CLI {
                                  --dry-run says what it would write.
       changelog [<version>]      what changed, from the notes that shipped in
                                  this copy. --list for the versions alone.
+      telemetry                  whether this install sends anonymous
+                                 statistics, and the random install id it
+                                 sends under. The same id Settings › Privacy
+                                 shows, for a Mac you reach over SSH.
       activity [--limit N]       what has touched the library: tool calls,
                                  agent runs, exports, deletions, backups.
                                  Ids only, never content. --json for jq.

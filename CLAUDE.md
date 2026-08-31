@@ -543,6 +543,8 @@ What the apps send, and what reading it back for the first time proved wrong.
 PostHog project.
 
 - The reader is the developer, and that is most of the data
+- Nothing said which install was yours, and that is why the filter is guesswork
+- Development builds cannot be in this data, and it is worth knowing why
 - `app_build` is VERSION at build time, so a pre-release build pollutes it
 - `installation_activated` counted the back catalogue, and the age bucket could not tell
 - Closing the setup window is a finish, and the funnel could not see it

@@ -19,7 +19,62 @@ accounts" currently excludes nobody.
 
 Filling it is not the obvious job it looks: `config.personProfiles = .never`
 means there are no person profiles at all, so a property-based dynamic cohort
-has nothing to match on. A static cohort on the distinct id is the route.
+has nothing to match on. That is not a thing to fix in the cohort, because a
+cohort is a set of *persons* and this project has none.
+
+**The filter that works is a HogQL entry in `test_account_filters` itself**,
+which needs no cohort and no person:
+
+```json
+{"key": "distinct_id != '<the install id>'", "type": "hogql", "value": null}
+```
+
+Set through `project-settings-update`, alongside the existing cohort entry.
+Measured after applying it: `dictation_completed`, which only this install has
+ever sent, went from 205 to 0 with `filterTestAccounts: true`, and
+`recording_completed` came back as 4, which is exactly the number the other
+three installs made. It removes the one install and nothing else.
+
+**Two things it does not do.** It does not touch `execute-sql`, which ignores
+`test_account_filters` entirely, so every raw SQL query in this file's
+measurements still counts everybody and has to exclude the id by hand. And it
+goes stale silently: the install id is the SDK's random per-install value,
+deleted when telemetry is turned off and regenerated fresh when it is turned
+back on, so a reinstall, a new Mac, or one trip through the Privacy switch
+produces a new id that the filter does not name. Nothing warns about this. The
+symptom is a dictation count that is suddenly not zero.
+
+## Nothing said which install was yours, and that is why the filter is guesswork
+
+The events carry no device name, on purpose, and the install ID was never
+shown anywhere. So neither the person reading the project nor the person who
+owns the Macs could say which rows belonged to whom: the only evidence was
+circumstantial timing, such as an iPhone activating 42 minutes after a Mac on
+the day telemetry was written.
+
+`Telemetry.installID` now surfaces it in Settings, Privacy and through `listen
+telemetry`. The CLI half is the one that matters for this job: a second Mac
+reached over SSH has no settings pane to click, and a machine in a drawer is
+exactly the one whose rows are hardest to account for.
+
+`listen telemetry` also distinguishes the three ways nothing is being sent,
+because they look identical from outside and are fixed differently: forced off
+by a device profile, switched off, or a build nobody released. It prints
+`Telemetry.destination` rather than `TelemetrySchema.host`, so an endpoint
+override is not quietly reported as the real project.
+
+## Development builds cannot be in this data, and it is worth knowing why
+
+`install.sh` calls `make_app.sh` with no `LISTEN_RELEASE_BUILD`, and
+`make_app.sh` only writes the `ListenReleaseBuild` key when that variable is
+`1`, which only `release.sh` sets. Without the key `Telemetry.blocked` is
+true. `verify_telemetry.sh` uses `LISTEN_TELEMETRY_ENDPOINT` and reaches
+localhost. So every install in the project is a released build, and "maybe
+that row is a test build" is never the explanation for anything.
+
+The corollary is the one that surprises: a developer's own
+`/Applications/Listen.app` **is** a release build, so their daily driver is in
+the data like anybody else's, and is usually the loudest install in it.
 
 ## `app_build` is VERSION at build time, so a pre-release build pollutes it
 

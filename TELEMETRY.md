@@ -34,7 +34,11 @@ everything outside the tables below, and the filter's source is public.
   telemetry turns on. It is not derived from anything, it is never synced
   between your devices (a Mac and an iPhone are two installs, deliberately),
   it is deleted the moment you turn telemetry off, and turning it back on
-  later creates a fresh one.
+  later creates a fresh one. **You can see it**: Settings, Privacy prints it
+  under the switch, and `listen telemetry` prints it too, for a Mac you reach
+  over SSH. Nothing else in this file can be checked against your own machine
+  the way that can, and somebody with two Macs has no other way to tell which
+  install is which, because no event carries a device name.
 - There are no accounts, no person profiles, no cookies, no session replay,
   no cross-site or cross-app tracking, and no advertising identifiers.
 

@@ -91,9 +91,35 @@ enum Telemetry {
         ProcessInfo.processInfo.environment["LISTEN_TELEMETRY_ENDPOINT"]
     }
 
+    /// Where events are actually going, override included. `listen telemetry`
+    /// prints this rather than `TelemetrySchema.host`, because the one moment
+    /// somebody asks where their data goes is the one moment an answer that
+    /// ignores the override would be a lie.
+    static var destination: String { endpointOverride ?? TelemetrySchema.host }
+
     // MARK: - Lifecycle
 
     private static var started = false
+
+    /// The random ID this install is sending under, or nil when it is sending
+    /// nothing.
+    ///
+    /// Shown in Settings, Privacy and printed by `listen telemetry`, because
+    /// the pane has always said an install ID exists and is deleted when the
+    /// switch goes off, and until now there was no way for anybody to check
+    /// either half of that. It is also the only way to tell one install from
+    /// another: the events carry no device name, deliberately, so a person
+    /// with three Macs cannot otherwise find their own rows, and neither can
+    /// anybody reading the project.
+    ///
+    /// Deliberately does not start the SDK. A getter that starts things is how
+    /// a settings pane ends up editing settings by being looked at; the caller
+    /// starts telemetry if it wants it started.
+    static var installID: String? {
+        guard started else { return nil }
+        let id = PostHogSDK.shared.getDistinctId()
+        return id.isEmpty ? nil : id
+    }
 
     /// At launch, and again at the moment consent flips to yes. Idempotent,
     /// and a no-op in every state but "consented and not blocked".

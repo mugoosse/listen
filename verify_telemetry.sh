@@ -123,6 +123,13 @@ else
     if grep -q "installation_activated" "$CAPTURE"; then
         pass "installation_activated fired on the migration"
     else fail "installation_activated missing from the batch"; fi
+    # The whole point of the property: this domain was deleted above, so
+    # `onboarded` is absent and this is a genuinely new install. If it ever
+    # reads `existing` here, the discriminator is being read too late.
+    if grep -q '"activation":"new_install"' "$CAPTURE" \
+       || grep -q '"activation": *"new_install"' "$CAPTURE"; then
+        pass "a fresh install is labelled new_install"
+    else fail "activation was not new_install on a fresh install"; fi
     if grep -q "feature_used" "$CAPTURE"; then pass "the known-good event arrived"
     else fail "feature_used missing from the batch"; fi
     if grep -q "off_schema_event" "$CAPTURE"; then fail "an off-schema event escaped"
@@ -149,6 +156,15 @@ launch 10
 if [ "$(requests)" = "0" ]; then
     fail "a prior no was not overridden by the migration"
 else pass "a prior no is overridden and the install starts sending"; fi
+# The other half of the pair with case 1. `onboarded` was written true above,
+# which is what every upgrading install looks like, so this activation is the
+# migration converting the back catalogue and must not be counted as a new
+# user. These two cases together are the assertion that the count means
+# something.
+if grep -q '"activation":"existing"' "$CAPTURE" \
+   || grep -q '"activation": *"existing"' "$CAPTURE"; then
+    pass "an upgrading install is labelled existing"
+else fail "activation was not existing on an install that had been set up"; fi
 if [ "$(defaults read "$DOMAIN" telemetryConsent 2>/dev/null)" = "1" ]; then
     pass "consent reads yes after the override"
 else fail "consent was not flipped to yes"; fi

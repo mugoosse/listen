@@ -318,10 +318,12 @@ final class Queue {
         // separate `operation_failed`, or every failed run would count twice.
         switch result {
         case .success:
-            Telemetry.recordingTranscribed(finished, outcome: "ok")
+            Telemetry.recordingTranscribed(finished, outcome: "ok",
+                                           model: choice.id)
         case .failure(let error):
             Telemetry.recordingTranscribed(finished,
-                                           outcome: Telemetry.code(for: error))
+                                           outcome: Telemetry.code(for: error),
+                                           model: choice.id)
         }
 
         // The tracks this run made out of the master go with it.

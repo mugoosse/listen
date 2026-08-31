@@ -177,11 +177,26 @@ enum Telemetry {
         switch (old == true, new == true) {
         case (false, true):
             Settings.telemetryConsentedAt = Date()
+            // Whether this install had ever been set up when telemetry came
+            // on, read before anything else can write the key. The default-on
+            // migration fires this event once for the whole back catalogue, so
+            // without this the count is a floor on the installed base and not
+            // acquisition, and `install_age_bucket` cannot separate them
+            // because it is measured from the opt-in day rather than the
+            // install. `onboarded` is the discriminator because it predates
+            // telemetry by three weeks, so every upgrading install already has
+            // it, and a genuinely new one does not: `Onboarding.show()` only
+            // orders a window front and writes the key when setup ends, which
+            // is after this runs. "existing" rather than "migrated" because
+            // turning telemetry back on from the Privacy pane lands here too,
+            // and that is not a migration.
+            let activation = Settings.isFirstRun ? "new_install" : "existing"
             startIfConsented()
             guard started else { return }
             PostHogSDK.shared.optIn()
             PostHogSDK.shared.capture(
-                TelemetrySchema.Event.installationActivated.rawValue)
+                TelemetrySchema.Event.installationActivated.rawValue,
+                properties: ["activation": activation])
         case (true, false):
             guard started else { return }
             // Opt out first so nothing new is queued, then reset, which drops
@@ -233,9 +248,17 @@ enum Telemetry {
     }
 
     /// One summary at the end of setup. Choices, never contents.
-    static func setupCompleted(micGranted: Bool, model: String,
+    ///
+    /// `outcome` is what makes the funnel honest: closing the window counts as
+    /// finishing (`Onboarding.windowWillClose`), so before this existed anyone
+    /// who walked away was simply missing, and the gap between activations and
+    /// setups read as an onboarding problem that could not be told from people
+    /// who never opened the wizard at all. Both paths send the same choices;
+    /// only this says whether the last step was reached.
+    static func setupCompleted(outcome: String, micGranted: Bool, model: String,
                                dictationOn: Bool, syncOn: Bool, calendarOn: Bool) {
         capture(.setupCompleted, [
+            "outcome": outcome,
             "mic_granted": micGranted,
             "model": model,
             "dictation_on": dictationOn,
@@ -260,11 +283,24 @@ enum Telemetry {
     /// code from `code(for:)`, never a description. The processing time is
     /// read from the recording's own provenance stamps, so the caller cannot
     /// hand over a number the recording does not carry.
-    static func recordingTranscribed(_ recording: Recording, outcome: String) {
+    ///
+    /// `model` is the model the run actually used, passed in rather than read
+    /// back off the recording. `Metadata.asr_model` only holds a model somebody
+    /// chose on purpose, so a run with the default left it nil and this event
+    /// reported `asr_model: unknown`: 8 of the first 11 runs in production,
+    /// including both from an install that had picked v2 during setup. Writing
+    /// the field at the end of a run would have fixed the reporting and broken
+    /// something else, because `Recording.asrModel` reads it and Transcribe
+    /// Again would then be pinned to whatever ran the first time, so changing
+    /// the default and re-running a meeting in another language would silently
+    /// use the old model. The event learns what ran; the recording does not
+    /// acquire an opinion it was never given.
+    static func recordingTranscribed(_ recording: Recording, outcome: String,
+                                     model: String) {
         let duration = recording.metadata.duration ?? 0
         var props: [String: Any] = [
             "outcome": outcome,
-            "asr_model": recording.metadata.asr_model ?? "unknown",
+            "asr_model": model,
             "duration_bucket": TelemetrySchema.durationBucket(seconds: duration),
             "kind": TelemetrySchema.recordingKind(source: recording.metadata.source),
             "speaker_count": TelemetrySchema.cappedSpeakerCount(

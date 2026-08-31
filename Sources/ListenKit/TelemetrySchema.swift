@@ -41,7 +41,7 @@ public enum TelemetrySchema {
     /// Stamped on every event. Bucket boundaries are forever once shipped,
     /// because moving one silently would make week 12 incomparable with week
     /// 11; this number is the escape hatch when one genuinely has to move.
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     // MARK: - Events
 
@@ -88,9 +88,10 @@ public enum TelemetrySchema {
     /// absent deliberately: it is the SDK's own crash event, filtered by
     /// prefix in the app instead.
     public static let allowedProperties: [String: Set<String>] = [
-        Event.installationActivated.rawValue: [],
+        Event.installationActivated.rawValue: ["activation"],
         Event.setupCompleted.rawValue: [
-            "mic_granted", "model", "dictation_on", "sync_on", "calendar_on",
+            "outcome", "mic_granted", "model", "dictation_on", "sync_on",
+            "calendar_on",
         ],
         Event.recordingCompleted.rawValue: [
             "kind", "source_app", "duration_bucket",

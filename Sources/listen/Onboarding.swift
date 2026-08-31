@@ -715,6 +715,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // One summary of the choices made here, sent only if the step
             // before said yes; `Telemetry` drops it silently otherwise.
             Telemetry.setupCompleted(
+                outcome: "finished",
                 micGranted: Permissions.microphone,
                 model: Settings.modelChosen ? Settings.model.id : "none",
                 dictationOn: Permissions.accessibility,
@@ -865,6 +866,20 @@ final class Onboarding: NSObject, NSWindowDelegate {
         // having forgotten. A first run has no close button any more (see
         // `show(closable:)`), so this now fires for the Settings re-run and
         // for quitting mid-setup, and both of those do mean "stop asking".
+        //
+        // The guard is what keeps the funnel from counting one setup twice:
+        // `finish()` sets `onboarded` before it orders the window out, so a
+        // run that reached `.done` has already sent its own `finished` event
+        // and must not send a second one saying it was abandoned.
+        if !Settings.onboarded {
+            Telemetry.setupCompleted(
+                outcome: "dismissed",
+                micGranted: Permissions.microphone,
+                model: Settings.modelChosen ? Settings.model.id : "none",
+                dictationOn: Permissions.accessibility,
+                syncOn: Settings.cloudSyncApplies,
+                calendarOn: Permissions.calendar)
+        }
         Settings.onboarded = true
         stopPolling()
         Dictation.shared.activate()

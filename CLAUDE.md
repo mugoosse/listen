@@ -536,6 +536,21 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The cross's `putAway` was inverted, and the bug it was chased for is still open
 - What could not be verified: the download stall
 
+### `.agents/notes/telemetry.md` (8k)
+
+What the apps send, and what reading it back for the first time proved wrong.
+`Telemetry`, `TelemetrySchema`, `TELEMETRY.md`, `verify_telemetry.sh`, the
+PostHog project.
+
+- The reader is the developer, and that is most of the data
+- `app_build` is VERSION at build time, so a pre-release build pollutes it
+- `installation_activated` counted the back catalogue, and the age bucket could not tell
+- Closing the setup window is a finish, and the funnel could not see it
+- The model a run used is not the model on the recording
+- A burst of sync failures was a throttle, and the edge trigger was right
+- What the project keeps is not what the privacy page promises
+- `$exception` has never fired
+
 ### `.agents/notes/release.md` (20k)
 
 `make_app.sh`, `release.sh`, `sparkle.conf`, `CHANGELOG.md`, `Changelog`,

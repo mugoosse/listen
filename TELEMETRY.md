@@ -67,7 +67,7 @@ everything outside the tables below, and the filter's source is public.
 | `os_major` | the OS major version, e.g. `26` |
 | `install_age_bucket` | `day_0`, `week_1`, `month_1`, `month_2_3`, `over_3_months`, measured from the day you opted in |
 | `acquisition_channel` | only if you answered "How did you hear about Listen?": `github`, `homebrew`, `app_store`, `search`, `reddit`, `hacker_news`, `youtube_podcast`, `friend`, `other` |
-| `schema_version` | this dictionary's version, currently 2 |
+| `schema_version` | this dictionary's version, currently 3 |
 
 The SDK also stamps its own context: OS name and version, app version and
 build, and SDK name and version. Nothing else of its automatic context
@@ -76,13 +76,21 @@ survives the filter, and `$device_name` is stripped explicitly.
 ## Events
 
 ### `installation_activated`
-Once, at the moment consent first becomes yes. No properties beyond the
-common ones.
+Once, at the moment consent first becomes yes. `activation` is `new_install`
+if this copy had never finished setup when telemetry came on, and `existing`
+otherwise. It exists because the one-time default-on migration fires this
+event for everybody who upgrades, so without it the count is a floor on the
+installed base rather than a count of new users, and `install_age_bucket`
+cannot tell them apart either, being measured from the opt-in day.
 
 ### `setup_completed`
-Once, at the end of setup. `mic_granted` (bool), `model` (model id or
-`none`), `dictation_on` (bool), `sync_on` (bool), `calendar_on` (bool).
-Choices, never contents.
+Once at the end of setup, and once if setup is closed before the end.
+`outcome` is `finished` or `dismissed`; the other properties describe
+whatever had been chosen by that point, so an abandoned run says how far it
+got. `mic_granted` (bool), `model` (model id or `none`), `dictation_on`
+(bool), `sync_on` (bool), `calendar_on` (bool). Choices, never contents.
+Re-running setup from Settings sends it again, so this is not once per
+install.
 
 ### `recording_completed`
 When a capture made on that device lands in its library. Only the device
@@ -104,7 +112,7 @@ ride this event's `outcome` and are deliberately not doubled into
 | Property | Values |
 |---|---|
 | `outcome` | `ok`, or a stable code: `transcription.asr_failed`, `transcription.pipeline_failed`, `transcription.diarization_failed`, `network.failed`, `unknown` |
-| `asr_model` | the model id, or `unknown` |
+| `asr_model` | the id of the model the run actually used. It is what ran, not what the recording or the app would choose now |
 | `duration_bucket` | as above |
 | `processing_bucket` | transcription time as a fraction of the audio's length: `under_0_1x`, `0_1_to_0_25x`, `0_25_to_0_5x`, `0_5_to_1x`, `over_1x` |
 | `speaker_count` | distinct diarized voices, capped at 12 |

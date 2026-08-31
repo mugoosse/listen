@@ -8,6 +8,71 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.26.0 (2026-08-31)
+
+Almost entirely about the anonymous statistics, and most of it is correcting
+things this project told you that turned out not to be true. Nothing here
+changes what leaves your Mac. It changes what you can see about it, and what
+the documentation claims happens to it afterwards.
+
+### You can see your install ID
+
+Settings, Privacy has always said your statistics travel under a random
+install ID that is created when you switch it on and deleted when you switch
+it off. It now prints that ID underneath the switch, so the sentence can be
+checked instead of believed: turn the switch off and on again, and the ID that
+comes back is a different one.
+
+`listen telemetry` prints the same ID, along with where the data goes and
+which version of the dictionary is in force. That exists for a Mac you reach
+over SSH, which has no settings pane to click. It also says which of three
+reasons applies when nothing is being sent, because from the outside they look
+identical and each is fixed differently: an organisation's device profile
+turned it off, you turned it off, or this is a build nobody released.
+
+This is also the only way to tell one of your own machines from a stranger's
+in the statistics, because no event carries a device name, deliberately.
+
+### Two things the privacy documentation promised were not happening
+
+Both were found by checking the analytics project against what `TELEMETRY.md`
+and the privacy page said about it, rather than by reading the code that
+enforces the part of it Listen controls. The send filter itself was correct:
+an audit of every property that has ever arrived found nothing outside the
+published list.
+
+**Retention.** Both documents said events are kept "for at most 12 months".
+Nothing was enforcing that, and nothing could: PostHog has no way to delete
+events after a set period, on any plan, through any setting or any API, and
+the request for one has been open since 2023. Both documents now say events
+are kept indefinitely. The identity is the part that does get deleted, on your
+instruction and at once, which is what turning the switch off does.
+
+**Location.** `TELEMETRY.md` said location is "kept only as a country". Your
+IP address is genuinely discarded and has never been stored, but a city and a
+postal code were being worked out from it first. Those are now switched off.
+What still arrives is a continent, a country, a region, a time zone, and a
+latitude and longitude accurate to that region rather than to you.
+`TELEMETRY.md` now describes that instead.
+
+### What the statistics count, corrected
+
+The dictionary version is now 3.
+
+Activation could not tell a new install from an existing one, because the
+one-time migration that turns statistics on fires the same event for everybody
+who updates. It now says which it was. Setup could not see somebody closing
+the window part-way, so an abandoned setup was missing rather than recorded;
+it now reports that it was abandoned, and how far it got. And the speech model
+was reported as "unknown" for any recording transcribed with the default, which
+was most of them; it now reports the model that actually ran.
+
+### The website counts download clicks
+
+The download buttons on the website now record that they were pressed, and
+which of the four on the page it was. Still cookieless, still nothing stored
+about who did it, and the privacy page says so.
+
 ## 0.25.0 (2026-08-31)
 
 Four fixes, all of them found by installing Listen on somebody else's Mac for

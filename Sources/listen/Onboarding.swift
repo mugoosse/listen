@@ -28,6 +28,14 @@ import ListenKit
 final class Onboarding: NSObject, NSWindowDelegate {
     static let shared = Onboarding()
 
+    /// Ask sits after dictation, and it is the second optional one. It is a
+    /// step rather than a card in the window for the reason the calendar is a
+    /// step: Settings is the only other place it can be offered from, and a
+    /// feature nobody is told about is one nobody turns on. What it must not
+    /// do is sell itself on the home screen of an app somebody opened to
+    /// record a meeting, which is what it did before this step existed. See
+    /// `Settings.askEnabled`.
+    ///
     /// The calendar sits between the two recording permissions and the model,
     /// and it is the only optional one. It is here at all because the Settings
     /// pane is the only other place the system prompt can be raised from, so
@@ -35,7 +43,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// and the feature is silently off for them. Its buttons say so: the way
     /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, calendar, model, dictation, sync, done
+        case welcome, microphone, systemAudio, calendar, model, dictation, ask, sync, done
     }
 
     private var window: NSWindow?
@@ -360,6 +368,32 @@ final class Onboarding: NSObject, NSWindowDelegate {
                    "Not granted yet. This opens System Settings, where Listen can be "
                    + "switched on under Accessibility.")
 
+        case .ask:
+            titleLabel.stringValue = "Ask about your meetings"
+            // **Value first, and in the words somebody would use themselves.**
+            // The card this replaced opened with "Ask needs an AI to answer
+            // with", which is a requirement for a feature the reader has never
+            // heard of: it asks for a decision about setting something up
+            // before saying what it would be for.
+            paragraph("Once a meeting is written down you can ask about it in "
+                      + "plain words. What did we decide. What did I say I would "
+                      + "do. What has this person told me about pricing, across "
+                      + "every call you have had with them. The answer comes out "
+                      + "of your own recordings, and you can keep it as a note.")
+            // The cost, before the button rather than after it.
+            paragraph("The answering is done by something of yours rather than "
+                      + "anything of ours: Claude Code or Codex on a subscription "
+                      + "you already pay for, or any provider that speaks the "
+                      + "OpenAI chat API, which includes a model running on this "
+                      + "Mac through Ollama. There is no Listen account and no "
+                      + "server of ours in between.")
+            paragraph("Recording and transcribing never use it, so leaving this "
+                      + "off costs you nothing else. Settings, Ask is where it "
+                      + "goes on later, and where you pick which one answers.")
+            if Settings.askEnabled {
+                status(true, "Ask is on", "")
+            }
+
         case .sync:
             titleLabel.stringValue = "Your other devices"
             paragraph("With iCloud sync on, meetings recorded on your iPhone arrive "
@@ -538,6 +572,16 @@ final class Onboarding: NSObject, NSWindowDelegate {
             primary.isEnabled = true
             secondary.isHidden = Permissions.accessibility
             secondary.title = "Skip"
+        case .ask:
+            // The press is the consent, and nothing else here needs granting:
+            // there is no system prompt to raise and no download to start, so
+            // this step is over the moment it is answered either way.
+            primary.title = Settings.askEnabled ? "Continue" : "Turn on Ask"
+            primary.isEnabled = true
+            secondary.isHidden = Settings.askEnabled
+            // "Not now" and not "Skip", for the calendar step's reason:
+            // declining costs a feature, not half of every recording.
+            secondary.title = "Not now"
         case .sync:
             // One label whichever way it goes, like the calendar step: the
             // promise is sync, and pressing it is the consent. Forced values
@@ -641,6 +685,19 @@ final class Onboarding: NSObject, NSWindowDelegate {
             Dictation.shared.activate()
             return
 
+        case .ask where !Settings.askEnabled:
+            // Turned on here and configured later, deliberately. The wizard
+            // needs `LibraryWindow.sheetHost` to hang a sheet on and the
+            // library window does not exist during a first run, so offering it
+            // here would be a button that sometimes does nothing. Saying yes
+            // puts Ask in the app, and the card there is what finishes the job.
+            Settings.askEnabled = true
+            MainMenu.refreshAsk()
+            // The window stays on this step so the tick can appear where it
+            // was promised, which is what the sync step does.
+            render()
+            return
+
         case .sync where !Settings.cloudSyncApplies && !Settings.isForced("cloudSync"):
             // The press is the consent, exactly as the Sync pane's checkbox
             // is, and it does the same things that checkbox does. The first
@@ -683,6 +740,10 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // Straight past, with nothing opened and nothing asked. "Not now"
             // means not now, and Settings, Permissions has the switch whenever
             // it does become now.
+            advance()
+        case .ask:
+            // The same, and `askEnabled` is left alone: it is already off, and
+            // Settings, Ask is where it becomes now.
             advance()
         default:
             advance()

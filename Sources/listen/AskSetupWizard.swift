@@ -407,6 +407,18 @@ final class AskSetupWizard: NSObject {
     /// only a question proves Ask does, and this is the same question the
     /// settings pane's test uses.
     private func proveIt(expectingKey key: String?) {
+        // **Walking this sheet to its last step is the consent the switch in
+        // Settings asks for**, so it is granted here rather than left as one
+        // more thing to find. Every one of the three paths into the sheet ends
+        // in this call, which is what makes it the one place to say it.
+        //
+        // Before the proof rather than after it: somebody whose test question
+        // fails still chose Ask, and the setup card that would tell them why
+        // is itself part of the surface this switch governs.
+        if !Settings.askEnabled {
+            Settings.askEnabled = true
+            LibraryWindow.shared.askEnabledChanged()
+        }
         resultLabel?.isHidden = false
         resultLabel?.stringValue = "Asking…"
         AgentCLI.statuses { [weak self] all in

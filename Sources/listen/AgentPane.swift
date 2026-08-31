@@ -19,6 +19,10 @@ import AppKit
 /// also makes "Check again" honest, since it is the same path.
 final class AgentPane: Pane {
     private var listStack: NSStackView?
+    /// The one control the switch does not govern, so `refreshEnabled` can
+    /// skip it rather than turning itself off.
+    private var enableBox: NSButton?
+    private var setUpButton: NSButton?
     private var choice: NSPopUpButton?
     private var tryButton: NSButton?
     private var result: NSTextField?
@@ -62,10 +66,25 @@ final class AgentPane: Pane {
              + "than Listen's.\n\n"
              + "There is no Listen account and no server of ours in between.")
 
+        // **The switch that decides whether any of this is in the app**, above
+        // everything it governs, because the rest of the pane is facts about
+        // machinery that is not running until it is on. See
+        // `Settings.askEnabled` for why off is the default.
+        enableBox = checkbox("Show Ask in Listen", Settings.askEnabled) { [weak self] on in
+            Settings.askEnabled = on
+            LibraryWindow.shared.askEnabledChanged()
+            self?.refreshEnabled()
+        }
+        note("Off, Listen records and transcribes and nothing asks you to set "
+             + "anything else up. On, a question box appears under the library "
+             + "and under each meeting, and Chats joins the title bar.")
+
+        separator()
+
         // The wizard, for choosing; this pane, for checking. The guided path
         // sits above the facts because the person who needs it most reads
         // nothing below it.
-        button("Set up Ask…") { AskSetupWizard.shared.present() }
+        setUpButton = button("Set up Ask…") { AskSetupWizard.shared.present() }
 
         separator()
         heading("What is set up")
@@ -147,9 +166,38 @@ final class AgentPane: Pane {
              + "provider charges is between you and them.")
 
         detect()
+        refreshEnabled()
     }
 
     override func refresh() { detect() }
+
+    /// Grey everything the switch governs, which is the whole pane below it.
+    ///
+    /// Rows are rebuilt on every detection sweep, so this runs after each one
+    /// rather than once: a provider row built while Ask is off would arrive
+    /// live, beside controls that are not.
+    ///
+    /// The pane stays readable when it is off, deliberately. Somebody deciding
+    /// whether to turn Ask on is reading exactly this prose about what each
+    /// backend costs and what it can reach, and greying that out would hide
+    /// the case for the decision behind having already taken it.
+    private func refreshEnabled() {
+        let on = Settings.askEnabled
+        for view in stack.arrangedSubviews where view !== enableBox {
+            Self.setEnabled(view, on)
+        }
+    }
+
+    private static func setEnabled(_ view: NSView, _ on: Bool) {
+        // A label is an `NSTextField` too. Only the ones somebody types into,
+        // which includes every `NSComboBox` in the provider rows.
+        if let field = view as? NSTextField {
+            if field.isEditable { field.isEnabled = on }
+        } else if let control = view as? NSControl {
+            control.isEnabled = on
+        }
+        for sub in view.subviews { setEnabled(sub, on) }
+    }
 
     override func viewWillDisappear() {
         super.viewWillDisappear()
@@ -492,6 +540,9 @@ final class AgentPane: Pane {
 
     private func fillList() {
         guard let listStack else { return }
+        // Rows are torn down and rebuilt below, so whatever `refreshEnabled`
+        // last did to them goes with them. See the note there.
+        defer { refreshEnabled() }
         boxOwner.removeAll()
         boxInitial.removeAll()
 

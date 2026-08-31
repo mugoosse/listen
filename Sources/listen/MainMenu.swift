@@ -14,6 +14,13 @@ import AppKit
 /// the title field without either of them knowing about it.
 @MainActor
 enum MainMenu {
+    /// The one row Ask owns, held so it can be hidden without rebuilding the
+    /// menu it is in. See the note where it is built.
+    private static weak var chatsItem: NSMenuItem?
+
+    /// Show or hide the Ask row, after `Settings.askEnabled` has changed.
+    static func refreshAsk() { chatsItem?.isHidden = !Settings.askEnabled }
+
     static func install() {
         let main = NSMenu()
 
@@ -157,8 +164,26 @@ enum MainMenu {
         // A shared target rather than nil, for `openLibrary`'s reason: it opens
         // the window when there is not one, and a responder chain has nothing in
         // it to reach then.
-        add(menu, "Chats", #selector(MenuActions.openChats), "0", [.command, .shift])
-            .target = MenuActions.shared
+        // Built once and hidden when Ask is off, rather than left out.
+        //
+        // **`install` may not be called twice.** Rebuilding the row with the
+        // feature was the obvious way to do this and it is not safe: measured
+        // on the setup card's Not now button, a second `install` either never
+        // returned or aborted the process outright, depending only on whether
+        // it was called inside the action or deferred to the next turn of the
+        // run loop. `NSApp.mainMenu` is replaced here and `NSApp.windowsMenu`
+        // with it, and AppKit has been keeping its own window rows in the old
+        // one since launch.
+        //
+        // Hidden rather than disabled, for the reason a greyed row is worse
+        // than no row: it promises something would happen under a condition it
+        // does not name, and the condition is a checkbox in another window. A
+        // hidden item's key equivalent is inert too, and `openChats` guards
+        // itself in any case. See `refreshAsk` and `Settings.askEnabled`.
+        chatsItem = add(menu, "Chats", #selector(MenuActions.openChats), "0",
+                        [.command, .shift])
+        chatsItem?.target = MenuActions.shared
+        refreshAsk()
         add(menu, "Open Listen", #selector(MenuActions.openLibrary), "0")
             .target = MenuActions.shared
         return item

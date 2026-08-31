@@ -325,6 +325,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// the rule the composer already follows everywhere else. Arriving somewhere
     /// never resumes a conversation you did not ask for.
     @objc func openChats() {
+        // The menu item is rebuilt away when Ask is off, and this is the guard
+        // that makes that true rather than merely tidy: a key equivalent is
+        // still in the responder chain until the rebuild lands, and
+        // `LISTEN_PANEL` reaches this directly.
+        guard Settings.askEnabled else { return }
         if window == nil { build() }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -343,6 +348,34 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func refreshSettingsBadges() {
         guard window != nil else { return }
         settingsNav.refreshBadges()
+    }
+
+    /// Ask has been turned on or off in Settings, so every surface it owns has
+    /// to be rebuilt rather than waiting for whatever would next redraw it.
+    ///
+    /// Three of them, and none reaches the others: the drawer is a property of
+    /// the split's main item, the Chats button is decided in
+    /// `toolbarDefaultItemIdentifiers`, and the menu is `NSApp.mainMenu`.
+    ///
+    /// **Turning it off while a conversation is the whole window has to move
+    /// somebody**, and it is reachable: Settings is a mode of this window, so
+    /// the toggle is thrown from inside the same window that is showing chat
+    /// mode underneath it. `chatReturn` is where Back would have gone, and it
+    /// is where the page goes now, except when it points at the mode being
+    /// dismantled.
+    func askEnabledChanged() {
+        if window != nil {
+            if !Settings.askEnabled {
+                if chatReturn == .chat { chatReturn = .library }
+                if mode == .chat { enter(chatReturn) }
+            }
+            rebuildToolbar()
+            updateComposer()
+        }
+        // One row's visibility, never `MainMenu.install` again: see the note
+        // there. Rebuilding the menu bar from inside the card's Not now button
+        // took the app down with it.
+        MainMenu.refreshAsk()
     }
 
     private func build() {
@@ -865,6 +898,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// `showsComposer` ignores a value it already has, so an extra call costs a
     /// comparison.
     private func updateComposer() {
+        // **Ask off is the shortest answer, and it comes first.** Everything
+        // below reasons about which screen deserves a composer; this is
+        // whether the feature is in the app at all. See `Settings.askEnabled`.
+        guard Settings.askEnabled else {
+            composerHost?.showsComposer = false
+            return
+        }
         // **And the meeting being transcribed, which is the same argument one
         // step later.** Capture ends and the job starts, and for the length of
         // that job there is still no transcript: a field offering to answer
@@ -1293,7 +1333,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // is the same reason twice. Its title bar is the one place Stop has
             // to be unmissable, so what is next to it is worth being strict
             // about.
-            if isHome && !isShowingLiveMeeting { items.append(Self.chatsItem) }
+            if isHome && !isShowingLiveMeeting && Settings.askEnabled {
+                items.append(Self.chatsItem)
+            }
             items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
             return items
         case .settings:
@@ -2274,12 +2316,37 @@ final class DetailWithComposer: NSViewController {
     ///
     /// The caret goes too. A field still blinking under a card that has just
     /// been put away is the same claim the cross was drawn to withdraw.
+    ///
+    /// **`putAway` is set here, and it used to be cleared.** Clearing it
+    /// contradicted both the sentence above and `putAway`'s own definition,
+    /// which is "set when somebody collapses on purpose"; `leavePage` cites
+    /// this method by name as its reason for setting it. It also disarmed the
+    /// only guard against the next reported height: `applyHeight` re-expands a
+    /// bar whose `wantedHeight` is over `barCeiling` unless `putAway` says
+    /// otherwise, so a tall report arriving after the press would reopen what
+    /// the press had just closed.
+    ///
+    /// **Corrected by reading, not by reproducing, and that distinction is
+    /// worth keeping.** It was found while chasing a report of an Ask panel
+    /// that opened itself after a recording and would not close, and it is
+    /// not known to be that bug: `verify_ask_close.sh` closes a real
+    /// conversation and passes on 0.24.1 as well, so on the paths that script
+    /// walks, the old line was already harmless. `closeConversation` empties
+    /// the composer before it collapses, so the height reported next is an
+    /// empty one and stays under the ceiling. What is not established is that
+    /// every path leaves it empty. This makes the guard match its
+    /// documentation either way.
+    ///
+    /// Set after `settle` and not before, because a height reported while the
+    /// composer is being emptied clears `putAway` on its way past. See
+    /// `onHeightChanged`, where that clearing is what lets a real question
+    /// bring the drawer back.
     @objc private func closeConversation() {
         settle {
             composer.startNew()
             composer.endComposing()
         }
-        putAway = false
+        putAway = true
         extent = .bar
         applyHeight(animated: true)
     }

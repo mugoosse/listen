@@ -70,6 +70,10 @@ settle() { sleep 2; }
 configure() {  # configure <claude-path> <codex-path>
   defaults delete com.mgo.listen-uitest >/dev/null 2>&1
   defaults write com.mgo.listen-uitest onboarded -bool true
+  # Ask is off until somebody turns it on, and every state below is a state of
+  # a surface that does not exist until then. See `Settings.askEnabled` and
+  # `verify_ask_toggle.sh`, which is the script that checks the switch itself.
+  defaults write com.mgo.listen-uitest askEnabled -bool true
   defaults write com.mgo.listen-uitest agentPath_claude -string "$1"
   defaults write com.mgo.listen-uitest agentPath_codex -string "$2"
   # An empty provider list, pre-stored, so the one-time provider migration is
@@ -133,10 +137,14 @@ echo "3. nothing installed at all: the plain-language card"
 configure "/nonexistent/claude" "/nonexistent/codex"
 launch
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -q "Ask needs an AI to answer with"
-check $? "the card leads with what Ask needs"
-echo "$dump" | grep -q "Recording and transcription are already working"
-check $? "and says what keeps working without it"
+echo "$dump" | grep -q "Pick what answers your questions"
+check $? "the card leads with the choice, not with a requirement"
+echo "$dump" | grep -q "each option says what it costs"
+check $? "and says the options carry their price"
+# The selling is the onboarding step's job now, and this card is only ever
+# read by somebody who already said yes there. See `Settings.askEnabled`.
+! echo "$dump" | grep -q "Check again"
+check $? "and offers two calls to action rather than three"
 ! echo "$dump" | grep -qi "npm install"
 check $? "with no package manager in sight"
 kill $APP 2>/dev/null; sleep 1

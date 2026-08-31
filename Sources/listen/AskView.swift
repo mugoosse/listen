@@ -146,6 +146,10 @@ final class AskView: NSView {
     private lazy var composer = ComposerWell(field: field, model: modelButton,
                                              send: sendButton)
     private let status = NSTextField(labelWithString: "")
+    /// The composer well's height and the status line's, so `showNotice` can
+    /// collapse both when the setup card replaces them.
+    private var wellHeight: NSLayoutConstraint!
+    private var lineHeight: NSLayoutConstraint!
     private lazy var composerTrailing =
         composer.trailingAnchor.constraint(equalTo: trailingAnchor)
     /// **The status line is a slot, not a line that comes and goes.**
@@ -285,7 +289,16 @@ final class AskView: NSView {
         starterRow.translatesAutoresizingMaskIntoConstraints = false
 
         notice.isHidden = true
-        notice.onCheckAgain = { [weak self] in self?.recheck() }
+        // Straight to the setting, which is where the card came from: it is on
+        // screen because `Settings.askEnabled` is on and nothing answered.
+        // `askEnabledChanged` is what takes the composer, the Chats item and
+        // this card away together, so there is no half-dismissed state to get
+        // into. Not routed through `self`: every Ask surface in the window has
+        // one of these, and the answer is the same wherever it is pressed.
+        notice.onDismiss = {
+            Settings.askEnabled = false
+            LibraryWindow.shared.askEnabledChanged()
+        }
 
         // The starters and the two drawer controls share one line, right
         // against left. A clock on a line of its own above the chips is a whole
@@ -371,6 +384,15 @@ final class AskView: NSView {
         // window shrinks the card instead of breaking the layout.
         let wide = notice.widthAnchor.constraint(equalToConstant: SetupNotice.maxWidth)
         wide.priority = .defaultHigh
+
+        // Held, because the setup card takes their place rather than sitting
+        // above them. See `showNotice`: hiding a view leaves its constraints
+        // active, so the well's 44 points and the status line's stay in the
+        // layout as a hole under the card unless the constants go to zero too.
+        wellHeight = composer.heightAnchor.constraint(
+            equalToConstant: ComposerWell.height)
+        lineHeight = status.heightAnchor.constraint(
+            equalToConstant: Self.statusHeight)
 
         // **The four things that are a column on a page.** Everything on this
         // pane is pinned to both of its sides in a card, which is right there
@@ -463,11 +485,11 @@ final class AskView: NSView {
             notice.widthAnchor.constraint(lessThanOrEqualTo: invitation.widthAnchor),
             wide,
 
-            composer.heightAnchor.constraint(equalToConstant: ComposerWell.height),
+            wellHeight,
             composer.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
 
             status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
-            status.heightAnchor.constraint(equalToConstant: Self.statusHeight),
+            lineHeight,
         ])
 
         // Over the scroll view rather than inside it, and centred on it. In the
@@ -1153,6 +1175,42 @@ final class AskView: NSView {
         }
     }
 
+    /// Put the setup card up in the starter chips' slot, or take it down and
+    /// give the slot back.
+    ///
+    /// **One call, because `barHeight` budgets for exactly one of them and
+    /// nothing was making that true.** The card is documented as standing in
+    /// the chips' place, and the height it is given is measured on that
+    /// assumption, but `starterLine` was never hidden: it holds the expand
+    /// button as well as the chips, so it kept its own line whether or not
+    /// there were any chips in it. The drawer was then solved for the card
+    /// alone and laid out with both, and the card lost the difference.
+    ///
+    /// Measured on the no-agent state at 560 points wide: the card asks for
+    /// 116 and was laid out at 99, which is one line of body text gone. The
+    /// body wrapped correctly and only its first line was ever drawn, so it
+    /// read as a sentence that stopped mid-way. Screenshots of a first install
+    /// show it stopping at "Set".
+    private func showNotice(_ statuses: [AgentStatus]?) {
+        if let statuses { notice.show(statuses) } else { notice.isHidden = true }
+        let up = !notice.isHidden
+        starterLine.isHidden = up
+        // **The card stands alone, and the field goes with the chips.**
+        //
+        // It used to sit above a live "Ask about your library…", which is a
+        // card inside a card offering a box that cannot answer: the state is
+        // known before anything is typed, so putting the field up is an
+        // invitation to find out the hard way. Nothing under the card is worth
+        // keeping either, since the status line only ever reports on a run.
+        //
+        // Constants and not just `isHidden`, because the well is pinned to a
+        // height and the status line to another, and a hidden view keeps both.
+        composer.isHidden = up
+        status.isHidden = up
+        wellHeight.constant = up ? 0 : ComposerWell.height
+        lineHeight.constant = up ? 0 : Self.statusHeight
+    }
+
     private func updateStatus() {
         // **No `recording != nil` guard.** There used to be one, returning
         // before any of this: with no meeting open there was no pane, so there
@@ -1176,7 +1234,7 @@ final class AskView: NSView {
             // instead, which is where somebody is already looking when they
             // want to know what will answer.
             say("")
-            notice.isHidden = true
+            showNotice(nil)
             setAskable(false)
             // **Reported here too, and this branch is the one that runs first.**
             //
@@ -1198,12 +1256,12 @@ final class AskView: NSView {
             // empty: two messages about one problem, six points apart, and the
             // small grey one is the one nobody reads.
             say("")
-            notice.show(found)
+            showNotice(found)
             setAskable(false)
             reportHeight()
             return
         }
-        notice.isHidden = true
+        showNotice(nil)
         setAskable(true)
         reportHeight()
         // A provider's catalogue goes stale while the app sits in the menu bar
@@ -1298,14 +1356,34 @@ final class AskView: NSView {
         // and the well, the well, and the gap over the starters row. The
         // scrolling conversation is what takes up the difference when there is
         // more room than this, and it is zero points high in a bar.
-        var height = Self.paneBottomInset + 6 + Self.statusHeight + 6
-            + ComposerWell.height + 8
+        // The well and the line are zero while the setup card is up, and this
+        // has to agree with `showNotice` or the drawer is solved for a
+        // composer that is not there.
+        let well = notice.isHidden ? ComposerWell.height : 0
+        let line = notice.isHidden ? Self.statusHeight : 0
+        var height = Self.paneBottomInset + 6 + line + 6 + well + 8
         if !notice.isHidden {
-            height += notice.fittingSize.height + 8
+            height += notice.height(forWidth: noticeWidth) + 8
         } else {
             height += max(starterLine.fittingSize.height, 20) + 8
         }
         return height
+    }
+
+    /// The width `notice` will actually be laid out at, which is what its
+    /// height depends on. See `SetupNotice.height(forWidth:)`.
+    ///
+    /// The constraints are a required cap at the pane's width and a high
+    /// `maxWidth` constant, so the card takes the smaller. Before the first
+    /// layout pass neither view has a width yet, and the constant is the
+    /// better guess than zero: the pane is wider than 560 in every window this
+    /// fits in, so the first report is right and a narrower window corrects it
+    /// on the next one.
+    private var noticeWidth: CGFloat {
+        let available = invitation.bounds.width > 0 ? invitation.bounds.width
+                                                    : bounds.width
+        guard available > 0 else { return SetupNotice.maxWidth }
+        return min(SetupNotice.maxWidth, available)
     }
 
     /// How far the pane's floor is off the drawer's, which is
@@ -1372,21 +1450,6 @@ final class AskView: NSView {
         updateSendButton()
         updateModelButton()
         drawStarters()
-    }
-
-    /// Look again, for somebody who has just installed or signed in elsewhere.
-    ///
-    /// The cached login-shell `PATH` is forgotten first, for the reason the
-    /// Agent pane's button forgets it: an npm install that landed in a
-    /// directory this process has never heard of is exactly the case being
-    /// checked for.
-    private func recheck() {
-        notice.isBusy = true
-        AgentCLI.forgetCachedPaths()
-        AgentCLI.statuses { [weak self] _ in
-            self?.notice.isBusy = false
-            self?.updateStatus()
-        }
     }
 
     /// Put a transient line under the composer.
@@ -2340,16 +2403,8 @@ final class SendButton: NSView {
 /// lays the options out with their trade-offs and finishes each one; the
 /// settings pane stays a gear-click away for whoever wants the facts instead.
 private final class SetupNotice: NSView {
-    var onCheckAgain: (() -> Void)?
-
-    /// Detection is running. The button says so itself rather than leaving a
-    /// press unacknowledged for the second or so a sweep takes.
-    var isBusy = false {
-        didSet {
-            check.isEnabled = !isBusy
-            check.title = isBusy ? "Looking…" : "Check again"
-        }
-    }
+    /// Somebody has decided they do not want Ask after all. See `dismiss`.
+    var onDismiss: (() -> Void)?
 
     /// Capped where the settings panes cap theirs, and for the same reason: a
     /// paragraph as wide as a full-screen window is one nobody finishes.
@@ -2357,7 +2412,6 @@ private final class SetupNotice: NSView {
 
     private let heading = NSTextField(wrappingLabelWithString: "")
     private let body = NSTextField(wrappingLabelWithString: "")
-    private let check = NSButton(title: "Check again", target: nil, action: nil)
     // The wizard, not the settings pane. The pane states facts about what is
     // installed, which is the right surface for checking on a thing and the
     // wrong one for choosing: the first outside install stared at accurate
@@ -2365,28 +2419,50 @@ private final class SetupNotice: NSView {
     // path, and the pane stays one gear-click away for whoever wants facts.
     private let settings = NSButton(title: "Set up Ask…",
                                     target: nil, action: nil)
+    /// **The way out, and this card needed one.**
+    ///
+    /// It only appears once somebody has turned Ask on, so it is never the
+    /// first thing a new install sees any more. What it still was, before
+    /// this button, is permanent: turn Ask on, fail to finish setting it up,
+    /// and the explanation of why asking will not work is on every screen for
+    /// ever, with a Check again that keeps saying the same thing.
+    ///
+    /// It turns Ask off rather than hiding only itself, and those are the same
+    /// thing said honestly. Hiding the card alone would leave a composer that
+    /// cannot answer and nothing on screen saying why, which is the state this
+    /// card exists to prevent. The three buttons are the three answers: set it
+    /// up, look again, or not at all.
+    private let dismiss = NSButton(title: "Not now", target: nil, action: nil)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        // **No border of its own.** It used to draw one, from when it shared
+        // the drawer with the composer and had to read as a separate block
+        // above it. It is the only thing in the drawer now, so its edge landed
+        // a few points inside the drawer's own rounded panel: a card in a
+        // card, which is what it looked like.
         layer?.cornerRadius = 12
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
 
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         body.font = .systemFont(ofSize: 12)
 
-        for button in [settings, check] {
+        // **Two, and there used to be three.** The third was "Check again",
+        // which re-ran detection in place. It is inside the wizard as well,
+        // under the option it applies to, and a card with three calls to
+        // action asks the reader to choose between them before they have
+        // decided anything at all.
+        for button in [settings, dismiss] {
             button.bezelStyle = .rounded
             button.font = .systemFont(ofSize: 12)
         }
         settings.target = self
         settings.action = #selector(openSettings)
-        check.target = self
-        check.action = #selector(checkAgain)
+        dismiss.target = self
+        dismiss.action = #selector(notNow)
 
-        let buttons = NSStackView(views: [settings, check])
+        let buttons = NSStackView(views: [settings, dismiss])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -2412,6 +2488,33 @@ private final class SetupNotice: NSView {
 
     required init?(coder: NSCoder) { fatalError("no nib") }
 
+    /// The height this card needs when it is `width` points wide.
+    ///
+    /// **`fittingSize` cannot answer that, and one clipped line is what it
+    /// cost.** The heading and the body are wrapping labels, and a wrapping
+    /// label's height is a function of its width; asked for a fitting size
+    /// with no width to fit into, it answers with its whole sentence on one
+    /// line. So the drawer was solved about a line short of what the card
+    /// needed, the stack was laid out from its top inset downwards, and the
+    /// heading was cut in half by the card's own top edge. Reported from a
+    /// first install, and visible in three screenshots of it: "Ask needs an AI
+    /// to answer with" sliced through the middle.
+    ///
+    /// `preferredMaxLayoutWidth` is what makes a label answer about the width
+    /// it is going to be given. `Pane.layout` carries the same trap, in the
+    /// same words: a note left at the old width reports the old height.
+    ///
+    /// The 32 is the two 16-point insets the column is pinned inside.
+    func height(forWidth width: CGFloat) -> CGFloat {
+        let content = max(0, width - 32)
+        for label in [heading, body]
+        where abs(label.preferredMaxLayoutWidth - content) > 0.5 {
+            label.preferredMaxLayoutWidth = content
+        }
+        layoutSubtreeIfNeeded()
+        return fittingSize.height
+    }
+
     /// Say the shortest true thing about why nothing can be asked.
     ///
     /// A CLI that is installed and never signed into wins over a missing one
@@ -2435,21 +2538,21 @@ private final class SetupNotice: NSView {
             // who never chose a CLI and never will. The npm and ollama
             // sentences that used to live here moved into the wizard, where
             // each appears only under the option that needs it.
-            heading.stringValue = "Ask needs an AI to answer with"
-            say("Recording and transcription are already working; this is only "
-                + "about answering questions. Set up takes about a minute, and "
-                + "the options are laid out with what each one costs.")
+            heading.stringValue = "Pick what answers your questions"
+            say("Ask is on, and it needs something to do the answering. "
+                + "It takes about a minute, and each option says what it costs.")
             return
         }
         let signedOut = out.filter { $0.backend.isCLI }
         guard signedOut.isEmpty else {
             heading.stringValue = signedOut.map(\.name).joined(separator: " and ")
                 + (signedOut.count == 1 ? " is" : " are") + " installed but not signed in"
+            // No "check again" in the sentence any more: the button that did
+            // it is gone, and the wizard re-runs detection on the way in.
             say("Run " + signedOut.compactMap { status in
                     status.backend.signInCommand.map { "`\($0)`" }
                 }.joined(separator: " or ")
-                + " in a terminal and check again, or Set up Ask to see every "
-                + "option.")
+                + " in a terminal, then Set up Ask to finish.")
             return
         }
         // Only the endpoint is left, and it is configured and silent.
@@ -2460,16 +2563,22 @@ private final class SetupNotice: NSView {
                 + "change it.")
         } else {
             say("Nothing answered at `\(endpoint.path?.absoluteString ?? "the base URL")`. "
-                + "Start the server, with `ollama serve` or whatever runs yours, then "
-                + "check again.")
+                + "Start the server, with `ollama serve` or whatever runs yours.")
         }
     }
 
     /// The app's own renderer, for the one thing the copy needs it for: a
     /// command in a sentence, set in the face a command is set in.
     private func say(_ markdown: String) {
+        // **Appended to every branch rather than written into one**, because
+        // the button is on all three and a control whose effect is not stated
+        // is one nobody dares press. In the body and not in a tooltip, for the
+        // reason the rest of this app's copy is: a tooltip is where you put
+        // something you have decided nobody needs to read.
         let text = NSMutableAttributedString(
-            attributedString: MarkdownText.attributed(markdown, width: 12))
+            attributedString: MarkdownText.attributed(
+                markdown + " Not now puts Ask away, and Settings › Ask "
+                    + "brings it back.", width: 12))
         // Every paragraph carries the newline it ended with, and the last one
         // would be a blank line inside the card.
         while let last = text.string.last, last.isNewline {
@@ -2482,16 +2591,8 @@ private final class SetupNotice: NSView {
 
     @objc private func openSettings() { AskSetupWizard.shared.present() }
 
-    @objc private func checkAgain() { onCheckAgain?() }
+    @objc private func notNow() { onDismiss?() }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        // A `CGColor` is a snapshot of what it was resolved from, so without
-        // this the light edge stays behind after a switch to dark. The text
-        // needs no such help: an attributed string holds the `NSColor` itself,
-        // and a semantic one resolves when it is drawn.
-        layer?.borderColor = NSColor.separatorColor.cgColor
-    }
 }
 
 /// A canned question, shaped like the tag chips it sits near.

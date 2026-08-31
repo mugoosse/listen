@@ -2142,6 +2142,39 @@ extension Chat {
 // ---------------------------------------------------------------------------
 
 extension Settings {
+    private static let askEnabledKey = "askEnabled"
+
+    /// Whether Ask appears in the app at all.
+    ///
+    /// **Off until somebody turns it on, which is the opposite of how every
+    /// other part of Listen defaults and is the point.** Recording and
+    /// transcribing need nothing configured; Ask needs a CLI installed and
+    /// signed into, or a URL and a key. Until that is done there is nothing
+    /// for it to do, so what it contributed to a first run was a composer that
+    /// could not answer, a card explaining why, and a Chats screen with
+    /// nothing in it, on top of a library that had no recordings yet either.
+    ///
+    /// Reported from the first install on somebody else's Mac, in those terms:
+    /// the setup card was the largest thing on the home screen before there
+    /// was a single recording, and it was asking for a decision about a
+    /// feature nobody had gone looking for. So the whole surface is behind
+    /// this, and Settings › Ask is where it is found: everything there states
+    /// what Ask is and what each backend costs, which is the right place to be
+    /// making that decision and the wrong place for it to be made for you.
+    ///
+    /// **Off for existing installs too, and that is deliberate rather than an
+    /// oversight in the migration.** Reading a usable agent as consent would
+    /// mean the flag says "somebody chose this" for people who never did, and
+    /// it is one checkbox to turn back on.
+    ///
+    /// `dictationEnabled` defaults on and reads through `object(forKey:)` to
+    /// say so; this one wants exactly `bool(forKey:)`'s answer, where a key
+    /// that was never written is false.
+    static var askEnabled: Bool {
+        get { forcedBool(askEnabledKey) ?? defaults.bool(forKey: askEnabledKey) }
+        set { defaults.set(newValue, forKey: askEnabledKey) }
+    }
+
     private static let agentBackendKey = "agentBackend"
     private static func agentPathKey(_ backend: AgentBackend) -> String {
         "agentPath_" + backend.rawValue

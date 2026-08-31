@@ -35,6 +35,64 @@ as toggling. Only an exact match is consumed. Handle `tapDisabledByTimeout` or
 the tap dies silently: macOS disables a tap that ever runs long, and the symptom
 is a shortcut that simply stops working with nothing logged.
 
+## Synchronous means deciding, not opening the microphone
+
+The section above is about *ordering*, and it was read once as licence to do the
+whole of `begin()` inside the tap callback. That included `recorder.start()`,
+which opens a CoreAudio device, and an active `.defaultTap` holds the keystroke
+until the callback returns. So the microphone's open time was added to every key
+on the Mac, not just to the chord.
+
+It stayed invisible while every microphone was fast. Measured on one Mac, from
+`AudioOutputUnitStart` to the first buffer:
+
+| device | open |
+| --- | --- |
+| built-in MacBook Pro microphone | 50 ms |
+| OBSBOT Tiny2 | 65 ms |
+| AT2020USB-XP, healthy | 25 ms |
+| **AT2020USB-XP, wedged at the USB level** | **5100 ms** |
+
+The same AT2020 measured 24 ms earlier the same day, so this is a state a device
+falls into rather than a property it has. `ioreg -p IOUSB -w0` named it: the
+device showed `busy 0 (107517 ms)` against 18-255 ms for everything else on the
+machine, and unplugging it and plugging it back in restored both numbers.
+
+What the user saw was "dictation takes ten seconds". What was actually happening
+is worse, and none of it is visible from inside the app:
+
+- The chord itself was held for the whole open. Measured at a tap placed
+  downstream of Listen's, the chord arrived aged **5299 ms** and **5304 ms**,
+  against 0-16 ms for ordinary typing and 128 ms for the press that *stops* a
+  dictation, which opens no device.
+- Five seconds is far past the tap timeout, so macOS disabled the tap and some
+  presses vanished outright. One was captured being ignored with Listen's main
+  thread 92% idle, which is what makes it read as a delay rather than a drop:
+  the user presses again, and again.
+
+So `recorder.start()` now runs on `DictationRecorder.lifecycle`, a serial queue,
+and `Dictation` gains a `starting` phase. The callback decides and returns; it
+opens nothing. Deferring to `DispatchQueue.main.async` would *not* have been
+enough, because the tap is serviced by the main run loop: blocking the main
+thread for five seconds stalls the tap just as thoroughly as blocking inside it.
+
+Two consequences worth keeping:
+
+- **`starting` is not an early `recording`.** The pill still waits for the first
+  buffer, because it has to mean "the microphone is live". A separate
+  `DictationHUD.State.starting` appears only after 1.5 seconds, which is longer
+  than any healthy device and clears the Bluetooth profile switch, so a normal
+  open shows nothing at all.
+- **The open cannot be called off part way through.** A chord pressed while the
+  device is opening sets `startCancelled`, returns the phase immediately so the
+  menu bar and the next press see the truth, and lets `opened` hand the device
+  back when it lands. `stop()` is on the same serial queue, so it can never
+  overtake the `start()` it belongs to.
+
+A microphone that takes longer than 1.5 seconds is now logged with the number,
+unconditionally. That one line is the difference between "dictation is broken"
+and "this one device is broken", and nothing else on the Mac distinguishes them.
+
 ## fn is invisible to NSEvent on Apple Silicon
 
 `NSEvent.addGlobalMonitorForEvents` never sees the Globe/fn key; the system
@@ -410,6 +468,39 @@ The demo exists because "is this better" is a question about a moving thing and
 cannot be answered from a screenshot or from memory of the build before last.
 `.pulse` is kept and deliberately not improved: it is the thing being compared
 against.
+
+`LISTEN_PANEL=dictation-demo` without `:fake` opens the real microphone through
+`DictationRecorder.start()`, which is the one hatch that exercises the device
+open. It is the cheap check that the serial queue above did not deadlock: it
+should print `dictating from <device> at <rate>` and keep running.
+
+### Timing a chord, when your own tap is downstream of Listen's
+
+Do not time a shortcut with a tap you install yourself and trust the answer.
+Listen's tap is `.headInsertEventTap`, so it runs *first*; anything slow inside
+it delays your tap by the same amount, and the interval you measure between
+"chord seen" and "pill up" comes out looking fine. That reading cost a wrong
+conclusion once: it said 124 ms while the user was waiting five seconds.
+
+Measure the event's **age** instead, at a `.tailAppendEventTap`:
+
+```swift
+var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb)
+// CGEvent.timestamp is nanoseconds since boot, NOT mach ticks. Convert
+// mach_absolute_time() with the timebase first or the subtraction is nonsense
+// (and, on Apple Silicon, silently wraps into huge positive numbers).
+let nowNs = mach_absolute_time() * UInt64(tb.numer) / UInt64(tb.denom)
+let age = Double(nowNs &- event.timestamp) / 1e9
+```
+
+A large age proves the hold is upstream, which is the only way to tell "Listen
+is slow" from "the event never arrived". Ordinary typing is the control: it
+should sit at 0-16 ms whatever dictation is doing.
+
+To pin it to the device rather than the app, replicate
+`DictationRecorder.build(on:)` in a standalone binary and time
+`AudioOutputUnitStart` per `AudioDeviceID`. If a device is slow there, it is
+slow for everyone and Listen is not the subject.
 
 ## What is deliberately not here
 

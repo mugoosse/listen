@@ -16,8 +16,29 @@ import Carbon.HIToolbox
 final class Dictation {
     static let shared = Dictation()
 
-    enum Phase { case idle, recording, transcribing }
+    /// `starting` is the device being opened, which is not instant and on a
+    /// faulty microphone is not close to it. It is a phase of its own rather
+    /// than an early `recording` because the two answer different questions:
+    /// the microphone is not live yet, and nothing may claim it is.
+    enum Phase { case idle, starting, recording, transcribing }
     private(set) var phase: Phase = .idle
+
+    /// The chord came again, or Escape did, while the device was still opening.
+    /// The open cannot be called off, so it is allowed to finish and then hands
+    /// the device straight back.
+    private var startCancelled = false
+
+    /// Puts the pill up if the open runs long. Cancelled by every exit from
+    /// `starting`, so a fast open never shows anything at all.
+    private var slowStartNotice: Timer?
+
+    /// Longer than any healthy device takes to open, and far short of a broken
+    /// one. Measured on one Mac: 25 ms on a USB microphone, 50 ms on the
+    /// built-in, 65 ms on a webcam's, against a repeatable 5.1 s on a USB
+    /// microphone that had wedged. Bluetooth sits between the two, and
+    /// `.agents/notes/dictation.md` puts its profile switch at past a second,
+    /// so this clears that as well.
+    private static let slowOpen: TimeInterval = 1.5
 
     private let hotkey = DictationHotkey()
     private let recorder = DictationRecorder()
@@ -93,10 +114,13 @@ final class Dictation {
             }
         }
         hotkey.onEscape = { [weak self] in
-            // Only while recording. Swallowing Escape at any other time would
-            // break every dialog and every editor on the Mac, for a feature that
-            // is not even running.
-            guard let self, self.phase == .recording else { return false }
+            // Only while a dictation is up, which includes the microphone still
+            // opening: on a slow device that is seconds long, and Escape has to
+            // mean the same thing there as it does a moment later. Swallowing
+            // Escape at any other time would break every dialog and every
+            // editor on the Mac, for a feature that is not even running.
+            guard let self, self.phase == .recording || self.phase == .starting
+            else { return false }
             self.cancel()
             return true
         }
@@ -181,6 +205,7 @@ final class Dictation {
     func toggle() {
         switch phase {
         case .recording:    finish()
+        case .starting:     abandonStart()
         case .transcribing: break      // still working on the last one
         case .idle:         begin()
         }
@@ -217,6 +242,11 @@ final class Dictation {
                 guard track == .you else { return }
                 self?.hud.level(level)
             }
+            // Said straight out, not through `announceLive`: there is no open
+            // to race, because the meeting's microphone has been delivering for
+            // however long the call has run. The flag keeps the invariant that
+            // `live()` is said once per dictation.
+            announcedLive = true
             live()
             trace("dictating into a running recording")
             onChange?()
@@ -236,15 +266,80 @@ final class Dictation {
         // stomped back to recording.
         recorder.onFirstBuffer = { [weak self] in
             Task { @MainActor in
-                guard let self, self.phase == .recording else { return }
-                self.live()
+                guard let self else { return }
+                self.firstBufferSeen = true
+                self.announceLive()
             }
         }
 
-        do {
-            try recorder.start()
+        // Opened off the main thread, and never inline here. This runs inside
+        // the `CGEventTap` callback, and an active tap holds the keystroke
+        // until the callback returns: opening the device here made every key on
+        // the Mac wait for the microphone, and had the tap disabled for running
+        // long, which silently swallowed presses. See `DictationRecorder`'s
+        // `lifecycle` queue for the measurement.
+        phase = .starting
+        startCancelled = false
+        firstBufferSeen = false
+        announcedLive = false
+        armSlowStartNotice()
+        onChange?()
+
+        recorder.start { [weak self] result in
+            MainActor.assumeIsolated { self?.opened(result) }
+        }
+    }
+
+    /// Say the microphone is still coming up, but only when it is slow enough
+    /// to be worth saying.
+    ///
+    /// A healthy device is open in tens of milliseconds, and a pill that
+    /// appeared for those would be a flash nobody can read. This is for the
+    /// case that has no other symptom: a chord that looks like it did nothing,
+    /// which is exactly how a wedged microphone presents.
+    private func armSlowStartNotice() {
+        slowStartNotice?.invalidate()
+        // `.common`, so it still fires with a menu open, for the same reason
+        // the Accessibility watch in `DictationHotkey` uses it.
+        let timer = Timer(timeInterval: Dictation.slowOpen, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .starting, !self.startCancelled,
+                      Settings.dictationShowHUD else { return }
+                self.hud.show(.starting)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        slowStartNotice = timer
+    }
+
+    /// The device finished opening, one way or the other.
+    private func opened(_ result: Result<TimeInterval, any Error>) {
+        slowStartNotice?.invalidate()
+        slowStartNotice = nil
+
+        // Abandoned while it was opening. The dictation the user asked for no
+        // longer exists, so the device goes back rather than staying open with
+        // nobody listening, which on a Bluetooth headset means holding it in
+        // hands-free mode for nothing.
+        guard phase == .starting, !startCancelled else {
+            if case .success = result { _ = recorder.stop() }
+            return
+        }
+
+        switch result {
+        case .success(let took):
             micError = nil
             phase = .recording
+            // The buffer may already have arrived while this was still on its
+            // way to the main actor, in which case this is what says so.
+            announceLive()
+            // Logged rather than traced, so it is in the hands of anybody
+            // reporting this. A microphone that takes seconds to open is the
+            // difference between "dictation is broken" and "this one device is
+            // broken", and nothing else on the Mac distinguishes them.
+            if took > Dictation.slowOpen {
+                log(String(format: "dictation microphone took %.1fs to open", took))
+            }
             // Load the polishing model and the word list while the user is still
             // talking. The first request to a cold model is the slow one, and
             // this spends time they were going to spend anyway.
@@ -253,16 +348,56 @@ final class Dictation {
                 await Polisher.shared.prewarm()
             }
             onChange?()
-        } catch {
+        case .failure(let error):
             // The raw CoreAudio error is unreadable and names nothing the user
             // can act on, so the menu gets a sentence and the log keeps the
             // detail for a bug report.
             micError = "The microphone could not be started"
             log("dictation mic error: \(error)")
+            phase = .idle
             Cue.failed()
             hud.hide()
             onChange?()
         }
+    }
+
+    /// The chord came again before the microphone was open.
+    ///
+    /// The phase goes back now rather than when the open lands, so the menu bar
+    /// and the next press see the truth immediately. `opened` does the
+    /// releasing, because the open cannot be interrupted part way through.
+    private func abandonStart() {
+        startCancelled = true
+        slowStartNotice?.invalidate()
+        slowStartNotice = nil
+        phase = .idle
+        hud.hide()
+        Cue.cancel()
+        trace("dictation abandoned while the microphone was still opening")
+        onChange?()
+    }
+
+    /// Whether the device has delivered audio, and whether `live()` has already
+    /// been said for this dictation.
+    ///
+    /// These two race, and the order is not fixed. `opened` reaches the main
+    /// actor through `DispatchQueue.main.async` while the first buffer reaches
+    /// it through a `Task`, and the device can deliver audio before the open
+    /// has even finished returning. Guarding the buffer on `phase == .recording`
+    /// alone therefore loses the announcement outright whenever the buffer wins,
+    /// which is no pill and no cue for the whole dictation.
+    private var firstBufferSeen = false
+    private var announcedLive = false
+
+    /// Say the microphone is live, once, as soon as both halves have landed.
+    ///
+    /// Still gated on `recording`, which is what keeps a dictation the user has
+    /// already stopped from chiming: the phase has moved on by then, and this
+    /// says nothing.
+    private func announceLive() {
+        guard phase == .recording, firstBufferSeen, !announcedLive else { return }
+        announcedLive = true
+        live()
     }
 
     /// The microphone is live: say so, in both channels.
@@ -359,6 +494,10 @@ final class Dictation {
     /// Without this, a shortcut pressed by accident has no way out that does not
     /// overwrite the clipboard, and the clipboard is somebody's working state.
     func cancel() {
+        // Escape while the device is opening is the same instruction, and has
+        // to take the other route: `collect()` would stop a recorder that has
+        // not started yet, and would wait on the open in order to do it.
+        if phase == .starting { abandonStart(); return }
         guard phase == .recording else { return }
         _ = collect()
         phase = .idle

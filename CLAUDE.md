@@ -341,6 +341,9 @@ front. `Dictation`, `DictationHotkey`, `DictationRecorder`, `DictationEngine`,
 that repo is being archived.**
 
 - The event tap must stay ordered and synchronous
+- Synchronous means deciding, not opening the microphone: one wedged USB mic
+  took 5.1 s to open and held every keystroke on the Mac
+- Timing a chord with your own tap lies, because Listen's runs first
 - fn is invisible to NSEvent on Apple Silicon
 - Secure input takes character key events away
 - Two capture paths, and why they are not one

@@ -40,6 +40,25 @@ final class DictationRecorder {
     private let lock = NSLock()
     private(set) var isRecording = false
 
+    /// Serialises the unit's lifecycle, and keeps the device open off the main
+    /// thread.
+    ///
+    /// `AudioOutputUnitStart` is not the quick call it looks like. Measured on
+    /// one Mac: 25 ms on a healthy USB microphone, 50 ms on the built-in, 65 ms
+    /// on a webcam's, and **5.1 seconds** on an AT2020 that had wedged at the
+    /// USB level, repeatably until it was replugged.
+    ///
+    /// Opening on the main thread is what turned that one bad microphone into a
+    /// Mac whose keyboard stopped answering. The chord is handled inside a
+    /// `CGEventTap` callback, and an active tap holds the keystroke until the
+    /// callback returns, so a five second open delayed every key on the machine
+    /// and eventually had the tap disabled for running long. Measured: the
+    /// chord arrived at a tap downstream of Listen's aged 5299 ms, against
+    /// 0-16 ms for ordinary typing. See `.agents/notes/dictation.md`.
+    ///
+    /// Serial, so a `stop()` can never overtake the `start()` it belongs to.
+    private let lifecycle = DispatchQueue(label: "com.mgo.listen.dictation-recorder")
+
     /// Fired once per recording, when the first converted samples arrive.
     ///
     /// The start cue hangs off this rather than off `start()`, so it means
@@ -73,7 +92,40 @@ final class DictationRecorder {
 
     deinit { teardown() }
 
+    /// Open the device and begin capturing, off the main thread.
+    ///
+    /// `completion` runs on the main queue and carries how long the open took,
+    /// because that number is the whole difference between "dictation is
+    /// broken" and "this one microphone is broken" and nothing else on the Mac
+    /// will tell you which.
+    ///
+    /// This is the form the shortcut must use. The synchronous one below blocks
+    /// its caller for as long as the device takes, which is a keystroke the
+    /// whole Mac waits on when the caller is an event tap.
+    func start(_ completion: @escaping @Sendable (Result<TimeInterval, any Error>) -> Void) {
+        lifecycle.async { [weak self] in
+            guard let self else { return }
+            let began = Date()
+            let result: Result<TimeInterval, any Error>
+            do {
+                try self.open()
+                result = .success(Date().timeIntervalSince(began))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// The blocking form, for the pill comparison harness: it has no event tap
+    /// to hold up and wants the error in its own hand.
     func start() throws {
+        try lifecycle.sync { try open() }
+    }
+
+    /// Everything that actually touches the device. Only ever called on
+    /// `lifecycle`, which is what keeps it from racing `stop()`.
+    private func open() throws {
         guard !isRecording else { return }
         lock.lock(); samples.removeAll(); lock.unlock()
         sawFirstBuffer = false
@@ -316,12 +368,18 @@ final class DictationRecorder {
     /// Stops capture and hands back raw samples. No temp file: the samples go
     /// straight into an MLXArray.
     func stop() -> [Float]? {
-        guard isRecording else { return nil }
-        teardown()
-        isRecording = false
+        // On `lifecycle` for the same reason `open()` is: the two must not
+        // interleave. In practice this never waits, because `Dictation` does
+        // not stop a dictation whose device is still opening; it abandons the
+        // start instead and lets the open release the device itself.
+        lifecycle.sync {
+            guard isRecording else { return nil }
+            teardown()
+            isRecording = false
 
-        lock.lock(); let pcm = samples; samples.removeAll(); lock.unlock()
-        return pcm.count > Int(SAMPLE_RATE / 10) ? pcm : nil   // ignore < 0.1 s
+            lock.lock(); let pcm = samples; samples.removeAll(); lock.unlock()
+            return pcm.count > Int(SAMPLE_RATE / 10) ? pcm : nil   // ignore < 0.1 s
+        }
     }
 
     /// Releases the device.

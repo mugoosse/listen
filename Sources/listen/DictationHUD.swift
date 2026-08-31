@@ -20,6 +20,11 @@ import AppKit
 @MainActor
 final class DictationHUD: NSObject {
     enum State {
+        /// The microphone is being opened and is taking long enough that saying
+        /// nothing would read as the chord having missed. Deliberately not
+        /// `recording`: nothing is being heard yet, and the pill's one job is
+        /// to be right about that.
+        case starting
         case recording
         case transcribing
         /// `of` is the number of chunks a long dictation was split into, and is
@@ -28,6 +33,7 @@ final class DictationHUD: NSObject {
 
         var text: String {
             switch self {
+            case .starting:     return "Starting the microphone…"
             case .recording:    return "Listening"
             case .transcribing: return "Transcribing…"
             // Counted only when there is more than one, because "Polishing 1/1"
@@ -93,11 +99,11 @@ final class DictationHUD: NSObject {
             meter.tint = .systemRed
             meter.begin()
             startTick()
-        // Both are the same colour on purpose. The meter answers one question,
-        // "is the microphone live", and the answer is no for both of these.
-        // Splitting the colour would imply a distinction that does not matter to
-        // anyone glancing at it.
-        case .transcribing, .polishing:
+        // All three are the same colour on purpose. The meter answers one
+        // question, "is the microphone live", and the answer is no for every
+        // one of these. Splitting the colour would imply a distinction that
+        // does not matter to anyone glancing at it.
+        case .starting, .transcribing, .polishing:
             timeLabel.isHidden = true
             cancelButton.isHidden = true
             label.isHidden = false

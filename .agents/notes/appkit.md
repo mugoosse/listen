@@ -802,3 +802,51 @@ is not optional politeness, it is what makes the document view take the clip
 view's width at all, and which macOS versions survive its absence is not a
 thing to bet on. Set `textColor` explicitly in the same breath: a text view
 built this way is not guaranteed the semantic default everywhere either.
+
+
+## `MainMenu.install()` may not be called twice
+
+Rebuilding `NSApp.mainMenu` is the obvious way to make a menu row appear and
+disappear with a feature, and it is not safe. Measured on the Ask card's Not
+now button, which is the one caller that presses it from inside a view's
+action, and the failure depends only on when it is called:
+
+- Called inside the action, **nothing after the call ran at all**. The setting
+  was written, the menu was replaced, and the composer and toolbar kept the
+  state they had, so the button read as dead. Nothing reached stderr.
+- Deferred with `DispatchQueue.main.async`, the process **aborted**
+  (`Abort trap: 6`), which a verification script caught as the window
+  disappearing mid-run.
+
+`install` replaces `NSApp.mainMenu` and `NSApp.windowsMenu` with it, and AppKit
+has been keeping its own window rows in the old one since launch. So the row is
+built once and hidden: `MainMenu.refreshAsk` sets `isHidden` on the one item it
+holds. A hidden item's key equivalent is inert too, which is the property that
+makes ⇧⌘0 stop working without a second guard, though `openChats` has one
+anyway.
+
+## A wrapping label's `fittingSize` is one line high, and the card it is in gets clipped
+
+`NSTextField(wrappingLabelWithString:)` has no width until it is laid out, and
+`fittingSize` solves for the width the label asks for, which is its whole
+sentence on one line. A container measured with `fittingSize` is therefore
+short by however many lines the text was going to wrap onto.
+
+The Ask setup card was measured that way and came out about one line short. The
+stack inside it is pinned top and bottom, so the shortfall landed on whichever
+label lost the compression fight: the heading was sliced in half by the card's
+own top edge, which is what a first install photographed.
+
+`preferredMaxLayoutWidth` is what makes a label answer about the width it is
+actually going to get, and `Pane.layout` already carries the same trap in the
+same words: a note left at the old width reports the old height and loses its
+last line as the window narrows.
+
+**Measuring right is only half of it.** With the labels reporting correctly the
+card asked for 116 points and was still laid out at 99, because the drawer's
+`barHeight` budgets for either the card *or* the starter chips row and nothing
+was hiding the chips: that row holds the expand button as well as the chips, so
+it kept its own line whether or not there were any chips in it. Two views
+sharing a slot have to be made exclusive by one call, or the arithmetic that
+assumes they are will be wrong in a way that looks like a text bug: the body
+wrapped correctly and only its first line was ever drawn.

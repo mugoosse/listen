@@ -818,3 +818,72 @@ the one shape here whose allocation sizes recur, and the cap bounds it anyway.
 the pool; it is `LISTEN_CHUNK`'s sibling, not a user setting. The mlx-swift
 `GPU.set(cacheLimit:)` spelling is deprecated in the pinned revision; the
 property is `MLX.Memory.cacheLimit`.
+
+
+## A threshold measured on a 47-minute meeting drops the far end of a 9-second call
+
+`Pipeline.run` decides twice from one measurement of the system track: whether
+to transcribe it at all, and whether anybody was on the far end. Both numbers
+were absolute seconds read off the meeting `signalSeconds` documents, and an
+absolute second count cannot be asked about a recording shorter than itself.
+
+Reported from the first install on somebody else's Mac: a Telegram call between
+two people, plainly two voices, came back as one speaker talking to themselves
+with the other half of the conversation missing. Measured on the recording they
+sent, 9.5 seconds, both tracks loud:
+
+    mic.wav     peak 0.330   8 of 10 seconds over 0.01
+    system.wav  peak 0.850   3 of 10 seconds over 0.01
+
+`system.wav` transcribes to "Hello. Okay." on its own through
+`listen transcribe`. Under `systemSignal >= 5` it was never transcribed at all:
+the whole system branch is skipped, so there is no second transcript, no second
+diarization and no second speaker. The stored transcript held the mic track
+alone, labelled `Me`, which is exactly what the screenshots showed. It reads to
+a user as two bugs, a diarizer that cannot hear two voices and a transcriber
+that swallows words, and it is neither.
+
+`somebodyRemote >= 30` is worse in the same way: nine seconds of audio cannot
+contain thirty seconds of speech, so a short call in an app Listen does not
+recognise can never be read as a call.
+
+Both are now fractions of the track with the old seconds as a **ceiling**, in
+`enoughToTranscribe` and `enoughToBeACall`, and `signal` returns the window
+count alongside the signal so the two are on one scale. Nothing about a long
+meeting moves: at 2828 seconds both `min`s take the constant. Checked against
+the real library rather than argued, 48 recordings with a system track, 37
+seconds to 7485 seconds, **zero changed either decision**, including
+`2026-08-07-101300-BE35`, which is the 2829-second meeting the original numbers
+were read off.
+
+Below about 33 seconds the fraction binds instead. A chime keeps failing it: a
+two-second chime in a twenty-second recording needs three seconds and has two.
+Under about ten seconds nothing can tell a chime from a voice, and the trade is
+deliberate: the cost of being wrong is one Parakeet pass over ten seconds, and
+the cost of the old answer was half of every short conversation.
+
+## The model download reset to 0% and stayed there, on a reading of 41 KB
+
+`ModelChoice.inFlightBytes` finds the transfer by looking for the most recently
+written `CFNetworkDownload` file in the temp directory, within a ten second
+window. That window is the right rule for **adopting** a file, and it was also
+being used to abandon one.
+
+A transfer that pauses longer than ten seconds, on a network hiccup or while
+the finished file is moved into place, stops qualifying while still sitting
+there holding every byte fetched so far. `bytesOnDisk` then falls back to the
+two JSON files already in the hub cache. Reported, with the screenshot: a
+2.47 GB download reached very nearly the end and then read `41 KB of 2,47 GB`.
+
+It stuck there because the guard in `ModelDownload.startWatch` caught only an
+exact zero:
+
+    if bytes == 0 { bytes = self.lastBytes }   // 41_000 is not 0
+
+So the collapse went through, and `lastBytes` was then poisoned with 41 KB and
+could never recover. Two changes, and both are needed: `inFlightBytes` follows
+the file it adopted by path until it disappears, and the guard is now "never
+backwards", which is true of every quantity it is applied to because within one
+download the bytes on disk only grow. The abandoned-file trap the original note
+records is still closed: `previous` is only ever a file this process watched go
+live, so none of the stale temp files on a real machine can be picked up by it.

@@ -127,6 +127,8 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - A model directory that exists is not a model, and both ways it can lie were measured
 - A copy of the right size that will not load has to be replaceable
 - MLX keeps every buffer it ever freed, until it is told a limit
+- A threshold measured on a 47-minute meeting drops the far end of a 9-second call
+- The model download reset to 0% and stayed there, on a reading of 41 KB
 
 ### `.agents/notes/speakers.md` (77k)
 
@@ -331,6 +333,8 @@ this app, so read them before building any new window, menu or popover.
 - A shot has to paint its own background, and drawing the cache over one wipes it
 - Liquid Glass photographs as a white block, and nothing inside it draws
 - A bare `NSTextView()` handed to a scroll view can draw nothing at all
+- `MainMenu.install()` may not be called twice
+- A wrapping label's `fittingSize` is one line high, and the card it is in gets clipped
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -527,6 +531,10 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Ask setup is a choice, and the settings pane only ever stated facts
 - The provider migration reads the Keychain, and an ad-hoc copy hangs on it
 - The wizard's save path is not scripted, and the reason is the Keychain service
+- Ask is off until somebody turns it on, and onboarding is where they are asked
+- The setup card stands alone, and takes the composer's place rather than sitting over it
+- The cross's `putAway` was inverted, and the bug it was chased for is still open
+- What could not be verified: the download stall
 
 ### `.agents/notes/release.md` (20k)
 
@@ -598,6 +606,13 @@ One script stands in for one, over the app built in the working directory:
 ./verify_ask_states.sh  # the Ask surfaces against stub CLIs: signed-out
                         # wording, the wizard, the plain no-agent card, and a
                         # failed run correcting the chip (uitest copy)
+./verify_ask_toggle.sh  # `Settings.askEnabled`: nothing Ask-shaped in the
+                        # window with it off, all of it back with it on, and
+                        # the card's Not now turning it off again (uitest copy)
+./verify_ask_close.sh   # closing a conversation with the cross, against a stub
+                        # that actually answers, which no other Ask script has.
+                        # `LISTEN_APP=` points it at a released build; see its
+                        # header for what it does not establish (uitest copy)
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
 ```

@@ -2884,3 +2884,103 @@ the real OpenRouter key of whoever runs it. So `verify_ask_states.sh` drives
 the wizard up to and around the save (opens from both entry points, options
 laid out, cancel writes nothing) and leaves the save itself to the one-line
 calls it makes into machinery the settings pane already exercises.
+
+
+## Ask is off until somebody turns it on, and onboarding is where they are asked
+
+Everything else in Listen works on a Mac that has configured nothing. Ask needs
+a CLI installed and signed into, or a URL and a key, and until that is done
+there is nothing for it to do. What it contributed to a first run was a
+composer that could not answer, a card explaining why, and a Chats screen with
+nothing in it, on top of a library that had no recordings yet either.
+
+Reported from the first install on somebody else's Mac, in those terms: the
+setup card was the largest thing on the home screen before there was a single
+recording, and it was asking for a decision about a feature nobody had gone
+looking for. The card's own copy assumed the reader already knew what Ask was
+and led with what it *needed*.
+
+So `Settings.askEnabled` gates the whole surface, off by default, and three
+things move together through `LibraryWindow.askEnabledChanged`: the composer
+drawer, the Chats toolbar item and the Chats menu row. Off for existing
+installs too, which is deliberate rather than a gap in the migration: reading a
+usable agent as consent would make the flag say "somebody chose this" for
+people who never did, and it is one checkbox to turn back on.
+
+**Selling it is the onboarding step's job, not a card's.** `Onboarding.Step.ask`
+sits after dictation and is optional the way the calendar step is: value first,
+in the words somebody would use themselves, then the cost, then a "Not now"
+that costs nothing. It turns the switch on and leaves choosing a backend to the
+card or to Settings, because `AskSetupWizard.present` needs
+`LibraryWindow.sheetHost` and there is no library window during a first run.
+
+That leaves the card one honest job, which is a person who said yes and has
+nothing answering yet. It says so and stops selling.
+
+## The setup card stands alone, and takes the composer's place rather than sitting over it
+
+The card used to sit above a live "Ask about your library…" inside the drawer's
+own rounded panel: a card in a card, offering a field that was known to be
+unable to answer before anything was typed. It also drew its own border, a few
+points inside the drawer's.
+
+Now `showNotice` is the single call that swaps them. It hides the starter
+chips, the composer well and the status line, and zeroes the well's and the
+line's height constraints, because hiding a view leaves its constraints active
+and the space with them. The card's own border is gone; the drawer's panel is
+its frame.
+
+Two buttons and not three. The third was "Check again", which re-ran detection
+in place; it is inside the wizard as well, under the option it applies to, and
+a card with three calls to action asks the reader to choose between them before
+they have decided anything. The way out is "Not now", which turns Ask off
+rather than hiding only the card: hiding the card alone would leave a composer
+that cannot answer with nothing on screen saying why, which is the state the
+card exists to prevent.
+
+
+## The cross's `putAway` was inverted, and the bug it was chased for is still open
+
+`closeConversation` set `putAway = false`. That contradicts `putAway`'s own
+definition, "set when somebody collapses on purpose", the sentence above the
+method saying a cross that reopens what it closed would be a lie about which of
+the two it is, and `leavePage`, which sets it and names this method as its
+reason. Clearing it disarms the guard in `applyHeight`, which re-expands a bar
+whose `wantedHeight` is over `barCeiling`. It is now `true`.
+
+**Corrected by reading, not by reproducing.** It was found chasing a report of
+an Ask panel that opened itself after a recording and would not close, and it
+is not known to be that bug. Three reproductions were built and measured, and
+all three pass on 0.24.1, which is the build that shipped the symptom:
+
+- a real conversation closed with the cross (`verify_ask_close.sh`)
+- the setup card with no agent configured
+- Chats mode with nothing in it
+
+The last two never put the card's header on screen at all, on either build, so
+there was no cross to press. What the first one showed is why the old line was
+mostly harmless: `closeConversation` empties the composer before it collapses,
+so the height reported next is an empty one and stays under the ceiling. What
+is not established is that every path leaves it empty.
+
+**So the reported symptom is still open**, and what is missing is the state it
+happened in rather than more guesses. Worth asking for: whether the panel
+covered the whole meeting page, and what was pressed just before it appeared.
+
+## What could not be verified: the download stall
+
+`ModelChoice.inFlightBytes` following its temp file through a stall is reasoned
+from the reported reading (`41 KB of 2,47 GB`, which is exactly the two JSON
+files in the hub cache) and not reproduced. Two attempts failed and both are
+worth not repeating:
+
+- Ageing the temp file's mtime past the ten second window does nothing,
+  because URLSession is still writing to it and refreshes the mtime within a
+  second. A test built on this passes on 0.24.1 as well, so it measures
+  nothing, and it was deleted rather than kept.
+- Suspending the process stops the poll as well as the writer, so there is
+  nothing on screen to read.
+
+A real stall needs the network taken away for more than ten seconds while the
+transfer stays open. Until somebody arranges that, the fix stands on the code
+rather than on a measurement.

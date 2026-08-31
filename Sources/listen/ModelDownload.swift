@@ -30,10 +30,25 @@ final class ModelDownload {
     private var watch: Timer?
     /// Holds the last real reading through a stall.
     ///
-    /// Deliberately not a running maximum, which sounds equivalent and is not:
-    /// seeded with a stale value it can never come down, which is how an
-    /// abandoned temp file froze Speak's display for the rest of a download.
+    /// **Only an exact zero used to count as a stall, and the reading that
+    /// broke this was 41 KB.** When `inFlightBytes` lost sight of the temp
+    /// file it was following, `bytesOnDisk` fell back to the two JSON files
+    /// already in the hub cache: not zero, so not caught here, and the bar
+    /// dropped from nearly full to 0% and stuck, because this then took 41 KB
+    /// as the value to hold. So the guard is now "never backwards", which is
+    /// true of every quantity it is applied to: within one download the bytes
+    /// on disk only grow, and `start` clears it.
+    ///
+    /// Still not a running maximum seeded from elsewhere, which is the trap
+    /// the original note recorded: an abandoned temp file latched onto at 1.4
+    /// GB froze Speak's display for the rest of a download. `inFlightBytes`
+    /// is what keeps that from happening, by adopting only a file it watched
+    /// being written.
     private var lastBytes: Int64 = 0
+
+    /// The temp file the last reading came from, handed back to
+    /// `inFlightBytes` so a pause does not lose the transfer.
+    private var streaming: URL?
 
     var isDownloading: Bool { status.isBusy }
 
@@ -66,6 +81,7 @@ final class ModelDownload {
     func start(_ choice: ModelChoice) {
         guard !status.isBusy else { return }
         lastBytes = 0
+        streaming = nil
         readyID = nil
 
         // Here rather than in `ASR.load`, and this is the only place that can
@@ -122,6 +138,7 @@ final class ModelDownload {
         task = nil
         stopWatch()
         lastBytes = 0
+        streaming = nil
         readyID = nil
         status = .idle
     }
@@ -154,8 +171,14 @@ final class ModelDownload {
                     self.status = .loading
                     return
                 }
-                var bytes = choice.bytesOnDisk
-                if bytes == 0 { bytes = self.lastBytes }
+                let reading = choice.bytesOnDisk(following: self.streaming)
+                self.streaming = reading.streaming
+                // Never backwards. See `lastBytes`: a transfer that pauses
+                // long enough for `inFlightBytes` to lose it reads as the few
+                // kilobytes of JSON already in the cache, and letting that
+                // through both empties the bar and becomes the number it
+                // holds afterwards.
+                let bytes = max(reading.bytes, self.lastBytes)
                 self.lastBytes = bytes
                 let fraction = choice.approxBytes > 0
                     ? min(1.0, Double(bytes) / Double(choice.approxBytes))

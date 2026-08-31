@@ -179,9 +179,14 @@ struct ModelChoice {
     /// download through two locations, the hub cache while fetching and
     /// mlx-audio's copy once it is unpacked there, so the larger reading is
     /// the truthful one.
-    var bytesOnDisk: Int64 {
-        max(size(of: downloadDirectory), size(of: cacheDirectory))
-            + Self.inFlightBytes()
+    ///
+    /// `streaming` is the temp file this reading was taken from, and passing
+    /// it back on the next call is what carries the number through a stall.
+    /// See `inFlightBytes`.
+    func bytesOnDisk(following previous: URL?) -> (bytes: Int64, streaming: URL?) {
+        let landed = max(size(of: downloadDirectory), size(of: cacheDirectory))
+        let flight = Self.inFlightBytes(following: previous)
+        return (landed + flight.bytes, flight.url)
     }
 
     /// Bytes of a download still streaming into the temp directory.
@@ -216,23 +221,49 @@ struct ModelChoice {
     /// So the ten second cutoff is doing real work, and comfortably: nothing
     /// stale ever came close to qualifying. About 23 MB/s here, 2.5 GB in
     /// roughly 110 s, which is what the progress bar is pacing against.
-    static func inFlightBytes() -> Int64 {
+    ///
+    /// **The ten seconds is a rule for adopting a file, not for abandoning
+    /// one, and conflating those is what reset a download to 0%.** A transfer
+    /// that pauses longer than the window, on a hiccup or while the finished
+    /// file is moved into place, stops qualifying while still sitting in the
+    /// temp directory holding every byte fetched so far. Reported from the
+    /// first install on somebody else's Mac: a 2.47 GB download reached very
+    /// nearly the end and then read `41 KB of 2,47 GB`, which is the two JSON
+    /// files in the hub cache and nothing else, and stayed there.
+    ///
+    /// So a file is adopted only while it is being written, and then followed
+    /// by path until it disappears. That keeps the abandoned-file problem
+    /// solved: `previous` is only ever a file this process watched go live, so
+    /// none of the 54 stale `CFNetworkDownload` files on the measuring machine
+    /// can be picked up by it.
+    static func inFlightBytes(following previous: URL?) -> (bytes: Int64, url: URL?) {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: tmp, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
-        else { return 0 }
-
         var newest = Date().addingTimeInterval(-10)
         var bytes: Int64 = 0
-        for url in entries where url.lastPathComponent.hasPrefix("CFNetworkDownload") {
-            guard let v = try? url.resourceValues(
-                forKeys: [.fileSizeKey, .contentModificationDateKey]),
-                  let modified = v.contentModificationDate, modified > newest
-            else { continue }
-            newest = modified
-            bytes = Int64(v.fileSize ?? 0)
+        var live: URL?
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: tmp, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
+            for url in entries where url.lastPathComponent.hasPrefix("CFNetworkDownload") {
+                guard let v = try? url.resourceValues(
+                    forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                      let modified = v.contentModificationDate, modified > newest
+                else { continue }
+                newest = modified
+                bytes = Int64(v.fileSize ?? 0)
+                live = url
+            }
         }
-        return bytes
+        if let live { return (bytes, live) }
+
+        // Nothing has been written for ten seconds. The file the last reading
+        // came from is still the transfer for as long as it is still there;
+        // when it goes, its bytes have landed in the hub cache and the
+        // directory sizes are what report them.
+        if let previous,
+           let size = (try? previous.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+            return (Int64(size), previous)
+        }
+        return (0, nil)
     }
 
     /// Complete enough to skip the download. The margin covers small

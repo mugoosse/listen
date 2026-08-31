@@ -8,6 +8,87 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.25.0 (2026-08-31)
+
+Four fixes, all of them found by installing Listen on somebody else's Mac for
+the first time and watching. One of them changes where Ask lives, and it is the
+one to read first if you use it.
+
+### Ask is off until you turn it on
+
+Recording and transcribing need nothing configured. Ask needs a CLI you have
+signed into, or a URL and a key, and until that is done there is nothing for it
+to do. What it added to a first run was a question box that could not answer, a
+card explaining why, and a Chats screen with nothing in it, on top of a library
+that had no recordings yet either. The card was the largest thing on the home
+screen before there was a single recording.
+
+So it is behind a switch now, in Settings, Ask, and the switch starts off. With
+it off there is no question box, no Chats in the title bar and no card anywhere.
+With it on, all three come back exactly as they were.
+
+**If you already use Ask, this update turns it off and you turn it back on
+once.** That is deliberate rather than an oversight: taking a working agent as
+evidence you had chosen Ask would put words in the mouth of everybody who never
+did. It is one checkbox, and your conversations are all still there.
+
+Setup now has a step for it, after Dictation, which says what Ask is for before
+it asks for anything and has a Not now that costs nothing.
+
+The card you see when Ask is on and nothing is answering yet has been rewritten.
+It no longer sits above a question box that cannot be used, it has two buttons
+rather than three, and Not now puts Ask away rather than only hiding the card.
+Two layout faults went with it: its heading was being clipped in half by its own
+top edge, and its last line was being cut off.
+
+### Both sides of a short call are transcribed
+
+A call under about thirty seconds lost whoever was on the far end. Not garbled:
+absent. The transcript held your microphone alone, under one speaker, and read
+as though you had been talking to yourself.
+
+Two thresholds decided whether the other end of a call was worth transcribing,
+and both were plain second counts measured on a 47-minute meeting. A nine second
+recording cannot contain thirty seconds of speech, so on anything short they
+answered no whatever the audio held. Measured on a 9.5-second call between two
+people, the far end was three of its ten seconds, was loud, and was dropped
+before anything looked at it.
+
+They are fractions of the recording now, with the old counts as a ceiling, so
+nothing about a long meeting changes. Checked across 48 recordings from 37
+seconds to just over two hours: none of them changed its answer.
+
+If you have short calls already in your library that came out with one speaker,
+Transcribe Again on them will now find both. It replaces the transcript, so
+hand corrections on those recordings go with it.
+
+### A stalled model download no longer resets to nothing
+
+Downloading the speech model could reach very nearly the end, drop to `0% · 41
+KB of 2,47 GB`, and stay there. Nothing was actually lost, and pressing Download
+again in Settings finished the job, but there was no way to know that from the
+screen.
+
+The bar follows the transfer through a pause now, and never counts backwards.
+Reported once and fixed from the evidence rather than reproduced, so if you see
+a download stall again, the byte count on that screen is the thing worth
+photographing.
+
+### Dictation no longer holds the keyboard while the microphone opens
+
+The dictation shortcut opened the microphone inside the keyboard event handler,
+so a slow input device delayed every keystroke on the Mac until it was ready.
+One wedged USB microphone measured 5.1 seconds.
+
+### Known, and not fixed here
+
+An Ask panel that opens over a meeting and will not close was reported on 0.24.1
+and is not fixed. A related fault in the close button was found and corrected,
+but three attempts to reproduce the reported one all failed, so it may still be
+there. With Ask off, which is now the default, it cannot happen. If you hit it,
+what would help is whether the panel covered the whole meeting page and what you
+pressed just before it appeared.
+
 ## 0.24.1 (2026-08-29)
 
 One fix. Discard Recording did nothing when it was pressed, and had done since

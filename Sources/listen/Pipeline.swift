@@ -177,10 +177,13 @@ actor Pipeline {
         // skipping one costs whatever was said. So five seconds is enough to
         // look, and thirty is what it takes to say somebody was on the far end,
         // which is the claim that decides whether the microphone is one person
-        // or a room. See `signalSeconds` for the measurement behind the shape.
-        let systemSignal = hasSystemFile ? Self.signalSeconds(recording.systemURL) : 0
-        let systemHasSpeech = systemSignal >= 5
-        let somebodyRemote = systemSignal >= 30
+        // or a room. See `signal` for the measurement behind the shape, and
+        // `enoughToTranscribe` for why those seconds are a ceiling rather than
+        // the threshold itself.
+        let system = hasSystemFile ? Self.signal(recording.systemURL)
+                                   : (carrying: 0.0, total: 0.0)
+        let systemHasSpeech = system.carrying >= Self.enoughToTranscribe(of: system.total)
+        let somebodyRemote = system.carrying >= Self.enoughToBeACall(of: system.total)
 
         // An imported recording has neither track, only the mixdown the legacy
         // recorder produced. Treat that as the everyone-track: diarize it whole
@@ -683,7 +686,8 @@ actor Pipeline {
         return out
     }
 
-    /// Seconds of a track that carry signal, counted in one-second windows.
+    /// Seconds of a track that carry signal, and how many seconds it holds,
+    /// both counted in one-second windows.
     ///
     /// **`isSilent` is a peak test and cannot answer this question.** Measured
     /// on the 47-minute meeting this was written for, a laptop on a table with
@@ -703,21 +707,30 @@ actor Pipeline {
     /// microphone's continuous speech, with three orders of magnitude of RMS
     /// between them to place it in.
     ///
+    /// **`total` is returned because the thresholds are fractions and were
+    /// once constants.** Read as absolute seconds, the numbers above say
+    /// nothing true about a short recording: a track shorter than the
+    /// threshold fails it however much of it is speech. See
+    /// `enoughToTranscribe`.
+    ///
     /// Reads the file directly for the reason `isSilent` does: the writer's
     /// format is known, so this is a scan of floats.
-    static func signalSeconds(_ url: URL, floor: Float = 0.01) -> Double {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+    static func signal(_ url: URL, floor: Float = 0.01)
+        -> (carrying: Double, total: Double) {
+        let nothing = (carrying: 0.0, total: 0.0)
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nothing }
         defer { try? handle.close() }
         guard let header = try? handle.read(upToCount: 44), header.count == 44
-        else { return 0 }
+        else { return nothing }
         // Offset 24 of a canonical header, which is what `WAVWriter` writes.
         let rate = header.withUnsafeBytes { raw in
             raw.loadUnaligned(fromByteOffset: 24, as: UInt32.self)
         }
         let window = Int(rate > 0 ? rate : UInt32(SAMPLE_RATE))
-        guard let data = try? handle.readToEnd(), data.count >= 4 else { return 0 }
+        guard let data = try? handle.readToEnd(), data.count >= 4 else { return nothing }
 
         var seconds = 0
+        var windows = 0
         data.withUnsafeBytes { raw in
             let floats = raw.bindMemory(to: Float.self)
             var start = 0
@@ -730,10 +743,52 @@ actor Pipeline {
                     peak = max(peak, abs(floats[i]))
                 }
                 if peak > floor { seconds += 1 }
+                windows += 1
                 start = end
             }
         }
-        return Double(seconds)
+        return (carrying: Double(seconds), total: Double(windows))
+    }
+
+    /// How much of a track has to carry signal before transcribing it earns a
+    /// pass, and before it counts as somebody on the far end.
+    ///
+    /// **These were five and thirty seconds flat, and a flat second count
+    /// cannot be asked about a short recording.** Both numbers were read off
+    /// the 47-minute meeting in `signal`, where the question is whether a
+    /// notification chime in an otherwise idle hour is a person. Applied to a
+    /// call that lasts less than the threshold, they answer no every time,
+    /// whatever the track holds: nine seconds of audio cannot contain thirty
+    /// seconds of speech.
+    ///
+    /// Measured on a 9.5-second Telegram call recorded on a MacBook Air, both
+    /// tracks loud and both plainly speech:
+    ///
+    ///     mic.wav     peak 0.330   8 of 10 seconds over 0.01
+    ///     system.wav  peak 0.850   3 of 10 seconds over 0.01
+    ///
+    /// Parakeet transcribes that system track to "Hello. Okay." on its own.
+    /// Under `>= 5` it was never transcribed at all, so the far end of the
+    /// conversation was dropped before anything looked at it and the meeting
+    /// was filed as one person talking to themselves. That is the bug these
+    /// two functions exist to close.
+    ///
+    /// A fraction with the old seconds as a **ceiling**, so nothing about a
+    /// long meeting changes: at 2828 seconds both `min`s take the constant,
+    /// and the 47-minute meeting still reads 7 seconds as enough to look at
+    /// and not enough to be a call, exactly as before. Below about 33 seconds
+    /// the fraction binds instead, and a chime keeps failing it: a 2-second
+    /// chime in a 20-second recording needs 3, and gets 2.
+    ///
+    /// The floor of 1 is what stops an empty track qualifying on `0 >= 0`.
+    static func enoughToTranscribe(of total: Double) -> Double {
+        max(1, min(5, (total * 0.15).rounded(.up)))
+    }
+
+    /// See `enoughToTranscribe`. Thirty seconds of a meeting, and just under a
+    /// third of anything too short to hold thirty seconds.
+    static func enoughToBeACall(of total: Double) -> Double {
+        max(1, min(30, (total * 0.30).rounded(.up)))
     }
 
     /// True when a track holds no signal worth transcribing.

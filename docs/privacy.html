@@ -160,7 +160,10 @@ footer a { color: var(--ink-soft); }
   <ul>
     <li><strong>Processor:</strong> PostHog Cloud, hosted in the EU
     (<code>eu.i.posthog.com</code>), configured to discard IP addresses at
-    ingestion and to keep events for at most 12 months.</li>
+    ingestion. Events are kept indefinitely: PostHog has no way to delete
+    events after a set time, so nothing here can promise that it happens.
+    What is deleted, immediately and on your instruction, is the install ID
+    that connects them, which is the switch in Settings, Privacy.</li>
     <li><strong>Identity:</strong> a random per-install ID, never synced
     between your devices, deleted the moment you turn it off. Turning it
     back on later creates a fresh one.</li>

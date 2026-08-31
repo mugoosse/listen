@@ -118,17 +118,35 @@ project 259056:
 
 - **IP discarding is real.** `anonymize_ips: true`, and `$ip` is absent from
   every one of the 371 events.
-- **Retention is not.** `event_retention_months: 84`, with
+- **Retention is not, and cannot be.** `event_retention_months: 84`, with
   `events_retention_enforced: false`. PostHog has no time-based event deletion
   to switch on: the feature request (PostHog/posthog#17031) has been open
-  since 2023. The promise cannot be kept by a setting, only by a purge
-  somebody performs.
-- **Location is not.** GeoIP enrichment runs before the IP is discarded, so
-  every event carries `$geoip_city_name`, `$geoip_postal_code`,
-  `$geoip_subdivision_1_*`, `$geoip_latitude` and `$geoip_longitude`. With a
-  handful of installs resolving to one city, that is a fingerprint rather than
-  a country. It is disabled by turning off the GeoIP transformation in the
-  project's data pipeline, which is a UI action with no API behind it.
+  since 2023. Checked three ways, because it is the kind of claim worth being
+  sure about: the field is absent from `project-settings-update`'s schema, the
+  UI has no such control under General or Product analytics, and the only
+  retention controls on the plan at all are for Logs (14 day, 30 day add-on).
+  Both documents now say events are kept indefinitely, because a promise
+  nothing enforces is worth less than an accurate sentence.
+- **Location was not, and pausing GeoIP only half fixed it.** GeoIP enrichment
+  runs before the IP is discarded, so every event carried
+  `$geoip_city_name`, `$geoip_postal_code`, `$geoip_subdivision_1_*`,
+  `$geoip_latitude` and `$geoip_longitude`.
+
+  Pausing the GeoIP transformation (Data, Transformations; a UI action with no
+  API behind it) removed `$geoip_city_name` and `$geoip_postal_code`, and
+  **that is all it removed**. The first event ingested afterwards still
+  carried `$geoip_country_*`, `$geoip_continent_*`, `$geoip_subdivision_1_*`,
+  `$geoip_time_zone`, `$geoip_accuracy_radius`, `$geoip_latitude` and
+  `$geoip_longitude`. So "kept only as a country" was still false after the
+  change that was supposed to make it true.
+
+  The general lesson: pausing a transformation is not disabling enrichment,
+  because some of it is the ingestion pipeline's own work rather than the
+  transformation's. TELEMETRY.md now describes the region-level data that
+  actually arrives. The untried lever is `$geoip_disable` as an event
+  property, which would also need adding to `allowedDollarProps`; it is not in
+  the docs this repo checked, so it needs proving against a real ingest before
+  anything is claimed for it.
 
 The send filter itself is sound, and this is worth stating because it is the
 part the repo can prove: an audit of every property key that arrived

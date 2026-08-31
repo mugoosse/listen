@@ -23,7 +23,13 @@ everything outside the tables below, and the filter's source is public.
 
 - Host: `eu.i.posthog.com` (PostHog Cloud, EU region). PostHog is the
   processor; the project is configured to discard client IP addresses at
-  ingestion, so location is kept only as a country.
+  ingestion, and the GeoIP enrichment that added a city and a postal code is
+  turned off. Your IP is not stored. What PostHog still derives from it before
+  discarding it, and attaches to every event, is a continent, a country, a
+  region (a state or province), a time zone, and a latitude and longitude
+  accurate to that region rather than to you. That is more than this file used
+  to claim, which was a country and nothing else, and it was measured rather
+  than assumed: the check is in `.agents/notes/telemetry.md`.
 - Identity: a random install ID the PostHog SDK generates the moment
   telemetry turns on. It is not derived from anything, it is never synced
   between your devices (a Mac and an iPhone are two installs, deliberately),
@@ -173,10 +179,20 @@ silently; a change bumps `schema_version` and is noted here.
 
 ## Retention and publication
 
-Event data is retained in PostHog for at most 12 months. Anything published
-from it (a "users transcribed X hours" style statistic) is aggregate only,
-says it comes from installs with telemetry on, and uses no cohort smaller
-than 50 installs.
+Event data is kept indefinitely. This file used to say twelve months, and that
+was never true: PostHog has no time-based event deletion to switch on, on any
+plan or through any API, and the feature request for it has been open since
+2023. A promise nothing enforces is worth less than an accurate sentence, so
+this is the accurate one. If PostHog ships retention, twelve months is the
+setting to choose and this paragraph goes back to promising it.
+
+The identity is the part that does get deleted, on your instruction and at
+once: turning telemetry off deletes the install ID, so the events that remain
+are no longer connected to each other or to a later you.
+
+Anything published from this data (a "users transcribed X hours" style
+statistic) is aggregate only, says it comes from installs with telemetry on,
+and uses no cohort smaller than 50 installs.
 
 ## Verifying all of this
 

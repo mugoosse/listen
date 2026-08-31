@@ -649,7 +649,7 @@ if (location.hostname === "mugoosse.github.io") {
       </a>
       <span class="bar-spacer"></span>
       <a class="button small" href="index.html">How it works</a>
-      <a class="button small primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download</a>
+      <a class="button small primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg" data-rybbit-event="mac_download_clicked" data-rybbit-prop-slot="nav">Download</a>
     </div>
   </div>
 </div>
@@ -663,7 +663,7 @@ if (location.hostname === "mugoosse.github.io") {
     </div>
 
     <div class="buttons" id="buttons">
-      <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+      <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg" data-rybbit-event="mac_download_clicked" data-rybbit-prop-slot="hero">Download for macOS</a>
       <a class="button" href="index.html">See everything it does</a>
     </div>
     <p class="under-button" id="under-button">Free and open source · Apple silicon · macOS 14 or later</p>
@@ -675,7 +675,7 @@ if (location.hostname === "mugoosse.github.io") {
       version, and there is no version that would work.</p>
       <p>Open the Apple menu and choose About This Mac. If it says <b>Chip</b>
       rather than <b>Processor</b>, this guess is wrong and you can
-      <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">download
+      <a href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg" data-rybbit-event="mac_download_clicked" data-rybbit-prop-slot="intel-fallback">download
       Listen</a> as normal.</p>
     </div>
 
@@ -793,7 +793,7 @@ if (location.hostname === "mugoosse.github.io") {
       14 or later. The speech model is about 2.5 GB and downloads once, the first
       time you run it.</p>
       <div class="buttons">
-        <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg">Download for macOS</a>
+        <a class="button primary" href="https://github.com/mugoosse/listen/releases/latest/download/Listen.dmg" data-rybbit-event="mac_download_clicked" data-rybbit-prop-slot="footer">Download for macOS</a>
         <a class="button" href="https://github.com/mugoosse/listen">Read the source</a>
       </div>
 

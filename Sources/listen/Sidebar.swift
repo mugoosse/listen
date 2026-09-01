@@ -28,15 +28,17 @@ final class SidebarViewController: NSViewController {
     /// People tab again under another name. A search is the one moment somebody
     /// has a name in mind, which is exactly when the card is worth showing.
     private enum Row {
-        /// A heading, and the lens it sets when there is one.
+        /// A heading, and nothing else.
         ///
-        /// A day heading sets nothing: "Today" is not a kind, and a lens that
-        /// narrowed the library to one date is a filter nobody asked for from a
-        /// control that looks like a label. Only the three kind headings are
-        /// buttons, and only while no kind lens is already on, because a
-        /// heading offering to show what is already shown is a control that
-        /// does nothing.
-        case header(String, Lens?)
+        /// **It used to carry the lens it set, and be a button.** A kind
+        /// heading was pressable and revealed an "Only these" hint on hover,
+        /// which was a control hidden inside something that reads as a label:
+        /// reported as "I don't expect this to be hoverable because it's not a
+        /// button", by the person who asked for it in the first place. Nothing
+        /// is lost, because the lens it set has two other ways in and one of
+        /// them is the discoverable one: "Show only" in the magnifier, which
+        /// names the `kind:` operator it writes, and typing that operator.
+        case header(String)
         case recording(Recording)
         case note(Note)
         case person(Person)
@@ -503,8 +505,7 @@ final class SidebarViewController: NSViewController {
         if !people.isEmpty {
             // Singular when there is one, and it is still the kind's heading:
             // the lens it sets is People either way.
-            rows.append(.header(people.count == 1 ? "Person" : "People",
-                                offer(.kind(.people), unless: kind)))
+            rows.append(.header(people.count == 1 ? "Person" : "People"))
             rows.append(contentsOf: people.map { Row.person($0) })
         }
 
@@ -518,7 +519,7 @@ final class SidebarViewController: NSViewController {
                 return nil
             }
             if !notes.isEmpty {
-                rows.append(.header("Notes", offer(.kind(.notes), unless: kind)))
+                rows.append(.header("Notes"))
                 rows.append(contentsOf: notes)
             }
             let recordings = items.compactMap { item -> Row? in
@@ -526,7 +527,7 @@ final class SidebarViewController: NSViewController {
                 return nil
             }
             if !recordings.isEmpty {
-                rows.append(.header("Recordings", offer(.kind(.recordings), unless: kind)))
+                rows.append(.header("Recordings"))
                 rows.append(contentsOf: recordings)
             }
             appendChatsRow(for: filter)
@@ -538,7 +539,7 @@ final class SidebarViewController: NSViewController {
         for item in items {
             let heading = Self.heading(for: item.date)
             if heading != lastHeading {
-                rows.append(.header(heading, nil))
+                rows.append(.header(heading))
                 lastHeading = heading
             }
             rows.append(item.row)
@@ -561,14 +562,6 @@ final class SidebarViewController: NSViewController {
         let count = ChatNav.mentions(typed)
         guard count > 0 else { return }
         rows.append(.chats(count: count, query: typed))
-    }
-
-    /// A heading's lens, or nil when that lens is already on.
-    ///
-    /// A heading offering to show what is already shown is a control that does
-    /// nothing, and the pill above the list is what turns it back off.
-    private func offer(_ lens: Lens, unless current: LibraryKind?) -> Lens? {
-        current == nil ? lens : nil
     }
 
     /// Draw the rows and put the selection back on whatever the pane is showing.
@@ -761,6 +754,9 @@ final class SidebarViewController: NSViewController {
     /// can look like the other, so one map serves both kinds of row.
     private var rowMatches: [String: RowMatch] = [:]
 
+    /// Every heading in the list, day or kind, is this.
+    static let headingFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+
     /// The one hit a row shows, out of however many it has.
     ///
     /// The first hit in the body rather than the "best" one. There is no
@@ -865,18 +861,6 @@ final class SidebarViewController: NSViewController {
 
     @objc private func showUnnamed() {
         filter(byUnnamedSpeakers: true)
-    }
-
-    /// A section heading was clicked, so narrow the list to that kind.
-    ///
-    /// The identifier carries the lens rather than a closure per row, because
-    /// the header views are made and thrown away by the table on every reload
-    /// and a captured lens would outlive the row it was made for.
-    @objc private func headerClicked(_ sender: NSView) {
-        guard let id = sender.identifier?.rawValue,
-              let kind = LibraryKind.allCases.first(where: { "kind:" + $0.rawValue == id })
-        else { return }
-        add(.kind(kind))
     }
 
     /// Show only one kind of row, from outside the list.
@@ -1374,30 +1358,29 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?,
                    row: Int) -> NSView? {
         switch rows[row] {
-        case .header(let title, let lens):
-            guard let lens else {
-                let label = NSTextField(labelWithString: title)
-                label.font = SectionHeader.font
-                label.textColor = .secondaryLabelColor
-                let holder = NSView()
-                label.translatesAutoresizingMaskIntoConstraints = false
-                holder.addSubview(label)
-                NSLayoutConstraint.activate([
-                    // Level with the icon column below it, not four points
-                    // inside it. A day heading, an app icon and New Recording's
-                    // dot now share one edge, and every title in the list
-                    // shares the next.
-                    label.leadingAnchor.constraint(equalTo: holder.leadingAnchor,
-                                                   constant: RecordingCell.textInset),
-                    label.bottomAnchor.constraint(equalTo: holder.bottomAnchor,
-                                                  constant: -4),
-                ])
-                return holder
-            }
-            let header = SectionHeader(title: title, target: self,
-                                       action: #selector(headerClicked(_:)))
-            header.identifier = NSUserInterfaceItemIdentifier(lens.id)
-            return header
+        case .header(let title):
+            // **A label, and only a label.** Every heading in this list is the
+            // same one now: a day, a kind, it makes no difference, because none
+            // of them does anything. The kind headings used to be buttons with
+            // a hover state and an "Only these" hint, and what that looked like
+            // on screen was a heading whose background lit up under the pointer
+            // for no reason a reader could name.
+            let label = NSTextField(labelWithString: title)
+            label.font = Self.headingFont
+            label.textColor = .secondaryLabelColor
+            let holder = NSView()
+            label.translatesAutoresizingMaskIntoConstraints = false
+            holder.addSubview(label)
+            NSLayoutConstraint.activate([
+                // Level with the icon column below it, not four points inside
+                // it. A day heading, an app icon and New Recording's dot now
+                // share one edge, and every title in the list shares the next.
+                label.leadingAnchor.constraint(equalTo: holder.leadingAnchor,
+                                               constant: RecordingCell.textInset),
+                label.bottomAnchor.constraint(equalTo: holder.bottomAnchor,
+                                              constant: -4),
+            ])
+            return holder
 
         case .recording(let recording):
             let cell = RecordingCell()
@@ -2077,22 +2060,28 @@ extension NSView {
 /// are four lines.
 /// The way from a search to the conversations that mention the same word.
 ///
-/// **Not a `SectionHeader`, which is what this was first.** That class is a
-/// heading with a lens behind it: 12pt semibold secondary type pinned to the
-/// bottom of its box, and an "Only these" hint that appears on hover. Used
-/// here it read as a section that had lost its rows, put a lens affordance on
-/// something that sets no lens, and its hint took enough of the width to
-/// truncate the sentence. Every one of those is right for a heading.
+/// **This was `SectionHeader`, the class that used to make a kind heading
+/// pressable, and it was wrong three ways at once.** Its label is pinned to the
+/// bottom of its box in heading type, so a short row read as a section that had
+/// lost its rows; it revealed an "Only these" lens hint on hover, which this
+/// row has no lens for; and that hint took enough of the width to cut the
+/// sentence down to `8 conversations mention "b`. The class is gone now,
+/// because headings stopped being buttons at the same time.
 ///
 /// What this is instead is the shape a note's sources already use for
 /// navigation, recorded under "A note's sources are `SourceChip`s": accent
-/// text, no fill, a pointing hand. An `.inline` grey capsule reads as a tag and
-/// says nothing about going anywhere; an accent-filled one shouts louder than
-/// the results above it.
+/// text, a chevron, a pointing hand, no fill. An `.inline` grey capsule reads
+/// as a tag and says nothing about going anywhere; an accent-filled one shouts
+/// louder than the results above it.
 ///
-/// The wording names the count and not the term. "8 conversations mention
-/// "business"" is 34 characters and truncates in a 280 point sidebar, and the
-/// word is in the search field three rows above, on screen the whole time.
+/// **The wording is a destination, not a statement about the library.** "Also
+/// in 8 conversations" describes where the word also appears and leaves the
+/// reader to work out that the line can be clicked. "See 8 chat results" names
+/// what happens and the screen it happens on, which is the one the sidebar and
+/// the Shift-Cmd-0 menu item both call Chats. The term itself is not in it: "8
+/// conversations mention "business"" is 34 characters and does not fit beside
+/// an icon in 280 points, and it is in the search field a few rows above, on
+/// screen the whole time.
 @MainActor
 final class ChatsRow: NSView {
     /// Tall enough to be a target and short enough not to read as a result.
@@ -2100,6 +2089,7 @@ final class ChatsRow: NSView {
 
     private let icon = NSImageView()
     private let button = HoverButton(.ink)
+    private let chevron = NSImageView()
 
     init(count: Int, target: AnyObject?, action: Selector) {
         super.init(frame: .zero)
@@ -2110,7 +2100,7 @@ final class ChatsRow: NSView {
         icon.contentTintColor = Brand.accent
         icon.symbolConfiguration = .init(pointSize: 11, weight: .regular)
 
-        let title = count == 1 ? "Also in 1 conversation" : "Also in \(count) conversations"
+        let title = count == 1 ? "See 1 chat result" : "See \(count) chat results"
         button.title = title
         button.font = .systemFont(ofSize: 12)
         button.rest = Brand.accent
@@ -2121,7 +2111,14 @@ final class ChatsRow: NSView {
         button.action = action
         button.setAccessibilityLabel(title)
 
-        for v in [icon, button] as [NSView] {
+        // The chevron a note's source links carry, which is what says the
+        // line goes somewhere rather than merely stating a count.
+        chevron.image = NSImage(systemSymbolName: "chevron.right",
+                                accessibilityDescription: nil)
+        chevron.contentTintColor = Brand.accent
+        chevron.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+
+        for v in [icon, button, chevron] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -2134,8 +2131,14 @@ final class ChatsRow: NSView {
             icon.widthAnchor.constraint(equalToConstant: 16),
             button.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             button.centerYAnchor.constraint(equalTo: centerYAnchor),
-            button.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
-                                             constant: -RecordingCell.textInset),
+            chevron.leadingAnchor.constraint(equalTo: button.trailingAnchor,
+                                             constant: 3),
+            // On the text rather than the row, because an `NSImageView` centres
+            // its glyph in its own frame and a chevron is smaller than the line
+            // it sits beside.
+            chevron.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            chevron.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                              constant: -RecordingCell.textInset),
         ])
     }
 
@@ -2146,115 +2149,6 @@ final class ChatsRow: NSView {
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
     }
-}
-
-@MainActor
-final class SectionHeader: NSView {
-    static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-
-    private let label = NSTextField(labelWithString: "")
-    private let hint = NSTextField(labelWithString: "Only these")
-    private weak var target: AnyObject?
-    private let action: Selector
-
-    private var hovering = false {
-        didSet {
-            guard hovering != oldValue else { return }
-            hint.isHidden = !hovering
-            restyle()
-        }
-    }
-
-    init(title: String, target: AnyObject?, action: Selector) {
-        self.target = target
-        self.action = action
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        translatesAutoresizingMaskIntoConstraints = false
-
-        label.stringValue = title
-        label.font = Self.font
-        label.textColor = .secondaryLabelColor
-
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = Brand.accent
-        hint.isHidden = true
-        // Or a long heading pushes it off the edge instead of truncating
-        // itself, which is the way round the sidebar's titles already work.
-        hint.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        for view in [label, hint] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(view)
-        }
-        NSLayoutConstraint.activate([
-            // The same edge as a day heading, so the two do not appear to be
-            // indented differently when a search swaps one set for the other.
-            label.leadingAnchor.constraint(equalTo: leadingAnchor,
-                                           constant: RecordingCell.textInset),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-            hint.firstBaselineAnchor.constraint(equalTo: label.firstBaselineAnchor),
-            hint.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                           constant: -RecordingCell.textInset),
-            hint.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor,
-                                          constant: 8),
-        ])
-
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(title)
-        setAccessibilityHelp("Show only \(title.lowercased()).")
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func accessibilityPerformPress() -> Bool {
-        NSApp.sendAction(action, to: target, from: self)
-        return true
-    }
-
-    /// The heading is one control, not a control containing two labels.
-    ///
-    /// Measured through the accessibility tree: a section read "Person,
-    /// Person, Person", once for the table's own cell wrapper, once for this
-    /// view and once for the field inside it. `setAccessibilityElement(false)`
-    /// on the fields does not do it, because `NSTextField` answers that
-    /// question itself; emptying the children is what removes them.
-    override func accessibilityChildren() -> [Any]? { [] }
-
-    private func restyle() {
-        layer?.backgroundColor = hovering ? hoverTint(0.10).cgColor : NSColor.clear.cgColor
-    }
-
-    /// A `CGColor` is a snapshot of what it was resolved from, so switching the
-    /// Mac between light and dark leaves the last one painted.
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        restyle()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-
-    override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        NSApp.sendAction(action, to: target, from: self)
-    }
-
-    /// Swallow the press so the table underneath does not treat it as a click
-    /// on the list. `shouldSelectRow` already refuses the selection; this stops
-    /// `rowClicked` seeing a click that closed the open page.
-    override func mouseDown(with event: NSEvent) {}
 }
 
 extension Recording {

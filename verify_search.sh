@@ -194,9 +194,9 @@ echo
 echo "4. conversations are offered, not listed"
 search "$TERM_CHAT"
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -qi "Also in .* conversation"
-check $? "a handoff row offers the conversations that mention it"
-"$PROBE" press $APP "conversation" >/dev/null 2>&1
+echo "$dump" | grep -qi "See .* chat result"
+check $? "a handoff row offers the chats that mention it"
+"$PROBE" press $APP "chat result" >/dev/null 2>&1
 sleep 2
 dump=$("$PROBE" texts $APP 2>&1)
 echo "$dump" | grep -qi "A fixture conversation"

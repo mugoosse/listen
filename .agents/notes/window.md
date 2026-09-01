@@ -359,6 +359,11 @@ of being a parallel way to do the same thing.
 
 ### The heading is a button, and it is the first one in this app that answers to accessibility
 
+**Superseded: the heading is not a button any more. See "A heading that
+lights up under the pointer is a control, and this one was not" at the foot
+of this file.** Kept because the accessibility half is still the rule for
+anything in this sidebar that *is* pressable, and `ChatsRow` is built on it.
+
 `SidebarRow` and `HoverRow` are plain `NSView`s with a target and an action, so
 no automation and no screen reader can press them. `SectionHeader` sets
 `accessibilityRole`, a label and `accessibilityPerformPress`, which is four
@@ -2190,14 +2195,52 @@ else about it was wrong, and all three faults were visible in one screenshot:
   `8 conversations mention “b  Only these`.
 
 `ChatsRow` is its own view, in the shape this app already uses for navigation —
-the one recorded under "A note's sources are `SourceChip`s": accent text, no
-fill, a pointing hand. It is a `HoverButton`, which is an `NSButton` and so
-answers to accessibility for free, which was the only good reason to have
-borrowed `SectionHeader` in the first place.
+the one recorded under "A note's sources are `SourceChip`s": accent text, a
+chevron, a pointing hand, no fill. It is a `HoverButton`, which is an
+`NSButton` and so answers to accessibility for free, which was the only good
+reason to have borrowed `SectionHeader` in the first place. **That class no
+longer exists**: headings stopped being buttons in the same change, and it had
+no other caller.
 
-**The wording names the count and not the term.** "8 conversations mention
-"business"" is 34 characters and does not fit a 280 point sidebar beside an
-icon; "Also in 8 conversations" does, and the word is in the search field a few
-rows above, on screen the whole time. `rowViewForRow` returns nil for it as it
-does for a heading, because the row draws its own hover in the ink of the link
-it is and a card behind that would be two highlights for one target.
+**The wording is a destination, not a statement about the library.** It read
+"Also in 8 conversations" first, which describes where the word also appears
+and leaves the reader to work out that the line can be clicked. "See 8 chat
+results ›" names what happens and the screen it happens on, which is the one
+the sidebar and the Shift-Cmd-0 menu item both call Chats. The term itself
+stays out of it either way: "8 conversations mention "business"" is 34
+characters and does not fit beside an icon in 280 points, and it is in the
+search field a few rows above, on screen the whole time.
+
+`rowViewForRow` returns nil for it as it does for a heading, because the row
+draws its own hover in the ink of the link it is and a card behind that would
+be two highlights for one target.
+
+## A heading that lights up under the pointer is a control, and this one was not
+
+The three kind headings were buttons. Pressing "Notes" set `kind:notes`, and
+hovering one revealed an "Only these" hint at the trailing edge. Reported as *"I
+don't expect this to be hoverable because it's not a button"* — by the person who
+asked for the affordance in the first place, which is the useful part: the
+reasoning for it was sound and what it did on screen was not.
+
+What it did on screen was light up the background of something set in heading
+type, secondary colour, 12pt semibold, pinned to the bottom of its box above a
+hairline. Every one of those choices says "label". The hover said "control", and
+the hint that would have explained it only appears once the pointer is already
+there, which is after the question has been asked.
+
+**Nothing is lost, because the lens it set has two other ways in and one of them
+is the discoverable one.** "Show only" in the magnifier lists all three kinds and
+names the operator each one writes (`Notes   kind:notes`), and typing that
+operator is the other. This file already argues that the menu is the route that
+teaches the typed one; the heading was a third way in that taught nothing and
+looked like nothing.
+
+So `Row.header` carries a string and no lens, `SectionHeader` is deleted, and
+every heading in the list — day or kind — is the plain label the day headings
+already used. `headerClicked` and `offer(_:unless:)` went with it.
+
+The general shape, which is the part worth keeping: **an affordance that only
+appears on hover cannot explain itself, so the thing under the pointer has to
+already look like what it is.** A row of results looks pressable because rows
+are; a heading does not, and no amount of hover state fixes that.

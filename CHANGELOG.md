@@ -8,6 +8,79 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.28.0 (2026-09-01)
+
+Searching your library found the right meeting and then left you to hunt
+through it by eye. This release makes a result say what it found, and adds a
+way to search the page in front of you.
+
+### What was wrong
+
+Typing a word you remembered hearing returned a row with the meeting's name on
+it and nothing else. Nothing said whether it matched the title or minute 26 of a
+38 minute call, how many times it appeared, or where to start reading. The
+search had already located every one of those and was throwing them away.
+
+### What changed
+
+A result now carries the sentence that matched, with who said it and when:
+
+    Call with Joris Goossens                    8
+    Saturday · 15:27 · 41:30
+    Maxime  15:52  …doen. Ik heb een iPhone, dus dan heb je…
+
+The number on the right is how many times the word appears in that recording.
+Notes are excerpted the same way. A recording that matched only on its title
+gets no excerpt, because repeating the title underneath itself says nothing.
+
+**Cmd-F now searches the page you are looking at**, over its title, its note and
+its transcript, with a counter, next and previous, and Return and Cmd-G to step.
+Every match is highlighted, the current one more strongly, and the waveform
+marks where in the meeting they are, so a word said three times in an hour is
+three ticks on the scrubber. It works on a note's page too.
+
+**The library search field has moved to Cmd-Shift-F.** This is the one change
+here that will interrupt something you already know how to do. Cmd-F means the
+document in front of you in every other Mac app, and the library field is on
+screen permanently and one click away, so it is the one that can afford the
+longer chord. It is the same pair as Xcode's find-in-file and find-in-project.
+
+Clicking a search result opens the meeting with the find bar already up on the
+first match, so the word you typed carries through instead of being abandoned at
+the door.
+
+Conversations you have had with an agent are searched too. They are not listed
+in the library, because they are not a collection of it; a row at the foot of
+the results says "See 8 chat results" and takes you there with the word already
+in that screen's own field.
+
+### Section headings are no longer clickable
+
+Pressing "Notes" or "Recordings" above a set of results used to narrow the list
+to that kind, and hovering one lit its background. A heading is set in heading
+type above a hairline, which reads as a label, so this was a control hidden
+inside something that does not look like one. Both other ways in are unchanged:
+"Show only" in the magnifier at the left of the search field, and typing
+`kind:notes` or `is:notes`.
+
+### Known limitations
+
+The count on a result row and the count in the find bar can disagree in two
+cases, and both are honest rather than broken. A word spanning the gap between
+two paragraphs matches the list and not the page. And an untitled recording
+matched on the word "untitled" is matched on the placeholder the list draws,
+which is not text the page contains. Either way the bar opens and says it found
+nothing on screen.
+
+Find in page covers meetings and notes, not a person's card, which is mostly
+counts and chips rather than prose. On a meeting it searches the note that is on
+screen rather than every note attached to it.
+
+Searching is fast enough not to need throttling: measured on the longest
+transcript to hand, 156 paragraphs, a single character finds 2546 matches and
+redraws them in 2 ms, so there is no delay before results appear and no minimum
+length before it starts.
+
 ## 0.27.0 (2026-09-01)
 
 Listen could lose the other person's half of a call and tell you nothing about

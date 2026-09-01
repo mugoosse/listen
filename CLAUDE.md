@@ -94,6 +94,12 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - Dictating made Listen a call, and the guard was on the pid rather than on the app
 - The app the call was in is a field, and never the title
 - Nothing asks "keep this recording?" any more
+- A dead tap and a quiet far side are the same silence, and only one is a failure
+- Rebuilding the tap from the IO proc's own queue deadlocks it
+- The tap is bound to the output device it was born on
+- `LISTEN_TAP_TEAR`, because waiting for a Mac to overload is not a test
+- A level timestamped on the main queue is not a level timestamped in the audio
+- The route is measurable, and the overload messages are not the mechanism
 
 ### `.agents/notes/asr.md` (32k)
 
@@ -633,6 +639,12 @@ One script stands in for one, over the app built in the working directory:
                         # header for what it does not establish (uitest copy)
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
+./verify_tap_routes.sh  # whether the system audio tap survives each output
+                        # route, by playing speech through it and checking what
+                        # arrived. --with-mic puts a headset in its call
+                        # profile, --load pins four cores. Needs speakers or
+                        # headphones actually connected, and it changes the
+                        # default device while it runs (and puts it back)
 ```
 
 The AX-driven ones share `tools/axprobe.swift`, compiled on demand into

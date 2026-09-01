@@ -593,3 +593,204 @@ one, because an hour of meeting and four seconds of dictation want opposite
 things: streaming to a `WAVWriter` against holding samples in memory, and a
 watchdog that switches devices against disposing the unit the moment the key
 comes up. See `.agents/notes/dictation.md`.
+
+
+## A dead tap and a quiet far side are the same silence, and only one is a failure
+
+Three meetings on 2026-09-01 recorded almost none of the other person, and
+nothing anywhere said so. Measured on the files afterwards:
+
+| recording | far end has any signal | bit-exact zero |
+|---|---|---|
+| `2026-09-01-130009-8257` (38:32) | 12.6% of the call | 21 whole minutes |
+| `2026-09-01-150027-035D` (8:46) | 28% | one run of 251 s |
+| `2026-09-01-150917-C60E` (22:57) | 37% | one run of 75 s |
+
+The microphone track was flawless through all three: steady -60 dB noise floor,
+no gaps, no device changes. The far side was audible to the user throughout, and
+the transcripts prove it. At 16:17 of the Emily call the user answers "what you
+mentioned earlier, which is like I'll become like a CTO and managing a junior
+dev" and minutes 15 and 16 are recorded as pure silence; nowhere in 38 minutes
+does either person say "you're breaking up". `coreaudiod`'s own output meter
+reports -17 to -20 dB RMS through every one of those silent minutes.
+
+### The configuration, because the first attempt to reproduce it had the wrong one
+
+All three were Google Meet in Chrome, with **AirPods Pro on output only, in
+high quality A2DP, and an Audio-Technica AT2020USB-XP on input**. Two devices on
+two clocks, chosen by hand in both Meet and Listen.
+
+That distinction is the whole test. A headset that is *also* the input is in its
+call profile, which is a different and much worse IO path, and reproducing that
+instead came back clean and would have been read as "Bluetooth is fine". The
+CoreAudio log named the AirPods as an input three times during the calls, which
+is what the wrong guess was built on; the same log names `AT2020USB-XP` six
+times, and that is what Listen was actually recording from. **The log says which
+devices exist, not which one an app chose**, and `Settings.microphoneUID` is
+where the second question is answered.
+
+**The comment beside `onLevel` is why this was invisible, and it is still
+right.** Bit-exact zero from a process tap really is the ordinary state of a Mac
+playing nothing, so a silence detector on this track means nothing. What it
+missed is that a dead tap produces the same zeros as a quiet room, so "no
+detector" left the two indistinguishable for the life of the app.
+
+`TapHealth` asks a different question with a certain answer: **are the zeros
+interleaved with signal inside a single 10 ms window?** No resampler, codec or
+converter produces that. It is an IO proc that missed its deadline and had part
+of its buffer zero-filled underneath it. On 2026-09-01 the far end lost 39
+samples of every 160 at 16 kHz on an exact 160-sample grid, and `coreaudiod`
+logged 137 `HALS_OverloadMessage` events during that call, 80% of them within
+two seconds of a torn second in a later one.
+
+Validated against the whole library before it was wired in: **0 torn windows
+across six healthy calls totalling four hours** (two Telegram, two WhatsApp, one
+Discord, one Chrome), against 328 to 3005 on the three broken ones.
+
+### The edge test is the whole reason it does not false-positive
+
+A window straddling the instant speech starts is half zeros and half signal,
+which is exactly the shape of damage, and a far side using DTX crosses that
+boundary every time the other person pauses. So a window only counts as torn
+when it carries signal in **both** its first and last quarter: an onset has
+nothing in the first, an offset nothing in the last.
+
+### Two phases, because holes on the grid look like an onset
+
+The first live test caught 96.6% of injected tearing when the file was scanned
+afterwards and **none of it as the audio arrived**. The injector aligned its
+holes to the start of each flush batch, and the live scan aligned its windows
+there too, so every hole sat in a window's first quarter and read as an onset.
+`scan` now runs at two phases half a window apart and takes the worse answer.
+The offline reading was only luckier, not better: a real tap whose holes land on
+the grid would have been missed the same way.
+
+### Silence only means something next to the microphone
+
+Bit-exact zero on its own is not evidence. The gate is your own voice inside it,
+and the numbers are measured rather than chosen: across the library the only two
+silences over 45 seconds that are **not** failures are recording lead-ins with
+zero speech in them, while every real one has 14 to 250 seconds of talking
+inside it. So `Capture` warns at 45 s with 5 s of speech and rebuilds at 90 s
+with 15 s, and `TapHealth.Report.lostRuns` applies the same gate to a finished
+file so `listen audio --check` and the live warning cannot disagree.
+
+## Rebuilding the tap from the IO proc's own queue deadlocks it
+
+`AudioDeviceCreateIOProcIDWithBlock` is handed `queue`, so the IO proc runs
+there. `AudioDeviceStop` blocks until the IO proc returns. Tearing the tap down
+from `queue`, which is where both the drain timer and the health check live,
+therefore hangs the recording it is trying to rescue. `restart` runs on a
+separate `control` queue and asserts it with `dispatchPrecondition`, the way
+`MicRecorder` already keeps one.
+
+It also suspends the drain timer and then does `queue.sync {}` before touching
+anything. Suspending a timer does not wait for a handler that is already
+running, and that handler writes to the same file the rebuild is about to pad.
+
+## The tap is bound to the output device it was born on
+
+`createTap` passes `deviceUID = nil`, which means "the default output", and that
+resolves **once**. Putting headphones on mid-meeting moved the audio to a device
+the tap was not on, and nothing could follow it. `watchDefaultOutput` listens on
+`kAudioHardwarePropertyDefaultOutputDevice` and rebuilds.
+
+**Pinning the tap to the built-in output is not the fix, and would be worse.** A
+tap only hears the device it is on. Somebody listening on a headset would get a
+recording of perfect silence, because the meeting is coming out of the headset.
+Following the route is the part that is always right; moving the route is the
+user's decision and takes the call out of their ears.
+
+Not verified on this Mac: there is only one usable output device here, and
+setting the default to the Microsoft Teams virtual device returns `noErr` and
+silently does not take. The rebuild path itself is verified through
+`LISTEN_TAP_TEAR`; only the device-change trigger for it is not.
+
+## `LISTEN_TAP_TEAR`, because waiting for a Mac to overload is not a test
+
+`LISTEN_TAP_TEAR=0.25` zeroes the head of every 10 ms window of the far-end
+track, which is the measured shape of the real damage. `LISTEN_TAP_TEAR=1` is
+the other failure, a tap gone deaf altogether, and it is the only way to reach
+the `Capture` side of the gate. Same reasoning as `LISTEN_OFFLINE`: the recovery
+is the interesting half and it cannot be reached by hoping.
+
+Verified with it: tearing detected live and the tap rebuilt three times in 50 s
+(the 20 s debounce holding), tracks still aligned at 50.2 s and 50.3 s; and a
+deaf tap warned at 45 s and rebuilt at 90 s, with the clock resetting to 0
+afterwards.
+
+**Zero the tail too.** The first version stopped at the last whole window, which
+left up to 159 samples of real audio in every batch. Inaudible, but it is
+signal, and signal is exactly what the deafness clock watches for, so the track
+looked healthy while being entirely destroyed.
+
+## A level timestamped on the main queue is not a level timestamped in the audio
+
+`secondsYouSpoke` asks "in the last 45 seconds". Stamping each level with
+`Date()` where it is *delivered*, inside `DispatchQueue.main.async`, answers that
+with when the main queue was free instead of when somebody was talking: it
+counted 5 to 11 seconds of speech in a 45 second window through which `say` ran
+almost continuously. The stamp is taken on the audio thread now.
+
+**And it counts seconds, not callbacks.** Dividing a callback count by a nominal
+31 per second reported 70 seconds of speech inside a 45 second window, because
+`MicRecorder.report` emits a short extra window at the end of every buffer and
+the true rate is neither 31 nor constant. A `Set` of whole seconds is
+rate-independent, and seconds are the unit the thresholds were calibrated in.
+
+## The route is measurable, and the overload messages are not the mechanism
+
+`verify_tap_routes.sh` plays speech through a chosen output, records it with the
+real capture path, and reports what arrived. Measured 2026-09-01, 300 s each,
+four cores pinned, the AT2020 on input both times:
+
+| output route | torn windows | where |
+|---|---|---|
+| AirPods Pro (bluetooth, A2DP) | 22 | two bursts at 01:24 and 01:47, each ~0.22 s |
+| MacBook Pro Speakers (builtin) | 1 | 00:00.23, the tap starting up |
+
+So the Bluetooth route does tear and the built-in route does not, which is the
+first direct evidence for what had only been a correlation across the library.
+
+**And it tore with zero `HALS_OverloadMessage` events.** The section above cites
+137 of them in the Emily call with 80% landing within two seconds of a torn
+second, which is true and was over-read: overloads accompany the severe
+episodes, they do not cause the tearing and are not necessary for it. An IO proc
+can be late without `coreaudiod` deciding the lateness is worth reporting.
+Anything built on "no overloads logged, therefore the tap was fine" is wrong.
+
+**The magnitude is not reproduced and that matters.** The three lost meetings
+tore 16 to 30 seconds each; this reproduces 0.2 seconds in five minutes. Three
+variables sit between the two and none is tested: Chrome's WebRTC pipeline,
+screen sharing, and the Microsoft Teams HAL plug-in that was loaded inside
+`coreaudiod` then and has since been removed. Do not read the 22 windows as an
+explanation of the 30 seconds.
+
+### A binary verdict was wrong in both directions
+
+`Report.healthy` started as `counts.torn == 0`. That called the healthy 300 s
+control broken over its single startup window, and gave a lost meeting the same
+verdict as a route that dropped a fifth of a second. `Report.verdict` grades it
+instead, on the measurements above: intact below 0.05% of what arrived, `minor`
+up to 1%, `lost` beyond. Six healthy library recordings score 0, the fresh
+control 0.003%, the reproduced Bluetooth fault 0.1%, and the three lost meetings
+2.2%, 7.3% and 8.9%.
+
+### The warning was verified on screen, not just in the CLI
+
+Everything else here was measured through `listen record` and `listen audio
+--check`, which is the wrong instrument for the one thing the user actually
+complained about: that nothing on screen told them the far side was missing.
+Driven with `LISTEN_TAP_TEAR=0.25` against a scratch library and read back
+through `AXUIElementCreateApplication(pid)`, mid-recording:
+
+- the floating panel: `The other side is breaking up`
+- the recording screen: `The other side is being recorded with gaps in it.
+  Listen is rebuilding the capture.`
+- the log for the same run: `the far side is arriving torn; rebuilt the tap`
+
+Both labels are `AXStaticText` and come back in a `texts` dump, so unlike
+`HoverRow` this warning is testable and there is no excuse for the next change
+to it going unchecked. `tools/axprobe.swift press <pid> record` starts the
+recording; the toolbar's Record button answers to `AXPress`, unlike the
+pull-downs the index warns about.

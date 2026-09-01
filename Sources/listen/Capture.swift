@@ -66,6 +66,35 @@ final class Capture {
     /// changes once or twice in an hour.
     private(set) var micIsSilent = false
 
+    /// What the far-end tap is doing. See `TapHealth` for why this could not be
+    /// answered with a level, and `.agents/notes/capture.md` for the three
+    /// meetings that were lost before it could be answered at all.
+    private(set) var systemHealth = SystemAudioRecorder.Health()
+
+    /// How many times the far-end tap had to be rebuilt mid-recording. The twin
+    /// of `micInterruptions`, and worth the same attention: both are gaps
+    /// padded with silence, which on disk looks exactly like nobody talking.
+    var systemInterruptions: Int { systemHealth.restarts }
+
+    /// The far end has been bit-exact zero long enough, while you were talking,
+    /// that a dead tap is the better explanation than a quiet room.
+    ///
+    /// Both halves are load-bearing. Zero on its own is the ordinary state of a
+    /// tap and says nothing, which is the whole reason this failure went
+    /// unreported for three meetings; your voice on its own says nothing
+    /// either, because you might simply be presenting.
+    private(set) var systemIsDeaf = false
+
+    /// Seconds of far-end silence before it is worth mentioning, and before it
+    /// is worth acting on. Measured rather than chosen: across the library the
+    /// only benign silences longer than 45 seconds are recording lead-ins with
+    /// no speech in them at all, and the shortest real failure had 14 seconds
+    /// of speech inside 190 seconds of silence.
+    private static let deafWarnAfter: TimeInterval = 45
+    private static let deafWarnSpeech: TimeInterval = 5
+    private static let deafRestartAfter: TimeInterval = 90
+    private static let deafRestartSpeech: TimeInterval = 15
+
     /// What the microphone track is actually recording from, and why it is not
     /// the device Settings names. Both nil until capture starts.
     var micDeviceName: String? { mic.deviceName }
@@ -111,13 +140,113 @@ final class Capture {
                      : "\(note.prefix(1).uppercased() + note.dropFirst()). Recording from \(device)."
     }
 
+    /// One sentence about the far-end track, or nil when there is nothing to
+    /// say. The twin of `micNotice(short:)`, shared by the recording screen and
+    /// the floating panel so the two cannot describe one state two ways.
+    ///
+    /// It says what was lost rather than what is wrong, because the person
+    /// reading it is in a meeting and the only useful question is whether to
+    /// carry on. "No audio from the other side for 1:20" is actionable;
+    /// "process tap starved" is not.
+    func systemNotice(short: Bool) -> String? {
+        if systemHealth.torn {
+            let where_ = systemHealth.tappingBluetooth ? " from your Bluetooth output" : ""
+            return short
+                ? "The other side is breaking up"
+                : "The other side is being recorded with gaps in it\(where_). "
+                  + "Listen is rebuilding the capture."
+        }
+        if systemIsDeaf {
+            let clock = Self.clock(systemHealth.deafFor)
+            guard !short else { return "No audio from the other side for \(clock)" }
+            return "No audio from the other side for \(clock), while you were talking. "
+                 + (systemHealth.tappingBluetooth
+                    ? "This has only ever been measured on a Bluetooth output; "
+                      + "switching output may recover it."
+                    : "Listen is rebuilding the capture.")
+        }
+        guard systemHealth.restarts > 0 else { return nil }
+        let times = systemHealth.restarts == 1 ? "once" : "\(systemHealth.restarts) times"
+        return short ? "Rebuilt system audio \(times)"
+                     : "Rebuilt the system audio capture \(times) this meeting. "
+                       + "The gaps are padded, so the timeline still lines up."
+    }
+
+    private static func clock(_ seconds: TimeInterval) -> String {
+        let whole = Int(seconds.rounded())
+        return whole < 60 ? "\(whole)s"
+                          : String(format: "%d:%02d", whole / 60, whole % 60)
+    }
+
+    /// Called whenever the recorder's health changes. Owns the one decision the
+    /// recorder cannot make alone, because it needs both tracks: whether a
+    /// silent far end means anything.
+    private func evaluateSystemHealth(_ health: SystemAudioRecorder.Health) {
+        systemHealth = health
+
+        // Longest window first. `secondsYouSpoke` prunes as it reads, so asking
+        // for 45 seconds and then for 90 would answer the second question with
+        // the first one's history and could only ever undercount.
+        let spokeLong = secondsYouSpoke(inLast: Self.deafRestartAfter)
+        let spokeShort = secondsYouSpoke(inLast: Self.deafWarnAfter)
+        trace(String(format: "system tap: deaf %.0fs, you spoke %.0fs of the last %.0fs",
+                     health.deafFor, spokeShort, Self.deafWarnAfter))
+
+        let deaf = health.deafFor >= Self.deafWarnAfter && spokeShort >= Self.deafWarnSpeech
+        if deaf != systemIsDeaf { systemIsDeaf = deaf }
+
+        // Acting costs a fraction of a second of audio, so it asks for more
+        // than the warning does: longer gone, and more of your voice inside it.
+        if health.deafFor >= Self.deafRestartAfter, spokeLong >= Self.deafRestartSpeech {
+            system.requestRestart(reason: "nothing from the far side for "
+                                  + "\(Int(health.deafFor))s while you were talking")
+        }
+
+        // The menu bar too, not only whichever window happens to be open. This
+        // warning expires the same way the microphone one does: once the call
+        // is over there is nothing left to fix.
+        onChange?()
+    }
+
     var elapsed: TimeInterval {
         guard let startedAt else { return 0 }
         return Date().timeIntervalSince(startedAt)
     }
 
-    private func broadcast(_ track: Track, _ level: Float) {
+    private func broadcast(_ track: Track, _ level: Float, at: Date = Date()) {
+        // Your own speech, counted here because this is the one place every
+        // microphone level already passes through. It is the other half of the
+        // far-end deafness test: bit-exact zero from the tap only means
+        // something was lost if somebody was in a conversation while it
+        // happened. Measured over the library on 2026-09-01, the two benign
+        // silences longer than 45 seconds are both recording lead-ins with no
+        // speech at all, while every real failure had 14 to 250 seconds of it.
+        if track == .you, level > Self.speakingLevel {
+            youSpokeIn.insert(Int(at.timeIntervalSince1970))
+        }
         for sink in levelSinks.values { sink(track, level) }
+    }
+
+    /// About -42 dBFS through `MicRecorder.loudness`, which is the floor the
+    /// far-end analysis was calibrated against rather than a number picked to
+    /// look like speech.
+    private static let speakingLevel: Float = 0.08
+
+    /// Which whole seconds recently carried your voice.
+    ///
+    /// **A set of seconds, not a count of callbacks.** Counting level
+    /// callbacks and dividing by their nominal rate reported 70 seconds of
+    /// speech inside a 45 second window, because `MicRecorder.report` emits a
+    /// short extra window at the end of every buffer and the true rate is
+    /// neither 31 per second nor constant. Seconds are also the unit the
+    /// thresholds were calibrated in, against per-second RMS over the library.
+    private var youSpokeIn: Set<Int> = []
+
+    private func secondsYouSpoke(inLast window: TimeInterval) -> TimeInterval {
+        let now = Int(Date().timeIntervalSince1970)
+        let cutoff = now - Int(window)
+        youSpokeIn = youSpokeIn.filter { $0 > cutoff }
+        return TimeInterval(youSpokeIn.count)
     }
 
     /// Highest level seen on each track, for `listen record`'s summary. A class
@@ -230,10 +359,28 @@ final class Capture {
         // trap written up beside it, where losing the order truncated a chord.
         micIsSilent = false
         mic.onLevel = { [weak self] level in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.broadcast(.you, level) } }
+            // Stamped here, on the audio thread, rather than wherever the main
+            // queue gets round to it. `secondsYouSpoke` asks "in the last 45
+            // seconds", and a timestamp taken on delivery answers that with
+            // when the main queue was free instead of when you were talking.
+            // Measured: the first version of this counted 5 to 11 seconds of
+            // speech in a 45 second window through which somebody talked
+            // almost continuously.
+            let at = Date()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.broadcast(.you, level, at: at) }
+            }
         }
         system.onLevel = { [weak self] level in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.broadcast(.them, level) } }
+        }
+        systemHealth = SystemAudioRecorder.Health()
+        systemIsDeaf = false
+        youSpokeIn = []
+        system.onHealthChange = { [weak self] health in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.evaluateSystemHealth(health) }
+            }
         }
         mic.onSilenceChange = { [weak self] silent in
             DispatchQueue.main.async {

@@ -361,14 +361,20 @@ final class RecordingIndicator {
         let silent = previewSilent ?? capture.micIsSilent
         youMeter.isSilent = silent
 
+        // One line here, unlike the recording screen, because this panel is 236
+        // to 460 points wide and two facts would truncate into one unreadable
+        // one. The microphone leads when both are wrong: it is the one the
+        // person at the keyboard can fix without leaving the call.
         let text = previewSilent == true
             ? "Your microphone is not picking anything up"
-            : capture.micNotice(short: true)
+            : (capture.micNotice(short: true)
+               ?? (previewSilent == nil ? capture.systemNotice(short: true) : nil))
 
         let wasHidden = warnLabel.isHidden
         warnLabel.stringValue = text ?? ""
         warnLabel.isHidden = text == nil
-        warnLabel.textColor = silent ? .systemOrange : .secondaryLabelColor
+        let losing = silent || capture.systemIsDeaf || capture.systemHealth.torn
+        warnLabel.textColor = losing ? .systemOrange : .secondaryLabelColor
         // The line changes the panel's height, so its appearing has to re-lay
         // out and re-place the panel. Without this it draws off the bottom edge
         // of a panel sized before the microphone went quiet, which is precisely

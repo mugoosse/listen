@@ -367,12 +367,19 @@ final class RecordingView: NSView {
         // capture behind it, so `micNotice` cannot tell whether the device on
         // screen is the built-in one, and a preview that claims a lid is shut
         // about a pair of headphones teaches the wrong sentence.
-        let text = previewSilent == true
+        let micText = previewSilent == true
             ? "Your microphone is not picking anything up."
             : capture.micNotice(short: false)
-        warning.stringValue = text ?? ""
-        warning.isHidden = text == nil
-        warning.textColor = silent ? .systemOrange : .secondaryLabelColor
+        // Both, not the more urgent of the two. They are about different halves
+        // of the recording and the far-end one is the half nobody could see:
+        // hiding it behind a microphone warning would reproduce the failure it
+        // exists to report. This screen is wide enough to say two sentences.
+        let systemText = previewSilent == nil ? capture.systemNotice(short: false) : nil
+        let text = [micText, systemText].compactMap { $0 }.joined(separator: " ")
+        warning.stringValue = text
+        warning.isHidden = text.isEmpty
+        let losing = silent || capture.systemIsDeaf || capture.systemHealth.torn
+        warning.textColor = losing ? .systemOrange : .secondaryLabelColor
         refreshDevices()
         // On the same tick as the device, and for the same reason: both can be
         // changed from somewhere that is not this view, the microphone by

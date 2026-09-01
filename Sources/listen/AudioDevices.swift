@@ -163,6 +163,29 @@ enum AudioDevices {
         transport(device.id) == UInt32(kAudioDeviceTransportTypeBuiltIn)
     }
 
+    /// Whether the system default *output* is a Bluetooth device.
+    ///
+    /// The system audio tap rides whichever device is the default output, and
+    /// every capture failure measured so far happened while that was a headset:
+    /// three Google Meet calls on 2026-09-01 lost most of the far side, with
+    /// 145 CoreAudio overload reports across two of them and 80% of those
+    /// landing within two seconds of torn audio. That is a correlation and not
+    /// a proven cause, so this only ever labels a report. Nothing switches on
+    /// it, because moving the tap off the headset would move it off the audio
+    /// as well. See `SystemAudioRecorder.watchDefaultOutput`.
+    static var defaultOutputIsBluetooth: Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                         &address, 0, nil, &size, &id) == noErr,
+              id != 0 else { return false }
+        return wirelessTransports.contains(transport(id))
+    }
+
     /// Inputs Listen is willing to record from unattended, best first.
     ///
     /// The system default leads whenever it qualifies, and that is not merely

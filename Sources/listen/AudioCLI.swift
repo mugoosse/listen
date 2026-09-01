@@ -18,7 +18,11 @@ enum AudioCLI {
     static func run(_ args: [String]) async -> Never {
         var rest = args
         let build = rest.contains("--build")
+        let check = rest.contains("--check")
         rest.removeAll { $0.hasPrefix("--") }
+        // Before the roster, because this asks nothing of the network and the
+        // whole point of it is a fast answer straight after a call.
+        if check { checkTracks(rest.first) }
         // Read straight from the container. This process has never run a sync
         // pass, so `CloudSyncHost.shared.devices` is empty here and a command
         // that trusted it would answer "nobody holds anything" every time.
@@ -133,6 +137,82 @@ enum AudioCLI {
             }
         }
         exit(0)
+    }
+
+    /// `listen audio --check [<id>]`: did the far-end track actually record?
+    ///
+    /// This exists because on 2026-09-01 the answer was no for three meetings
+    /// in a row and nothing on the Mac said so. A duration check passes, a file
+    /// size check passes, and the recording screen drew a flat strip that is
+    /// indistinguishable from a colleague who is listening. `TapHealth` asks the
+    /// one question that separates a dead tap from a quiet room, and this is
+    /// where a person can ask it without opening anything.
+    ///
+    /// With no id it walks the recent recordings, because the useful question
+    /// after a bad week is "which of these lost audio", not "did this one".
+    private static func checkTracks(_ id: String?) -> Never {
+        var recordings: [Recording]
+        if let id {
+            guard let one = Recording.find(id) else {
+                FileHandle.standardError.write(Data("no recording \(id)\n".utf8))
+                exit(1)
+            }
+            recordings = [one]
+        } else {
+            recordings = Array(Recording.all().filter(\.hasTracks).prefix(10))
+        }
+        guard !recordings.isEmpty else {
+            print("no recordings with audio on this Mac")
+            exit(0)
+        }
+
+        var damaged = 0
+        for recording in recordings {
+            print("\(recording.id)  \(recording.displayTitle)")
+            guard let track = TapHealth.readFloatTrack(recording.systemURL) else {
+                print("  no system track on this Mac")
+                continue
+            }
+            // The microphone track is what turns a long silence into a verdict.
+            // Without it the head of every recording reads as a failure, which
+            // it is not: measured across the library, both benign silences over
+            // 45 seconds are lead-ins nobody spoke through.
+            let mic = TapHealth.readFloatTrack(recording.micURL)?.samples
+            let report = TapHealth.report(track: track.samples,
+                                          sampleRate: track.sampleRate, against: mic)
+            let arrived = report.signalSeconds
+            print(String(format: "  far end: %.0fs of audio in %.0fs", arrived, report.seconds))
+            if report.counts.torn > 0 {
+                print(String(format: "  torn:    %.1fs across %d windows, %.1f%% of what arrived",
+                             report.tornSeconds, report.counts.torn,
+                             report.counts.tornShare * 100))
+            }
+            for run in report.deadRuns {
+                let lost = run.speech >= TapHealth.deadSpeechSeconds
+                print(String(format: "  %@ %d:%02d for %.0fs, you spoke %.0fs of it",
+                             lost ? "dead:   " : "quiet:  ",
+                             Int(run.at) / 60, Int(run.at) % 60, run.seconds, run.speech))
+            }
+            switch report.verdict {
+            case .intact:
+                print("  looks intact")
+            case .minor:
+                // Worth printing and not worth alarming anybody about. A tenth
+                // of a percent is two hundred milliseconds in five minutes: it
+                // says the route is not perfect, not that the meeting is gone.
+                print("  a few gaps, too small to cost you words. "
+                      + "Usually the output route rather than a fault.")
+            case .lost:
+                damaged += 1
+                // Named rather than described, because the next question is
+                // always "is this the known one".
+                print("  the far-end track lost audio. See TapHealth and "
+                      + ".agents/notes/capture.md")
+            }
+        }
+        // A non-zero status so this can gate something later without parsing
+        // the text, which is the shape `listen sync --fake` already uses.
+        exit(damaged == 0 ? 0 : 2)
     }
 
     private static func percent(_ part: Int64, of whole: Int64) -> String {

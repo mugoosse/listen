@@ -1593,7 +1593,9 @@ enum CLI {
       audio [<id>] [--build]     what audio this Mac holds and which devices
                                  are keeping it. An id narrows it to one
                                  recording; --build makes its master here and
-                                 says what that cost.
+                                 says what that cost. --check asks whether the
+                                 other side actually recorded, which a duration
+                                 and a file size cannot tell you.
       mcp [--tools a,b,c]        stdio MCP server. Notes and tags are the only
                                  things an agent can write. --tools serves only
                                  those, and refuses the rest by name.
@@ -3205,6 +3207,13 @@ enum CLI {
         // draw the same flat line.
         log(String(format: "levels: you %.3f, them %.3f (peak, 0...1)",
                    Capture.LevelPeaks.shared.you, Capture.LevelPeaks.shared.them))
+        // The far end's own health, for the same reason the line above exists:
+        // a flat strip and a dead tap are the same picture, and this is the
+        // only place a script can read the difference. `listen audio --check`
+        // answers it afterwards; this answers it for the run that just ended.
+        if let notice = Capture.shared.systemNotice(short: false) {
+            log("far end: \(notice)")
+        }
         // The folder, on stdout, so it composes: `listen transcribe $(listen record ...)`.
         print(recording.folder.path)
         exit(0)

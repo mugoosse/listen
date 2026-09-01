@@ -40,6 +40,17 @@ final class SidebarViewController: NSViewController {
         case recording(Recording)
         case note(Note)
         case person(Person)
+        /// How many conversations mention what was typed, and the way over to
+        /// them.
+        ///
+        /// **A way out of this list, not a fourth collection in it.** The
+        /// conversations are deliberately not one: `ChatNav` has no collection
+        /// picker for that reason, and two lists of conversations that could
+        /// disagree is worse than one list you have to go to. So this row is a
+        /// verb. It carries the query because pressing it hands the word over,
+        /// and the field it lands in sits at the same place on screen, so the
+        /// text appears to stay put while the list under it changes.
+        case chats(count: Int, query: String)
     }
 
     private var rows: [Row] = []
@@ -392,7 +403,14 @@ final class SidebarViewController: NSViewController {
         sectionsByKind = !filter.query.trimmingCharacters(in: .whitespaces).isEmpty
             || kind != nil
 
-        let matching = kind == nil || kind == .recordings ? filter.apply(to: library) : []
+        // `search` rather than `apply`, so the rows can show the sentence that
+        // matched instead of only the fact that something did.
+        let searched = kind == nil || kind == .recordings
+            ? filter.search(library)
+            : RecordingFilter.Found(recordings: [], hits: [:])
+        let matching = searched.recordings
+        rowMatches = [:]
+        for (id, hits) in searched.hits { rowMatches[id] = Self.summarise(hits) }
 
         // Notes stand alongside recordings, sorted into the same days, because
         // a note is a page that happens to have no audio. Ordinarily only the
@@ -438,9 +456,12 @@ final class SidebarViewController: NSViewController {
         let listingRecordings = kind == nil || kind == .recordings
         let mayDoubleUp = listingRecordings && filter.tags.isEmpty
         let noteRows = !filter.needsSpeakers && (kind == nil || kind == .notes)
-            ? everyNote.filter {
-                (Self.pageless($0) || !mayDoubleUp)
-                    && Self.matches($0, query: filter.query, tags: filter.tags)
+            ? everyNote.filter { note in
+                guard Self.pageless(note) || !mayDoubleUp else { return false }
+                guard let hits = Self.matches(note, query: filter.query,
+                                              tags: filter.tags) else { return false }
+                if !hits.isEmpty { rowMatches[note.slug] = Self.summarise(hits) }
+                return true
               }
             : []
 
@@ -508,6 +529,7 @@ final class SidebarViewController: NSViewController {
                 rows.append(.header("Recordings", offer(.kind(.recordings), unless: kind)))
                 rows.append(contentsOf: recordings)
             }
+            appendChatsRow(for: filter)
             finishReload(keepID: keepID)
             return
         }
@@ -523,6 +545,22 @@ final class SidebarViewController: NSViewController {
         }
 
         finishReload(keepID: keepID)
+    }
+
+    /// The row at the foot of a search saying how many conversations mention it.
+    ///
+    /// Only while something is typed, and only when there is something to
+    /// offer: a row reading "0 conversations" on every search is a permanent
+    /// statement that the feature exists, which is an advertisement rather than
+    /// a result. Only in the library's own list, too, because a kind lens is
+    /// somebody saying which collection they are asking about.
+    private func appendChatsRow(for filter: RecordingFilter) {
+        guard Settings.askEnabled, filter.kind == nil else { return }
+        let typed = filter.query.trimmingCharacters(in: .whitespaces)
+        guard !typed.isEmpty else { return }
+        let count = ChatNav.mentions(typed)
+        guard count > 0 else { return }
+        rows.append(.chats(count: count, query: typed))
     }
 
     /// A heading's lens, or nil when that lens is already on.
@@ -677,12 +715,82 @@ final class SidebarViewController: NSViewController {
     /// Free text stays title and body. Typing `job hunt` should not surface a
     /// note because it is *filed* under it; `tag:job hunt` is how that question
     /// is asked, and the field turns it into a lens.
-    private static func matches(_ note: Note, query: String, tags: [String]) -> Bool {
-        guard note.carries(tags) else { return false }
+    /// nil when the note does not match; the hits when it does, which is empty
+    /// for a note kept by a tag lens with nothing typed. The Bool this used to
+    /// return threw away the sentence the row now shows.
+    private static func matches(_ note: Note, query: String,
+                                tags: [String]) -> [RecordingFilter.Hit]? {
+        guard note.carries(tags) else { return nil }
         let wanted = query.trimmingCharacters(in: .whitespaces)
-        guard !wanted.isEmpty else { return true }
-        return note.title.localizedCaseInsensitiveContains(wanted)
-            || note.body.localizedCaseInsensitiveContains(wanted)
+        guard !wanted.isEmpty else { return [] }
+        var hits: [RecordingFilter.Hit] = []
+        for range in Find.ranges(of: wanted, in: note.title) {
+            hits.append(RecordingFilter.Hit(turn: nil, start: 0, speaker: "",
+                                            range: range, text: note.title))
+        }
+        for range in Find.ranges(of: wanted, in: note.body) {
+            hits.append(RecordingFilter.Hit(turn: 0, start: 0, speaker: "",
+                                            range: range, text: note.body))
+        }
+        return hits.isEmpty ? nil : hits
+    }
+
+    /// What a row says about why it is in the list.
+    ///
+    /// One row per document with a count, rather than one row per hit. A
+    /// 38-minute call can hold a dozen of a common word, and twelve sub-rows
+    /// for one meeting buries every other result in 280 points of sidebar. The
+    /// count is the honest signal and the page's own find bar is where the
+    /// twelve are walked.
+    struct RowMatch {
+        /// nil when the only hits were in the title, which the row already
+        /// shows: a third line repeating the second is noise on exactly the
+        /// rows that matched most cheaply.
+        var excerpt: NSAttributedString?
+        var count: Int
+        /// The ranges in the title, marked in place instead of excerpted.
+        var titleRanges: [NSRange]
+    }
+
+    /// Keyed by recording id or note slug. Both are unique strings and neither
+    /// can look like the other, so one map serves both kinds of row.
+    private var rowMatches: [String: RowMatch] = [:]
+
+    /// The one hit a row shows, out of however many it has.
+    ///
+    /// The first hit in the body rather than the "best" one. There is no
+    /// ranking worth the name over a transcript, and a first match is at least
+    /// an answer somebody can predict: it is where the find bar will open too.
+    private static func summarise(_ hits: [RecordingFilter.Hit]) -> RowMatch {
+        let titles = hits.filter { $0.turn == nil }
+        let bodies = hits.filter { $0.turn != nil }
+        guard let first = bodies.first else {
+            return RowMatch(excerpt: nil, count: hits.count,
+                            titleRanges: titles.map(\.range))
+        }
+        let line = NSMutableAttributedString()
+        // The speaker and the timestamp in front of it, which is the whole
+        // difference between "it is in here somewhere" and an answer. Both are
+        // already in hand: the hit was found by walking the turns.
+        if !first.speaker.isEmpty {
+            line.append(NSAttributedString(
+                string: first.speaker + "  " + TranscriptFormat.stamp(first.start) + "  ",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ]))
+        }
+        // **The prefix comes out of the excerpt's budget, not on top of it.**
+        // `Excerpt.width` is two lines of the row, and the speaker and the
+        // timestamp share those two lines: added on top, the window was cut off
+        // by the field's own truncation instead of by the elision that keeps
+        // the match in view, so the tail of every excerpt was lost.
+        line.append(Excerpt.around(first.range, in: first.text,
+                                   width: Excerpt.width - line.length,
+                                   font: .systemFont(ofSize: 11),
+                                   colour: .secondaryLabelColor))
+        return RowMatch(excerpt: line, count: hits.count,
+                        titleRanges: titles.map(\.range))
     }
 
     /// Internal rather than private: `ChatNav` files conversations under the
@@ -1055,6 +1163,18 @@ final class SidebarViewController: NSViewController {
     /// alternative is a cache with nothing to invalidate it.
     private var knownTags: [String] { Tags.all().map(\.name) }
 
+    /// What was typed in the field, with the operators taken out.
+    ///
+    /// `query` is the raw text and `liftOperators` moves finished ones into
+    /// pills, but a half-typed `tag:` is still in there. `parse` is what the
+    /// list itself is filtered by, so a page opened on this word and the row
+    /// that offered it agree by construction rather than by two readings of one
+    /// string.
+    var freeTextQuery: String {
+        RecordingFilter.parse(query, knownTags: knownTags).query
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     /// What the magnifier offers, which is this window's "show search options".
     ///
     /// **A menu rather than a row of chips under the field.** Gmail has a full
@@ -1171,6 +1291,15 @@ final class SidebarViewController: NSViewController {
         LibraryWindow.shared.renameSelected()
     }
 
+    /// The handoff row: take the word over to the conversations.
+    @objc private func chatsRowClicked() {
+        guard case .chats(_, let query)? = rows.first(where: {
+            if case .chats = $0 { return true }
+            return false
+        }) else { return }
+        LibraryWindow.shared.enterChats(searching: query)
+    }
+
     private func rowMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
@@ -1194,14 +1323,42 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         return false
     }
 
+    /// Three constants, and the third is new.
+    ///
+    /// **Variable heights are cheap here, which is worth saying**, because
+    /// `NoteCell` records the flat 52 as a reason not to put tags on a row.
+    /// Nothing in this app works out where a row is by multiplying; this is
+    /// already a per-row function; and `RecordingCell` centres its content on a
+    /// layout guide pinned to `centerYAnchor` rather than to the row's top, so
+    /// a taller row re-centres itself. And it is three states rather than N, so
+    /// nothing has to measure any text to answer.
+    /// 86 for a result row, measured rather than guessed: the title's line is
+    /// 17 points, the subtitle's 14, two lines of excerpt 28, and the two gaps
+    /// between them 5, which is 64; the 22 left over is the air `RecordingCell`
+    /// asks for either side of its block, less the 2 the row spends outside the
+    /// card `HoverRowView` draws.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         if case .header = rows[row] { return 30 }
-        return 52
+        return match(at: row)?.excerpt == nil ? 52 : 86
+    }
+
+    /// What the row at this index matched on, if anything.
+    private func match(at row: Int) -> RowMatch? {
+        guard row >= 0, row < rows.count else { return nil }
+        switch rows[row] {
+        case .recording(let recording): return rowMatches[recording.id]
+        case .note(let note): return rowMatches[note.slug]
+        case .header, .chats, .person: return nil
+        }
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        if case .header = rows[row] { return false }
-        return true
+        switch rows[row] {
+        // A heading is a lens, and the handoff row is a way out of this list.
+        // Neither is a document, so neither is a selection.
+        case .header, .chats: return false
+        case .recording, .note, .person: return true
+        }
     }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?,
@@ -1234,8 +1391,23 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         case .recording(let recording):
             let cell = RecordingCell()
-            cell.configure(recording, dated: sectionsByKind)
+            cell.configure(recording, dated: sectionsByKind,
+                           match: rowMatches[recording.id])
             return cell
+
+        case .chats(let count, let query):
+            // A `SectionHeader`, not a `HoverRow`. `HoverRow` is a plain view
+            // with a target and an action, so it is invisible to accessibility
+            // and cannot be pressed through it, which is what makes every
+            // popover list row in this app untestable. This one is a verb with
+            // a consequence and has to be drivable and readable.
+            let header = SectionHeader(
+                title: count == 1
+                    ? "1 conversation mentions “\(query)”"
+                    : "\(count) conversations mention “\(query)”",
+                target: self, action: #selector(chatsRowClicked))
+            header.identifier = NSUserInterfaceItemIdentifier("chats-handoff")
+            return header
 
         case .note(let note):
             // `NoteCell`, the same class the Notes collection drew, rather than
@@ -1247,7 +1419,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             // already prints the note's date on every row, because the Notes
             // collection it was written for had no day headings to carry one.
             let cell = NoteCell()
-            cell.configure(note)
+            cell.configure(note, match: rowMatches[note.slug])
             return cell
 
         case .person(let person):
@@ -1293,7 +1465,9 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             selectedPerson = nil
             selectedNote = note
             onSelectNote?(note)
-        case .header:
+        // Neither is selectable, so neither can arrive here; both are listed
+        // rather than defaulted so a fifth kind of row has to say what it does.
+        case .header, .chats:
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
@@ -1445,7 +1619,8 @@ extension SidebarViewController: NSMenuDelegate {
     }
 }
 
-/// One row: title, when, how long, and what is happening to it.
+/// One row: title, when, how long, what is happening to it, and on a search,
+/// the sentence that matched.
 @MainActor
 final class RecordingCell: NSView {
     private let title = NSTextField(labelWithString: "")
@@ -1461,6 +1636,12 @@ final class RecordingCell: NSView {
     /// before it gets to a fifth word. The icon costs no text width, and it is
     /// the one thing on the row somebody recognises without reading.
     private let appIcon = NSImageView()
+    /// The sentence that matched, on rows that are search results.
+    private let excerpt = NSTextField(labelWithString: "")
+    /// How many times, when it is more than once.
+    private let count = NSTextField(labelWithString: "")
+    private var excerptTop: NSLayoutConstraint!
+    private var excerptHeight: NSLayoutConstraint!
 
     /// The icon column, and the text column after it, are the sidebar's and not
     /// this cell's.
@@ -1499,7 +1680,30 @@ final class RecordingCell: NSView {
         subtitle.lineBreakMode = .byTruncatingTail
         activityBar.isHidden = true
 
-        for v in [title, subtitle, appIcon, activityBar] as [NSView] {
+        excerpt.font = .systemFont(ofSize: 11)
+        excerpt.textColor = .secondaryLabelColor
+        // Two lines and no more. The height this row takes is a constant in
+        // `heightOfRow`, which answers without measuring any text, so a third
+        // line would be drawn outside the row it belongs to.
+        excerpt.maximumNumberOfLines = 2
+        excerpt.lineBreakMode = .byTruncatingTail
+        excerpt.cell?.usesSingleLineMode = false
+        // **`maximumNumberOfLines` alone does not truncate a wrapping field.**
+        // Measured: a two-line cap with `.byTruncatingTail` drew three lines of
+        // an excerpt and overflowed the row, because the cap limits what is
+        // laid out and this is what makes the last laid-out line end in an
+        // ellipsis rather than simply stopping. Both are needed, and the row's
+        // height is a constant, so the overflow is drawn over the row below.
+        excerpt.cell?.truncatesLastVisibleLine = true
+        excerpt.isHidden = true
+
+        count.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        count.textColor = .tertiaryLabelColor
+        count.isHidden = true
+        count.setContentHuggingPriority(.required, for: .horizontal)
+        count.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        for v in [title, subtitle, appIcon, activityBar, excerpt, count] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -1515,6 +1719,16 @@ final class RecordingCell: NSView {
 
         activityTop = activityBar.topAnchor.constraint(equalTo: subtitle.bottomAnchor)
         activityHeight = activityBar.heightAnchor.constraint(equalToConstant: 0)
+        // The same paired-constraint idiom, for the same reason: a hidden view
+        // keeps its frame, so a row with no match would carry an empty third
+        // line and sit as high in its 52 points as a row with one sits in 82.
+        excerptTop = excerpt.topAnchor.constraint(equalTo: activityBar.bottomAnchor)
+        excerptHeight = excerpt.heightAnchor.constraint(equalToConstant: 0)
+        // Below the two padding inequalities under it, so a row whose content
+        // does not fit gives up the centring rather than the air. At equal
+        // priority the pair is simply unsatisfiable and AppKit picks one.
+        let centred = block.centerYAnchor.constraint(equalTo: centerYAnchor)
+        centred.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             appIcon.leadingAnchor.constraint(equalTo: leadingAnchor,
@@ -1528,8 +1742,14 @@ final class RecordingCell: NSView {
 
             title.leadingAnchor.constraint(equalTo: appIcon.trailingAnchor,
                                            constant: Self.gap),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor,
+            // The count takes the trailing end of the title's line when there
+            // is one, and the title gives way to it. Hidden, it has no width,
+            // so an ordinary row is laid out exactly as it was.
+            title.trailingAnchor.constraint(equalTo: count.leadingAnchor,
+                                            constant: -6),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor,
                                             constant: -Self.textInset),
+            count.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
@@ -1539,9 +1759,29 @@ final class RecordingCell: NSView {
             activityBar.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             activityBar.trailingAnchor.constraint(equalTo: title.trailingAnchor),
 
+            excerptTop,
+            excerptHeight,
+            excerpt.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            excerpt.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                              constant: -Self.textInset),
+
             block.topAnchor.constraint(equalTo: title.topAnchor),
-            block.bottomAnchor.constraint(equalTo: activityBar.bottomAnchor),
-            block.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // The excerpt is the last thing in the block now, so the whole of
+            // it stays centred in whichever height the row was given.
+            block.bottomAnchor.constraint(equalTo: excerpt.bottomAnchor),
+            centred,
+            // **Air inside the card, stated rather than left to the centring.**
+            // `HoverRowView` draws the selection and hover card at
+            // `bounds.insetBy(dy: 2)`, so the row's own edge is 2 points
+            // outside it and text pinned near that edge sits against the card's
+            // corner. Centring alone kept these honest only while the content
+            // was two short lines: a three-line row fills the height, the
+            // centre stops moving, and the padding silently goes to zero.
+            // Inequalities, so they cost nothing on a row with room and bite on
+            // the one that has not.
+            block.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 10),
+            block.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor,
+                                          constant: -10),
         ])
     }
 
@@ -1549,8 +1789,67 @@ final class RecordingCell: NSView {
 
     /// `dated` prints the day on the row, for when the heading above it names
     /// a kind rather than a day. See `SidebarViewController.sectionsByKind`.
-    func configure(_ recording: Recording, dated: Bool = false) {
+    /// Why this row is in the list: the sentence that matched, and how many.
+    ///
+    /// **A title-only match gets no third line.** The title is already the
+    /// first line of the row, so a snippet repeating it spends 30 points saying
+    /// what is directly above it, on exactly the rows that matched most
+    /// cheaply. The words in the title are marked instead.
+    private func apply(_ match: SidebarViewController.RowMatch?) {
+        guard let match else {
+            excerpt.isHidden = true
+            excerpt.stringValue = ""
+            excerptTop.constant = 0
+            excerptHeight.constant = 0
+            excerptHeight.isActive = true
+            count.isHidden = true
+            return
+        }
+        if let line = match.excerpt {
+            excerpt.attributedStringValue = line
+            excerpt.isHidden = false
+            excerptTop.constant = 3
+            excerptHeight.isActive = false
+        } else {
+            excerpt.isHidden = true
+            excerpt.stringValue = ""
+            excerptTop.constant = 0
+            excerptHeight.constant = 0
+            excerptHeight.isActive = true
+        }
+        // Only past one. "1" beside a row that is in the list because it matched
+        // once states the obvious in a column that is short of room.
+        count.isHidden = match.count < 2
+        count.stringValue = "\(match.count)"
+        markTitle(match.titleRanges)
+    }
+
+    /// Mark the query where it appears in the title.
+    ///
+    /// An attributed string brings its own truncation, which is none, so the
+    /// `.byTruncatingTail` set in `init` has to be carried here by hand or a
+    /// long meeting name stops truncating and pushes the count off the row.
+    private func markTitle(_ ranges: [NSRange]) {
+        guard !ranges.isEmpty else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let marked = NSMutableAttributedString(string: title.stringValue, attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph,
+        ])
+        for range in ranges where NSMaxRange(range) <= marked.length {
+            marked.addAttribute(.backgroundColor,
+                                value: NSColor.systemYellow.withAlphaComponent(0.35),
+                                range: range)
+        }
+        title.attributedStringValue = marked
+    }
+
+    func configure(_ recording: Recording, dated: Bool = false,
+                   match: SidebarViewController.RowMatch? = nil) {
         title.stringValue = recording.displayTitle
+        apply(match)
         // The column is reserved whether or not there is an icon to put in it,
         // so every title in the list starts at the same place. Indenting only
         // the rows that have one gives the list a ragged left edge that moves

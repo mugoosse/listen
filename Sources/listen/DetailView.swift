@@ -23,6 +23,8 @@ final class DetailView: NSView {
     private let chips = SpeakerChips()
     private let tagChips = TagChips()
     private let playerCard = NSView()
+    /// Find in page. Collapsed to nothing until Cmd-F, see `findTop`.
+    private let findBar = FindBar()
     private let playButton = NSButton()
     private let waveform = WaveformView()
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
@@ -332,6 +334,24 @@ final class DetailView: NSView {
     private var recordingHeadingHeight: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
     private var playerHeight: NSLayoutConstraint!
+    /// The find bar's pair. Closed is 0 and 0, which puts `findBar.bottom`
+    /// exactly on `playerCard.bottom` and leaves the page laid out as it was
+    /// before this existed. That is the whole argument for putting it here.
+    private var findTop: NSLayoutConstraint!
+    private var findHeight: NSLayoutConstraint!
+    /// Every match on the page, in reading order: the title, then the note on
+    /// screen, then the paragraphs. The array is the order; nothing sorts it.
+    private var found: [FindMatch] = []
+    /// Which of them the bar is sitting on.
+    private var foundAt: Int?
+    /// What is being searched for, empty when the bar is shut.
+    private var finding = ""
+    /// The note ranges the layout manager is currently decorating.
+    ///
+    /// Held because a range into text that has since been replaced is a range
+    /// into nothing, and taking a temporary attribute off has to name where it
+    /// was put.
+    private var noteHighlighted: [NSRange] = []
     private var noteInfoTop: NSLayoutConstraint!
     private var noteInfoHeight: NSLayoutConstraint!
     /// Whether this recording has anything to play. Held rather than recomputed,
@@ -561,7 +581,7 @@ final class DetailView: NSView {
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, notesHeading, noteTagChips, recordingHeading, greeting,
-                  recentChats, empty, emptyIcon, transcribing, live] {
+                  recentChats, empty, emptyIcon, transcribing, live, findBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -601,6 +621,34 @@ final class DetailView: NSView {
         playerTop = playerCard.topAnchor.constraint(equalTo: recordingHeading.bottomAnchor,
                                                     constant: 8)
         playerHeight = playerCard.heightAnchor.constraint(equalToConstant: 58)
+        // **Under the player, and zero until somebody presses Cmd-F.**
+        //
+        // Three views hang off `playerCard.bottomAnchor` and now hang off this
+        // instead, at the same constants; closed, its top and height are both 0
+        // and its bottom edge is the player's own, so the page is laid out to
+        // the point as it was before the bar existed. A collapsed state that
+        // cannot be subtly wrong is worth more than a tidier hierarchy on a
+        // page this heavily tuned.
+        //
+        // Not at the top of the pane: the window is `.fullSizeContentView` with
+        // a transparent title bar, so the toolbar floats over the content and a
+        // full-width bar up there runs under the ellipsis and the record
+        // capsule. `titleLabel`'s 38 works only because a title is left-aligned
+        // and those items are on the right.
+        //
+        // Not an overlay either: it would cover the top of the transcript,
+        // which is where the first match usually is, and every `scrollToVisible`
+        // below would carry a permanent top margin for ever. The obvious fix is
+        // not available, because a content inset is a scroll offset and will not
+        // hold a view in place, which is why `scroll` runs with
+        // `automaticallyAdjustsContentInsets = false` already.
+        findTop = findBar.topAnchor.constraint(equalTo: playerCard.bottomAnchor,
+                                                constant: 0)
+        findHeight = findBar.heightAnchor.constraint(equalToConstant: 0)
+        findBar.isHidden = true
+        findBar.onQuery = { [weak self] text in self?.findQueryChanged(text) }
+        findBar.onStep = { [weak self] by in self?.stepFind(by) }
+        findBar.onDone = { [weak self] in self?.closeFind() }
         // An empty note has nothing to say about itself: no date, because it has
         // never been saved. A label with an empty string still occupies a line,
         // so the caret sat forty points below the toggle with nothing between
@@ -758,7 +806,15 @@ final class DetailView: NSView {
             // window's edge and not 23 points inside it. The margins the two
             // constants here used to hold are in `transcriptInsets`, where the
             // scroller cannot inherit them.
-            scroll.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 8),
+            // `findBar.bottomAnchor` rather than the player's, at the same 8.
+            // The bar is zero-high and zero-from-the-player when it is closed,
+            // so this is the same line it was; see `findTop`.
+            findTop,
+            findHeight,
+            findBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            findBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            scroll.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -770,7 +826,7 @@ final class DetailView: NSView {
             //
             // Level with the transcript it stands in for, so the note above
             // stays put when a running recording finishes.
-            live.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 12),
+            live.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 12),
             live.leadingAnchor.constraint(equalTo: leadingAnchor),
             live.trailingAnchor.constraint(equalTo: trailingAnchor),
             live.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -805,7 +861,7 @@ final class DetailView: NSView {
             // both are documents about the meeting whose title is above them.
             // Its own composer is pinned inside it, so this one reaches the
             // bottom of the window rather than stopping short of it.
-            askView.topAnchor.constraint(equalTo: playerCard.bottomAnchor, constant: 8),
+            askView.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8),
             askView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             askView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             askView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
@@ -1195,6 +1251,10 @@ final class DetailView: NSView {
         // written rather than after it is saved. Cheap: the layout manager has
         // already laid out this line to draw it.
         sizeNotes()
+        // Re-run rather than re-apply: a character typed at the top of the note
+        // moves every range below it, so the ranges found before this keystroke
+        // now point at the wrong words.
+        refreshFind()
         noteSaveTimer?.invalidate()
         noteSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
             Task { @MainActor in self.saveYours() }
@@ -1347,6 +1407,12 @@ final class DetailView: NSView {
     /// app and will use it. What earns its place here is that this file is
     /// attached to the recording and readable by an agent.
     private func renderNote() {
+        // Before the storage is replaced, never after. A temporary attribute is
+        // removed by naming the range it was put at, and every line below this
+        // swaps the text under those ranges: run it afterwards and the removal
+        // addresses characters that are not there any more.
+        clearNoteMarks()
+        defer { refreshFind() }
         guard let note = notes.first(where: { $0.slug == showingNote }) else {
             notesText.isEditable = false
             notesText.textStorage?.setAttributedString(NSAttributedString())
@@ -1830,6 +1896,9 @@ final class DetailView: NSView {
         // player that is collapsed there anyway: switching to Ask already stops
         // playback.
         if !page { setFocus(nil) }
+        // And the find bar with it, for the same reason: the three surfaces it
+        // searches are the page's, and none of them is on screen in Ask.
+        if !page { closeFind() }
         showProvenance()
         showRelated()
         updatePlaceholder()
@@ -1984,6 +2053,10 @@ final class DetailView: NSView {
             live.begin()
             live.isHidden = false
             setModeBarCollapsed(true)
+            // The pane below the header is `RecordingView`'s while this runs,
+            // and there is no transcript to search: nothing is transcribed
+            // until Stop. The same rule the composer already follows here.
+            closeFind()
             scroll.isHidden = true
             notesScroll.isHidden = true
             noteInfo.isHidden = true
@@ -2294,6 +2367,12 @@ final class DetailView: NSView {
         // an hour of scrolling, and the second one is why fixing it at the call
         // site did not work. See "A sidebar reload is not somebody choosing a
         // recording".
+        // **Only when the recording actually changed.** `reload()` re-shows
+        // whatever is selected on every activation, every queue tick and both
+        // edges of capture, so closing the bar here unconditionally would shut
+        // it under the reader several times a minute. The same test the three
+        // lines around this one make, and for the same family of reasons.
+        if recording.id != previous { closeFind() }
         renderTurns(scrollToTop: recording.id != previous)
 
         // No player while it is being recorded. The tracks exist and are
@@ -2390,6 +2469,10 @@ final class DetailView: NSView {
         // above "Select something from the list."
         recordingHeading.isHidden = hidden
         notesHeading.isHidden = hidden
+        // The list this comment is about, again. A find bar over "Select
+        // something from the list" is a search of nothing, and its ticks would
+        // outlive the recording that produced them.
+        if hidden { closeFind() }
         // The list this comment is about. The strip lives on the heading's row,
         // so it has to go when the heading does.
         if hidden { noteTagChips.clear() }
@@ -2626,6 +2709,11 @@ final class DetailView: NSView {
             tail.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                         constant: -Self.transcriptSides),
         ])
+
+        // Every `TurnView` on the page is new, so the find highlights they were
+        // carrying went with the old ones. One call here covers every rebuild
+        // there is, because this is the only builder.
+        refreshFind()
 
         // Not after an edit. A reload that jumps to the top of an hour-long
         // meeting loses the reader's place every time they correct a word.
@@ -3042,9 +3130,27 @@ final class DetailView: NSView {
 
     /// Scroll the turn being spoken into view, if the reader has not gone
     /// somewhere else.
+    ///
+    /// The `follows` gate is the playhead's and stays here. The mechanism under
+    /// it is `bring`, because a find step is a deliberate navigation and must
+    /// happen whether or not the reader is following the audio.
     private func reveal(_ index: Int) {
-        guard follows, index < turnViews.count else { return }
-        let frame = turnViews[index].frame
+        guard follows else { return }
+        bring(index)
+    }
+
+    /// Scroll a turn into view, whoever asked.
+    ///
+    /// `within` narrows the target to a range inside the paragraph. A turn is
+    /// one person's uninterrupted stretch and can run for minutes, so a
+    /// paragraph taller than the viewport lands on one of its edges and a match
+    /// in the middle of it ends up off screen after a step that reported
+    /// success.
+    private func bring(_ index: Int, within range: NSRange? = nil,
+                       atTop: Bool = false) {
+        guard index < turnViews.count else { return }
+        let view = turnViews[index]
+        var frame = view.frame
         // **Nothing to scroll to before layout has run.**
         //
         // `renderTurns` empties the stack and fills it again in one pass, and
@@ -3060,10 +3166,389 @@ final class DetailView: NSView {
         // which `refresh(revealing:)` is about. This is here because scrolling
         // to a view that has no layout cannot be right whatever asked for it.
         guard frame.height > 0 else { return }
+        // Converted rather than added: the stack is unflipped, so hand
+        // arithmetic on y is the thing this whole comment is about.
+        if let range, let inside = view.rect(of: range) {
+            frame = view.convert(inside, to: stack)
+        }
         guard !scroll.documentVisibleRect.contains(frame) else { return }
         scrollingProgrammatically = true
-        stack.scrollToVisible(frame.insetBy(dx: 0, dy: -50))
-        DispatchQueue.main.async { self.scrollingProgrammatically = false }
+        defer { DispatchQueue.main.async { self.scrollingProgrammatically = false } }
+
+        // **`scrollToVisible` scrolls the least it can, and the least it can put
+        // a find match flush against the bottom edge of the window.**
+        //
+        // That is right for the playhead, which is following along and should
+        // move the page as little as possible. It is wrong for a jump somebody
+        // asked for: measured on a 41-minute call, opening on match 1 left the
+        // matched paragraph on the last line of the viewport with the eight
+        // turns before it filling the screen above, so the page looked like it
+        // had not moved at all.
+        //
+        // The stack is **unflipped**, so the top of the viewport is the frame's
+        // `maxY`, not its `minY`. Getting that backwards scrolls a whole
+        // window's height the wrong way, which is the same trap `reveal`
+        // records about a zero frame.
+        guard atTop else {
+            stack.scrollToVisible(frame.insetBy(dx: 0, dy: -50))
+            return
+        }
+        // **Two coordinate systems, and they run opposite ways.** The stack is
+        // unflipped, so a turn's frame counts up from the bottom of the
+        // document and turn 0 has the *highest* y. `TopAlignedClipView` is
+        // flipped, so what `scroll(to:)` wants counts down from the top. The
+        // distance from the document's top to this frame's top edge is
+        // therefore `document - frame.maxY`, and using the frame's y directly
+        // scrolls most of a meeting the wrong way: measured on a 41-minute
+        // call, opening on the match at 15:51 landed the page at 21:14, six
+        // minutes past it, with the match off the top of the screen.
+        let visible = scroll.contentView.bounds.height
+        let document = stack.bounds.height
+        let fromTop = document - frame.maxY
+        let y = min(max(0, fromTop - Self.findLead), max(0, document - visible))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        // `lead` is how far below the top of the viewport the match landed, and
+        // it is the whole assertion: the arithmetic above went the wrong way
+        // once and every visible symptom of it was "the page did not move",
+        // which a screenshot shows and no AX tree can. `verify_search.sh` reads
+        // this line. Clamped at the two ends of the document, so it is only
+        // `findLead` in the middle of one.
+        trace("find scroll turn=\(index) fromTop=\(Int(fromTop)) "
+            + "to=\(Int(y)) lead=\(Int(fromTop - y))")
+    }
+
+    /// Air above a match the find bar has jumped to.
+    ///
+    /// Not zero: a paragraph hard against the top edge reads as the top of the
+    /// document rather than as a result, and the turn before it is usually the
+    /// question the match is the answer to.
+    private static let findLead: CGFloat = 60
+
+    // MARK: - Find in page
+
+    /// True while the bar is up, which the window asks before stepping.
+    var isFinding: Bool { !findBar.isHidden }
+
+    /// Open the bar, or focus it if it is already open.
+    ///
+    /// Cmd-F with the bar up selects everything in the field rather than
+    /// closing it, which is what every other Mac app does.
+    func openFind() {
+        guard recording != nil else { NSSound.beep(); return }
+        if findBar.isHidden {
+            findBar.isHidden = false
+            findTop.constant = 8
+            findHeight.constant = FindBar.height
+            // **Searching is the reader saying they are reading.** The same
+            // rule `applyEdit` makes: once somebody is working on the page, the
+            // playhead stops dragging it around. Closing does not put this
+            // back, and that asymmetry is deliberate: `follows` is re-armed
+            // only by opening a different recording, and re-arming it here
+            // would pull the page away the moment the bar went down.
+            follows = false
+        }
+        findBar.focus()
+    }
+
+    /// Take the bar down and every highlight with it.
+    func closeFind() {
+        finding = ""
+        found = []
+        foundAt = nil
+        applyFind()
+        findBar.setQuery("")
+        findBar.report(nil, of: 0)
+        guard !findBar.isHidden else { return }
+        findBar.isHidden = true
+        findTop.constant = 0
+        findHeight.constant = 0
+        // The field keeps first responder otherwise, and the next keystroke
+        // goes into a bar nobody can see.
+        // `nil`, not `self`: an `NSView` does not accept first responder by
+        // default, so aiming it here fails quietly and leaves the caret in a
+        // field nobody can see any more.
+        if window?.firstResponder is NSTextView { window?.makeFirstResponder(nil) }
+    }
+
+    private func findQueryChanged(_ text: String) {
+        let began = DEBUG ? Date() : nil
+        finding = text
+        found = findMatches(for: text)
+        foundAt = found.isEmpty ? nil : 0
+        applyFind()
+        findBar.report(foundAt, of: found.count)
+        if let foundAt { scrollToMatch(found[foundAt]) }
+        if let began {
+            trace("find \"\(text)\" \(found.count) matches over \(turns.count) turns "
+                + "in \(Int(Date().timeIntervalSince(began) * 1000)) ms")
+        }
+    }
+
+    /// Escape closes the bar, and otherwise means what it meant before.
+    ///
+    /// The split view controller's `cancelOperation` is deliberately last in the
+    /// responder chain, *"so anything that wants Escape for itself gets it
+    /// first"*. This wants it, and only while the bar is up: calling `super`
+    /// otherwise leaves that arrangement exactly as it was. The bar's own field
+    /// takes the key ahead of this whenever it holds the caret, through
+    /// `doCommandBy`.
+    override func cancelOperation(_ sender: Any?) {
+        guard isFinding else { super.cancelOperation(sender); return }
+        closeFind()
+    }
+
+    func findNext() { stepFind(1) }
+    func findPrevious() { stepFind(-1) }
+
+    /// Open the bar on a query somebody has already typed somewhere else.
+    ///
+    /// The route from a search result in the sidebar: the click already said
+    /// which word, so the page opens knowing it rather than making the reader
+    /// type it a second time into a bar they have to find first.
+    ///
+    /// Deferred, because this runs in the same pass as `show`'s `renderTurns`
+    /// and every frame in the stack is still zero: scrolling now lands on the
+    /// last paragraph of the meeting. See `bring`.
+    func find(_ query: String) {
+        guard recording != nil, !query.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return }
+        showTranscript()
+        openFind()
+        findBar.setQuery(query)
+        DispatchQueue.main.async { [self] in
+            stack.layoutSubtreeIfNeeded()
+            findQueryChanged(query)
+        }
+    }
+
+    private func stepFind(_ by: Int) {
+        guard !found.isEmpty else { NSSound.beep(); return }
+        // Wrapping silently at both ends. A find bar that stops at the last
+        // match is one you have to know the length of.
+        let next = ((foundAt ?? 0) + by + found.count) % found.count
+        foundAt = next
+        applyFind()
+        findBar.report(next, of: found.count)
+        scrollToMatch(found[next])
+    }
+
+    /// Rebuild the list for what is on the page now, keeping the reader's place.
+    ///
+    /// Called by everything that changes any of the three documents, and it
+    /// **never scrolls**: it runs at the end of `renderTurns`, in the same pass
+    /// the stack was filled, where every frame is still zero and the stack is
+    /// unflipped. That is the whole class of "scrolled into the last paragraph
+    /// of an hour-long meeting", refused by construction.
+    private func refreshFind() {
+        guard !finding.isEmpty else { return }
+        // The address, not the index. An edit renumbers every turn after it,
+        // which is the same distinction `currentStart` records against
+        // `currentTurn`.
+        let was = foundAt.flatMap { $0 < found.count ? found[$0].place : nil }
+        found = findMatches(for: finding)
+        if let was, let again = found.firstIndex(where: { $0.place == was }) {
+            foundAt = again
+        } else if found.isEmpty {
+            foundAt = nil
+        } else {
+            foundAt = min(foundAt ?? 0, found.count - 1)
+        }
+        applyFind()
+        findBar.report(foundAt, of: found.count)
+    }
+
+    /// Every match on the page, in reading order.
+    private func findMatches(for query: String) -> [FindMatch] {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return [] }
+        var out: [FindMatch] = []
+
+        // The title first, because it is the top of the page. `stringValue`
+        // rather than `displayTitle`: the placeholder is a word on screen and a
+        // key on disk, and an untitled recording has an empty field here, so
+        // the list can offer a recording for the word "untitled" that the page
+        // then honestly cannot find.
+        for range in Find.ranges(of: wanted, in: titleLabel.stringValue) {
+            out.append(FindMatch(place: .title(range)))
+        }
+
+        // Then the note on screen, and only that one. The others are links in
+        // `chatLinks` rather than documents on this page, so this is the whole
+        // page rather than a cut of it, and it is also the safe reading:
+        // `showNote` does not flush the pending save, so stepping into a note
+        // that is not up would be the first caller that had not saved, and the
+        // 0.8s timer behind it is guarded by `showingYours` and would drop the
+        // keystrokes without a word.
+        if !notesScroll.isHidden, let slug = showingNote {
+            for range in Find.ranges(of: wanted, in: notesText.string) {
+                out.append(FindMatch(place: .note(slug: slug, range)))
+            }
+        }
+
+        // Then the paragraphs, in order.
+        for (index, turn) in turns.enumerated() {
+            for range in Find.ranges(of: wanted, in: turn.text) {
+                out.append(FindMatch(place: .turn(index: index, range),
+                                     time: time(of: range, in: index) ?? turn.start))
+            }
+        }
+        return out
+    }
+
+    /// When a match in a turn is spoken, for the waveform's ticks.
+    ///
+    /// The sentence containing it, falling back to the turn's own start.
+    /// A fallback rather than a skip: `Merge.sentences` drops segments it
+    /// cannot locate in the turn text, and a match that lands in one of those
+    /// gaps still happened and still deserves a mark.
+    private func time(of range: NSRange, in index: Int) -> TimeInterval? {
+        guard index < sentences.count else { return nil }
+        return sentences[index].first { NSIntersectionRange($0.range, range).length > 0 }?.start
+    }
+
+    /// Push the current list onto all three surfaces.
+    private func applyFind() {
+        let current = foundAt.flatMap { $0 < found.count ? found[$0] : nil }
+
+        // The title.
+        var titleRanges: [NSRange] = []
+        var titleCurrent: NSRange?
+        // The note.
+        var noteRanges: [NSRange] = []
+        var noteCurrent: NSRange?
+        // The paragraphs, gathered per turn so each view is written once.
+        var byTurn: [Int: [NSRange]] = [:]
+        var turnCurrent: (Int, NSRange)?
+
+        for match in found {
+            switch match.place {
+            case .title(let range): titleRanges.append(range)
+            case .note(_, let range): noteRanges.append(range)
+            case .turn(let index, let range): byTurn[index, default: []].append(range)
+            }
+        }
+        switch current?.place {
+        case .title(let range): titleCurrent = range
+        case .note(_, let range): noteCurrent = range
+        case .turn(let index, let range): turnCurrent = (index, range)
+        case nil: break
+        }
+
+        renderTitle(marking: titleRanges, current: titleCurrent)
+        markNote(noteRanges, current: noteCurrent)
+        for (index, view) in turnViews.enumerated() {
+            let ranges = byTurn[index] ?? []
+            view.setFind(ranges, current: turnCurrent?.0 == index ? turnCurrent?.1 : nil)
+        }
+
+        // Only the transcript is on the clock, which is why `FindMatch.time` is
+        // optional. Cleared with everything else, or the previous query's ticks
+        // outlive it: `loadWaveform` resets `peaks` and `spans` and would never
+        // know about these.
+        waveform.marks = found.compactMap(\.time)
+        waveform.mark = current?.time
+    }
+
+    /// Mark the query in the title, or put the plain title back.
+    ///
+    /// **An attributed string brings its own truncation, which is none.**
+    /// `lineBreakMode = .byTruncatingTail` is set on the field in `build` and is
+    /// lost the instant an attributed value goes in without a paragraph style
+    /// carrying it, so a long meeting name stops truncating and re-lays the
+    /// whole header out. It is carried here by hand.
+    ///
+    /// Nothing at all while the field is being edited: the field editor owns
+    /// the text then, and writing to it moves the caret to the end.
+    private func renderTitle(marking ranges: [NSRange], current: NSRange?) {
+        guard titleLabel.currentEditor() == nil else { return }
+        let text = titleLabel.stringValue
+        guard !ranges.isEmpty else {
+            // Assigning `stringValue` is what takes an attributed value off, and
+            // it must not run on every pass: it would fight the branch in `show`
+            // that leaves an open edit alone.
+            if titleLabel.attributedStringValue.length > 0,
+               titleLabel.attributedStringValue.string == text,
+               titleLabel.attributedStringValue.attribute(
+                   .backgroundColor, at: 0, effectiveRange: nil) != nil {
+                titleLabel.stringValue = text
+            }
+            return
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let marked = NSMutableAttributedString(string: text, attributes: [
+            .font: titleLabel.font ?? NSFont.systemFont(ofSize: 22, weight: .semibold),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph,
+        ])
+        let length = marked.length
+        for range in ranges where NSMaxRange(range) <= length {
+            marked.addAttribute(.backgroundColor,
+                                value: NSColor.systemYellow.withAlphaComponent(0.35),
+                                range: range)
+        }
+        if let current, NSMaxRange(current) <= length {
+            marked.addAttribute(.backgroundColor, value: NSColor.systemOrange,
+                                range: current)
+            marked.addAttribute(.foregroundColor, value: NSColor.black, range: current)
+        }
+        titleLabel.attributedStringValue = marked
+    }
+
+    /// Highlight ranges in the note, through the layout manager.
+    ///
+    /// **Temporary attributes, never an edit to the storage.** The storage is
+    /// what `sizeNotes` measures and what the user is typing into, and an edit
+    /// under a caret is an undo event that merges with `typingAttributes`, so
+    /// the next character typed would inherit the highlight. `LinkLine` records
+    /// the same decision for the same reasons.
+    private func markNote(_ ranges: [NSRange], current: NSRange?) {
+        guard let layout = notesText.layoutManager else { return }
+        let length = (notesText.string as NSString).length
+        for range in noteHighlighted where NSMaxRange(range) <= length {
+            layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+        }
+        noteHighlighted = []
+        for range in ranges where NSMaxRange(range) <= length {
+            let isCurrent = range == current
+            layout.addTemporaryAttributes(
+                isCurrent
+                    ? [.backgroundColor: NSColor.systemOrange,
+                       .foregroundColor: NSColor.black]
+                    : [.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.35)],
+                forCharacterRange: range)
+            noteHighlighted.append(range)
+        }
+    }
+
+    /// Take the note's highlights off before its storage is replaced.
+    ///
+    /// Before, not after: `LinkLine.set` records that a range into text that
+    /// has already been swapped addresses nothing, so the attributes are never
+    /// removed and the next pass measures against a length that has moved.
+    private func clearNoteMarks() {
+        guard let layout = notesText.layoutManager else { return }
+        let length = (notesText.string as NSString).length
+        for range in noteHighlighted where NSMaxRange(range) <= length {
+            layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+        }
+        noteHighlighted = []
+    }
+
+    /// Scroll to a match, on whichever surface it is.
+    private func scrollToMatch(_ match: FindMatch) {
+        switch match.place {
+        case .title:
+            // The title never scrolls; it is pinned to the top of the pane.
+            break
+        case .note(_, let range):
+            notesText.scrollRangeToVisible(range)
+        case .turn(let index, let range):
+            bring(index, within: range, atTop: true)
+        }
     }
 
     @objc private func userScrolled() {
@@ -3885,6 +4370,77 @@ final class TurnView: NSView {
         }
     }
 
+    /// This turn's find matches, pushed down by the pane.
+    ///
+    /// Held rather than written onto the label, because `highlight` rebuilds
+    /// the whole string from `base` whenever the playhead enters a different
+    /// sentence. A background colour written straight onto `bodyLabel` survives
+    /// until the next such tick and no longer, which reads as a highlight that
+    /// works except sometimes.
+    private var findRanges: [NSRange] = []
+    /// Which of them the find bar is sitting on, when it is in this turn.
+    private var findCurrent: NSRange?
+
+    /// The find bar's matches in this turn, and which one is current.
+    ///
+    /// The equality guard is what makes a blanket loop over every turn on the
+    /// page affordable: comparing two small arrays two hundred times costs
+    /// nothing, and re-assigning two hundred `attributedStringValue`s
+    /// invalidates two hundred intrinsic sizes and re-lays the whole stack out.
+    ///
+    /// **Measured, because the fear was a coalescing timer would be needed and
+    /// it is not.** `LISTEN_DEBUG=1` times the whole pass; on the longest
+    /// transcript to hand, 156 turns, the worst query anybody can type is one
+    /// character:
+    ///
+    ///     find "e"     2546 matches over 156 turns in 2 ms
+    ///     find "th"     700 matches over 156 turns in 1 ms
+    ///     find "the"    385 matches over 156 turns in 0 ms
+    ///
+    /// So no debounce and no two-character minimum: both would be latency added
+    /// to hide two milliseconds. That is the synchronous half; the layout the
+    /// changed labels ask for happens on the next pass and was not visible.
+    func setFind(_ ranges: [NSRange], current: NSRange?) {
+        guard ranges != findRanges || current != findCurrent else { return }
+        findRanges = ranges
+        findCurrent = current
+        render()
+    }
+
+    /// Where a range sits inside this paragraph, in the view's own coordinates.
+    ///
+    /// A layout manager built here over `base` at the label's width. Not exact:
+    /// `report` records a hand-built one disagreeing with AppKit on 341 of 1026
+    /// sampled points, because it cannot see the cell's insets. That mattered
+    /// there, where the answer decided which character had been clicked. Here
+    /// it is a scroll target and being a line out is invisible.
+    ///
+    /// nil before layout has run, which is what makes the caller fall back to
+    /// the whole paragraph rather than scroll somewhere wrong.
+    func rect(of range: NSRange) -> NSRect? {
+        let width = bodyLabel.bounds.width
+        guard width > 1, NSMaxRange(range) <= base.length else { return nil }
+        let storage = NSTextStorage(attributedString: base)
+        let container = NSTextContainer(
+            size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        let layout = NSLayoutManager()
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let glyphs = layout.glyphRange(forCharacterRange: range,
+                                       actualCharacterRange: nil)
+        let box = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        // A layout manager measures from the top down. An `NSTextField` is not
+        // a flipped view, so the box has to be turned over inside the label
+        // before it means anything to anybody else.
+        let inLabel = bodyLabel.isFlipped
+            ? box
+            : NSRect(x: box.minX, y: bodyLabel.bounds.height - box.maxY,
+                     width: box.width, height: box.height)
+        return bodyLabel.convert(inLabel, to: self)
+    }
+
     /// Highlight the sentence containing `time`, or none.
     ///
     /// Called twenty times a second while playing, so it does nothing at all
@@ -3898,12 +4454,44 @@ final class TurnView: NSView {
         }
         guard index != highlighted else { return }
         highlighted = index
+        render()
+    }
 
+    /// **The only place `bodyLabel`'s string is written**, so the playhead and
+    /// the find bar cannot each undo the other.
+    ///
+    /// They used to be one function, and adding a second writer was not an
+    /// option: this rebuilds from `base` and assigns wholesale, so whatever it
+    /// was not told about is gone. The playhead goes on first and the find
+    /// ranges over it, because a match inside the sentence being spoken is
+    /// still a match and is the one the reader asked for.
+    ///
+    /// Yellow rather than a third alpha of the accent. The page already spends
+    /// that colour twice on one paragraph, 0.07 for the turn and 0.30 for the
+    /// sentence, and the comment above `isCurrent` is about keeping those two
+    /// apart; a third shade would be a third thing to tell apart at a glance.
+    /// Black on the current match is fixed rather than `labelColor` for
+    /// `Brand.onAccent`'s reason: the fill does not change between appearances,
+    /// so the ink on it must not either.
+    private func render() {
+        guard editing == nil else { return }
         let text = NSMutableAttributedString(attributedString: base)
-        if let index {
+        if let highlighted {
             text.addAttribute(.backgroundColor,
                               value: Brand.accent.withAlphaComponent(0.30),
-                              range: sentences[index].range)
+                              range: sentences[highlighted].range)
+        }
+        let length = text.length
+        for range in findRanges where NSMaxRange(range) <= length {
+            text.addAttribute(.backgroundColor,
+                              value: NSColor.systemYellow.withAlphaComponent(0.35),
+                              range: range)
+        }
+        if let findCurrent, NSMaxRange(findCurrent) <= length {
+            text.addAttribute(.backgroundColor, value: NSColor.systemOrange,
+                              range: findCurrent)
+            text.addAttribute(.foregroundColor, value: NSColor.black,
+                              range: findCurrent)
         }
         bodyLabel.attributedStringValue = text
     }
@@ -4127,6 +4715,11 @@ final class TurnView: NSView {
         // The highlight was frozen while the field was up, so let the next
         // playhead tick reapply it rather than leaving a stale one.
         highlighted = nil
+        // But the find highlight has no tick to wait for. Without this, a turn
+        // whose sentence was just edited comes back with its matches missing
+        // until the audio happens to reach it, which on a paused meeting is
+        // never.
+        render()
         onEditingChanged?(self, false)
     }
 }
@@ -4186,10 +4779,17 @@ extension DetailView: NSTextFieldDelegate, NSTextViewDelegate {
         // and not a redraw. It is shared with `listen title` on purpose.
         guard (try? current.rename(to: typed)) == true else { return }
         recording = current
+        // The line above wrote `stringValue`, which takes any attributed value
+        // with it, so a title that was carrying find highlights has just lost
+        // them. It is also new text, so the ranges have moved.
+        refreshFind()
         onChanged?()
     }
 
     func beginEditingTitle() {
+        // The plain string first. A find highlight is an attributed value, and
+        // handing the field editor one means typing inherits the yellow.
+        titleLabel.stringValue = titleLabel.stringValue
         window?.makeFirstResponder(titleLabel)
         titleLabel.currentEditor()?.selectAll(nil)
     }
@@ -4287,6 +4887,13 @@ final class DetailViewController: NSViewController {
     var isShowingLive: Bool { detail.isShowingLive }
 
     var isLoadingTranscript: Bool { detail.isLoadingTranscript }
+
+    var isFinding: Bool { detail.isFinding }
+    func openFind() { detail.openFind() }
+    func closeFind() { detail.closeFind() }
+    func findNext() { detail.findNext() }
+    func findPrevious() { detail.findPrevious() }
+    func find(_ query: String) { detail.find(query) }
 
     var onShowingChanged: (() -> Void)? {
         get { detail.onShowingChanged }

@@ -69,6 +69,8 @@ enum ChatLink {
 final class NoteCell: NSView {
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    /// The sentence that matched, on rows that are search results.
+    private let excerpt = NSTextField(labelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -77,8 +79,19 @@ final class NoteCell: NSView {
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
+        excerpt.font = .systemFont(ofSize: 11)
+        excerpt.textColor = .secondaryLabelColor
+        // Two, matching `RecordingCell`, and for the same reason: the row's
+        // height is a constant answered without measuring the text.
+        excerpt.maximumNumberOfLines = 2
+        excerpt.lineBreakMode = .byTruncatingTail
+        excerpt.cell?.usesSingleLineMode = false
+        // Both are needed, for the reason `RecordingCell` records: the line cap
+        // alone lays out three lines and draws them over the row below.
+        excerpt.cell?.truncatesLastVisibleLine = true
+        excerpt.isHidden = true
 
-        let stack = NSStackView(views: [title, detail])
+        let stack = NSStackView(views: [title, detail, excerpt])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
@@ -93,7 +106,11 @@ final class NoteCell: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ note: Note) {
+    func configure(_ note: Note, match: SidebarViewController.RowMatch? = nil) {
+        // A stack view hides a view's space along with it, unlike the pinned
+        // constraints `RecordingCell` uses, so this is the whole of it here.
+        excerpt.isHidden = match?.excerpt == nil
+        if let line = match?.excerpt { excerpt.attributedStringValue = line }
         let sources = Notes.sources(of: note)
         // Every one of the user's own notes is titled "Your notes", so a list of
         // them is a column of identical rows distinguished only by a truncated
@@ -180,6 +197,14 @@ final class NotePane: NSViewController {
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "Select a note.")
 
+    /// Find in page, over the one document this pane holds.
+    private let findBar = FindBar()
+    private var findTop: NSLayoutConstraint!
+    private var findHeight: NSLayoutConstraint!
+    private var found: [NSRange] = []
+    private var foundAt: Int?
+    private var finding = ""
+
     private var note: Note?
 
     /// Where a source button goes: the recording, and the note being read, so
@@ -233,10 +258,20 @@ final class NotePane: NSViewController {
         }
         tagChips.onChanged = { [weak self] in self?.refreshTags() }
 
-        for v in [heading, info, sources, tagChips, scroll, empty] as [NSView] {
+        findBar.isHidden = true
+        findBar.onQuery = { [weak self] text in self?.findQueryChanged(text) }
+        findBar.onStep = { [weak self] by in self?.stepFind(by) }
+        findBar.onDone = { [weak self] in self?.closeFind() }
+
+        for v in [heading, info, sources, tagChips, scroll, empty, findBar] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(v)
         }
+        // The same collapsed pair the recording page uses: zero top and zero
+        // height put the bar's bottom edge on the strip above it, so the note
+        // is laid out exactly as it was before this existed.
+        findTop = findBar.topAnchor.constraint(equalTo: tagChips.bottomAnchor, constant: 0)
+        findHeight = findBar.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             heading.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
             heading.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
@@ -256,7 +291,11 @@ final class NotePane: NSViewController {
             tagChips.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
             tagChips.trailingAnchor.constraint(lessThanOrEqualTo: heading.trailingAnchor),
             tagChips.heightAnchor.constraint(equalToConstant: 24),
-            scroll.topAnchor.constraint(equalTo: tagChips.bottomAnchor, constant: 12),
+            findTop,
+            findHeight,
+            findBar.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            findBar.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
             scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor,
                                              constant: -24),
@@ -288,8 +327,94 @@ final class NotePane: NSViewController {
         ]
     }
 
+    // MARK: - Find in page
+
+    /// True while the bar is up. The window asks before offering to step.
+    var isFinding: Bool { isViewLoaded && !findBar.isHidden }
+
+    func openFind() {
+        loadViewIfNeeded()
+        guard note != nil else { NSSound.beep(); return }
+        if findBar.isHidden {
+            findBar.isHidden = false
+            findTop.constant = 8
+            findHeight.constant = FindBar.height
+        }
+        findBar.focus()
+    }
+
+    func closeFind() {
+        guard isViewLoaded else { return }
+        found = []
+        foundAt = nil
+        finding = ""
+        markFound()
+        findBar.setQuery("")
+        findBar.report(nil, of: 0)
+        guard !findBar.isHidden else { return }
+        findBar.isHidden = true
+        findTop.constant = 0
+        findHeight.constant = 0
+        // `nil` for the reason the recording page's copy gives.
+        if view.window?.firstResponder is NSTextView {
+            view.window?.makeFirstResponder(nil)
+        }
+    }
+
+    func findNext() { stepFind(1) }
+    func findPrevious() { stepFind(-1) }
+
+    private func findQueryChanged(_ query: String) {
+        finding = query
+        found = Find.ranges(of: query, in: text.string)
+        foundAt = found.isEmpty ? nil : 0
+        markFound()
+        findBar.report(foundAt, of: found.count)
+        if let foundAt { text.scrollRangeToVisible(found[foundAt]) }
+    }
+
+    private func stepFind(_ by: Int) {
+        guard !found.isEmpty else { NSSound.beep(); return }
+        let next = ((foundAt ?? 0) + by + found.count) % found.count
+        foundAt = next
+        markFound()
+        findBar.report(next, of: found.count)
+        text.scrollRangeToVisible(found[next])
+    }
+
+    /// The ranges the layout manager is decorating, so they can be taken off.
+    private var marked: [NSRange] = []
+
+    /// **Temporary attributes, never an edit to the storage**, for the reason
+    /// `LinkLine` records: the storage is what the height is measured from and
+    /// what an answer streams into, and a decoration belongs to neither. They
+    /// are also dropped for free when the text is replaced.
+    private func markFound() {
+        guard let layout = text.layoutManager else { return }
+        let length = (text.string as NSString).length
+        for range in marked where NSMaxRange(range) <= length {
+            layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+        }
+        marked = []
+        let current = foundAt.flatMap { $0 < found.count ? found[$0] : nil }
+        for range in found where NSMaxRange(range) <= length {
+            layout.addTemporaryAttributes(
+                range == current
+                    ? [.backgroundColor: NSColor.systemOrange,
+                       .foregroundColor: NSColor.black]
+                    : [.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.35)],
+                forCharacterRange: range)
+            marked.append(range)
+        }
+    }
+
     func show(_ note: Note?) {
         loadViewIfNeeded()
+        // A different note is a different document, so the search over the last
+        // one goes with it. Unlike the recording page, this pane is only ever
+        // shown for a selection, so there is no reload to guard against.
+        if note?.slug != self.note?.slug { closeFind() }
         self.note = note
         let hidden = note == nil
         for v in [heading, info, sources, tagChips, scroll] as [NSView] {

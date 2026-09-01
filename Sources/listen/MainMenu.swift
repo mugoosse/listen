@@ -132,7 +132,30 @@ enum MainMenu {
         add(menu, "Paste", #selector(NSText.paste(_:)), "v")
         add(menu, "Select All", #selector(NSText.selectAll(_:)), "a")
         menu.addItem(.separator())
-        add(menu, "Find", #selector(MenuActions.focusSearch), "f")
+        // **Cmd-F is the page, not the library.** Every other Mac app spends it
+        // on the document in front of you, and the library's field is on screen
+        // permanently and one click away, so it is the one that can afford to
+        // give up the chord. The pair is Xcode's: this file, and this project.
+        //
+        // Targeted at `LibraryWindow.shared` explicitly rather than left nil,
+        // the way the File menu's recording items are. `LibraryWindow` is an
+        // `NSObject` and not an `NSResponder`, so a nil-targeted item reaches it
+        // as the window's *delegate* rather than through the view responder
+        // chain, and naming the target is what routes these through
+        // `validateMenuItem` as well.
+        add(menu, "Find in Page…", #selector(LibraryWindow.findInPageSelected), "f")
+            .target = LibraryWindow.shared
+        add(menu, "Find Next", #selector(LibraryWindow.findNextSelected), "g")
+            .target = LibraryWindow.shared
+        add(menu, "Find Previous", #selector(LibraryWindow.findPreviousSelected), "g",
+            [.command, .shift])
+            .target = LibraryWindow.shared
+        menu.addItem(.separator())
+        // Keeps its `MenuActions` target, because it opens the window when
+        // there is not one and a responder chain has nothing in it to reach
+        // then.
+        add(menu, "Search Library", #selector(MenuActions.focusSearch), "f",
+            [.command, .shift])
             .target = MenuActions.shared
         return item
     }

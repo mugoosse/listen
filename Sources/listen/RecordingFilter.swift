@@ -99,7 +99,74 @@ struct RecordingFilter {
             && !needsSpeakers && kind == nil
     }
 
+    /// Where a query was found in a recording, and enough to show it.
+    ///
+    /// The range is into `text`, which is carried rather than looked up again:
+    /// `storedTurns` re-reads and decodes `turns.json` on every access with no
+    /// cache, and the search has already paid that once by the time this exists.
+    struct Hit {
+        /// Which paragraph, or nil for a match in the title.
+        var turn: Int?
+        var start: Double
+        /// Already through `SpeakerName.display`.
+        var speaker: String
+        var range: NSRange
+        var text: String
+    }
+
+    /// The library narrowed, and where the query was found in what survived.
+    struct Found {
+        var recordings: [Recording]
+        /// Recording id to its hits. Empty when nothing was typed.
+        var hits: [String: [Hit]]
+    }
+
+    /// The same narrowing as `apply(to:)`, keeping what it found.
+    ///
+    /// Two entry points and one predicate, which is what this type exists for:
+    /// the CLI and the MCP server want a plain list and the window wants to
+    /// show the sentence that matched, and a second copy of the rule would be
+    /// the fourth thing this file's doc comment is about.
+    func search(_ library: [Recording]) -> Found {
+        var out = narrow(library)
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return Found(recordings: out, hits: [:]) }
+
+        var hits: [String: [Hit]] = [:]
+        out = out.filter { recording in
+            var found: [Hit] = []
+            // The title first, so a row that matched only its own name can say
+            // so by marking the words already on it rather than by growing a
+            // line that repeats them.
+            for range in Find.ranges(of: q, in: recording.displayTitle) {
+                found.append(Hit(turn: nil, start: 0, speaker: "",
+                                 range: range, text: recording.displayTitle))
+            }
+            // **Turn by turn, never over the joined string.** `transcriptText`
+            // joins paragraphs with a space, so a query straddling two of them
+            // matched text nobody said, and a hit found there has no speaker
+            // and no timestamp to attribute it to. Scanning each turn fixes the
+            // false positive and yields both for free.
+            for (index, turn) in recording.storedTurns.enumerated() {
+                for range in Find.ranges(of: q, in: turn.text) {
+                    found.append(Hit(turn: index, start: turn.start,
+                                     speaker: SpeakerName.display(turn.speaker),
+                                     range: range, text: turn.text))
+                }
+            }
+            guard !found.isEmpty else { return false }
+            hits[recording.id] = found
+            return true
+        }
+        return Found(recordings: out, hits: hits)
+    }
+
     func apply(to library: [Recording]) -> [Recording] {
+        search(library).recordings
+    }
+
+    /// Everything except the free text, which is the expensive half.
+    private func narrow(_ library: [Recording]) -> [Recording] {
         var out = library
 
         if after != nil || before != nil {
@@ -139,21 +206,12 @@ struct RecordingFilter {
             out = out.filter { $0.speaks(person) }
         }
 
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        if !q.isEmpty {
-            out = out.filter {
-                // `displayTitle`, so a search matches the words on the row it
-                // is looking at. Against the stored title, typing what an
-                // unnamed recording visibly says would find nothing, and typing
-                // the key it happens to be stored under would find every one.
-                $0.displayTitle.lowercased().contains(q)
-                    // The transcript too, which is the reason anybody searches a
-                    // meeting library: you remember what was said, not what the
-                    // recording was called.
-                    || $0.transcriptText.lowercased().contains(q)
-            }
-        }
-
+        // The free text is not here any more: it is in `search`, which keeps
+        // the ranges it found instead of throwing them away. `displayTitle` is
+        // still what a title is matched against, so a search matches the words
+        // on the row it is looking at, and the transcript is still searched,
+        // because remembering what was said rather than what the recording was
+        // called is the reason anybody has a meeting library at all.
         return out
     }
 

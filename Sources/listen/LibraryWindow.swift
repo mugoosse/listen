@@ -324,7 +324,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// list beside it for going back to something. That is deliberate, and it is
     /// the rule the composer already follows everywhere else. Arriving somewhere
     /// never resumes a conversation you did not ask for.
-    @objc func openChats() {
+    @objc func openChats() { enterChats(searching: nil) }
+
+    /// Enter Chats mode, optionally carrying a search over from the library.
+    ///
+    /// The handoff row at the foot of the library's results is what passes a
+    /// query. Both fields sit at the same place on screen, 42 points down in a
+    /// pane of the same width, so the word appears to stay put while the list
+    /// under it changes: see "The search field belongs where the list it swaps
+    /// with keeps its own".
+    func enterChats(searching query: String?) {
         // The menu item is rebuilt away when Ask is off, and this is the guard
         // that makes that true rather than merely tidy: a key equivalent is
         // still in the responder chain until the rebuild lands, and
@@ -333,6 +342,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if window == nil { build() }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        // Before `enter`, which reloads the list: setting it after would show
+        // the whole history for a frame and then narrow it.
+        if let query { chatNav.search(query) }
         enter(.chat)
     }
 
@@ -535,6 +547,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // another costs a comparison and nothing else.
             self.detailHost.show(self.detail)
             self.detail.show(recording)
+            // **A row clicked while the list is narrowed by a word is a search
+            // result**, so the page opens on that word rather than making
+            // somebody type it a second time into a bar they have to find
+            // first. After `show`, which has already rendered the turns, so
+            // there is something to count.
+            //
+            // Read from the field at the moment of use rather than carried
+            // through this callback: `finishReload(keepID:)` restores the
+            // selection without firing it, so anything threaded through here is
+            // dropped on every reload. Three routes in get this for nothing,
+            // because `open(recording:note:)` and `reveal` both arrive through
+            // `sidebar.select(id)`; `LibraryWindow.reload()` calls `show`
+            // directly and so does not reopen the bar, which is right, since it
+            // runs on every activation and every queue tick.
+            let typed = self.sidebar.freeTextQuery
+            if recording != nil, !typed.isEmpty { self.detail.find(typed) }
             // The composer follows the selection: a question typed while a
             // meeting is open is about that meeting, and one typed with nothing
             // open is about the library. `AskView.show` is a no-op when the id
@@ -1786,14 +1814,48 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         item.maxSize = size
     }
 
-    /// Focus the search field, for Cmd-F.
+    /// Focus the search field, for Cmd-Shift-F.
     ///
-    /// Leaves settings on the way. Cmd-F means find a recording, and the field
-    /// it focuses is in the other sidebar.
+    /// Leaves settings on the way. **Cmd-Shift-F, not Cmd-F**, which now opens
+    /// the find bar on the page: this searches the whole library and that
+    /// searches the document in front of you, which is Xcode's pair and every
+    /// other Mac app's meaning for the plain chord. The field this focuses is
+    /// on screen permanently, so it is the one that can afford the longer
+    /// shortcut; a bar that is invisible until it is summoned cannot.
     func focusSearch() {
         window?.makeKeyAndOrderFront(nil)
         exitSettings()
         sidebar.focusSearch()
+    }
+
+    /// Open the find bar on whatever page is up, for Cmd-F.
+    @objc func findInPageSelected() {
+        guard mode == .library else { NSSound.beep(); return }
+        if detailHost.current === notePane { notePane.openFind() } else { detail.openFind() }
+    }
+
+    @objc func findNextSelected() {
+        if detailHost.current === notePane { notePane.findNext() } else { detail.findNext() }
+    }
+
+    @objc func findPreviousSelected() {
+        if detailHost.current === notePane {
+            notePane.findPrevious()
+        } else {
+            detail.findPrevious()
+        }
+    }
+
+    /// Is there a page in front of us with something to search?
+    ///
+    /// The recording being made is not one: nothing is transcribed until Stop,
+    /// so the only document that exists is the note being written, and the pane
+    /// under the header belongs to `RecordingView`.
+    private var canFindInPage: Bool {
+        guard mode == .library else { return false }
+        if detailHost.current === notePane { return true }
+        guard sidebar.selectedRecording != nil else { return false }
+        return !detail.isAsking && !detail.isShowingLive
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -1827,6 +1889,13 @@ extension LibraryWindow: NSMenuItemValidation {
         // red, destructive, and the only thing this menu offers during a call.
         case #selector(discardRecordingSelected):
             return selected?.isLive == true
+        case #selector(findInPageSelected):
+            return canFindInPage
+        // Steppable only once there is a bar up with something in it. A live
+        // Find Next over a page nobody has searched is a chord that beeps.
+        case #selector(findNextSelected), #selector(findPreviousSelected):
+            guard canFindInPage else { return false }
+            return detailHost.current === notePane ? notePane.isFinding : detail.isFinding
         case #selector(retranscribeSelected), #selector(retranscribeWithModel(_:)),
              #selector(toggleRoomSelected):
             // Not on a recording that is still being captured. The audio is
@@ -3304,6 +3373,17 @@ extension LibraryWindow: NSMenuDelegate {
         // ellipsis and the sidebar's right-click menu both, because they share
         // this delegate.
         add(menu, "Tags…", #selector(tagSelected), "number")
+        // **Only on the toolbar's copy.** This delegate serves the sidebar's
+        // right-click menu too, and "Find in Page" on a row of a list is a verb
+        // about a page that is not the one being pointed at. `menu ===
+        // actionsMenu` is the test the top of this function already makes.
+        //
+        // No key equivalent, and it is Cmd-F: an equivalent is dispatched from
+        // the main menu bar, so the copies of an item down here cannot carry
+        // one. The Edit menu holds the chord.
+        if menu === actionsMenu, canFindInPage {
+            add(menu, "Find in Page", #selector(findInPageSelected), "magnifyingglass")
+        }
 
         // This one recording's audio, asked for or given back.
         //

@@ -1886,3 +1886,243 @@ checked at the same time and are both nil-target `sendAction` calls already.
 `attributedTitle` cannot look disabled, so it is the one kind of menu item whose
 target and validation have to be read rather than trusted to the screen. Every
 red item in this app is in that class.
+
+## A search that found something could not say where
+
+Typing `peco` returned the right recording and nothing else: one row, with no
+way to tell whether it matched the title or minute 26 of a 38-minute call, or
+how many times. `RecordingFilter.apply(to:)` matched `displayTitle ||
+transcriptText` and `SidebarViewController.matches` matched `note.title ||
+note.body`, and **both returned a `Bool`**. The hit was computed and thrown
+away, so the row could only ever say "this one".
+
+`RecordingFilter.search` is `apply`'s work with the ranges kept, and `apply` is
+now one line calling it, so there is still one predicate. Three things fell out
+of doing it that way rather than by excerpting in a second pass:
+
+- **The excerpt is free.** `storedTurns` re-reads and JSON-decodes `turns.json`
+  on every access with no cache, and the search already paid that for every
+  recording on every keystroke. A second pass to excerpt would have doubled the
+  expensive half of typing.
+- **Matching per turn fixed a false positive nobody had noticed.**
+  `transcriptText` joins paragraphs with a space, so `budget meeting` matched a
+  recording where one word ended turn 3 and the other began turn 4, which nobody
+  said. It also has no speaker and no timestamp to attribute a hit to, and those
+  are exactly what the row needs.
+- **A title-only match gets no excerpt line.** The title is the row's first
+  line, so a snippet under it repeats what is directly above, on exactly the
+  rows that matched most cheaply. The words in the title are marked instead.
+
+`Excerpt.around` is the first thing here that cuts *around* a match rather than
+off the front; `ReferencePopover.snippet` takes no query and `Chat.shorten` is
+head-anchored. The match sits in the left third of the window rather than the
+middle, because what follows a term is far more often the answer than what
+precedes it.
+
+### The count and the page can disagree, in two ways worth knowing
+
+Both arrive as a bar reading "Not found" over a row that promised a match, and
+both are correct rather than bugs to chase:
+
+1. A query spanning the `" "` that `transcriptText` joins two turns with matches
+   the list and not the page.
+2. The list matches `displayTitle`, and the page can only search
+   `titleLabel.stringValue`, which is empty on an untitled recording. So
+   searching "untitled" lists recordings the page cannot find it in.
+
+The bar opens anyway. One that refuses to appear after a click that said the
+word is in there is worse than one that says honestly that it is not on screen.
+
+## Conversations are offered at the foot of a search, not listed in it
+
+`agent.md` records that the conversations are deliberately not a fourth
+collection of the library, which is why `ChatNav` has no collection picker. A
+search that silently ignores them is still wrong: the word is in there and the
+library said nothing.
+
+So the last row of a search is a verb, `Row.chats`, reading "3 conversations
+mention "peco"" and entering chat mode with the query carried across.
+`ChatNav.search(_:)` fills the field as well as the state, because a list
+narrowed by a term the reader cannot see is a history with conversations missing
+from it. Both fields sit at (17, 82), 272 by 26 — the measurement in `agent.md`
+under "The search field belongs where the list it swaps with keeps its own" — so
+the word appears to stay put while the list under it changes.
+
+Three things it has to get right:
+
+- **`shouldSelectRow` is false for it.** It is a way out of the list, not a
+  document in it.
+- **It is a `SectionHeader`, not a `HoverRow`.** `HoverRow` is a plain `NSView`
+  with a target and an action and is invisible to accessibility, which is what
+  makes every popover list row in this app untestable. This row has a
+  consequence, so it has to be pressable through `AXPress`.
+- **Only when the count is above zero, and only with no kind lens on.** A row
+  reading "0 conversations" on every search is an advertisement rather than a
+  result, and `kind:` is somebody having already said which collection they
+  mean.
+
+## The playback highlight erases anything else written on a paragraph
+
+`TurnView.highlight` rebuilds the body from `base` and assigns
+`bodyLabel.attributedStringValue` **wholesale**, so a find highlight written
+straight onto the label survives until the playhead next crosses a sentence
+boundary and then vanishes. Its `guard index != highlighted` early-out means
+that can be many seconds later, and only while something is playing: the shape
+of bug that gets reported as "sometimes".
+
+There is now one writer. `highlight` and `setFind` both set state and call
+`render()`, which is the only place that label's string is assigned. The
+playhead's sentence goes on first and the find ranges over it, because a match
+inside the sentence being spoken is still a match and is the one the reader
+asked for.
+
+**Yellow, not a third alpha of the accent.** The page already spends that colour
+twice on one paragraph, 0.07 for the turn and 0.30 for the sentence, and the
+comment above `isCurrent` exists to keep those two apart. A third shade would be
+a third thing to tell apart at a glance. The current match is `systemOrange`
+with fixed black ink, for `Brand.onAccent`'s reason: the fill does not change
+between appearances, so the ink on it must not either.
+
+`setFind` guards on equality, which is what makes a blanket loop over every turn
+affordable. Measured with `LISTEN_DEBUG=1` on the longest transcript to hand,
+156 turns, the worst query anybody can type:
+
+```
+find "e"     2546 matches over 156 turns in 2 ms
+find "th"     700 matches over 156 turns in 1 ms
+find "the"    385 matches over 156 turns in 0 ms
+```
+
+So no coalescing timer and no two-character minimum. Both would have been
+latency added to hide two milliseconds.
+
+`stopEditing` has to call `render()` too. It clears `highlighted` and leaves the
+next playhead tick to repaint, and the find highlight has no tick to wait for:
+without it a turn whose sentence was just corrected comes back with its matches
+missing until the audio reaches it, which on a paused meeting is never.
+
+## `show` runs on every activation, so closing the bar there closes it constantly
+
+`LibraryWindow.reload()` calls `detail.show(fresh)` on every app activation,
+every queue tick and both edges of capture. A find bar closed unconditionally in
+`show` therefore shuts under the reader several times a minute.
+
+`recording.id != previous` is the gate, and it is the same test the three lines
+around it already make for `endEditingTitle`, `scrollToTop` and `follows`. The
+same rule with a different consequence each time, which is why it is worth
+naming: **`show` is not only how a selection is answered.**
+
+Across a rebuild the current match is kept by its **address**, not its index.
+`renderTurns` throws every `TurnView` away and an edit renumbers every turn
+after it, which is the distinction `currentStart` already records against
+`currentTurn`.
+
+## The find bar is under the player, and collapsed it is not there at all
+
+Closed, `findTop` and `findHeight` are both 0, which puts the bar's bottom edge
+exactly on `playerCard.bottom`. The three views that used to hang off the player
+— `scroll`, `live` and `askView` — hang off the bar instead at the same 8, 12
+and 8, so **the page with the bar shut is laid out to the point as it was before
+the bar existed**. On a page this heavily tuned that is worth more than a tidier
+hierarchy: the collapsed state cannot be subtly wrong.
+
+Two placements that do not work, both tried on paper first:
+
+- **The top of the pane.** The window is `.fullSizeContentView` with
+  `titlebarAppearsTransparent`, so the toolbar floats over the content and a
+  full-width bar up there runs under the ellipsis and the record capsule.
+  `titleLabel`'s 38 works only because a title is left-aligned and those items
+  are on the right.
+- **An overlay.** It covers the top of the transcript, which is where the first
+  match usually is, and every `scrollToVisible` below would carry a permanent
+  top margin for ever. The obvious fix is unavailable: a content inset is a
+  scroll offset and will not hold a view in place, which is why `scroll` already
+  runs with `automaticallyAdjustsContentInsets = false`.
+
+This reverses nothing in "the transcript is never filtered": the bar decorates
+and scrolls, and `turns`, `sentences` and `turnViews` stay index-aligned.
+
+The `applyFocus` objection is answered rather than ignored. A bar under the
+player makes the page breathe, and that was `focusBar`, driven by a click on a
+*speaker name* — a gesture that had no business moving the page. Cmd-F means "I
+am about to search this page"; it moves once at the open and once at the close.
+
+**`FindBar` owns its own delegate, and must.** `DetailView` is an
+`NSTextFieldDelegate` and its `controlTextDidEndEditing` does not check which
+field sent it: it renames the recording to `titleLabel.stringValue`
+unconditionally, because the title used to be the only field delegating there.
+Pointing the find field at the pane renames the meeting to the search string the
+moment the field gives up focus.
+
+## `scrollToVisible` moves as little as it can, and the two coordinate systems run opposite ways
+
+Two bugs on one line, and the second was hidden by the first.
+
+**`scrollToVisible` does the smallest scroll that works**, which for a find jump
+puts the match flush against an edge. That is right for the playhead, which is
+following along and should move the page as little as it can; it is wrong for a
+jump somebody asked for. Measured on a 41-minute call: opening on match 1 left
+the matched paragraph on the last line of the viewport with the eight turns
+before it filling the screen above, so the page looked like it had not moved.
+
+So a find jump computes its own origin, and that is where the second one is.
+**The stack is unflipped and the clip view is flipped, and they count opposite
+ways.** A turn's frame counts up from the bottom of the document, so turn 0 has
+the *highest* y; `contentView.scroll(to:)` wants a point counting down from the
+document's top. The distance from the top to a frame's top edge is therefore
+`document - frame.maxY`. Using the frame's own y scrolls most of a meeting the
+wrong way: measured, opening on the match at 15:51 landed the page at 21:14, six
+minutes past it, with the match off the top of the screen.
+
+**Neither symptom is visible to a test that reads the AX tree**, which is the
+part worth keeping. Every `TurnView` is in the tree whether or not it is on
+screen, so a page that never moved reads exactly like one that moved correctly,
+and the counter says "1 of 8" either way. It was found by looking at a
+screenshot. `verify_search.sh` now asserts the `find scroll … lead=60` trace
+instead, which is the number that changes when the arithmetic is inverted.
+
+`reveal` keeps its `follows` gate and its minimum scroll; `bring` is the
+mechanism under it and takes `atTop` for the find path.
+
+`follows` goes false when the bar opens, the rule `applyEdit` already makes:
+searching is the reader saying they are reading. **Closing does not put it
+back**, and that asymmetry is deliberate rather than an omission — `follows` is
+re-armed only by opening a different recording, and re-arming it here would pull
+the page away the moment the bar went down. `readingOrigin` needs nothing:
+`userScrolled` writes it on every bounds change including programmatic ones.
+
+## A two-line cap does not shorten anything, and the third line lands on the next row
+
+`maximumNumberOfLines = 2` with `.byTruncatingTail` drew **three** lines of an
+excerpt in a row whose height is a constant, so the overflow was painted over
+the row below and there was no air left inside the card.
+`truncatesLastVisibleLine` is the other half: the cap limits what is laid out,
+and this is what makes the last laid-out line end in an ellipsis rather than
+simply stopping. Both are needed.
+
+The prefix comes out of the excerpt's budget rather than being added on top of
+it. `Excerpt.width` is two lines of the row, and the speaker and the timestamp
+share those two lines, so adding them made the field's own elision cut the
+window instead of the one that keeps the match in view: the tail of every
+excerpt was lost.
+
+## The padding inside a row's card is stated, not left to the centring
+
+`RecordingCell` centres its content on a layout guide, which is what let the row
+grow from 52 to 86 points for a result without anything else moving. Centring
+alone kept the rows honest only while the content was two short lines: fill the
+height and the centre stops moving, and the padding silently goes to zero.
+`HoverRowView` draws its card at `bounds.insetBy(dy: 2)`, so text near the row's
+edge sits against the card's corner.
+
+Two inequalities against the row's own edges at 10, with the centring dropped to
+`.defaultHigh` so the pair can never be unsatisfiable. They cost nothing on a
+row with room and bite on the one that has not. Reported by a reader looking at
+it, not by anything here.
+
+**Variable row heights are cheap in this list, which reverses `NoteCell`'s
+note.** That note gives the flat 52 as a reason not to put tags on a row, and
+three things make the third line affordable where pills were not: `heightOfRow`
+is already a per-row function, nothing in this app works out where a row is by
+multiplying, and it is three constants rather than N, so nothing has to measure
+any text to answer.

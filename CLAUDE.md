@@ -303,6 +303,14 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The record capsule asked for 36 points on a toolbar that had 28 to give
 - The Ask settings pane opened blank twice a day, and the picker sat empty
 - Discard Recording was targeted at the window, and red hid that it was dead
+- A search that found something could not say where
+- Conversations are offered at the foot of a search, not listed in it
+- The playback highlight erases anything else written on a paragraph
+- `show` runs on every activation, so closing the bar there closes it constantly
+- The find bar is under the player, and collapsed it is not there at all
+- `scrollToVisible` moves as little as it can, and the two coordinate systems run opposite ways
+- A two-line cap does not shorten anything, and the third line lands on the next row
+- The padding inside a row's card is stated, not left to the centring
 
 ### `.agents/notes/appkit.md` (35k)
 
@@ -639,6 +647,14 @@ One script stands in for one, over the app built in the working directory:
                         # header for what it does not establish (uitest copy)
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
+./verify_search.sh      # a search result shows the sentence that matched and
+                        # how many; a title-only match grows no excerpt; a note
+                        # body is excerpted; conversations are offered by a
+                        # handoff row rather than listed; and the find bar
+                        # counts, steps, wraps and lands 60 points below the top
+                        # of the transcript (that last one is read from the
+                        # `LISTEN_DEBUG` trace, because where a page scrolled to
+                        # is invisible to the AX tree)
 ./verify_tap_routes.sh  # whether the system audio tap survives each output
                         # route, by playing speech through it and checking what
                         # arrived. --with-mic puts a headset in its call

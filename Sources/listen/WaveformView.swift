@@ -69,6 +69,18 @@ final class WaveformView: NSView {
         }
     }
 
+    /// Where the find bar's transcript matches are, in seconds.
+    ///
+    /// Seconds and not bar indices, the same rule `spans` follows: the bar
+    /// count follows the view's width and the caller does not know it, so a
+    /// tick and the paragraph it points at could otherwise name two different
+    /// moments. Invalidating unconditionally is right here where `progress`
+    /// throttles: that moves twenty times a second and this changes once per
+    /// query.
+    var marks: [Double] = [] { didSet { needsDisplay = true } }
+    /// The one the find bar is sitting on.
+    var mark: Double? { didSet { needsDisplay = true } }
+
     /// Fires continuously while scrubbing, with a fraction of the whole.
     var onScrub: ((Double) -> Void)?
 
@@ -182,6 +194,28 @@ final class WaveformView: NSView {
                 run.fill()
             }
             NSGraphicsContext.restoreGraphicsState()
+        }
+
+        // Before the playhead and after the bars, so the playhead stays the
+        // topmost mark on the scrubber and a tick never hides it.
+        //
+        // At the top edge rather than full height, because a full-height line
+        // is a second playhead. `isFlipped` is false here, so `bounds.height`
+        // minus the height is the top. Drawn at full strength even while
+        // `focused` is greying everybody else: that pass answers "where is this
+        // speaker" and this one answers "where is this word", and dimming one
+        // for the other would make the two unaskable together.
+        if duration > 0, !marks.isEmpty {
+            NSColor.systemYellow.setFill()
+            for time in marks {
+                let x = bounds.width * CGFloat(min(max(time / duration, 0), 1))
+                NSRect(x: x - 0.5, y: bounds.height - 4, width: 1, height: 4).fill()
+            }
+            if let mark {
+                NSColor.systemOrange.setFill()
+                let x = bounds.width * CGFloat(min(max(mark / duration, 0), 1))
+                NSRect(x: x - 1, y: bounds.height - 6, width: 2, height: 6).fill()
+            }
         }
 
         if progress > 0 {

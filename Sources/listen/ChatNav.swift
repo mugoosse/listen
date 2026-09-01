@@ -195,6 +195,31 @@ final class ChatNav: NSViewController {
 
     func focusSearch() { view.window?.makeFirstResponder(searchField) }
 
+    /// Narrow the list to a query typed somewhere else.
+    ///
+    /// The library's own field hands its word over here when somebody clicks
+    /// the row saying how many conversations mention it. Sets the field as well
+    /// as the state, because a list narrowed by a term the reader cannot see is
+    /// a history with conversations missing from it.
+    func search(_ text: String) {
+        loadViewIfNeeded()
+        searchField.stringValue = text
+        query = text
+        reload()
+    }
+
+    /// How many conversations a word appears in.
+    ///
+    /// The library's list asks, so it can offer the way over. Here rather than
+    /// in the sidebar, because this is where the predicate lives and two
+    /// readings of "mentions" that could disagree is the thing `RecordingFilter`
+    /// exists to prevent.
+    static func mentions(_ query: String) -> Int {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return 0 }
+        return Chat.all().filter { matches($0, query: wanted) }.count
+    }
+
     @objc private func searchChanged() {
         query = searchField.stringValue
         reload()

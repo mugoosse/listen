@@ -8,6 +8,72 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.27.0 (2026-09-01)
+
+Listen could lose the other person's half of a call and tell you nothing about
+it. This release does not fix every cause of that, but it does mean you will
+know while it is happening instead of finding out from the transcript.
+
+### What was wrong
+
+The system audio track, the one that records everyone else, can stop receiving
+audio while the recording carries on. The file keeps growing, the duration is
+right, the microphone track is perfect, and the meter on screen draws a flat
+line that looks exactly like somebody listening quietly.
+
+Measured on three real meetings: one 38 minute call has audio from the other
+side for 12.6% of its length, with 21 whole minutes of pure silence, while both
+people were talking normally and neither could hear anything wrong.
+
+Listen never checked, and the reasoning for that was written down and looked
+sound: a silent system track is the ordinary state of a Mac playing nothing, so
+"the track is quiet" tells you nothing. What that missed is that a broken
+capture is silent in exactly the same way.
+
+### What changed
+
+Listen now tells the difference, by asking whether the silence is punched
+through audio that is otherwise arriving, which nothing in a working audio path
+ever produces. When it happens you get a sentence on the recording screen and
+on the floating panel, saying what is missing rather than showing you a meter
+to interpret:
+
+- "The other side is breaking up"
+- "No audio from the other side for 1:20, while you were talking"
+
+Listen also rebuilds the capture on its own when it sees either, and pads the
+gap so the two tracks stay lined up and nothing after it is attributed to the
+wrong person. If that happens the screen says so too, and says how many times.
+
+One related fix: the capture was tied to whichever output device was in use
+when the recording started, so putting headphones on mid-meeting moved the
+sound to a device Listen was no longer listening to. It follows the change now.
+
+### Checking recordings you already have
+
+    listen audio --check
+
+with no arguments looks at your recent recordings and says how much of the
+other side arrived, how much of it is damaged, and which silences are long
+enough to have cost you words. Add a recording id to check one. It exits
+non-zero when it finds something, so it can be scripted.
+
+This is worth running once on your back catalogue. It cannot repair anything:
+audio that was never captured is gone, and the only thing to do with an
+affected recording is know not to trust its transcript.
+
+### What this does not fix
+
+The underlying cause is not established. Every failure measured so far happened
+with Bluetooth headphones as the output, and a Bluetooth route does measurably
+tear where the built-in speakers do not, but the effect reproduced in testing
+is about a hundredth of the size of the real ones. Chrome's own audio pipeline
+is the largest untested difference between the two.
+
+So this release is a detector, a repair attempt and an honest report, not a
+guarantee. If you are recording something that matters and you have the choice,
+a wired output or the built-in speakers is still the safer setting.
+
 ## 0.26.0 (2026-08-31)
 
 Almost entirely about the anonymous statistics, and most of it is correcting

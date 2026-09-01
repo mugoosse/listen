@@ -728,9 +728,14 @@ final class SidebarViewController: NSViewController {
             hits.append(RecordingFilter.Hit(turn: nil, start: 0, speaker: "",
                                             range: range, text: note.title))
         }
-        for range in Find.ranges(of: wanted, in: note.body) {
+        // Flattened first and searched second, never the other way round:
+        // collapsing the markdown moves every offset after the first run, so
+        // ranges found in the original would mark the wrong words in the
+        // excerpt cut from the flattened copy. See `Excerpt.flattened`.
+        let body = Excerpt.flattened(note.body)
+        for range in Find.ranges(of: wanted, in: body) {
             hits.append(RecordingFilter.Hit(turn: 0, start: 0, speaker: "",
-                                            range: range, text: note.body))
+                                            range: range, text: body))
         }
         return hits.isEmpty ? nil : hits
     }
@@ -1315,6 +1320,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         // Day headings are not rows anybody can act on, so they do not light up.
         if case .header = rows[row] { return nil }
+        // Nor does the handoff row: it draws its own hover, in the ink of the
+        // link it is, and a card behind that would be two highlights for one
+        // target.
+        if case .chats = rows[row] { return nil }
         return HoverRowView()
     }
 
@@ -1339,6 +1348,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     /// card `HoverRowView` draws.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         if case .header = rows[row] { return 30 }
+        if case .chats = rows[row] { return ChatsRow.height }
         return match(at: row)?.excerpt == nil ? 52 : 86
     }
 
@@ -1395,19 +1405,11 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
                            match: rowMatches[recording.id])
             return cell
 
-        case .chats(let count, let query):
-            // A `SectionHeader`, not a `HoverRow`. `HoverRow` is a plain view
-            // with a target and an action, so it is invisible to accessibility
-            // and cannot be pressed through it, which is what makes every
-            // popover list row in this app untestable. This one is a verb with
-            // a consequence and has to be drivable and readable.
-            let header = SectionHeader(
-                title: count == 1
-                    ? "1 conversation mentions “\(query)”"
-                    : "\(count) conversations mention “\(query)”",
-                target: self, action: #selector(chatsRowClicked))
-            header.identifier = NSUserInterfaceItemIdentifier("chats-handoff")
-            return header
+        case .chats(let count, _):
+            let row = ChatsRow(count: count, target: self,
+                               action: #selector(chatsRowClicked))
+            row.identifier = NSUserInterfaceItemIdentifier("chats-handoff")
+            return row
 
         case .note(let note):
             // `NoteCell`, the same class the Notes collection drew, rather than
@@ -2073,6 +2075,79 @@ extension NSView {
 /// no screen reader can press them, which is a real gap and not just a testing
 /// one. There is no reason to add a third: the role, the title and the press
 /// are four lines.
+/// The way from a search to the conversations that mention the same word.
+///
+/// **Not a `SectionHeader`, which is what this was first.** That class is a
+/// heading with a lens behind it: 12pt semibold secondary type pinned to the
+/// bottom of its box, and an "Only these" hint that appears on hover. Used
+/// here it read as a section that had lost its rows, put a lens affordance on
+/// something that sets no lens, and its hint took enough of the width to
+/// truncate the sentence. Every one of those is right for a heading.
+///
+/// What this is instead is the shape a note's sources already use for
+/// navigation, recorded under "A note's sources are `SourceChip`s": accent
+/// text, no fill, a pointing hand. An `.inline` grey capsule reads as a tag and
+/// says nothing about going anywhere; an accent-filled one shouts louder than
+/// the results above it.
+///
+/// The wording names the count and not the term. "8 conversations mention
+/// "business"" is 34 characters and truncates in a 280 point sidebar, and the
+/// word is in the search field three rows above, on screen the whole time.
+@MainActor
+final class ChatsRow: NSView {
+    /// Tall enough to be a target and short enough not to read as a result.
+    static let height: CGFloat = 34
+
+    private let icon = NSImageView()
+    private let button = HoverButton(.ink)
+
+    init(count: Int, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        icon.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right",
+                             accessibilityDescription: nil)
+        icon.contentTintColor = Brand.accent
+        icon.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+
+        let title = count == 1 ? "Also in 1 conversation" : "Also in \(count) conversations"
+        button.title = title
+        button.font = .systemFont(ofSize: 12)
+        button.rest = Brand.accent
+        // Not a different hue on hover, which would read as a state change
+        // rather than as a target. `HoverButton` records the rule.
+        button.bright = Brand.accent.blended(withFraction: 0.35, of: .white) ?? Brand.accent
+        button.target = target
+        button.action = action
+        button.setAccessibilityLabel(title)
+
+        for v in [icon, button] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            // The icon column the rows above it use, so this lines up with
+            // their app icons rather than starting a column of its own.
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: RecordingCell.textInset),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            button.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                             constant: -RecordingCell.textInset),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The pointing hand the rest of this app's links have. `HoverButton` draws
+    /// the ink change; the cursor is what says it goes somewhere.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 @MainActor
 final class SectionHeader: NSView {
     static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)

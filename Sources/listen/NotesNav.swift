@@ -71,6 +71,16 @@ final class NoteCell: NSView {
     private let detail = NSTextField(labelWithString: "")
     /// The sentence that matched, on rows that are search results.
     private let excerpt = NSTextField(labelWithString: "")
+    /// How many times, when it is more than once.
+    private let count = NSTextField(labelWithString: "")
+    private var excerptTop: NSLayoutConstraint!
+    private var excerptHeight: NSLayoutConstraint!
+    /// What kind of row this is, in the column a recording's app icon uses.
+    ///
+    /// A glyph rather than an empty reserved column: the two kinds of row are
+    /// mixed under two headings in one list, and this is the thing that says
+    /// which is which without reading either.
+    private let icon = NSImageView()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -91,26 +101,94 @@ final class NoteCell: NSView {
         excerpt.cell?.truncatesLastVisibleLine = true
         excerpt.isHidden = true
 
-        let stack = NSStackView(views: [title, detail, excerpt])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 2
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        count.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        count.textColor = .tertiaryLabelColor
+        count.isHidden = true
+        count.setContentHuggingPriority(.required, for: .horizontal)
+        count.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        // **A layout guide, not the `NSStackView` this used to be.** A vertical
+        // stack sizes an arranged subview to what it asks for, and a label that
+        // elides asks for its whole string, so the two-line cap on the excerpt
+        // was laid out and then ignored: a four-line note body drew four lines
+        // in a row 86 points high and painted the last two over the row below.
+        // `RecordingCell` already carries this warning; this cell was written
+        // before it had a third line to be caught by it.
+        let block = NSLayoutGuide()
+        addLayoutGuide(block)
+
+        icon.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: nil)
+        icon.contentTintColor = .tertiaryLabelColor
+        icon.symbolConfiguration = .init(pointSize: 13, weight: .regular)
+
+        for v in [title, detail, excerpt, count, icon] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+
+        excerptTop = excerpt.topAnchor.constraint(equalTo: detail.bottomAnchor,
+                                                   constant: 3)
+        excerptHeight = excerpt.heightAnchor.constraint(equalToConstant: 0)
+        let centred = block.centerYAnchor.constraint(equalTo: centerYAnchor)
+        centred.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // **The same icon column a recording's row reserves.** The two
+            // kinds of row sit in one list under two headings, and a note's
+            // title used to start 24 points to the left of a recording's, so
+            // the list had a left edge that moved as you scrolled past a
+            // section boundary. `RecordingCell` states the rule and the numbers:
+            // the column is reserved whether or not there is anything to put in
+            // it, and the gap after it is shared rather than reinvented.
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: RecordingCell.textInset),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 16),
+            icon.centerYAnchor.constraint(equalTo: block.centerYAnchor),
+
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            title.trailingAnchor.constraint(equalTo: count.leadingAnchor, constant: -6),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            count.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+
+            excerptTop,
+            excerpt.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            excerpt.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+
+            block.topAnchor.constraint(equalTo: title.topAnchor),
+            block.bottomAnchor.constraint(equalTo: excerpt.bottomAnchor),
+            centred,
+            // The air inside the card, stated for `RecordingCell`'s reason: the
+            // centring stops holding the moment the content fills the height.
+            block.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 10),
+            block.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor,
+                                          constant: -10),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ note: Note, match: SidebarViewController.RowMatch? = nil) {
-        // A stack view hides a view's space along with it, unlike the pinned
-        // constraints `RecordingCell` uses, so this is the whole of it here.
-        excerpt.isHidden = match?.excerpt == nil
-        if let line = match?.excerpt { excerpt.attributedStringValue = line }
+        if let line = match?.excerpt {
+            excerpt.attributedStringValue = line
+            excerpt.isHidden = false
+            excerptTop.constant = 3
+            excerptHeight.isActive = false
+        } else {
+            excerpt.isHidden = true
+            excerpt.stringValue = ""
+            excerptTop.constant = 0
+            excerptHeight.constant = 0
+            excerptHeight.isActive = true
+        }
+        // Past one only, matching a recording's row: a "1" beside something
+        // that is in the list because it matched once states the obvious.
+        count.isHidden = (match?.count ?? 0) < 2
+        count.stringValue = "\(match?.count ?? 0)"
         let sources = Notes.sources(of: note)
         // Every one of the user's own notes is titled "Your notes", so a list of
         // them is a column of identical rows distinguished only by a truncated

@@ -20,6 +20,40 @@ enum Excerpt {
     /// context.
     private static let ellipsis = "…"
 
+    /// One line of prose out of a document that has structure.
+    ///
+    /// **A note body is markdown**: headings, bullets and blank lines. Cut a
+    /// window out of it raw and the newlines come with it, so a row that has
+    /// two lines to spend drew four and painted them over the row below. What
+    /// a result row wants is a sentence, not a fragment of a document.
+    ///
+    /// It has to happen **before** the search rather than after it, because
+    /// collapsing whitespace moves every offset after the first run: an excerpt
+    /// cut on ranges found in the original would mark the wrong words. So the
+    /// caller flattens once and searches what it flattened.
+    ///
+    /// The leading `#` and `-` go with it, for the same reason
+    /// `ReferencePopover.snippet` drops them: a bullet in the middle of a line
+    /// is punctuation nobody typed.
+    static func flattened(_ text: String) -> String {
+        var out = ""
+        var space = true          // so a leading run is dropped too
+        for character in text {
+            if character.isWhitespace || character.isNewline {
+                if !space { out.append(" "); space = true }
+                continue
+            }
+            // Only where a marker actually is one: at the head of a line, which
+            // after the rule above is the position right after a space.
+            if space, character == "#" || character == "-" || character == "*" {
+                continue
+            }
+            out.append(character)
+            space = false
+        }
+        return out.trimmingCharacters(in: .whitespaces)
+    }
+
     /// A window of `text` around `range`, elided on word boundaries, with the
     /// matched run marked.
     ///

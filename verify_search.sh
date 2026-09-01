@@ -68,6 +68,13 @@ done
 
 # A note whose body carries a word nothing else does, so the note row's excerpt
 # is the only thing that can produce it.
+#
+# **Its body is markdown with a bullet across a line break, on purpose.** A note
+# is written by an agent as a document: headings, blank lines and lists. Cut a
+# window out of that raw and the newlines came with it, so a row with two lines
+# to spend drew four and painted them over the row below. The assertion below
+# looks for the two sides of that break joined by a single space, which only
+# happens when `Excerpt.flattened` has run.
 cat > "$LISTEN_LIBRARY/notes/search-fixture.md" <<EOF
 ---
 title: "Search fixture"
@@ -78,9 +85,10 @@ source: cli
 
 # Search fixture
 
-A paragraph of ordinary words so the excerpt has something to cut around, and
-then the word $TERM_NOTE sitting in the middle of it, followed by more ordinary
-words so both ends of the window have somewhere to go.
+A paragraph of ordinary words so the excerpt has something to cut around.
+
+- Then the word $TERM_NOTE sits after a bullet, followed by more ordinary
+  words so both ends of the window have somewhere to go.
 EOF
 
 # And a conversation carrying another, for the handoff row.
@@ -176,13 +184,18 @@ echo "$dump" | grep -qi "Search fixture"
 check $? "the note row is in the list"
 echo "$dump" | grep -qi "$TERM_NOTE"
 check $? "and the row shows the sentence carrying \"$TERM_NOTE\""
+# The two sides of a line break and a bullet, joined by one space. Raw, this
+# reads "around.\n- Then the word", and the row drew four lines over its
+# neighbour. See `Excerpt.flattened`.
+echo "$dump" | grep -q "around. Then the word $TERM_NOTE"
+check $? "and the markdown is flattened into one line of prose"
 
 echo
 echo "4. conversations are offered, not listed"
 search "$TERM_CHAT"
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -qi "conversation.*mention"
-check $? "a handoff row says how many conversations mention it"
+echo "$dump" | grep -qi "Also in .* conversation"
+check $? "a handoff row offers the conversations that mention it"
 "$PROBE" press $APP "conversation" >/dev/null 2>&1
 sleep 2
 dump=$("$PROBE" texts $APP 2>&1)

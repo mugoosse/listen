@@ -2126,3 +2126,78 @@ three things make the third line affordable where pills were not: `heightOfRow`
 is already a per-row function, nothing in this app works out where a row is by
 multiplying, and it is three constants rather than N, so nothing has to measure
 any text to answer.
+
+## A note body is a document, and an excerpt of one has to be flattened first
+
+A recording's turn is a sentence somebody said. A note's body is markdown a
+model wrote: headings, blank lines and bullets. Cut a window out of that raw and
+the structure comes with it, so a row with two lines to spend drew four —
+`…for."*` / `- Part 6 is mostly business development` / `between Nick and John
+David about` / `…` — and painted the last two over the row below it.
+
+`Excerpt.flattened` collapses the whitespace and drops a leading `#`, `-` or `*`
+where it is actually a marker, which after the collapse is the position right
+after a space. `ReferencePopover.snippet` already did the whitespace half for a
+note's preview, and this is that rule where a query is involved.
+
+**It has to happen before the search, not after it.** Collapsing whitespace
+moves every offset after the first run, so ranges found in the original mark the
+wrong words in a window cut from the flattened copy. `SidebarViewController.matches`
+therefore flattens once and searches what it flattened, and carries that string
+in the `Hit`, so the excerpt and the range can never be about two different
+texts.
+
+## A vertical stack view sized the excerpt to its whole string
+
+`RecordingCell` uses a layout guide and says why in a comment: *a vertical
+`NSStackView` sizes an arranged subview to what it asks for, and a label that
+elides asks for its whole string.* `NoteCell` was a stack view, written before it
+had a third line for that to matter, and the two-line cap on its excerpt was
+duly laid out and then ignored — four lines in a row 86 points high, over the
+top of its neighbour.
+
+It is the same layout guide now, and the same padding inequalities. Worth
+knowing generally: **a two-line cap on a label inside a vertical stack is not a
+two-line label.** The cap has to be paired with a definite height or a
+non-stacking parent, or with nothing between it and a fixed row height.
+
+## The list has one icon column, and notes were 24 points inside it
+
+`RecordingCell` reserves the icon column whether or not there is an app icon to
+put in it, because *indenting only the rows that have one gives the list a
+ragged left edge that moves as you scroll*. `NoteCell` never reserved it, which
+did not show while notes were a collection of their own and did show the moment
+both kinds carried a three-line card in one scrolling list: the left edge jumped
+24 points at the section boundary.
+
+Notes take the same column, with a `note.text` glyph in it rather than an empty
+square. The empty square is right for a recording, where the column's job is
+alignment and the icon is a bonus; here the glyph is doing a second job, which
+is saying which of two kinds of row this is without reading either.
+
+## The handoff row was a section heading, and every part of that was wrong
+
+`SectionHeader` was reused for the row that offers the conversations, because it
+was the one row class in this sidebar that answers to accessibility. Everything
+else about it was wrong, and all three faults were visible in one screenshot:
+
+- Its label is **pinned to the bottom** of its box in 12pt semibold secondary
+  type, so a 34-point row read as a section that had lost its rows.
+- It carries an **"Only these" hint** on hover, which is the lens affordance a
+  kind heading needs. This row sets no lens, so it offered a control that does
+  not exist.
+- The hint takes enough of the width that the sentence **elided**:
+  `8 conversations mention “b  Only these`.
+
+`ChatsRow` is its own view, in the shape this app already uses for navigation —
+the one recorded under "A note's sources are `SourceChip`s": accent text, no
+fill, a pointing hand. It is a `HoverButton`, which is an `NSButton` and so
+answers to accessibility for free, which was the only good reason to have
+borrowed `SectionHeader` in the first place.
+
+**The wording names the count and not the term.** "8 conversations mention
+"business"" is 34 characters and does not fit a 280 point sidebar beside an
+icon; "Also in 8 conversations" does, and the word is in the search field a few
+rows above, on screen the whole time. `rowViewForRow` returns nil for it as it
+does for a heading, because the row draws its own hover in the ink of the link
+it is and a card behind that would be two highlights for one target.

@@ -76,6 +76,43 @@ The corollary is the one that surprises: a developer's own
 `/Applications/Listen.app` **is** a release build, so their daily driver is in
 the data like anybody else's, and is usually the loudest install in it.
 
+## A per-application firewall makes this blind, and a `curl` test will not find it
+
+One install sent its `installation_activated` and then nothing at all for
+three days, while the person using it was dictating daily. Every app-side gate
+was healthy: consent had never been toggled (the install ID was unchanged, and
+turning telemetry off deletes it), the SDK was started, the build was a
+released one. The events were being captured and not delivered.
+
+The cause was a Little Snitch rule on `posthog.com` for Listen.
+
+**The diagnostic that wasted the time was `curl` against the host.** It
+returned 400 from the affected Mac, exactly matching a healthy control, and
+400 is the right answer there because that endpoint wants a POST. But Little
+Snitch rules are **per application**: curl is not Listen, so it has its own
+rule and sailed through. A host-reachability test from a different process
+says nothing about whether the app is allowed out. Ask for the firewall's view
+of *the app*, or have somebody read `listen telemetry` on the machine; do not
+ask for a curl.
+
+Two consequences worth keeping.
+
+**Every count in this project is a floor, and the shortfall is not random.**
+The people who block an analytics host are exactly the people a local-first
+meeting recorder attracts, so the missing population is correlated with the
+audience. "Nobody outside these installs has ever dictated" was true of the
+data and false about the world.
+
+**This is not a bug to fix.** `InternetAccessPolicy.plist` declares the host
+to firewalls precisely so somebody can make this choice, and says blocking it
+costs nothing but the statistics. That promise has to keep being true, so
+nothing here may retry around a block, fall back to another host, or report
+the refusal as an error. Being invisible is the feature working.
+
+The one thing that is worth improving is that the app cannot tell its owner
+delivery is failing. `listen telemetry` says whether telemetry is *on*, not
+whether anything has ever arrived, and those are different questions.
+
 ## `app_build` is VERSION at build time, so a pre-release build pollutes it
 
 83 events arrived stamped `0.21.0`, a version telemetry never shipped in: the

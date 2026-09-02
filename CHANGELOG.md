@@ -8,6 +8,45 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.30.0 (2026-09-02)
+
+The note and the transcript are tabs on a recording's page rather than two
+sections stacked one above the other.
+
+### What changed
+
+- **Recording** and **Notes** sit under the speaker chips, Recording first. The
+  tab you are on survives clicking down the list, so reading the notes across a
+  run of meetings is one click per meeting rather than two. A recording being
+  made always lands on Recording when you stop it, because pressing Stop is a
+  request to see what was said.
+- The note is as tall as the window. It used to be a box between 30 and 154
+  points, sized to its own text: 154 was six lines, measured against the longest
+  note in the development library, and anything past that scrolled inside a box
+  smaller than the screen with an empty transcript pane underneath it.
+- The transcript starts at the top of the reading area instead of a third of the
+  way down it. The heading, the note, the note's date and the "Also about this"
+  line all sat between the player and the first paragraph, on every meeting,
+  including the ones nobody had written a word about.
+- The **Notes** tab carries a count of the notes that have anything in them, so
+  a meeting that has been written up does not look like one that has not. An
+  empty note is not counted: every recording is offered one whether or not it
+  exists yet, so counting those would put the same number on everything.
+- A note's tags moved to the tab row, at the right, one row under the
+  recording's own tags. They were always two different filings and now they look
+  it.
+
+### What it costs
+
+You can no longer read a note and the transcript at the same time, and playback
+stops when you switch to Notes. The transport belongs to the transcript, and a
+player that is not on screen is one you cannot pause. That is the trade for a
+note with the whole window and a transcript that starts at the top.
+
+Nothing about how notes are stored changed. They are the same markdown files in
+the same folder, and the CLI, the MCP server and an agent read and write them
+exactly as before.
+
 ## 0.29.0 (2026-09-02)
 
 A WhatsApp call taken on the MacBook's own microphone recorded the other side

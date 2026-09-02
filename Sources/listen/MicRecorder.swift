@@ -31,6 +31,16 @@ final class MicRecorder {
     /// usually reacting to.
     private var scratch: AVAudioPCMBuffer?
     private var converter: AVAudioConverter?
+
+    /// One channel at the hardware rate, filled from `scratch` by
+    /// `AudioDevices.mixToMono` before the converter sees anything. The
+    /// converter only ever resamples now; see `buildEngine`.
+    private var mono: AVAudioPCMBuffer?
+
+    /// Applied in the mix-down. One for every device but the built-in
+    /// microphone's raw array, which arrives some 22 dB below its processed
+    /// stream. See `AudioDevices.rawArrayGain`.
+    private var gain: Float = 1
     private var writer: WAVWriter?
     private let lock = NSLock()
 
@@ -97,12 +107,61 @@ final class MicRecorder {
     /// that was never the problem.
     private(set) var deviceIsBuiltIn = false
 
+    /// Why the device could not be opened, or nil while a unit is running.
+    ///
+    /// Set when `buildEngine` throws, at the first attempt or any later one,
+    /// and cleared by the attempt that succeeds. It exists because the track is
+    /// not abandoned on that throw any more: the watchdog keeps trying, and the
+    /// person on the call is told, which is the part that was missing. On
+    /// 2026-09-02 the first attempt threw four milliseconds in, `start` rethrew,
+    /// nothing ever tried again, and the screen said "Recording from MacBook
+    /// Pro Microphone" over a 44-byte file for 22 minutes.
+    private(set) var openFailure: String?
+
+    /// Whether a capture unit is actually running. `isRecording` says the track
+    /// is open and being retried; this says samples can arrive.
+    var isCapturing: Bool { unit != nil }
+
+    /// How often a device that would not open is tried again. Longer than
+    /// `stallGrace`: a device in this state was changed under another app and
+    /// comes back on that app's schedule, and every attempt costs a unit and
+    /// forty lines of Core Audio log.
+    private let reopenGrace: TimeInterval = 5
+
+    /// The last time a failed open was written to the log, so a device that
+    /// refuses for an hour is reported every half minute rather than every
+    /// attempt.
+    private var lastFailureLog = Date.distantPast
+
+    /// `LISTEN_MIC_FAIL_OPEN=<seconds>` refuses every microphone for that long
+    /// after `start`, so the retry, the padding and the warning can be
+    /// exercised without a device that happens to be broken. Same family as
+    /// `LISTEN_TAP_TEAR`.
+    private static let simulatedFailure: TimeInterval? = ProcessInfo.processInfo
+        .environment["LISTEN_MIC_FAIL_OPEN"].flatMap(Double.init)
+
     /// Devices this recording has already watched deliver nothing.
     ///
     /// Grows, never shrinks, which is what bounds the switching: every failure
     /// takes one device out of `candidates`, so a machine where nothing works
     /// tries each input once and then stops rather than cycling for an hour.
     private var exhausted: Set<String> = []
+
+    /// Devices that refused to open during this recording.
+    ///
+    /// Separate from `exhausted`, because the two cost different things to
+    /// ask again. A device that went silent was recording, and moving off it
+    /// and back is a gap each time, so `exhausted` never shrinks. A device that
+    /// would not open was recording nothing, so asking it again every
+    /// `reopenGrace` costs a unit and nothing else. This set is cleared whenever
+    /// the chooser runs dry and on every open that succeeds, so the attempts
+    /// go round the usable candidates in turn and a microphone that comes back
+    /// is picked up within a few of them. Measured on `verify_capture.sh` with
+    /// the lid shut: filing refusals under `exhausted` instead sent the fourth
+    /// attempt through `resolvedMicrophone` to the built-in microphone, which
+    /// the chooser had refused for the lid, and it recorded sixteen seconds of
+    /// bit-exact zero with two working USB microphones on the desk.
+    private var refused: Set<String> = []
 
     /// Captured frames since the last sample above `signalFloor`. Written on the
     /// audio thread under `lock`, read by the watchdog on `control`.
@@ -212,6 +271,7 @@ final class MicRecorder {
             // Per recording, not per launch. A microphone that was unplugged
             // during this morning's call has to be allowed back this afternoon.
             exhausted = []
+            refused = []
             isSilent = false
             deviceName = nil
             deviceNote = nil
@@ -222,16 +282,31 @@ final class MicRecorder {
             lastGrowth = now
             lastFrames = 0
             lastRestartAttempt = .distantPast
+            openFailure = nil
+            lastFailureLog = .distantPast
 
             writer = try WAVWriter(url: url)
             do {
                 try buildEngine()
-            } catch {
+            } catch CaptureError.noInputDevice {
+                // Nothing to try again with. This is the one failure that is
+                // still fatal here: no device means no candidate for the
+                // watchdog to move to, and a track that can only ever be
+                // padding is not worth a file.
                 writer?.close()
                 writer = nil
                 self.url = nil
                 startedAt = nil
-                throw error
+                throw CaptureError.noInputDevice
+            } catch {
+                // Not rethrown. A device that would not open at the first
+                // attempt used to end the track for the whole meeting: no
+                // retry, no padding, and nothing on screen, because the
+                // watchdog only ever ran for a track that had started. Now the
+                // track starts anyway, the failure is reported, and
+                // `checkForStall` keeps trying, onto another candidate if there
+                // is one. See `noteOpenFailure`.
+                noteOpenFailure(error)
             }
             isRecording = true
             startWatchdog()
@@ -246,6 +321,10 @@ final class MicRecorder {
             watchdog = nil
             teardownEngine()
             lock.lock()
+            // The tail is filled like any other gap, so a track whose device
+            // never opened, or was still being retried, ends at the same
+            // instant as the system track rather than at its last sample.
+            padToWallClock()
             writer?.close()
             writer = nil
             lock.unlock()
@@ -302,18 +381,37 @@ final class MicRecorder {
         // when every input has been tried and none delivers anything, a file of
         // silence with `isSilent` set and the UI saying so beats no file, and
         // `checkForSilence` stops switching once `candidates` is empty.
-        guard let choice = Settings.chooseMicrophone(excluding: exhausted)
+        // Refusals are skipped until every candidate has refused once, then
+        // forgotten, so the attempts rotate rather than stall on the first
+        // device or, worse, fall through to a device the chooser refused.
+        var chosen = Settings.chooseMicrophone(excluding: exhausted.union(refused))
+        if chosen == nil, !refused.isEmpty {
+            refused = []
+            chosen = Settings.chooseMicrophone(excluding: exhausted)
+        }
+        guard let choice = chosen
                 ?? Settings.resolvedMicrophone.map({ MicChoice(device: $0, rejected: nil) })
         else { throw CaptureError.noInputDevice }
         let device = choice.device
         deviceName = device.name
-        deviceNote = choice.rejected
+        // A failed open outranks the chooser's reason for landing on another
+        // device: after the built-in microphone refused, "MacBook Pro
+        // Microphone is not picking anything up. Recording from OBSBOT" is the
+        // wrong story and "could not be opened" is the right one. Landing back
+        // on the same device is a recovery, and a recovery has nothing to say.
+        deviceNote = (openFailure != nil && device.uid != currentUID)
+            ? openFailure : choice.rejected
         currentUID = device.uid
         deviceIsBuiltIn = AudioDevices.isBuiltIn(device)
         heardSinceOpen = false
         lock.lock()
         silentFrames = 0
         lock.unlock()
+
+        if let failFor = MicRecorder.simulatedFailure, let startedAt,
+           Date().timeIntervalSince(startedAt) < failFor {
+            throw CaptureError.micOpenRefused
+        }
 
         var desc = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
@@ -357,17 +455,25 @@ final class MicRecorder {
         guard AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
                                    kAudioUnitScope_Input, 1, &hardware, &size) == noErr
         else { throw CaptureError.badFormat(0, 0) }
-        guard hardware.mSampleRate > 0, hardware.mChannelsPerFrame > 0,
-              let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                           sampleRate: hardware.mSampleRate,
-                                           channels: hardware.mChannelsPerFrame,
-                                           interleaved: false)
+        // Every channel the device has, whatever the count. This used to be the
+        // plain `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)`,
+        // which is nil above two channels, and the built-in microphone has three
+        // for as long as any voice-processing client (a WhatsApp call, say) is
+        // on it. That nil threw here four milliseconds into a 22 minute call,
+        // and the user's side of it was never recorded. See
+        // `AudioDevices.renderFormat`.
+        guard let inFormat = AudioDevices.renderFormat(sampleRate: hardware.mSampleRate,
+                                                       channels: hardware.mChannelsPerFrame),
+              let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: hardware.mSampleRate,
+                                             channels: 1, interleaved: false)
         else { throw CaptureError.badFormat(hardware.mSampleRate, hardware.mChannelsPerFrame) }
 
-        // Ask for the format the converter is built from rather than describing
-        // the same thing twice. The down-mix to mono stays with
-        // `AVAudioConverter`, which is where it was when this was last known
-        // good.
+        // Ask for the format `scratch` is built from rather than describing the
+        // same thing twice. The channel count is the device's own: asking the
+        // unit for one channel instead renders without a single error and
+        // delivers speech 30 dB down, which is measured in
+        // `AudioDevices.mixToMono`.
         var client = inFormat.streamDescription.pointee
         guard AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
                                    kAudioUnitScope_Output, 1, &client,
@@ -379,13 +485,23 @@ final class MicRecorder {
                              kAudioUnitScope_Global, 0, &maxFrames,
                              UInt32(MemoryLayout<UInt32>.size))
 
+        // The converter is mono to mono and only ever changes the rate. The
+        // down-mix happens by hand in `capture`, because `AVAudioConverter`
+        // never did one: on two channels it took channel 0, and on a discrete
+        // three-channel layout it initialises and writes zeros.
         guard let buffer = AVAudioPCMBuffer(pcmFormat: inFormat,
                                             frameCapacity: MicRecorder.maxFrames),
-              let conv = AVAudioConverter(from: inFormat, to: target)
+              let mixed = AVAudioPCMBuffer(pcmFormat: monoFormat,
+                                           frameCapacity: MicRecorder.maxFrames),
+              let conv = AVAudioConverter(from: monoFormat, to: target)
         else { throw CaptureError.badFormat(hardware.mSampleRate, hardware.mChannelsPerFrame) }
         scratch = buffer
+        mono = mixed
         converter = conv
-        trace("mic format \(Int(hardware.mSampleRate)) Hz, \(hardware.mChannelsPerFrame) ch")
+        gain = AudioDevices.isRawArray(device, channels: hardware.mChannelsPerFrame)
+            ? AudioDevices.rawArrayGain : 1
+        trace("mic format \(Int(hardware.mSampleRate)) Hz, \(hardware.mChannelsPerFrame) ch"
+              + (gain == 1 ? "" : ", raw array, +\(Int(20 * log10(gain))) dB"))
 
         var callback = AURenderCallbackStruct(
             inputProc: MicRecorder.render,
@@ -413,6 +529,7 @@ final class MicRecorder {
             AudioUnitUninitialize(unit)
             converter = nil
             scratch = nil
+            mono = nil
             throw CaptureError.deviceStartFailed(started)
         }
         keep = true
@@ -452,6 +569,7 @@ final class MicRecorder {
         unit = nil
         converter = nil
         scratch = nil
+        mono = nil
     }
 
     /// The audio thread. Renders one slice, converts it and appends it.
@@ -468,7 +586,7 @@ final class MicRecorder {
                          _ timestamp: UnsafePointer<AudioTimeStamp>,
                          _ bus: UInt32,
                          _ frames: UInt32) -> OSStatus {
-        guard let unit, let scratch, let conv = converter else { return noErr }
+        guard let unit, let scratch, let mono, let conv = converter else { return noErr }
         guard frames <= scratch.frameCapacity else { return noErr }
 
         // `frameLength` first, and nothing written into the buffer list by hand.
@@ -485,7 +603,12 @@ final class MicRecorder {
                                      scratch.mutableAudioBufferList)
         guard status == noErr else { return status }
 
-        let ratio = SAMPLE_RATE / scratch.format.sampleRate
+        // Every channel into one, by hand, before the converter. See
+        // `AudioDevices.mixToMono` for the two ways a library would do it that
+        // both produce a well-formed file of nothing.
+        AudioDevices.mixToMono(scratch, into: mono, gain: gain)
+
+        let ratio = SAMPLE_RATE / mono.format.sampleRate
         let capacity = AVAudioFrameCount(Double(frames) * ratio) + 1024
         guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity)
         else { return noErr }
@@ -496,7 +619,7 @@ final class MicRecorder {
             if supplied { status.pointee = .noDataNow; return nil }
             supplied = true
             status.pointee = .haveData
-            return scratch
+            return mono
         }
         guard err == nil, out.frameLength > 0, let ch = out.floatChannelData?[0]
         else { return noErr }
@@ -664,6 +787,14 @@ final class MicRecorder {
             return
         }
         guard idle >= stallGrace else { return }
+        // A device that would not open is tried again on a slower clock than a
+        // device that stopped, and under its own name: "no audio for 40s" is
+        // true of it and explains nothing.
+        if unit == nil {
+            guard Date().timeIntervalSince(lastRestartAttempt) >= reopenGrace else { return }
+            restart(reason: "trying the microphone again")
+            return
+        }
         restart(reason: "no audio for "
                 + String(format: "%.1f", Date().timeIntervalSince(lastGrowth)) + "s")
     }
@@ -743,6 +874,7 @@ final class MicRecorder {
         control.async { [weak self] in
             guard let self, self.isRecording else { return }
             self.exhausted = []
+            self.refused = []
             self.lastRestartAttempt = .distantPast
             self.restart(reason: "microphone changed by hand")
         }
@@ -758,6 +890,8 @@ final class MicRecorder {
         teardownEngine()
         do {
             try buildEngine()
+            openFailure = nil
+            refused = []
             restarts += 1
             lastGrowth = Date()
             lock.lock()
@@ -770,9 +904,36 @@ final class MicRecorder {
                 + "\(deviceName ?? "the default input") (\(restarts) restart"
                 + (restarts == 1 ? "" : "s") + " so far)")
         } catch {
-            log("microphone: \(reason); could not restart "
-                + "(\(error.localizedDescription)), still trying")
+            noteOpenFailure(error, after: reason)
         }
+    }
+
+    /// The device would not open. Remember why, stop asking this device, tell
+    /// the screen, and leave the track running for the watchdog to try again.
+    ///
+    /// The device goes into `refused`, not `exhausted`: the next attempt moves
+    /// to another candidate, and it is asked again once the others have had
+    /// their turn. `adoptChosenDevice` clears both, so a person picking it by
+    /// hand is still obeyed. Reported through `isSilent` rather than a flag of its own,
+    /// because everything that shows a silent microphone (the strip, the panel,
+    /// the menu bar, the orange picker) is exactly what should show this, and
+    /// `checkForSilence` clears it the only way it clears anything: by hearing
+    /// something.
+    private func noteOpenFailure(_ error: Error, after reason: String? = nil) {
+        let name = deviceName ?? "The microphone"
+        openFailure = "\(name) could not be opened (\(error.localizedDescription))"
+        if let uid = currentUID { refused.insert(uid) }
+        if !isSilent {
+            isSilent = true
+            onSilenceChange?(true)
+        }
+        // Every half minute, not every attempt: `checkForStall` retries every
+        // `reopenGrace` for as long as the meeting lasts.
+        guard Date().timeIntervalSince(lastFailureLog) >= 30 else { return }
+        lastFailureLog = Date()
+        log("microphone: " + (reason.map { "\($0); " } ?? "")
+            + "\(openFailure ?? "could not open"); trying again every "
+            + "\(Int(reopenGrace)) s")
     }
 
     /// Fill the outage with silence so the rest of the meeting stays lined up.

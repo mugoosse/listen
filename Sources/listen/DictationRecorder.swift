@@ -36,6 +36,12 @@ final class DictationRecorder {
     private var unit: AudioUnit?
     private var converter: AVAudioConverter?
     private var scratch: AVAudioPCMBuffer?
+    /// One channel at the hardware rate, mixed from `scratch` before the
+    /// converter, which only ever resamples. See `MicRecorder`.
+    private var mono: AVAudioPCMBuffer?
+    /// One for every device but the built-in microphone's raw array. See
+    /// `AudioDevices.rawArrayGain`.
+    private var gain: Float = 1
     private var samples: [Float] = []
     private let lock = NSLock()
     private(set) var isRecording = false
@@ -212,19 +218,24 @@ final class DictationRecorder {
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         guard AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat,
                                    kAudioUnitScope_Input, 1, &hardware, &size) == noErr,
-              hardware.mSampleRate > 0, hardware.mChannelsPerFrame > 0,
-              let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                           sampleRate: hardware.mSampleRate,
-                                           channels: hardware.mChannelsPerFrame,
-                                           interleaved: false)
+              // Whatever channel count the device has. The plain initialiser is
+              // nil above two, and the built-in microphone has three for as long
+              // as a voice-processing client is on it, which is any WhatsApp or
+              // FaceTime call. See `AudioDevices.renderFormat`.
+              let inFormat = AudioDevices.renderFormat(sampleRate: hardware.mSampleRate,
+                                                       channels: hardware.mChannelsPerFrame),
+              let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: hardware.mSampleRate,
+                                             channels: 1, interleaved: false)
         else {
             AudioComponentInstanceDispose(unit)
             throw DictationRecorderError.badFormat
         }
 
-        // Ask for the format the converter is built from, rather than taking
-        // the hardware's and describing it twice. Channel count is left alone
-        // and the down-mix to mono stays with `AVAudioConverter`.
+        // Ask for the format `scratch` is built from, rather than taking the
+        // hardware's and describing it twice. The channel count is the
+        // device's own, and the down-mix to mono is done by hand in `capture`:
+        // `AVAudioConverter` never did one. See `AudioDevices.mixToMono`.
         var client = inFormat.streamDescription.pointee
         guard AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
                                    kAudioUnitScope_Output, 1, &client,
@@ -239,9 +250,10 @@ final class DictationRecorder {
                              kAudioUnitScope_Global, 0, &maxFrames,
                              UInt32(MemoryLayout<UInt32>.size))
 
-        converter = AVAudioConverter(from: inFormat, to: target)
+        converter = AVAudioConverter(from: monoFormat, to: target)
         scratch = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: DictationRecorder.maxFrames)
-        guard converter != nil, scratch != nil else {
+        mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: DictationRecorder.maxFrames)
+        guard converter != nil, scratch != nil, mono != nil else {
             AudioComponentInstanceDispose(unit)
             throw DictationRecorderError.badFormat
         }
@@ -259,8 +271,11 @@ final class DictationRecorder {
             throw DictationRecorderError.cannotStart(initialised)
         }
 
+        gain = AudioDevices.isRawArray(device, channels: hardware.mChannelsPerFrame)
+            ? AudioDevices.rawArrayGain : 1
         trace("dictating from \(device.name) at \(Int(hardware.mSampleRate)) Hz, "
-              + "\(hardware.mChannelsPerFrame) ch")
+              + "\(hardware.mChannelsPerFrame) ch"
+              + (gain == 1 ? "" : ", raw array, +\(Int(20 * log10(gain))) dB"))
         return unit
     }
 
@@ -277,7 +292,7 @@ final class DictationRecorder {
                          _ timestamp: UnsafePointer<AudioTimeStamp>,
                          _ bus: UInt32,
                          _ frames: UInt32) -> OSStatus {
-        guard let unit, let scratch, let conv = converter else { return noErr }
+        guard let unit, let scratch, let mono, let conv = converter else { return noErr }
         guard frames <= scratch.frameCapacity else { return noErr }
 
         // `frameLength` first, and nothing written into the buffer list by hand.
@@ -297,7 +312,9 @@ final class DictationRecorder {
             return status
         }
 
-        let ratio = SAMPLE_RATE / scratch.format.sampleRate
+        AudioDevices.mixToMono(scratch, into: mono, gain: gain)
+
+        let ratio = SAMPLE_RATE / mono.format.sampleRate
         let capacity = AVAudioFrameCount(Double(frames) * ratio) + 1024
         guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity)
         else { traceAudio("no output buffer"); return noErr }
@@ -308,7 +325,7 @@ final class DictationRecorder {
             if supplied { status.pointee = .noDataNow; return nil }
             supplied = true
             status.pointee = .haveData
-            return scratch
+            return mono
         }
         guard err == nil, out.frameLength > 0, let ch = out.floatChannelData?[0]
         else {
@@ -399,5 +416,6 @@ final class DictationRecorder {
         unit = nil
         converter = nil
         scratch = nil
+        mono = nil
     }
 }

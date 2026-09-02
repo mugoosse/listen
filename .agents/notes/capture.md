@@ -794,3 +794,157 @@ Both labels are `AXStaticText` and come back in a `texts` dump, so unlike
 to it going unchecked. `tools/axprobe.swift press <pid> record` starts the
 recording; the toolbar's Record button answers to `AXPress`, unlike the
 pull-downs the index warns about.
+
+## A call on the built-in microphone turns it into three channels, and two was the most the recorder could take
+
+The failure that cost the user's side of a 22 minute WhatsApp call on
+2026-09-02, on 0.27.0. `system.wav` was 1331 s and healthy. `mic.wav` was
+**44 bytes**: a WAV header and not one sample, not even the silence a restart
+pads with. The "You" strip never moved, the transcript was filed as Speaker A
+at 99%, and the line under the strips said `Recording from MacBook Pro
+Microphone` for the whole call.
+
+Core Audio's own trace of the moment is the whole story in four milliseconds
+(`/usr/bin/log show --predicate 'process == "Listen" AND category == "AUHAL"'`;
+`log` on its own is a zsh builtin that prints nothing, which cost two queries):
+
+    12:30:26.859 AUHAL: Selecting device 77 from constructor
+    12:30:26.859 SetProperty: caller requesting device change from 77 to 84
+    12:30:26.863 UpdateStreamFormats: input stream 0: 3 ch, 48000 Hz, Float32, interleaved
+    12:30:26.863 ~AUHAL: Selecting device 0 from destructor
+
+Twelve other opens of the same device that day (dictations, and one after the
+call) read `1 ch, 48000 Hz`. This one read three, and the unit was disposed
+before `AudioUnitInitialize`, which is `buildEngine`'s `defer` running behind a
+throw. The throw was `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)`,
+which returns **nil for three channels or more**; so does
+`AVAudioFormat(streamDescription:)`. Neither had ever been handed more than two.
+
+**Why three.** Two and a half seconds earlier `coreaudiod` logged `Changing
+client description of BuiltInMicrophoneDevice: Kind: 1, Mode: 1`, a config
+change, and `IOWorkLoopInit: BuiltInMicrophoneDevice (VPAUAggregateAudioDevice-…)`
+for WhatsApp's pid: the call's voice-processing session taking the microphone.
+Reproduced with `tools/vpio.swift`, which does nothing but hold a
+`kAudioUnitSubType_VoiceProcessingIO` unit open on the default devices: the
+built-in microphone reads 1 ch before, **3 ch for as long as the unit runs**,
+and 1 ch again half a second after it stops. The three are the raw microphone
+array (correlated 0.94 to 0.97 with channel 0) in place of the processed mono
+stream, and every client sees them, not only the one that asked. That is any
+WhatsApp or FaceTime call taken on the built-in microphone. Sunday's two
+WhatsApp calls have mic tracks at processed levels (-7.8 and +2.8 dBFS peak),
+so they were not on it, which is also what "the microphone you chose is not
+connected" on the status line meant: the saved device was whatever they used.
+
+### Two libraries turn three channels into a well-formed file of nothing
+
+Three ways to take three channels down to one were measured before one was
+chosen, with the same spoken phrase through the built-in speakers:
+
+| approach | outcome |
+|---|---|
+| `AVAudioConverter` from a discrete 3-ch layout to mono | initialises, reports `.haveData`, writes **zeros** |
+| a 1-ch client format on the HAL unit, its own channel map | renders at full rate with no errors, phrase at **-68 dBFS** peak |
+| render the device's own 3 ch, average by hand | phrase at -39 dBFS peak on the raw channels |
+
+The first two are the dangerous kind: a file of the right length with nothing
+in it, and nothing anywhere that says so. `AudioDevices.renderFormat` builds a
+format for any channel count (discrete-in-order above two),
+`AudioDevices.mixToMono` averages the channels, and the converter is mono to
+mono and only ever resamples. `DictationRecorder` had the same line and got the
+same change. Both functions are checked on synthetic planar and interleaved
+buffers of one to four channels, and the app under `vpio` traces `mic format
+48000 Hz, 3 ch` and carries the same RMS as a raw reader on the same
+microphone at the same moment (-78.2 against -77.9 dBFS).
+
+**The two-channel path was never a down-mix either.** Fed 0.1 left and 0.2
+right, `AVAudioConverter` produced 0.1: channel 0, with channel 1 dropped, under
+a comment saying the down-mix "stays with `AVAudioConverter`". It averages now,
+which is what the sentence always meant, and is the difference between a
+stereo interface with the microphone on input 2 recording something and
+recording nothing. The OBSBOT Tiny2 on this desk delivers bit-exact zero on
+both channels, so the silence switch moves off it in three seconds as before;
+that is the device, not the mix.
+
+**The raw array is 22 dB quieter, so it is gained.** Same phrase, `vpio
+--no-duck` (a voice-processing client ducks everything else by 30 dB, which is
+what a call does and what made the first comparison meaningless), three runs
+each, measured against the far-end track as the reference for how loud the
+phrase was: the microphone track sat 25.6 dB under it in the processed state
+and 47.7 dB under it in the raw state (medians, by peak; 21 dB by RMS; a
+further pair gave 21 and 29 dB). Through the "you" meter that is 0.692 against
+0.000: every phrase would have drawn a flat strip over a recording that was
+actually being made. `AudioDevices.rawArrayGain` is +24 dB, applied only to the
+built-in microphone with more than one channel (`isRawArray`), clamped at full
+scale. Verified on the rebuilt app: the same phrase through `vpio --no-duck`
+traces `mic format 48000 Hz, 3 ch, raw array, +24 dB` and reads 0.413 and 0.187
+on the meter with peaks of -31 and -43 dBFS, against 0.481 and -31 dBFS in the
+processed state with the phrase 8 dB louder. It is not the DSP's processing
+back, only its gain, and a shout will clip rather than compress. What is deliberately not done: opening a
+voice-processing unit of Listen's own, which would give the processed stream and
+echo cancellation with it, but is a second call-profile switch on any headset
+and an unmeasured change to every recording that is not a call.
+
+### A failure at the first attempt had no second attempt, and the screen said "Recording from"
+
+Every recovery mechanism in `MicRecorder`, the property listeners, the stall
+watchdog, the silence switch and `adoptChosenDevice`, is gated on
+`isRecording`, and `start` rethrew a `buildEngine` failure with `isRecording`
+still false. So a device that refused at 0.004 s was never asked again; picking
+a microphone by hand mid-call did nothing (`adoptChosenDevice` returned on its
+guard, which is why "I chose it in Listen too" changed nothing); `Capture.stop`
+wrote no `mic_silent`, which also needs `isRecording`; and a detected meeting
+only logs the error, to a stderr that is `/dev/null` for a GUI launch. The
+screen was worse than silent: `deviceName` and `deviceNote` are set at the top
+of `buildEngine` before anything can fail, and `micNotice` read them straight
+back as `Recording from MacBook Pro Microphone`.
+
+`start` now keeps the track open on any failure but `noInputDevice`, and
+`noteOpenFailure` does four things: remembers why in `openFailure`; puts the
+device in `refused`, so the next attempt moves to another candidate; sets
+`isSilent`, so every surface that shows a dead microphone shows this one; and
+logs once per half minute. `checkForStall` retries every `reopenGrace` (5 s,
+slower than a stall, because a device in this state changed under another app
+and comes back on that app's schedule, and each attempt is a unit and forty
+lines of Core Audio log).
+
+**`refused` is not `exhausted`, and the first draft filed it there.** A silent
+device was recording, so leaving it costs a gap and `exhausted` never shrinks;
+a device that would not open was recording nothing, so asking again is free.
+`refused` is cleared when the chooser runs dry and on every open that succeeds,
+so the attempts go round the usable candidates in turn. Measured with the lid
+shut and two USB microphones on the desk, with the refusal simulated for every
+device: filed under `exhausted`, the fourth attempt fell through
+`resolvedMicrophone` to the built-in microphone the chooser had refused for
+the lid, and recorded sixteen seconds of bit-exact zero while both USB
+microphones sat unused. The success pads the head from `origin` like any other
+gap and `stop` pads the tail, so a track that never opened is still the length
+of the meeting. `Capture.start` treats a retried microphone as a warning and not
+as a track: `nothingToRecord` asks `isCapturing`, and `micNotice` puts the
+failure ahead of the silence sentence, because "not picking anything up" is
+true and is the wrong instruction.
+
+**The empty file also took playback with it.** `Mixdown.read` opened the
+44-byte `mic.wav`, got `length == 0`, built a zero-capacity buffer and asked
+`AVAudioFile.read(into:)` to fill it, which throws -50 (`buffer.frameCapacity
+!= 0`, twice in the log at the two presses of play). `try? Mixdown.make` swallowed
+that, `playbackURL` fell back to `recording.tracks.first`, which is the same
+empty file, and `AVAudioPlayer` opened it happily at `00:00 / 00:00` over a
+perfectly good far-end track. `Mixdown.make` now drops tracks with no frames
+before mixing and plays the one that is left as it is; `stop` padding the tail
+means a track that never opened is a full-length silent file from now on, so
+this only ever applies to files older than the fix.
+
+`LISTEN_MIC_FAIL_OPEN=<seconds>` refuses every microphone for that long after
+`start`, because a device that will not open is not something to wait for.
+Verified with it through `listen record` against a scratch library:
+
+- refused for 8 s of a 16 s recording: the warning printed, `capture started
+  mic=false system=true`, `mic padded 12.5s` (start, 2 s, then every 5 s), `now
+  recording from MacBook Pro Microphone (1 restart so far)`, `is picking up`,
+  and both tracks 16.2 s long with the last 3.5 s of the mic track live;
+- refused throughout a 6 s recording: a 6.17 s mic track of padded silence,
+  `mic_silent: true`, the system track intact;
+- on screen, read back through `tools/axprobe texts`: the panel says `Your
+  microphone could not be opened` and the recording screen says `MacBook Pro
+  Microphone could not be opened (…). Your voice is not being recorded. Listen
+  keeps trying, or pick another microphone.` Both are `AXStaticText`.

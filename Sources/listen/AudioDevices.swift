@@ -247,6 +247,112 @@ enum AudioDevices {
         else { return nil }
         return value.takeRetainedValue() as String
     }
+
+    // -----------------------------------------------------------------------
+    // Rendering whatever a device has, as one channel
+
+    /// A Float32, non-interleaved format with exactly `channels` channels at
+    /// `sampleRate`, or nil for nothing a capture unit could render into.
+    ///
+    /// Above two channels this needs a channel layout, and that is not a
+    /// nicety: `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)`
+    /// returns nil for three channels or more, and so does
+    /// `AVAudioFormat(streamDescription:)`. That nil is how a WhatsApp call on
+    /// 2026-09-02 lost the user's whole side. A voice-processing session
+    /// (WhatsApp's, FaceTime's, any `kAudioUnitSubType_VoiceProcessingIO`
+    /// client) switches the built-in microphone from its processed mono stream
+    /// to the raw three-microphone array for as long as it runs, every other
+    /// client sees three channels, and the recorder threw on a format it could
+    /// not describe. Measured with `tools/vpio.swift`: 1 ch before, 3 ch for
+    /// the whole session, 1 ch again after.
+    ///
+    /// Discrete-in-order is the honest layout for it: nothing is known about
+    /// what the channels are, only how many. Do not hand a format built this
+    /// way to `AVAudioConverter` expecting a mono mix; see `mixToMono`.
+    static func renderFormat(sampleRate: Double, channels: UInt32) -> AVAudioFormat? {
+        guard sampleRate > 0, channels > 0 else { return nil }
+        if channels <= 2 {
+            return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                 channels: channels, interleaved: false)
+        }
+        guard let layout = AVAudioChannelLayout(
+            layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | channels)
+        else { return nil }
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                             interleaved: false, channelLayout: layout)
+    }
+
+    /// Make-up gain for the built-in microphone's raw array, as a linear factor.
+    ///
+    /// +24 dB. The three raw channels are the un-gained microphones, and the
+    /// processed mono stream that replaces them the rest of the time carries
+    /// about 20 to 30 dB more. Measured with `tools/vpio.swift --no-duck` and
+    /// the same phrase through the built-in speakers, against the far-end
+    /// track as the reference for how loud the phrase was: the microphone
+    /// track sat 25.6 dB under it in the processed state and 47.7 dB under it
+    /// in the raw state (medians of three, by peak), a gap of 22 dB, with 21 dB
+    /// by RMS and 21 to 29 dB across a further pair. Without it the "you"
+    /// meter read 0.000 through every phrase, which is the flat strip that
+    /// made the recording look dead, and speech would land around -50 dBFS.
+    /// Clamped at full scale in `mixToMono`, so somebody shouting into it clips
+    /// rather than wrapping.
+    static let rawArrayGain: Float = 16
+
+    /// Whether `device` is delivering its raw array rather than its processed
+    /// stream: the built-in microphone with more than one channel. One channel
+    /// is the DSP's processed output; three is what every client gets while
+    /// any voice-processing session holds the device.
+    static func isRawArray(_ device: AudioDevice, channels: UInt32) -> Bool {
+        channels > 1 && isBuiltIn(device)
+    }
+
+    /// Average every channel of `source` into the single channel of `mono`,
+    /// scaled by `gain` and clamped to full scale when the gain is not one.
+    ///
+    /// By hand, because the two obvious alternatives were both measured wrong on
+    /// the same day, and both fail *silently*:
+    ///
+    /// - `AVAudioConverter` from a discrete three-channel layout to mono
+    ///   initialises, reports `.haveData`, and writes zeros;
+    /// - asking the HAL unit itself for a one-channel client format renders at
+    ///   the right rate with no errors and delivers the spoken test phrase at
+    ///   -68 dBFS peak, against -39 dBFS on any of the three raw channels. A
+    ///   file made that way is well formed and holds nothing.
+    ///
+    /// And on two channels the converter was never mixing at all: it took
+    /// channel 0 and dropped channel 1 (fed 0.1 and 0.2, it produced 0.1). An
+    /// average is what "down-mix to mono" was always assumed to mean, it
+    /// records a microphone plugged into either input of a stereo interface,
+    /// and on the raw array (channels correlated 0.94 to 0.97 with the first)
+    /// it costs nothing. Both buffers must be Float32 at the same rate.
+    static func mixToMono(_ source: AVAudioPCMBuffer, into mono: AVAudioPCMBuffer,
+                          gain: Float = 1) {
+        let frames = Int(source.frameLength)
+        mono.frameLength = source.frameLength
+        guard frames > 0, let out = mono.floatChannelData?[0],
+              let channels = source.floatChannelData else { return }
+        let count = Int(source.format.channelCount)
+        if count == 1, gain == 1 {
+            out.update(from: channels[0], count: frames)
+            return
+        }
+        let scale = gain / Float(count)
+        let clamp: (Float) -> Float = gain == 1 ? { $0 } : { max(-1, min(1, $0)) }
+        if source.format.isInterleaved {
+            let data = channels[0]
+            for i in 0..<frames {
+                var sum: Float = 0
+                for c in 0..<count { sum += data[i * count + c] }
+                out[i] = clamp(sum * scale)
+            }
+        } else {
+            for i in 0..<frames {
+                var sum: Float = 0
+                for c in 0..<count { sum += channels[c][i] }
+                out[i] = clamp(sum * scale)
+            }
+        }
+    }
 }
 
 extension Settings {

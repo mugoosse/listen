@@ -125,6 +125,14 @@ final class Capture {
     /// USB microphone that had been unplugged, which is a true sentence about the
     /// wrong device and sends somebody to open a lid that was never the problem.
     func micNotice(short: Bool) -> String? {
+        if let failure = mic.openFailure {
+            // Ahead of the silence sentence, which is also true (the strip is
+            // flat) and is the wrong instruction: nothing is picking anything
+            // up because nothing is open.
+            return short ? "Your microphone could not be opened"
+                         : "\(failure). Your voice is not being recorded. "
+                           + "Listen keeps trying, or pick another microphone."
+        }
         if micIsSilent {
             let name = micDeviceName ?? "Your microphone"
             guard mic.deviceIsBuiltIn, AudioDevices.lidClosed else {
@@ -398,6 +406,12 @@ final class Capture {
 
         do {
             try mic.start(writingTo: recording.micURL, from: origin)
+            if let failure = mic.openFailure {
+                // The track is open and being retried, but nothing is arriving,
+                // and a recording that says nothing about that is the one that
+                // was filed as a 99% one-speaker meeting.
+                warnings.append("microphone: \(failure); Listen keeps trying")
+            }
         } catch {
             warnings.append("microphone: \(error.localizedDescription)")
             log("mic capture failed: \(error.localizedDescription)")
@@ -409,14 +423,17 @@ final class Capture {
             log("system capture failed: \(error.localizedDescription)")
         }
 
-        guard mic.isRecording || system.isRecording else {
+        guard mic.isCapturing || system.isRecording else {
+            // A microphone still being retried is a track that is open, not one
+            // that is recording, and on its own it is not worth a folder.
+            mic.stop()
             try? FileManager.default.removeItem(at: folder)
             throw CaptureError.nothingToRecord(warnings)
         }
 
         current = recording
         startedAt = now
-        trace("capture started \(id), mic=\(mic.isRecording) system=\(system.isRecording)")
+        trace("capture started \(id), mic=\(mic.isCapturing) system=\(system.isRecording)")
         onChange?()
         return recording
     }

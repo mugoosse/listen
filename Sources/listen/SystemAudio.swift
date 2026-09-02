@@ -638,6 +638,7 @@ enum CaptureError: Error, LocalizedError {
     case tapUnsupported
     case noInputDevice
     case micUnitFailed(OSStatus)
+    case micOpenRefused
 
     var errorDescription: String? {
         switch self {
@@ -661,6 +662,8 @@ enum CaptureError: Error, LocalizedError {
             return "there is no microphone to record from"
         case .micUnitFailed(let s):
             return "could not create the microphone capture unit (status \(s))"
+        case .micOpenRefused:
+            return "the microphone was refused by LISTEN_MIC_FAIL_OPEN"
         }
     }
 }

@@ -68,7 +68,7 @@ every session whether or not the session goes near the calendar. Nothing was
 deleted. Use `Read`, not `@`: an `@path` line is inlined at load time and would
 put the whole thing back.
 
-### `.agents/notes/capture.md` (27k)
+### `.agents/notes/capture.md` (54k)
 
 How audio gets onto disk, and how it is shown while it happens. `Capture`,
 `SystemAudioRecorder`, `MicrophoneRecorder`, `WAVWriter`, `MeetingDetector`,
@@ -100,6 +100,9 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - `LISTEN_TAP_TEAR`, because waiting for a Mac to overload is not a test
 - A level timestamped on the main queue is not a level timestamped in the audio
 - The route is measurable, and the overload messages are not the mechanism
+- A call on the built-in microphone turns it into three channels, and two was the most the recorder could take
+- Two libraries turn three channels into a well-formed file of nothing
+- A failure at the first attempt had no second attempt, and the screen said "Recording from"
 
 ### `.agents/notes/asr.md` (32k)
 
@@ -661,6 +664,14 @@ One script stands in for one, over the app built in the working directory:
                         # of the transcript (that last one is read from the
                         # `LISTEN_DEBUG` trace, because where a page scrolled to
                         # is invisible to the AX tree)
+./verify_capture.sh     # the microphone track in the states that have lost
+                        # it: the three-channel state a call leaves the
+                        # built-in microphone in (reproduced with tools/vpio,
+                        # no call needed), a device that refuses to open and
+                        # is retried, one that never opens, and with --ui the
+                        # warning on screen and playback of a recording whose
+                        # mic file is empty. Plays a phrase aloud; needs the
+                        # lid open for the three-channel case, and says so
 ./verify_tap_routes.sh  # whether the system audio tap survives each output
                         # route, by playing speech through it and checking what
                         # arrived. --with-mic puts a headset in its call

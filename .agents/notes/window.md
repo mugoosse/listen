@@ -2132,6 +2132,49 @@ is already a per-row function, nothing in this app works out where a row is by
 multiplying, and it is three constants rather than N, so nothing has to measure
 any text to answer.
 
+## A 52 point row has nothing spare, and the activity bar took it from the padding
+
+The row of a meeting being transcribed drew its progress bar through the
+descenders of "identifying speakers", and the subtitle sat on the card's bottom
+edge. Reported from a screenshot, on 0.28.0.
+
+The arithmetic says why, and it is exact rather than nearly. `RecordingCell`'s
+block is a 16 point title, 2 points of gap and a 14 point subtitle, measured
+rather than remembered, which is 32; the row is 52 and the cell asks for 10 of
+air either side of the block, which is the other 20. There is nothing left. The
+bar adds 3 of gap and 2 of itself, so a row carrying one is 5 points short, and
+the two padding inequalities and the constraint holding the bar under the
+subtitle cannot all hold at once. Auto Layout then drops one of them, and which
+one is not something to reason about: a harness that rebuilds the same
+constraint set outside the app quietly loses the *top* padding and lays the row
+out 5 points high, while the shipped build lost the bar's own constraint and
+drew it over the text.
+
+So the row buys the room instead. `RecordingCell.activityRoom` is that 5,
+`heightOfRow` adds it to whichever constant the row was already worth, and
+`RecordingCell.activity(for:)` and `drawsBar` are static because the height has
+to be answered before the cell exists and has to agree with what `configure`
+then draws. A failure is an activity with nothing moving: it rides the row as a
+tool tip, draws no bar, and buys no room, which is why the two are separate
+questions.
+
+**A bar can arrive with no reload behind it.** `Queue.onChange` reloads the
+list, so a job starting is re-measured, but `CloudSyncHost.onActivity` calls
+straight through to `tickRow`, which reconfigures one cell in place and is never
+asked for a height. `tickRow` therefore compares `table.rect(ofRow:)` against
+what the row now needs and calls `noteHeightOfRows` only on the change, inside a
+zero duration animation group so the row does not spring open under the pointer.
+
+Measured on the built app, driven against a scratch library holding one
+untranscribed meeting, reading the AX frames rather than a picture (the sidebar
+is Liquid Glass, so `LISTEN_SHOT` photographs it as a white block):
+
+    AXRow  h 57   title +9   subtitle bottom +43    <- transcribing, with a bar
+    AXRow  h 52   title +9   subtitle bottom +43    <- an ordinary row
+
+The two lines sit in the same place in both, and the extra 5 points are all the
+bar's.
+
 ## A note body is a document, and an excerpt of one has to be flattened first
 
 A recording's turn is a sentence somebody said. A note's body is markdown a

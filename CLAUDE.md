@@ -312,6 +312,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - `scrollToVisible` moves as little as it can, and the two coordinate systems run opposite ways
 - A two-line cap does not shorten anything, and the third line lands on the next row
 - The padding inside a row's card is stated, not left to the centring
+- A 52 point row has nothing spare, and the activity bar took it from the padding
 - A note body is a document, and an excerpt of one has to be flattened first
 - A vertical stack view sized the excerpt to its whole string
 - The list has one icon column, and notes were 24 points inside it

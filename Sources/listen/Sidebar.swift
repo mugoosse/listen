@@ -1048,6 +1048,18 @@ final class SidebarViewController: NSViewController {
                   as? RecordingCell
         else { return }
         cell.configure(recording, dated: sectionsByKind)
+        // A bar arriving or going makes the row a different height, and a cell
+        // reconfigured in place is never asked for one. Only on the change:
+        // this runs once a chunk, and re-measuring a row to advance a number
+        // is the work `tickRow` exists to avoid.
+        let wanted = height(forRow: row)
+        guard abs(table.rect(ofRow: row).height - wanted) > 0.5 else { return }
+        // Zero duration, or the row springs open and the list moves under the
+        // pointer to report something that is not about the list.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+        }
     }
 
     /// Is anything open, whatever kind it is?
@@ -1330,10 +1342,30 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
     /// between them 5, which is 64; the 22 left over is the air `RecordingCell`
     /// asks for either side of its block, less the 2 the row spends outside the
     /// card `HoverRowView` draws.
+    ///
+    /// And an activity bar buys `RecordingCell.activityRoom` on top of
+    /// whichever of those it lands on, because 52 is exactly the two lines and
+    /// their air with nothing left over. See that constant.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        height(forRow: row)
+    }
+
+    /// The height a row needs, asked in two places.
+    ///
+    /// `heightOfRow` is one and `tickRow` is the other, because a bar can
+    /// arrive with no reload behind it: `Queue.onChange` reloads the list, but
+    /// `CloudSyncHost.onActivity` calls straight through to one cell. Both
+    /// have to answer the same number, or the bar is laid out in a row that is
+    /// not tall enough to hold it.
+    private func height(forRow row: Int) -> CGFloat {
+        guard rows.indices.contains(row) else { return 52 }
         if case .header = rows[row] { return 30 }
         if case .chats = rows[row] { return ChatsRow.height }
-        return match(at: row)?.excerpt == nil ? 52 : 86
+        let base: CGFloat = match(at: row)?.excerpt == nil ? 52 : 86
+        guard case .recording(let recording) = rows[row],
+              RecordingCell.drawsBar(RecordingCell.activity(for: recording))
+        else { return base }
+        return base + RecordingCell.activityRoom
     }
 
     /// What the row at this index matched on, if anything.
@@ -1650,6 +1682,20 @@ final class RecordingCell: NSView {
     /// The day headings are laid out against this too, so the two cannot part.
     static let textInset: CGFloat = 8
 
+    /// What the activity bar costs the row it is on: 3 points of gap and the
+    /// bar's own 2.
+    ///
+    /// **A row that is not given it draws the bar over its own subtitle.** The
+    /// block is a 16 point title, 2 of gap and a 14 point subtitle, measured
+    /// rather than remembered, and 16 + 2 + 14 is 32: exactly the 52 point row
+    /// less the 10 of air this cell asks for either side of the block. There
+    /// is nothing spare, so on a row with a bar the two padding inequalities
+    /// and the constraint holding the bar under the subtitle cannot all hold,
+    /// and Auto Layout drops one of them. Measured on 0.28.0: the row of a
+    /// meeting being transcribed drew the bar through the descenders of
+    /// "identifying speakers", and the subtitle sat on the card's bottom edge.
+    static let activityRoom: CGFloat = 5
+
     /// Monospaced digits, so a counting clock does not shuffle the words after
     /// it. Named because `configure` writes an attributed string, which carries
     /// its own font rather than taking the field's.
@@ -1831,6 +1877,32 @@ final class RecordingCell: NSView {
         title.attributedStringValue = marked
     }
 
+    /// What is happening to this recording, if anything is.
+    ///
+    /// The queue's own job first, because a recording being transcribed on this
+    /// Mac is the more specific answer, and the sync host's otherwise.
+    static func activity(for recording: Recording) -> CloudActivity? {
+        if Queue.shared.running == recording.id {
+            return CloudActivity(
+                recordingID: recording.id, stage: .transcribing,
+                fraction: Queue.shared.progress?.overall,
+                detail: Queue.shared.progress?.message)
+        }
+        return CloudSyncHost.shared.activity(for: recording.id)
+    }
+
+    /// Whether that is drawn as a bar, which is a second question rather than
+    /// the same one.
+    ///
+    /// A failure has nothing moving and no fraction: it rides the row as a
+    /// tool tip, draws no bar, and so must not buy the row `activityRoom`
+    /// either. `heightOfRow` asks this before the cell exists, which is why it
+    /// is here and not a line inside `configure`.
+    static func drawsBar(_ active: CloudActivity?) -> Bool {
+        guard let active else { return false }
+        return active.stage != .ready && (active.fraction != nil || active.isMoving)
+    }
+
     func configure(_ recording: Recording, dated: Bool = false,
                    match: SidebarViewController.RowMatch? = nil) {
         title.stringValue = recording.displayTitle
@@ -1913,18 +1985,13 @@ final class RecordingCell: NSView {
         }
         subtitle.attributedStringValue = line
 
-        let active: CloudActivity?
-        if Queue.shared.running == recording.id {
-            active = CloudActivity(
-                recordingID: recording.id, stage: .transcribing,
-                fraction: Queue.shared.progress?.overall,
-                detail: Queue.shared.progress?.message)
-        } else {
-            active = CloudSyncHost.shared.activity(for: recording.id)
-        }
-        if let active, active.stage != .ready,
-           active.fraction != nil || active.isMoving {
+        let active = Self.activity(for: recording)
+        if let active, Self.drawsBar(active) {
             activityBar.isHidden = false
+            // 3 and 2 are `activityRoom`, split. The row was given exactly
+            // these two numbers on top of its usual height, so changing one
+            // here without changing that constant puts the bar back over the
+            // subtitle.
             activityTop.constant = 3
             activityHeight.constant = 2
             activityBar.setAccessibilityLabel(active.title)

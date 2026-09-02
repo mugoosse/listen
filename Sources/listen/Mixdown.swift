@@ -18,7 +18,14 @@ enum Mixdown {
         if FileManager.default.fileExists(atPath: recording.mixURL.path) {
             return recording.mixURL
         }
-        let tracks = recording.tracks
+        // Only the tracks with anything in them. A microphone that never
+        // opened leaves a WAV header and no samples (2026-09-02, a 22 minute
+        // WhatsApp call; see `.agents/notes/capture.md`), and reading zero
+        // frames into a zero-capacity buffer throws -50, which used to take
+        // playback of the whole recording with it: the mixdown failed, the
+        // fallback picked that same empty file, and the player opened at
+        // 00:00 / 00:00 over a perfectly good far-end track.
+        let tracks = try recording.tracks.filter { try AVAudioFile(forReading: $0).length > 0 }
         guard !tracks.isEmpty else { return nil }
         guard tracks.count > 1 else { return tracks[0] }
 
@@ -44,6 +51,9 @@ enum Mixdown {
 
     private static func read(_ url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
+        // `read(into:)` rejects a zero-capacity buffer rather than reading
+        // nothing, so an empty file is answered here.
+        guard file.length > 0 else { return [] }
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                    sampleRate: file.fileFormat.sampleRate,
                                    channels: 1, interleaved: false)!

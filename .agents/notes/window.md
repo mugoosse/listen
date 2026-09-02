@@ -2287,3 +2287,98 @@ The general shape, which is the part worth keeping: **an affordance that only
 appears on hover cannot explain itself, so the thing under the pointer has to
 already look like what it is.** A row of results looks pressable because rows
 are; a heading does not, and no amount of hover state fixes that.
+
+## Notes and the transcript are tabs, and the count is what tabs cost
+
+The two halves of a meeting were stacked: the note first, because that is the
+half you write, then "Recording" with its transport and the dialogue under it.
+Both were sections of one scrolling page, and the note's box was sized to its
+own text between a floor of 30 points and a ceiling of 154.
+
+That is the right shape while a note is an annotation in the margin and the
+wrong one as soon as it is a document. The ceiling was measured against the
+longest of the 11 notes in the development library, which ran to five lines;
+past it the note scrolled **inside a box smaller than the window**, with a whole
+empty transcript pane below it. And the transcript paid on every meeting: the
+heading, the note, the provenance line and the "Also about this" line together
+put the first paragraph a third of the way down the pane, on a page whose
+subject is the paragraphs.
+
+So: `Tab.recording` and `Tab.notes`, a two-segment `NSSegmentedControl` on the
+row `modeBar` has held empty since the mode picker was retired, and each tab
+gets the whole reading area. The note is pinned to the floor of the pane
+(`notesBottom`) instead of being measured, which is why `sizeNotes`,
+`notesFloorHeight` and `notesCeilingHeight` are gone.
+
+**The tab bar is not a new row.** `modeBar` was kept through the change that
+emptied it, against exactly this: *"a second document mode is a live possibility
+and the bar is where it would go"*. Its 14 above and 24 high are the numbers
+that row already had, so the header above the tabs is laid out to the point as
+it was.
+
+**Recording is the default, and the tab survives a selection change.** Both
+halves of that matter. A meeting is what was said and the note is what you made
+of it, so a page you have not opened yet cannot sensibly open on your own
+writing; but reading notes down a list of meetings is a mode, which is the same
+argument `reloadNotes` has always made about the old picker. The one thing that
+resets it is a recording being live: `show` forces `.recording` there, because
+pressing Stop is a request to see what was said.
+
+**The count on the Notes tab is what buys back the one thing tabs cost.**
+Stacked, a note was visible the moment the page opened. Behind a tab it is not,
+so a meeting that has been written up and one that has not look identical, and
+the label is the smallest honest signal that says otherwise: it says there is
+something to read without claiming to say what. Empty notes do not count, or
+every meeting in the library would read "Notes · 1" and mean nothing anywhere:
+the user's own note is offered whether or not it exists on disk. The note being
+typed into is counted from the text view rather than from `notes`, because that
+list is only rewritten 0.8 seconds after a keystroke and a tab a second behind
+the caret reads as broken.
+
+**Playback stops on the way to Notes.** This is the real loss: on one page you
+could listen and write at the same time, and now you cannot. It is the rule
+`switchShowing` already makes for Ask and for the same reason, which is that a
+transport nobody can see is a transport nobody can pause. The transport belongs
+to the transcript, so it collapses with it.
+
+Three things follow that are easy to miss, and all three were found by looking
+rather than by reading the diff:
+
+- **The find bar is the hinge of the layout, not the player.** Everything below
+  the tabs hangs off `findBar.bottomAnchor` on both tabs. Closed, the bar and
+  the collapsed player are each zero high and zero away, so the top of the notes
+  column sits exactly on the bottom of the tab bar; opening it with Cmd-F on the
+  Notes tab then pushes the note down instead of drawing over it. `findMatches`
+  already reads the note only while it is on screen, so a tab switch has to end
+  with `refreshFind`, or the count in the bar is for the tab you left.
+- **The note tag strip is filled by `renderNote`, which does not run on a tab
+  switch.** Nothing about the note changed, only which tab is up, so the
+  signature check in `reloadNotes` skips the render. Hiding the strip on the way
+  out and never putting it back left every visit after the first showing a note
+  with no filing on it and no way to add any. `applyShowing` restores the
+  visibility and never the content.
+- **`updateEmpty` has a sentence about the transcript**, so it has to be silent
+  while the other tab is up: "No transcript yet" centred over somebody's note is
+  the page describing a document that is not on it.
+
+## The gap under the tab bar belongs to the column, not to the first line in it
+
+Reported on the first build of the tabs, as *"make sure to have enough padding
+below the tabs"*, with a screenshot of a note whose "Edited Today at 13:47" was
+sitting on the bottom edge of the bar.
+
+Two lines can come first on the Notes tab and **both of them collapse**: the
+"Also about this" links, when nothing else has been written about the meeting,
+and the provenance line, when the note has never been saved. The spacing was on
+each of them (`chatLinksTop.constant = show ? 10 : 0`, `noteInfoTop.constant =
+noteInfo.isHidden ? -6 : 0`), which is correct for a stack of sections and wrong
+for the top of a page: with neither line present the note's own date landed 8
+points under the bar, and with only one of them the gap was a different size
+again.
+
+So `Self.underTabs` is a constant on the column's first anchor and nothing
+conditional touches it; only the heights collapse. 16 there, and 14 for the
+player card on the other tab, because a card's top edge is where it says it is
+and a line of text carries its leading above the cap height: measured against
+each other on the two tabs, equal constants read as the Notes tab being the
+tighter of the two.

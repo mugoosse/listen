@@ -156,20 +156,43 @@ final class DetailView: NSView {
     private let modePicker = NSSegmentedControl(
         labels: ["Ask"], trackingMode: .selectAny,
         target: nil, action: nil)
-    /// Names the transcript once the notes are above it.
+    /// Which half of the meeting is on screen.
     ///
-    /// With Transcript as a tab the pane's title said which document you were
-    /// looking at. On one page nothing does, so a meeting with an empty note
-    /// would open on a wall of dialogue with no heading anywhere.
-    private let recordingHeading = NSTextField(labelWithString: "Recording")
-    /// The transcript's own heading has a pair now.
+    /// **Tabs rather than sections.** The two halves were stacked: a note box
+    /// of between 30 and 154 points, and the transcript under it taking what
+    /// was left. That is right while the note is a margin annotation and wrong
+    /// as soon as it is a document: the note could never be more than six lines
+    /// tall without scrolling inside a box smaller than the window, and the
+    /// transcript permanently started a third of the way down the pane.
     ///
-    /// The note half of the page was the only unlabelled thing on it: a block
-    /// of text under the player with nothing saying what it was, which reads as
-    /// part of the recording's own metadata rather than as the one document you
-    /// write. Same size, same weight, same colour as "Transcript", because they
-    /// are the two halves of one page.
-    private let notesHeading = NSTextField(labelWithString: "Notes")
+    /// As tabs each one gets the whole reading area. The cost is that they
+    /// cannot be read at the same time, which is the trade the stacked layout
+    /// was making in the other direction, and the count on the Notes tab is
+    /// what keeps a written note from becoming invisible behind it.
+    private enum Tab { case recording, notes }
+    /// Recording, always, until somebody says otherwise.
+    ///
+    /// A meeting is what was said; the note is what you made of it, and you
+    /// cannot have made anything of a meeting you have not opened yet. It
+    /// survives a selection change for the reason the mode always has: reading
+    /// notes down a list of meetings is a mode, not a choice repeated at every
+    /// row. Stopping a recording puts it back, because pressing Stop is a
+    /// request to see what was said.
+    private var tab: Tab = .recording
+    /// The tab bar, on the row the mode picker used to have to itself.
+    ///
+    /// `.selectOne`, unlike `modePicker` next door: these are two documents and
+    /// exactly one of them is up, so pressing the selected one again must do
+    /// nothing rather than leave the pane showing neither.
+    ///
+    /// Fixed widths so the bar does not resize under the pointer when the note
+    /// count changes. 104 is "Recording" at the control's own font plus its
+    /// padding, measured, and the Notes segment matches it rather than hugging
+    /// a shorter word: two tabs of different widths read as one being more
+    /// important than the other.
+    private let tabPicker = NSSegmentedControl(
+        labels: ["Recording", "Notes"], trackingMode: .selectOne,
+        target: nil, action: nil)
     /// What the note being read is filed under.
     ///
     /// **Its own strip, not the one in the header.** That one is the
@@ -179,8 +202,6 @@ final class DetailView: NSView {
     /// note about a single meeting can be tagged by hand, because such a note
     /// is read in this drawer and never gets a page of its own in the sidebar.
     private let noteTagChips = TagChips()
-    private var notesHeadingTop: NSLayoutConstraint!
-    private var notesHeadingHeight: NSLayoutConstraint!
     /// The greeting over an empty pane, with the mascot beside it.
     ///
     /// The empty state used to be one grey sentence of instruction. This screen
@@ -246,6 +267,11 @@ final class DetailView: NSView {
         guard abs(drawerCover - points) > 0.5 else { return }
         drawerCover = points
         tailHeight?.constant = RecordButton.clearance + points
+        // The note reaches the floor now, so the drawer covers it exactly as it
+        // covers the transcript. A constraint rather than a content inset, for
+        // the reason this file records twice over: an inset is a scroll offset
+        // and will not hold a view in place.
+        notesBottom?.constant = -(RecordButton.clearance + points)
     }
 
     /// Told by the window, because only the window knows how tall the drawer is.
@@ -286,6 +312,13 @@ final class DetailView: NSView {
     /// the pane's geometry is unchanged: the box starts 14 lower and is 14
     /// shorter, so everything below it is where it was.
     private static let notesTopInset: CGFloat = 14
+    /// The air under the tab bar, above whatever the tab puts first.
+    ///
+    /// Two points more than the player's own 14, because a card's top edge is
+    /// where it says it is and a line of text carries its leading above the cap
+    /// height: measured against each other on the two tabs, equal constants
+    /// read as the Notes tab being the tighter of the two.
+    private static let underTabs: CGFloat = 16
     /// Small, because the provenance line above already separates the note from
     /// the toggle. It was 16, which stacked with that line and left the first
     /// character of an empty note a long way from anything.
@@ -308,30 +341,19 @@ final class DetailView: NSView {
 
     private var modeTop: NSLayoutConstraint!
     private var modeHeight: NSLayoutConstraint!
-    private var notesHeight: NSLayoutConstraint!
-
-    /// The note takes what it needs between these two.
+    /// The note reaches the floor of the pane, less the room the record capsule
+    /// and the conversation drawer need.
     ///
-    /// The floor is two lines: an empty note is one line high, and a writing
-    /// surface you cannot see is one nobody writes in, which is the same
-    /// argument as the click-anywhere handler in `mouseDown`. The ceiling is
-    /// six, measured against the longest of the 11 notes in the development
-    /// library, which runs to five. Past it the note scrolls inside itself,
-    /// which is why it is a scroll view rather than a label.
+    /// **This replaced a measured height.** The box used to be sized to its own
+    /// text between a floor of 30 and a ceiling of 154, because it was sharing
+    /// the pane with the transcript and had to leave it something. On a tab of
+    /// its own there is nothing to share with, so a note is as tall as the
+    /// window and `sizeNotes` has gone with the constants it used.
     ///
-    /// Three lines was the first floor and is one too many. Almost every
-    /// meeting has no note, so on almost every page it was two blank lines
-    /// between the placeholder and "Recording", which read as the page having
-    /// come apart rather than as room to write.
-    ///
-    /// Both are the box itself, and both went down by `notesTopInset` when the
-    /// air above the note stopped being counted inside it. The same numbers as
-    /// before: 44 and 168 measured a box that carried 14 points of nothing at
-    /// the top of it.
-    private static let notesFloorHeight: CGFloat = 30
-    private static let notesCeilingHeight: CGFloat = 154
-    private var recordingHeadingTop: NSLayoutConstraint!
-    private var recordingHeadingHeight: NSLayoutConstraint!
+    /// The gap at the bottom is invisible: the scroll view does not draw a
+    /// background, so what is under the last line is the pane. See
+    /// `setBottomInset`, which is the only thing that moves it.
+    private var notesBottom: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
     private var playerHeight: NSLayoutConstraint!
     /// The find bar's pair. Closed is 0 and 0, which puts `findBar.bottom`
@@ -569,18 +591,14 @@ final class DetailView: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             playerCard.addSubview(v)
         }
-        for v in [modePicker, notePicker] {
+        for v in [modePicker, notePicker, tabPicker] {
             v.translatesAutoresizingMaskIntoConstraints = false
             modeBar.addSubview(v)
-        }
-        for heading in [recordingHeading, notesHeading] {
-            heading.font = .systemFont(ofSize: 12, weight: .semibold)
-            heading.textColor = .secondaryLabelColor
         }
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, notesHeading, noteTagChips, recordingHeading, greeting,
+                  chatLinks, noteTagChips, greeting,
                   recentChats, empty, emptyIcon, transcribing, live, findBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -599,27 +617,27 @@ final class DetailView: NSView {
         //
         // Collapsible for the reason the chips row is: a hidden view still
         // occupies its frame.
-        // **Collapsed from the start, because it holds nothing any more.** Both
-        // of its controls are permanently hidden: the mode picker went when the
-        // page started naming its two halves with headings, and the note
-        // switcher went with it. What was left was 38 points of guaranteed
-        // nothing between the speaker chips and "Notes" on every meeting page,
-        // which was the largest gap on the page and the hardest to account for,
-        // because there is no view there to look at.
+        // **It holds the tab bar now**, which is what it was emptied of when the
+        // page started naming its two halves with headings instead. The row was
+        // kept through that against exactly this: "a second document mode is a
+        // live possibility and the bar is where it would go".
         //
-        // Kept rather than deleted, with `setModeBarCollapsed` still able to
-        // open it, because a second document mode is a live possibility and the
-        // bar is where it would go.
+        // Still collapsed at build time and opened by `show`, because a live
+        // recording and a transcript being made both take the whole pane and
+        // have nothing to switch between.
         modeTop = modeBar.topAnchor.constraint(equalTo: chips.bottomAnchor, constant: 0)
         modeHeight = modeBar.heightAnchor.constraint(equalToConstant: 0)
         modeBar.isHidden = true
-        // **Under the section heading, not above the notes.** The player is
-        // part of the recording, and the page now says so: notes first, because
-        // that is the half you write, then "Recording" with its transport and
-        // the dialogue under it. It used to sit directly under the chips, which
-        // made the note below it read as a caption on the audio.
-        playerTop = playerCard.topAnchor.constraint(equalTo: recordingHeading.bottomAnchor,
-                                                    constant: 8)
+        // **Under the tab bar, and inside the Recording tab.** The transport
+        // and the dialogue are one document: you play a meeting to read along
+        // with it, so the player collapses with the transcript when the Notes
+        // tab is up rather than hanging over a page it cannot transport.
+        //
+        // That is also why switching to Notes stops playback, which is the rule
+        // `switchShowing` already makes for Ask: a transport nobody can see is
+        // a transport nobody can pause.
+        playerTop = playerCard.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
+                                                    constant: 10)
         playerHeight = playerCard.heightAnchor.constraint(equalToConstant: 58)
         // **Under the player, and zero until somebody presses Cmd-F.**
         //
@@ -649,48 +667,35 @@ final class DetailView: NSView {
         findBar.onQuery = { [weak self] text in self?.findQueryChanged(text) }
         findBar.onStep = { [weak self] by in self?.stepFind(by) }
         findBar.onDone = { [weak self] in self?.closeFind() }
-        // An empty note has nothing to say about itself: no date, because it has
-        // never been saved. A label with an empty string still occupies a line,
-        // so the caret sat forty points below the toggle with nothing between
-        // them, which reads as a field that has come loose from its heading.
-        // The note starts the page and the transcript follows it rather than
-        // sharing its box.
-        // 16 from the chips, which is the gap every section heading on this page
-        // now gets: "Notes" and "Recording" are the same kind of thing and were
-        // 50 and 14 points below what came before them.
-        notesHeadingTop = notesHeading.topAnchor.constraint(equalTo: modeBar.bottomAnchor,
-                                                            constant: 16)
-        notesHeadingHeight = notesHeading.heightAnchor.constraint(equalToConstant: 16)
-        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: notesHeading.bottomAnchor,
-                                                    constant: 4)
-        noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
-        // **The notes get a height, and the transcript gets the rest.**
+        // **The Notes tab, top to bottom: the other documents, then who wrote
+        // this one, then the note.** All three hang off the find bar rather than
+        // off the tab row, so the two tabs share one chain: closed, the bar and
+        // the collapsed player are both zero high and zero away, which puts the
+        // top of this column exactly on the bottom of the tab bar. Opening it
+        // with Cmd-F on the Notes tab then pushes the note down instead of
+        // drawing over it.
         //
-        // Not a split of the pane in some ratio: a note is usually a few lines
-        // and a transcript is usually an hour, so giving the note half the
-        // window would leave most of it white on almost every meeting. It takes
-        // what it needs up to a ceiling and the dialogue takes what is left.
-        //
-        // 168 points is six lines at the note's own size plus its insets,
-        // measured against the longest of the 11 notes in the development
-        // library, which runs to five. Past the ceiling it scrolls inside
-        // itself, which is why it is a scroll view and not a label.
-        // A constant, recomputed from the text by `sizeNotes`. An `NSScrollView`
-        // has no intrinsic height, so a pair of inequalities leaves the layout
-        // free to pick the ceiling: measured, a one-line note reserved the full
-        // 168 points and left a hand's width of nothing above the transcript.
-        notesHeight = notesScroll.heightAnchor.constraint(equalToConstant: Self.notesFloorHeight)
-        // Collapsing to nothing when no conversation has named this recording,
-        // spacing included, for the reason the chips row and the focus bar both
-        // record: a hidden view keeps its frame, so leaving it would open a gap
-        // above the transcript of every meeting nobody has asked about.
-        chatLinksTop = chatLinks.topAnchor.constraint(equalTo: notesScroll.bottomAnchor,
-                                                      constant: 0)
+        // The links moved above the note rather than below it. Under the note
+        // they were a footnote on the page; above it they are what they have
+        // always been, which is a way to swap the document underneath.
+        // **The 16 is the gap under the tab bar, and it belongs to the column
+        // rather than to this line.** Both of the two lines above the note
+        // collapse: the links when nothing else has been written about the
+        // meeting, the provenance when the note has never been saved. With the
+        // gap on whichever one happened to be first, a note with neither opened
+        // with its own date pinned to the bottom edge of the tabs, and the
+        // page read as though the bar had landed on the text.
+        chatLinksTop = chatLinks.topAnchor.constraint(equalTo: findBar.bottomAnchor,
+                                                      constant: Self.underTabs)
         chatLinksHeight = chatLinks.heightAnchor.constraint(equalToConstant: 0)
-        recordingHeadingTop = recordingHeading.topAnchor.constraint(
-            equalTo: chatLinks.bottomAnchor, constant: 16)
-        recordingHeadingHeight = recordingHeading.heightAnchor.constraint(
-            equalToConstant: 16)
+        noteInfoTop = noteInfo.topAnchor.constraint(equalTo: chatLinks.bottomAnchor,
+                                                    constant: 8)
+        noteInfoHeight = noteInfo.heightAnchor.constraint(equalToConstant: 0)
+        // The floor of the pane, less the room the record capsule needs and
+        // whatever the conversation drawer is covering. `setBottomInset` is the
+        // only other thing that touches it.
+        notesBottom = notesScroll.bottomAnchor.constraint(
+            equalTo: bottomAnchor, constant: -RecordButton.clearance)
         noteInfoHeight.priority = .defaultHigh
 
         // Speakers grow rightward from the title, tags grow leftward from the
@@ -777,6 +782,8 @@ final class DetailView: NSView {
             modeBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             modePicker.leadingAnchor.constraint(equalTo: modeBar.leadingAnchor),
             modePicker.centerYAnchor.constraint(equalTo: modeBar.centerYAnchor),
+            tabPicker.leadingAnchor.constraint(equalTo: modeBar.leadingAnchor),
+            tabPicker.centerYAnchor.constraint(equalTo: modeBar.centerYAnchor),
             // Trailing, and allowed to shrink. A note titled with a whole
             // sentence would otherwise push the segmented control off the
             // leading edge of the pane.
@@ -785,22 +792,16 @@ final class DetailView: NSView {
             notePicker.leadingAnchor.constraint(
                 greaterThanOrEqualTo: modePicker.trailingAnchor, constant: 12),
 
-            // **Its own scroller, under the notes rather than sharing them.**
+            // **Its own scroller, and never the transcript's.**
             //
-            // Playback scrolls this to the sentence being spoken. In one
-            // scroller with the note above it, following the playhead would drag
-            // the note off the top of the window while somebody has a caret in
-            // it, so the two halves of the page have to scroll independently.
+            // Playback scrolls the transcript to the sentence being spoken. In
+            // one scroller with the note, following the playhead would drag the
+            // note about while somebody has a caret in it, so the two documents
+            // scroll independently even now that only one is ever up.
             chatLinksTop,
             chatLinksHeight,
             chatLinks.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             chatLinks.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-
-            recordingHeadingTop,
-            recordingHeadingHeight,
-            recordingHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            recordingHeading.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                                        constant: -24),
 
             // Flush with the pane on both sides, so its scroller is at the
             // window's edge and not 23 points inside it. The margins the two
@@ -831,18 +832,17 @@ final class DetailView: NSView {
             live.trailingAnchor.constraint(equalTo: trailingAnchor),
             live.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            notesHeadingTop,
-            notesHeadingHeight,
-            notesHeading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            notesHeading.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            // Trailing on the heading's own row, which is the arrangement the
+            // Trailing on the tab bar's own row, which is the arrangement the
             // strip is built for: it grows leftward from the pane's edge, so
-            // "Notes" and the filing never fight for a fixed split.
+            // the tabs and the filing never fight for a fixed split. It is the
+            // note's filing rather than the recording's, so it is on screen
+            // only while the Notes tab is, one row under the recording's own
+            // strip and never beside it.
             noteTagChips.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            noteTagChips.centerYAnchor.constraint(equalTo: notesHeading.centerYAnchor),
+            noteTagChips.centerYAnchor.constraint(equalTo: modeBar.centerYAnchor),
             noteTagChips.heightAnchor.constraint(equalToConstant: 22),
             noteTagChips.leadingAnchor.constraint(
-                greaterThanOrEqualTo: notesHeading.leadingAnchor, constant: 60),
+                greaterThanOrEqualTo: tabPicker.trailingAnchor, constant: 12),
 
             noteInfoTop,
             noteInfo.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -855,7 +855,7 @@ final class DetailView: NSView {
                                              constant: 4 + Self.notesTopInset),
             notesScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             notesScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            notesHeight,
+            notesBottom,
 
             // The same box the notes pane occupies, and for the same reason:
             // both are documents about the meeting whose title is above them.
@@ -931,6 +931,22 @@ final class DetailView: NSView {
     // MARK: - Notes
 
     private func buildNotesPane() {
+        tabPicker.selectedSegment = 0
+        tabPicker.selectedSegmentBezelColor = Brand.tint
+        tabPicker.target = self
+        tabPicker.action = #selector(switchTab)
+        tabPicker.font = .systemFont(ofSize: 12)
+        // Measured rather than left to hug: "Recording" is the longer word, and
+        // the Notes segment grows a count as soon as anything is written there.
+        // Left to autosize, the bar changed width under the pointer the first
+        // time somebody typed a note.
+        tabPicker.setWidth(104, forSegment: 0)
+        tabPicker.setWidth(104, forSegment: 1)
+        // Both halves of the page are documents, so the bar says so out loud
+        // for anybody driving this with the keyboard or a screen reader. The
+        // segments carry their own labels; this names what they switch.
+        tabPicker.setAccessibilityLabel("What to show for this recording")
+
         modePicker.selectedSegment = 0
         modePicker.selectedSegmentBezelColor = Brand.tint
         modePicker.target = self
@@ -1099,6 +1115,10 @@ final class DetailView: NSView {
     }
 
     /// A hidden view still occupies its frame, so both dimensions have to go.
+    ///
+    /// 14 above and 24 high, which is the row the tab bar sits in. `applyShowing`
+    /// is the only caller that opens it, so the bar cannot be on screen over a
+    /// pane that has no two documents to switch between.
     private func setModeBarCollapsed(_ collapsed: Bool) {
         modeBar.isHidden = collapsed
         modeTop.constant = collapsed ? 0 : 14
@@ -1114,7 +1134,10 @@ final class DetailView: NSView {
     /// nobody had noticed.
     private func setPlayerCollapsed(_ collapsed: Bool) {
         playerCard.isHidden = collapsed
-        playerTop.constant = collapsed ? 0 : 10
+        // 14, which is `underTabs` less the leading a line of text carries and
+        // a card does not. It was 10 under a section heading, which is a label
+        // and lighter than a bar of two controls.
+        playerTop.constant = collapsed ? 0 : 14
         let expanded: CGFloat
         if activityLabel.isHidden { expanded = 58 }
         else { expanded = activityBar.isHidden ? 78 : 86 }
@@ -1161,6 +1184,35 @@ final class DetailView: NSView {
                 ? "The audio is coming from your iPhone."
                 : "The audio for this meeting is on the Mac that recorded it."
         }
+    }
+
+    /// Move between the transcript and the note.
+    ///
+    /// Playback stops on the way out of Recording, which is the rule
+    /// `switchShowing` already makes for Ask and for the same reason: the
+    /// transport goes with the transcript, and a player nobody can see is a
+    /// player nobody can pause. It is the one thing the stacked layout could do
+    /// that this cannot, and it is bought with a note as tall as the window.
+    @objc private func switchTab(_ sender: NSSegmentedControl) {
+        // A control swallows its own click, so it has to let the title field go
+        // itself. Every control in this pane does the same.
+        endEditing()
+        // Before the note leaves the screen, never after.
+        saveYours()
+        let wanted: Tab = sender.selectedSegment == 1 ? .notes : .recording
+        guard wanted != tab else { return }
+        tab = wanted
+        if tab == .notes {
+            stopPlayback()
+            // Re-read on the way in rather than only on selection, so opening
+            // the tab is also the gesture that picks up what an agent wrote.
+            reloadNotes(reset: false)
+        }
+        applyShowing()
+        // After the hiding is done, because `findMatches` reads the note only
+        // while it is on screen: the count and the highlights have to be for
+        // the tab that is up now. It never scrolls, by construction.
+        refreshFind()
     }
 
     @objc private func switchShowing(_ sender: NSSegmentedControl) {
@@ -1224,11 +1276,13 @@ final class DetailView: NSView {
     func showTranscript() {
         saveYours()
         showing = .page
+        tab = .recording
         applyShowing()
     }
 
     func showNote(_ slug: String?) {
         showing = .page
+        tab = .notes
         if let slug, notes.contains(where: { $0.slug == slug }) {
             showingNote = slug
             rebuildNotePicker()
@@ -1247,10 +1301,14 @@ final class DetailView: NSView {
     func textDidChange(_ notification: Notification) {
         guard notification.object as AnyObject === notesText, showingYours else { return }
         notesPlaceholder.isHidden = !notesText.string.isEmpty
-        // Grow with the text, so the transcript is pushed down as the note is
-        // written rather than after it is saved. Cheap: the layout manager has
-        // already laid out this line to draw it.
-        sizeNotes()
+        // The count on the tab, as it is typed: the first character written
+        // into an empty note is what turns "Notes" into "Notes · 1", and it has
+        // to happen before the 0.8s save or the tab is a second behind the
+        // caret. `notes` has not been rewritten yet, so this reads the text
+        // view rather than the list.
+        updateTabLabels()
+        // Nothing sizes the box any more: on a tab of its own the note is as
+        // tall as the pane whatever is in it. See `notesBottom`.
         // Re-run rather than re-apply: a character typed at the top of the note
         // moves every range below it, so the ranges found before this keystroke
         // now point at the wrong words.
@@ -1458,9 +1516,7 @@ final class DetailView: NSView {
         // laid out at its full height and drawing nothing. A blank band where
         // the provenance goes reads as a note that has lost its own history.
         showProvenance()
-        // After the text is in and before anything is drawn, so arriving at a
-        // recording never shows the previous note's height for a frame.
-        sizeNotes()
+        updateTabLabels()
         notesText.scroll(NSPoint(x: 0, y: 0))
     }
 
@@ -1476,25 +1532,32 @@ final class DetailView: NSView {
         onOpenChat?(chat)
     }
 
-    /// Give the note the height of its own text, between the floor and ceiling.
+    /// How many notes about this meeting have anything in them, on the tab.
     ///
-    /// Asked of the layout manager rather than measured off the frame: an
-    /// `NSTextView` in a scroll view is only as tall as its own text, and the
-    /// frame is whatever it was last given, so reading it back returns the
-    /// answer from before this note was put in it. `ensureLayout` first, because
-    /// `usedRect` is only true for glyphs that have been laid out and the text
-    /// was set in the same pass.
-    private func sizeNotes() {
-        guard let container = notesText.textContainer,
-              let manager = notesText.layoutManager else { return }
-        manager.ensureLayout(for: container)
-        let text = manager.usedRect(for: container).height
-        // The text and the text view's own insets, and nothing for the air
-        // above: that is a gap between this box and the line over it now, not
-        // part of the box. See `notesTopInset`.
-        let wanted = text + Self.notesTextInset * 2
-        notesHeight.constant = min(max(wanted, Self.notesFloorHeight),
-                                   Self.notesCeilingHeight)
+    /// **The one thing tabs cost, bought back.** Stacked, a note was visible
+    /// the moment the page opened; behind a tab it is not, so a meeting that
+    /// has been written up and one that has not looked identical. The count is
+    /// the smallest honest signal: it says there is something to read without
+    /// claiming to say what.
+    ///
+    /// Empty notes do not count. Every recording is offered a note of its own
+    /// whether or not one exists on disk, so counting the list would put
+    /// "Notes · 1" on every meeting in the library and mean nothing anywhere.
+    ///
+    /// The note being typed into is counted from the text view rather than from
+    /// `notes`, because the list is only rewritten 0.8 seconds after a
+    /// keystroke and a tab that lags the caret by a second reads as broken.
+    private func updateTabLabels() {
+        var written = notes.filter {
+            !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !($0.slug == showingNote && Notes.isYours($0))
+        }.count
+        if let note = notes.first(where: { $0.slug == showingNote }), Notes.isYours(note) {
+            if !notesText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                written += 1
+            }
+        }
+        tabPicker.setLabel(written > 0 ? "Notes · \(written)" : "Notes", forSegment: 1)
     }
 
     /// Everything else written about this recording, on one line.
@@ -1562,10 +1625,16 @@ final class DetailView: NSView {
         let others = notes.filter { !Notes.isYours($0) }
         let chats = recording.map { Chat.about($0.id) } ?? []
         let away = showingNote != nil && !showingYours
-        let show = showing == .page && (!others.isEmpty || !chats.isEmpty || away)
+        // On the Notes tab only: it is the line that swaps the document
+        // underneath it, so on the transcript it would be a row of links to a
+        // pane that is not on screen.
+        let show = showing == .page && tab == .notes
+            && (!others.isEmpty || !chats.isEmpty || away)
         chatLinks.isHidden = !show
         chatLinksHeight.isActive = !show
-        chatLinksTop.constant = show ? 10 : 0
+        // The top is the column's, not this line's: see `chatLinksTop`. Only
+        // the height collapses.
+        chatLinksTop.constant = Self.underTabs
         guard show else { return }
 
         let plain: [NSAttributedString.Key: Any] = [
@@ -1608,11 +1677,14 @@ final class DetailView: NSView {
     }
 
     private func showProvenance() {
-        noteInfo.isHidden = recording == nil || showing != .page || noteInfo.string.isEmpty
+        noteInfo.isHidden = recording == nil || showing != .page
+            || tab != .notes || noteInfo.string.isEmpty
         // Collapsed as well as hidden: a hidden view keeps its frame, which is
         // the trap the chips row and the player already record.
         noteInfoHeight.isActive = noteInfo.isHidden
-        noteInfoTop.constant = noteInfo.isHidden ? -6 : 0
+        // 8 under the links when there are any, and nothing at all when there
+        // are not: the gap under the tab bar is already spent above.
+        noteInfoTop.constant = noteInfo.isHidden ? 0 : (chatLinks.isHidden ? 0 : 8)
     }
 
     /// An `NSTextView` has no placeholder, so this is a label behind one.
@@ -1633,6 +1705,10 @@ final class DetailView: NSView {
             "What you are thinking. Only you write this, and an agent can read it."
         notesPlaceholder.isHidden = recording == nil
             || showing != .page
+            // A sibling of the text view rather than a subview of it, which is
+            // the trap recorded below: taking the note off screen with the tab
+            // leaves its invitation drawn over the transcript.
+            || tab != .notes
             // With the note box itself away while the transcript is being made.
             // It is a sibling of that box rather than a child of it, which is
             // the trap this file records against the empty label, so hiding the
@@ -1837,7 +1913,8 @@ final class DetailView: NSView {
         // besides, since its audio is on *this* Mac and simply is not finished.
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
-                  hidden: showing == .ask || recording?.isLive == true)
+                  hidden: showing == .ask || recording?.isLive == true
+                      || tab == .notes)
         // **Every piece of the page is gated on there being a page.** The
         // heading, the note and the transcript are furniture belonging to a
         // meeting, and with nothing selected the pane's whole content is one
@@ -1848,7 +1925,6 @@ final class DetailView: NSView {
         // of the empty label rather than children of anything it hides.
         let page = showing == .page
         let open = page && recording != nil
-        scroll.isHidden = !open
         // **A meeting being transcribed is a loading state, and a loading state
         // has one thing on it.** The picture in the middle of the pane is what
         // this screen is about until the job finishes; a transport over audio
@@ -1857,47 +1933,43 @@ final class DetailView: NSView {
         // by looking at an hour-long call at 82%: three empty regions and the
         // one live thing in the middle of them.
         let readable = open && !isLoadingTranscript
-        // Both halves of the page, together. This is the change: a note and the
-        // dialogue it was taken during are one document, and choosing between
-        // them was never a choice anybody wanted to make.
-        notesScroll.isHidden = !readable
-        // **Re-measured on the way back rather than remembered.** This kept
-        // whatever the constant already was, which was right while the only way
-        // to lose it was to select nothing (and selecting a recording again
-        // re-renders the note, which re-measures). A job finishing does neither:
-        // same recording, same note, so `reloadNotes` finds the signature
-        // unchanged and skips the render, and a height zeroed on the way in
-        // would have stayed zero with the note hidden inside it.
-        if readable { sizeNotes() } else { notesHeight.constant = 0 }
-        // Collapsed as well as hidden, spacing included, which this file
-        // records three times over.
-        notesHeading.isHidden = !readable
-        // With the heading, always. It is pinned to that row, so a strip left
-        // behind would draw over whatever collapsed up into the space.
-        if !readable { noteTagChips.isHidden = true }
-        notesHeadingHeight.constant = readable ? 16 : 0
-        notesHeadingTop.constant = readable ? 12 : 0
-        // No heading over a meeting with nothing under it either. The sentence
-        // `updateEmpty` writes there already says why the transcript is absent,
-        // and a label naming a document that is not present is furniture
-        // pretending to be content.
-        // **And not over the picture either**, which is what Transcribe Again
-        // made visible: that job replaces a transcript that already exists, so
-        // `turns` is not empty, and the heading stood alone over a progress
-        // picture naming a document that had been taken off the screen.
-        recordingHeading.isHidden = !readable || turns.isEmpty
-        // Collapsed as well as hidden, spacing included: a hidden view keeps its
-        // frame, which is the trap this file already records three times.
-        recordingHeadingHeight.constant = recordingHeading.isHidden ? 0 : 16
-        recordingHeadingTop.constant = recordingHeading.isHidden ? 0 : 14
+        // **One tab at a time, and neither of them while there is no page.**
+        // A meeting being transcribed is a loading state and a loading state has
+        // one thing on it: the picture in the middle of the pane is what the
+        // screen is about until the job finishes, and a tab bar over it would
+        // be offering two documents that do not exist yet.
+        let onNotes = readable && tab == .notes
+        setModeBarCollapsed(!readable)
+        tabPicker.isHidden = !readable
+        tabPicker.selectedSegment = tab == .notes ? 1 : 0
+        updateTabLabels()
+        scroll.isHidden = !open || tab != .recording
+        notesScroll.isHidden = !onNotes
+        // **The note's filing, not the recording's, so it goes with the note.**
+        // Pinned to the tab row, so a strip left behind would draw over the
+        // tabs themselves rather than merely be wrong.
+        //
+        // Restored here as well as hidden, and this is the half that was
+        // missing: the strip is filled by `renderNote`, which does not run on a
+        // tab switch, because the note has not changed and only which tab is up
+        // has. Hiding it on the way out and never putting it back left the note
+        // on the Notes tab with no filing on it and no way to add any, on every
+        // visit after the first. Visibility only, never content: `renderNote`
+        // is still the one thing that says what is in it.
+        noteTagChips.isHidden = !onNotes
+            || !notes.contains { $0.slug == showingNote }
         askView.isHidden = page
         // The focus is about playing this transcript, so it goes with the
         // transcript. Leaving the bar up over Ask would be a sentence about a
         // player that is collapsed there anyway: switching to Ask already stops
-        // playback.
-        if !page { setFocus(nil) }
+        // playback. The Notes tab is the same argument, one tab in rather than
+        // one mode over: the transcript it names is not on screen.
+        if !page || tab != .recording { setFocus(nil) }
         // And the find bar with it, for the same reason: the three surfaces it
-        // searches are the page's, and none of them is on screen in Ask.
+        // searches are the page's, and none of them is on screen in Ask. It
+        // stays up across a tab switch, because the title and whichever
+        // document is up are both still searchable and closing it would be the
+        // pane deciding somebody had finished looking.
         if !page { closeFind() }
         showProvenance()
         showRelated()
@@ -2080,12 +2152,14 @@ final class DetailView: NSView {
         var showPicture = false
         switch showing {
         case .page:
-            // The transcript's message, not the note's. The note half is never
+            // The transcript's message, not the note's. The note tab is never
             // empty, because the user's own is always offered and an empty one
             // is a cursor rather than a message: the placeholder inside the text
-            // view says what it is for. So the only half that can have nothing
-            // to show is the dialogue, and this sentence is about that.
-            message = turns.isEmpty ? Self.emptyTranscriptMessage(recording) : ""
+            // view says what it is for. So the only tab that can have nothing
+            // to show is the dialogue, and this sentence is about that, which
+            // is why it is silent while the other one is up.
+            message = turns.isEmpty && tab == .recording
+                ? Self.emptyTranscriptMessage(recording) : ""
             // Whenever this recording is the running job, and deliberately not
             // only when there is no transcript yet.
             //
@@ -2120,7 +2194,8 @@ final class DetailView: NSView {
         transcribing.isHidden = !showPicture
         // The transcript goes away while the picture is up, or a re-run draws
         // the picture on top of the paragraphs it is in the middle of replacing.
-        scroll.isHidden = showing != .page || showPicture
+        // And with the Notes tab, which is the other way it can be off screen.
+        scroll.isHidden = showing != .page || showPicture || tab != .recording
         // Not just hidden: clearing the progress is what stops the thirty a
         // second timer inside it. Clicking from a transcribing recording to any
         // other one would otherwise leave it running against a view nobody can
@@ -2423,17 +2498,20 @@ final class DetailView: NSView {
         // stopping is a request to see what was said. Left as Notes, pressing
         // Stop landed on the page you had just finished typing on and hid the
         // transcript arriving behind a tab.
-        if recording.isLive { showing = .page }
+        // And on the transcript when it arrives, which is what Stop is asking
+        // for. The tab otherwise survives a selection change, so a note left up
+        // on the last meeting would hide the one being made from the person who
+        // just finished making it.
+        if recording.isLive { showing = .page; tab = .recording }
         // Before `reloadNotes`, which can put the mode back to the transcript.
         // The pane has to be pointed at the new recording either way: it stops
         // any answer still running for the last one and loads that one's
         // `chat.json`, and both have to happen whether or not Ask is up.
         askView.show(recording)
         reloadNotes(reset: true)
-        // Always, now that every recording has a note to type into. It used to
-        // collapse when there was nothing to switch between, and there always
-        // is.
-        setModeBarCollapsed(false)
+        // The tab bar is opened by `applyShowing` and by nothing else, so that
+        // a pane with no two documents on it, one being transcribed or one being
+        // recorded, cannot be left with a bar over it.
         applyShowing()
     }
 
@@ -2464,29 +2542,24 @@ final class DetailView: NSView {
         askView.isHidden = hidden
         // **This list is the one that runs when nothing is selected**, because
         // `show(nil)` returns from here without reaching `applyShowing`. Anything
-        // added to the page has to be added here too, and the heading was not:
-        // it drew the word "Transcript" halfway down an otherwise empty pane,
-        // above "Select something from the list."
-        recordingHeading.isHidden = hidden
-        notesHeading.isHidden = hidden
+        // added to the page has to be added here too, and the section headings
+        // this replaced were not: they drew the word "Transcript" halfway down
+        // an otherwise empty pane, above "Select something from the list."
+        // A tab bar there would be the same bug with two words instead of one.
+        if hidden { setModeBarCollapsed(true) }
         // The list this comment is about, again. A find bar over "Select
         // something from the list" is a search of nothing, and its ticks would
         // outlive the recording that produced them.
         if hidden { closeFind() }
-        // The list this comment is about. The strip lives on the heading's row,
-        // so it has to go when the heading does.
+        // The list this comment is about. The strip lives on the tab bar's row,
+        // so it has to go when the tabs do.
         if hidden { noteTagChips.clear() }
         chatLinks.isHidden = hidden
         if hidden {
             // Collapsed as well as hidden, spacing included, or the empty
             // sentence sits pushed down the pane by furniture nobody can see.
-            recordingHeadingHeight.constant = 0
-            recordingHeadingTop.constant = 0
-            notesHeadingHeight.constant = 0
-            notesHeadingTop.constant = 0
             chatLinksHeight.isActive = true
             chatLinksTop.constant = 0
-            notesHeight.constant = 0
         }
         if hidden {
             // Deselecting while a meeting is being recorded is ordinary: the
@@ -3499,7 +3572,7 @@ final class DetailView: NSView {
     /// Highlight ranges in the note, through the layout manager.
     ///
     /// **Temporary attributes, never an edit to the storage.** The storage is
-    /// what `sizeNotes` measures and what the user is typing into, and an edit
+    /// what the user is typing into, and an edit
     /// under a caret is an undo event that merges with `typingAttributes`, so
     /// the next character typed would inherit the highlight. `LinkLine` records
     /// the same decision for the same reasons.

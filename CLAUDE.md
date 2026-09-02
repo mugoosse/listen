@@ -320,6 +320,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A vertical stack view sized the excerpt to its whole string
 - The list has one icon column, and notes were 24 points inside it
 - The handoff row was a section heading, and every part of that was wrong
+- Notes and the transcript are tabs, and the count is what tabs cost
+- The gap under the tab bar belongs to the column, not to the first line in it
 
 ### `.agents/notes/appkit.md` (35k)
 

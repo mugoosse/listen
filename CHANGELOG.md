@@ -8,6 +8,62 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.29.0 (2026-09-02)
+
+A WhatsApp call taken on the MacBook's own microphone recorded the other side
+and none of you. This release records you, says so when it cannot, and plays
+the recording that was left behind.
+
+### What was wrong
+
+The moment a call connects, macOS switches the built-in microphone from its
+usual processed mono stream to the raw three-microphone array, for every app on
+the Mac, and keeps it there until the call ends. Listen could describe one or
+two channels and threw on three, four milliseconds after opening the device.
+Nothing tried again, because every retry in the recorder only ran for a track
+that had started. So the microphone track was a 44-byte file, the strip for
+your voice stayed flat for 22 minutes, the status line said "Recording from
+MacBook Pro Microphone", and the transcript came out as one speaker at 99%. The
+empty file then broke playback of that recording as well: play opened at
+00:00 / 00:00 over a perfectly good far-end track.
+
+A call taken on a headset or a USB microphone was never affected, which is why
+the earlier calls in a library are fine.
+
+### What changed
+
+- The recorder takes whatever channel count the device reports and averages it
+  to mono itself. The raw array is about 22 dB quieter than the processed
+  stream for the same voice, measured against a played phrase over three runs
+  each, so it is gained by 24 dB. That is only the gain: none of the system's
+  noise processing comes back with it, and a shout will clip rather than
+  compress.
+- A microphone that will not open no longer ends the track. It is tried again
+  every five seconds, through the other microphones in turn; the gap is padded
+  so both tracks stay aligned; the panel says "Your microphone could not be
+  opened" and the recording screen says which one and why. A track that never
+  opens is a full-length silent file, marked as such.
+- Dictation had the same channel limit and gets the same fix.
+- A recording whose microphone file is empty plays again. The mixdown skips a
+  track with no frames and plays the one that is left as it is.
+- On a two-channel microphone the mono down-mix was in fact the first channel
+  alone. It is now the average of both, so a stereo interface with the
+  microphone on its second input records something instead of nothing.
+
+### What it does not fix
+
+Your side of a call recorded before this release is gone: the file holds no
+samples. The other side was recorded and transcribes as before. And a far end
+that says a single syllable in a twelve-second call will still come back with
+no words, whichever model, because the recogniser will not commit to one
+syllable in that much silence.
+
+### Checking it
+
+`./verify_capture.sh --ui` plays a phrase through the speakers and records it
+in each of these states, including the three-channel one, which
+`tools/vpio.swift` reproduces without making a call.
+
 ## 0.28.0 (2026-09-01)
 
 Searching your library found the right meeting and then left you to hunt

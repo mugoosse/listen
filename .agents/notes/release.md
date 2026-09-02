@@ -410,3 +410,55 @@ Recovery is the one-time setup in `RELEASING.md` §2, run again, and then
 `./release.sh --publish` from the top. `--resume` is no help: nothing was
 submitted, so there is no id to resume, and no tag was created either, so the
 re-run is clean rather than a repair.
+
+### And then again inside a single run, which preflight cannot catch
+
+0.28.0, six days later, on the same machine. **Preflight passed.** The profile
+was there when the run started, there when the app was submitted, there when the
+disk image was submitted, and gone by the next call:
+
+```
+notarizing the app…
+submission: 56b54355-a416-4dc1-95fa-d475148713b0
+  status: Accepted
+stapled the app
+notarizing the dmg…
+submission: 49198705-8daa-4794-8947-b6df407f612c
+  status: Accepted
+Error: No Keychain password item found for profile: listen-notary
+error: notarization returned ''.
+```
+
+Both submissions were **Accepted**. `notarytool history` the next day, after the
+credential was stored again, still lists `49198705` as Accepted, so the work
+reached Apple and came back; what was lost was the ability to make the call
+after it. The app was stapled and validates; the disk image was not.
+
+**So the preflight check does not prevent this, and the note above overstates
+what it bought.** Asking once at the start turns a missing credential into a one
+second failure, which is worth having and is what happened at 0.24.1. It does
+nothing about a credential that disappears while the run is using it, and that
+is the more expensive shape: it costs the build *and* both notarization
+round-trips, about forty minutes here, and it fails at the point where the next
+thing to happen would have been publishing.
+
+Why it goes is still not known, and the second sighting rules a little more out
+rather than in. It is not the keychain being locked: the Sparkle key was read in
+the same run, minutes earlier, and both submissions authenticated. It is not a
+long idle gap: 0.24.1 lost it across two and a half hours, this run lost it
+across about ten minutes of continuous use.
+
+The refusal is still the script working. Nothing was published: no tag locally or
+on the remote, and `dist/` held the zip and the disk image but no
+`SHA256SUMS.txt`, no `appcast.xml` and no unversioned copy, so there was nothing
+half-released to unpick.
+
+Recovery is the same, and `--resume` is still not it even though there were
+submissions to resume this time: `--resume` takes the *app* notarization, and a
+re-run rebuilds anyway. Store the credential again per `RELEASING.md` §2, then
+`./release.sh --publish` from the top. Measured: the re-run went through cleanly,
+both stapled, both Gatekeeper accepted, published as v0.28.0.
+
+**What this is worth in practice**: if a release dies here, check the tag before
+anything else. No tag means the tree is clean and the fix is a re-run, however
+far through the run it got.

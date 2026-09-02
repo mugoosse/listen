@@ -592,7 +592,7 @@ PostHog project.
 - `/release` is the shortcut, and it publishes nothing itself
 - CI runs a different Xcode from the machine you are on, and only one of them ships
 - Double-clicking the icon in the DMG window launches the image's copy
-- The notarytool profile went missing between two releases on the same day
+- The notarytool profile went missing between two releases, and then again mid-run
 
 ## Conventions
 

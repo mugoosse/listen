@@ -2669,6 +2669,13 @@ final class DetailView: NSView {
             chatLinksHeight.isActive = true
             chatLinksTop.constant = 0
         }
+        // The list this comment is about, again. Added after the Chats tab
+        // was, and missing here for exactly as long as that took to notice:
+        // deselecting left it showing the previous recording's conversations,
+        // pinned under the tab bar, over the home page's own greeting and
+        // its own list of recent questions.
+        chatList.isHidden = hidden
+        if hidden { chatList.show(nil) }
         if hidden {
             // Deselecting while a meeting is being recorded is ordinary: the
             // recording carries on, so the note has to be written down and the

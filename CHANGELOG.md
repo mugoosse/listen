@@ -8,6 +8,90 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.31.1 (2026-09-03)
+
+A webinar watched on speakers no longer puts its hosts in the transcript twice,
+a recording whose microphone never opened now reaches your other Mac, and a
+long meeting title stays clear of the toolbar.
+
+### The far end coming back in through the microphone
+
+Watching a webinar on speakers with the microphone open put both hosts in the
+transcript twice, once under their own letters and once under your name. Muting
+yourself in the meeting app stops the far end hearing you and does nothing to
+Listen, which records the microphone raw, so the hosts came back in through the
+speakers and were transcribed as you.
+
+Listen already dropped that on a recording it reads as a room. It could not on
+one it reads as a call, which is what a webinar is, because there it labels the
+whole microphone track as you without looking at it.
+
+- Microphone sentences whose words are also being spoken on the system track at
+  that moment are dropped. Timing alone cannot decide it: measured over the 54
+  recordings in the development library that have a speaker labelled as the
+  user, the webinar's microphone is 100% covered by system speech, but an
+  ordinary call reaches 82.8%. The words separate cleanly, 97.9% for the
+  webinar against 49.3% for the next highest and 6.4% median.
+- Per sentence rather than per speaker, so the two or three things you do say
+  out loud during a webinar stay in the transcript. That is safe here for the
+  reason an overlap rule is not: an interruption's words are the interrupter's
+  own.
+- Sentences of four words or more, at a 90% match. Across the same library that
+  is 7 of 10726 sentences attributed to the user, six of them the webinar's and
+  the seventh an echo as well.
+
+### Your voiceprint was being built from the other side
+
+The worse half of the same bug, and the invisible one. Listen learns your own
+voice from the microphone track, so on that webinar it learned the host's. The
+voiceprint filed for you sits at cosine 0.7477 from the host, where the
+meeting's two real speakers sit at 0.1226 from each other, and 0.75 is the
+point at which Listen names somebody without asking. The only thing that kept
+it out of the voice bank is that a print needs 15 seconds of speech before it
+counts as evidence and the bleed lasted 13.4.
+
+A recording whose microphone held nothing but the far end now files no
+voiceprint for you at all.
+
+**This does not repair a recording you already have.** The duplicated lines and
+the voiceprint stay until you remove them, and `listen label <id> Me --discard`
+does both, keeping any names you have already applied. There is no route to it
+in the window yet, because the microphone track is never treated as a
+placeholder and only a placeholder can be discarded there.
+
+### A recording whose microphone never opened
+
+A call whose microphone never opened leaves a `mic.wav` that is a 44-byte
+header with no audio behind it. Building the combined file the other Macs sync
+failed on that empty side, and failed again on every pass afterwards, so the
+recording never crossed: the other Mac, told by the heartbeat that this one
+held the audio, sat on "Retrying sync: Audio is not available in iCloud yet"
+for a day with the whole transcript on screen under it.
+
+The empty side still counts as a track, so the file splits back into the two it
+was captured as rather than putting the far side into everyone's microphone
+track. Measured on the live library: "sent audio for 1" on the first pass, "got
+audio for 1" on the other Mac 75 seconds later, a 22.0 MB master of 1331.39 s
+against the metadata's 1331.365.
+
+### A long meeting title ran under the toolbar
+
+The window's toolbar floats over the page, and the title sat 38 points down on
+the reasoning that it is left-aligned while the record capsule and the ellipsis
+are on the right. That holds only for a short title. A long one fills the width
+and ran the whole way under both: measured off a screenshot at 2x, the
+capsule's bottom edge is 39.5 points below the top of the window and the
+title's frame began 1.5 points above it, with only the text field's own leading
+keeping the letters out of the button. It is 52 now, which puts the frame 12.5
+points clear and the capital letters 17.5.
+
+### The home page with Ask switched off
+
+"Ask about your library below" pointed at a composer that is not there when Ask
+is off. That branch now offers New Recording, which is the one action actually
+available. The empty-library copy said to start a recording from the sidebar,
+which has been wrong since the record control moved to a toolbar button.
+
 ## 0.31.0 (2026-09-03)
 
 Conversations about a meeting get a tab of their own, the starter questions

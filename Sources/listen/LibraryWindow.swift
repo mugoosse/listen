@@ -31,18 +31,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// What the window is showing. Settings is a mode of this window rather
     /// than a window of its own: the sidebar swaps the recording list for the
     /// section list and the content side swaps the transcript for a pane.
-    /// **A conversation read full width is a mode, and it took two goes to say
-    /// so.** It was an extent of the drawer first: the page covered the content
-    /// pane while the sidebar went on listing recordings, so a click in that
-    /// list changed a view that `applyHeight` had hidden. The recording never
-    /// appeared, the click read as a dead control, and a conversation opened
-    /// from History had no way back to the library at all. A mode has no such
-    /// conflict, because the list under it is the list of conversations: there
-    /// is nothing left for the page to swallow.
+    /// **A conversation is a mode, and it took three goes to say so.** It was
+    /// an extent of the drawer first: the page covered the content pane while
+    /// the sidebar went on listing recordings, so a click in that list changed
+    /// a view that `applyHeight` had hidden. The recording never appeared, the
+    /// click read as a dead control, and a conversation opened from History had
+    /// no way back to the library at all. A mode has no such conflict, because
+    /// the list under it is the list of conversations: there is nothing left
+    /// for the page to swallow.
     ///
-    /// The drawer keeps its two other sizes. A card resting over the meeting it
-    /// is about is still the right shape for asking about that meeting, and that
-    /// is what `standard` stays.
+    /// The third go was deleting the middle state. The drawer kept a card, a
+    /// panel resting over the meeting it was about, on the argument that a
+    /// question about that meeting wants it still on screen; what it actually
+    /// bought was a second gesture between asking and reading the answer, and
+    /// two sets of controls onto one conversation. A question enters this mode
+    /// now. See `DetailWithComposer.pageMode`.
     /// Which screen the window is.
     ///
     /// **People and Notes are gone, and they were collections rather than
@@ -60,8 +63,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     ///
     /// A conversation is reached from the screen it is about as often as from
     /// the list, so "back to the library" would be wrong exactly when somebody
-    /// grew a card over a meeting into a page. Recorded on the way in rather
-    /// than inferred on the way out.
+    /// asked a question about the meeting they were reading. Recorded on the
+    /// way in rather than inferred on the way out.
     private var chatReturn: Mode = .library
 
     /// The two split items' view controllers, which never change. Swapping a
@@ -100,11 +103,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
     // There is no History item any more. It was a menu of the conversations
     // about the page you were on, in the top left of every page but the home
-    // one, and it is gone rather than moved: the card's own title menu asks the
-    // same question six points from where a conversation is actually had, and
+    // one, and it is gone rather than moved: the bar's own History button asks
+    // the same question six points from where a question is actually typed, and
     // `ChatNav` is the list. Three controls onto one set of rows was two too
     // many, and this was the copy nobody was standing next to. See
-    // `appendSourceHistory`, which is what the title menu still fills itself
+    // `appendSourceHistory`, which is what that button still fills itself
     // from.
     private static let chatsItem = NSToolbarItem.Identifier("openChats")
     private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
@@ -269,7 +272,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // `launchChat`.
         if let chat = launchChat {
             launchChat = nil
-            composerHost?.open(chat, as: .page)
+            composerHost?.open(chat)
         }
     }
 
@@ -304,12 +307,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// back to the library.
     @objc func exitSettings() {
         // Chat mode is the one that does not go back to the library, because it
-        // is the one you can arrive at from anywhere: a conversation grown out
-        // of a card over a meeting has that meeting to go back to, and dropping
+        // is the one you can arrive at from anywhere: a question asked about
+        // the meeting on screen has that meeting to go back to, and dropping
         // somebody on the home page instead would be the toolbar answering a
         // question nobody asked. See `chatReturn`.
         if mode == .chat {
-            enter(chatReturn, keepingCard: true)
+            enter(chatReturn)
             return
         }
         guard mode != .library else { return }
@@ -434,37 +437,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // every mode change, and the menu it shows belongs to the drawer.
         self.composerHost = composerHost
         // Conversations named on a page open in the window's composer, which is
-        // the only one on screen.
-        //
-        // **As a card, because the page it is named on is the page it is
-        // about.** Every other route in opens a page: the list of conversations
-        // is a mode, and reading one there means the meeting is not on screen.
-        // This link is the opposite case, and taking it to a full-width page
-        // would put away the transcript whose "Also about this" line was just
-        // clicked.
+        // the only one on screen, and they open as a page like every other
+        // route in. It used to be a card when the link was on a meeting, so
+        // that the transcript stayed behind the conversation about it; that
+        // meant the same conversation appeared in two different shapes
+        // depending on which control had been pressed, and Back is a cheaper
+        // way to get the transcript back than a state nobody could predict.
         detail.onOpenChat = { [weak self] chat in
-            guard let self else { return }
-            // The home page is the exception, and it is the reason opening a
-            // conversation ever became a page: picked out of the greeting it
-            // used to open as a panel resting over a greeting it had nothing to
-            // do with. There is nothing behind it there, so it takes the window.
-            self.composerHost?.open(chat, as: self.isHome ? .page : .card)
-        }
-        // The page's centred sentence steps aside for the drawer. Only that
-        // label: a meeting page is happy to be partly covered, and an empty one
-        // arguing with the conversation on top of it is not.
-        composerHost.onCoveringChanged = { [weak self] covering in
-            self?.detail.setDrawerCovering(covering)
+            self?.composerHost?.open(chat)
         }
         composerHost.onDrawerHeight = { [weak self] points in
             self?.detail.setBottomInset(points)
         }
-        // **The drawer asks; the window decides.** A page is a mode now, and a
-        // mode change is the window's to make: it swaps the sidebar's list, its
+        // **The drawer asks; the window decides.** A page is a mode, and a mode
+        // change is the window's to make: it swaps the sidebar's list, its
         // masthead and the toolbar's items, none of which the drawer can see.
         // What the drawer still owns is the moment, because the two things that
-        // want a page (a conversation opened, and a card grown by its own disc)
-        // both happen inside it.
+        // want a page, a question just asked and a conversation opened, both
+        // happen inside the pane.
         composerHost.onWantsPage = { [weak self] in
             guard let self else { return }
             // Already there, which is a second conversation opened out of the
@@ -624,7 +614,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // library while one is being read. It is already the mode by the time a
         // row can be clicked, so this opens the page and nothing else.
         chatNav.onSelect = { [weak self] chat in
-            self?.composerHost?.open(chat, as: .page)
+            self?.composerHost?.open(chat)
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         // The list, and not the pane that just wrote the change. `reload` calls
@@ -645,13 +635,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self?.open(recording: id, note: slug)
         }
         // The question on a note page is a link to the conversation it was
-        // asked in. A card rather than the mode, for the reason
-        // `openSourceConversation` opens one: the note stays behind it, which is
-        // what makes this a look back at the working-out rather than a
-        // navigation away from the artifact.
+        // asked in, and it opens the way every other conversation does.
         notePane.onOpenChat = { [weak self] id in
             guard let chat = Chat.load(id: id) else { return }
-            self?.composerHost?.open(chat, as: .card)
+            self?.composerHost?.open(chat)
         }
         // A rename rewrites transcripts, so the roster beside it is stale the
         // moment it lands, and so is the recording list behind both.
@@ -814,13 +801,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     /// Change what the window is showing.
     ///
-    /// `keepingCard` is for the one caller that is a *return* rather than a
-    /// navigation: Back, out of chat mode, which puts the conversation down over
-    /// the meeting it grew from. Every other way out of that mode is somebody
-    /// asking for a different page (a reference clicked in an answer, a note
-    /// link, a person), and landing them on it under a card about the
-    /// conversation they have just left would cover the thing they asked for.
-    private func enter(_ next: Mode, keepingCard: Bool = false) {
+    /// It took a `keepingCard` argument, for the one caller that is a *return*
+    /// rather than a navigation: Back, out of chat mode, which put the
+    /// conversation down over the meeting it had grown from. Nothing grows from
+    /// a meeting any more, and leaving the page is one rule however it is left.
+    private func enter(_ next: Mode) {
         guard let sidebarItem, let split, mode != next else { return }
         // A mode change leaves nothing behind to inspect afterwards, and "the
         // window went back to the library on its own" is otherwise unanswerable.
@@ -888,9 +873,43 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // Only settings hid the sidebar, so only settings restores it.
             if was == .settings { sidebarItem.isCollapsed = sidebarWasCollapsed }
             sidebarHost.show(sidebar)
-            detailHost.show(detail)
+            // **Back out of a conversation puts nothing back, because nothing
+            // was taken away.** The chat branch leaves `detailHost` holding
+            // whatever page the question was asked from, and the page is
+            // covered rather than swapped; re-showing the transcript here would
+            // land somebody who asked about a person, or about a note, on a
+            // meeting they had not chosen, with the sidebar still highlighting
+            // the row they came from. It was reachable before a question took
+            // the page, by growing a card to full width and pressing Back, and
+            // it is the ordinary path now.
+            //
+            // Settings *does* swap the pane, in `showPane`, so coming back from
+            // there has something to restore.
+            if was != .chat { detailHost.show(detail) }
             reload()
-            if let table = sidebar.view.window?.firstResponder as? NSView,
+            // **`isViewLoaded` first, and asking without it was a bug in the
+            // shipped app.** `settingsNav.view` *loads* the view controller,
+            // `SettingsNavViewController` selects its first row as it comes up,
+            // and that selection is a `tableViewSelectionDidChange` which calls
+            // `onSelect`, which calls `showPane`, which puts the General
+            // settings pane into `detailHost`. On the way back from chat mode
+            // with settings never opened this session, that pane arrived a
+            // moment after this branch had put the transcript back and replaced
+            // it: pressing Back on a conversation landed on Settings › General
+            // inside library mode, with the recording list still beside it.
+            //
+            // Measured on 0.30.0 as well as here, by asking a question, growing
+            // the card to full width and pressing Back: "Your name" in the
+            // content pane, no transcript. So it is older than the card's
+            // removal and was found by it, because a question reaching the page
+            // in one gesture makes this the ordinary way back rather than one
+            // that needs two discs pressed first.
+            //
+            // The question this asks is only ever true when settings has been
+            // open, which is exactly when the view is loaded, so the guard
+            // costs nothing.
+            if settingsNav.isViewLoaded,
+               let table = window?.firstResponder as? NSView,
                table.isDescendant(of: settingsNav.view) {
                 window?.makeFirstResponder(sidebar.view)
             }
@@ -901,7 +920,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // except on the way into settings, which is about to lock it again.
         if was == .chat {
             if next != .settings { sidebarItem.isCollapsed = sidebarWasCollapsed }
-            composerHost?.leavePage(keepingCard: keepingCard)
+            composerHost?.leavePage()
         }
         // Set here rather than in each branch, because it is one rule about
         // which screen is up and four copies of it is four places for the next
@@ -920,7 +939,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     ///
     /// **The meeting that is being recorded**, which is the one page whose
     /// bottom edge is already occupied. The two meters and the device row live
-    /// there, and the card sat on top of them: the strip that says whether your
+    /// there, and the bar sat on top of them: the strip that says whether your
     /// own voice is arriving was behind a field asking about a transcript that
     /// does not exist yet, since nothing is transcribed until Stop. It comes
     /// back the instant capture ends, on the same meeting, which is also the
@@ -1355,9 +1374,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // **One control, and only on the home page.** There were two: Chats
             // here, and on any open page a History menu of the conversations
             // about *it*. The second is gone. A page already carries its
-            // conversations on the card resting at the bottom of it, whose title
-            // menu lists exactly those rows, so the toolbar copy was a second
-            // opinion in the corner furthest from where anything is asked, and
+            // conversations on the composer bar at the bottom of it, whose
+            // History button lists exactly those rows, so the toolbar copy was
+            // a second opinion in the corner furthest from where anything is
+            // asked, and
             // the corner it sat in is a note's, a person's or a meeting's own
             // heading. Chats stays where it is: the home page is the one screen
             // that is about asking rather than about a document, and "take me to
@@ -1609,7 +1629,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // `NSToolbarItem` lays its own image and title out and exposes no
             // spacing, and the clock came out against the C of Chats. The same
             // fix, and the same one-character shape, as the trailing space
-            // `DetailWithComposer.titleButton` puts before its chevron.
+            // `AskView`'s History button puts before its chevron.
             item.title = " Chats"
             item.toolTip = "Everything you have asked"
             item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
@@ -1650,8 +1670,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.image = NSImage(systemSymbolName: "ellipsis",
                                  accessibilityDescription: "Actions")
             // The drawer owns the menu and fills it as it opens, for the reason
-            // History's is owned there: whether there is a conversation to
-            // delete is an answer that goes stale the moment one is started.
+            // the bar's History menu is built there: whether there is a
+            // conversation to delete is an answer that goes stale the moment
+            // one is started.
             item.menu = composerHost?.chatActionsMenu ?? NSMenu()
             item.showsIndicator = false
             return item
@@ -1971,13 +1992,6 @@ final class DetailWithComposer: NSViewController {
     /// The drawer's own background, so a conversation is not read through the
     /// transcript underneath it.
     private let drawer = NSView()
-    /// The header's controls, all four of them borderless and therefore all
-    /// four of them silent until pressed before `HoverButton` existed. The
-    /// three on the discs fill their disc under the pointer; the title, which
-    /// is a word in a line rather than a shape, brightens instead.
-    private let collapseButton = HoverButton(.fill(idle: 0))
-    private let titleButton = HoverButton()
-
     /// The same glass the composer well is made of, so the drawer under it is
     /// one material rather than two that nearly match.
     ///
@@ -2000,14 +2014,6 @@ final class DetailWithComposer: NSViewController {
         vibrant.layer?.masksToBounds = true
         return vibrant
     }
-    private var header: NSView!
-    private var headerHeight: NSLayoutConstraint!
-
-    /// What `AskView` last asked for, before collapsing is taken into account.
-    private var wantedHeight: CGFloat = 68
-
-    /// The window hides the page's empty sentence while this is up.
-    var onCoveringChanged: ((Bool) -> Void)?
     /// A conversation wants the whole window. The window answers by entering
     /// chat mode, which calls `enterPage` back: the drawer owns the moment, the
     /// window owns the mode. See `Mode.chat`.
@@ -2070,132 +2076,24 @@ final class DetailWithComposer: NSViewController {
             backdrop.bottomAnchor.constraint(equalTo: drawer.bottomAnchor),
         ])
 
-        // **The header is permanent, not a feature of being expanded.** It was
-        // only there while the drawer was open, which meant collapsing removed
-        // the one control that could open it again: the conversation was still
-        // on disk, still resumable, and unreachable. A strip that is always
-        // there is also the only honest home for the history, which otherwise
-        // has nowhere to live at all.
-        header = NSView()
-        header.translatesAutoresizingMaskIntoConstraints = false
-
-        // **A button, not a label.** The clock leaves the header when the
-        // drawer is open, which took switching, starting and deleting with it:
-        // expanded, there was no route to any of them. The title is the natural
-        // place, because it already names the thing they act on.
-        //
-        // The chevron is a character in the attributed title rather than the
-        // button's `image`, which is the alignment fix `SpeakerPill` records: an
-        // `.imageTrailing` glyph sits on the title's baseline and lands a couple
-        // of points below the centre of the letters beside it.
-        titleButton.target = self
-        titleButton.action = #selector(showTitleMenu)
-        // **A symbol, not a typed glyph.** The caret used to be "⌄" appended to
-        // the title string, U+2304 DOWN ARROWHEAD, and it sat visibly below the
-        // words next to it: that character is centred on its own em box rather
-        // than on the x-height of the run it lands in, and it comes from
-        // whatever fallback font happens to carry it, so it matched neither the
-        // baseline nor the weight. An SF Symbol is laid out against the title's
-        // own line, which is the whole reason `AnswerTurn`'s disclosure is an
-        // image too.
-        titleButton.image = NSImage(systemSymbolName: "chevron.down",
-                                    accessibilityDescription: "")
-        titleButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
-        titleButton.imagePosition = .imageTrailing
-        // Beside the words rather than pushed to the far edge of the button,
-        // which is what an untouched trailing image does when the button is
-        // wider than its text.
-        titleButton.imageHugsTitle = true
-
-        // Its own glass disc, and big enough to be a target rather than a hint.
-        // A bare chevron at 11 points is the control somebody hunts for after
-        // the drawer has already swallowed the page.
-        collapseButton.imagePosition = .imageOnly
-        collapseButton.contentTintColor = .labelColor
-        collapseButton.symbolConfiguration = .init(pointSize: 13, weight: .semibold)
-        // Set once, here, rather than in `applyHeight`. It used to be assigned
-        // there because the glyph flipped with the state, and when the header
-        // became expanded-only that stopped being true: collapse always means
-        // put this away. The assignment went with the rewrite and left a glass
-        // disc with nothing drawn in it.
-        //
-        // **A cross rather than a chevron.** The chevron was drawn from the
-        // control's mechanics: the drawer slides down to the bar, so down is
-        // where it goes. Nobody reads it that way. A chevron pointing down in a
-        // pane full of scrolling text is "go to the end", and this one sat in
-        // the corner where every other card in every other app puts its
-        // dismissal. What the button does is close the conversation and leave
-        // the composer, which is what a cross means.
-        collapseButton.image = NSImage(systemSymbolName: "xmark",
-                                       accessibilityDescription: "Close the conversation")
-        collapseButton.toolTip = "Close the conversation"
-        collapseButton.target = self
-        collapseButton.action = #selector(closeConversation)
-        collapseButton.translatesAutoresizingMaskIntoConstraints = false
-        collapseGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
-        collapseGlass.translatesAutoresizingMaskIntoConstraints = false
-        collapseGlass.addSubview(collapseButton)
-
-        // Beside the collapse control, and the same size, because they are the
-        // two directions of one thing: how much of the page the conversation
-        // is allowed to have.
-        fullButton.imagePosition = .imageOnly
-        fullButton.contentTintColor = .labelColor
-        fullButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
-        fullButton.target = self
-        fullButton.action = #selector(toggleFull)
-        fullButton.translatesAutoresizingMaskIntoConstraints = false
-        fullGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
-        fullGlass.translatesAutoresizingMaskIntoConstraints = false
-        fullGlass.addSubview(fullButton)
-
-        // **Starting another one is a button, not only a menu row.** It was
-        // reachable in two places, both of them lists of past conversations:
-        // the History pull-down and the same menu under the drawer's title.
-        // That is the wrong shape for it. Going back to something you asked
-        // yesterday is browsing and belongs in a menu; asking a fresh question
-        // is the most common thing anybody does with a conversation that is
-        // already on screen, and it was costing a menu and a read of every row
-        // in it. The menu keeps its row, because the pull-down in the title bar
-        // is the only route in when no card is up.
-        newButton.imagePosition = .imageOnly
-        newButton.contentTintColor = .labelColor
-        newButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
-        newButton.image = NSImage(systemSymbolName: "square.and.pencil",
-                                  accessibilityDescription: "New conversation")
-        newButton.toolTip = "New conversation"
-        newButton.target = self
-        newButton.action = #selector(newConversation)
-        newButton.translatesAutoresizingMaskIntoConstraints = false
-        newGlass = Self.glassPanel(radius: Self.collapseDiameter / 2)
-        newGlass.translatesAutoresizingMaskIntoConstraints = false
-        newGlass.addSubview(newButton)
-
-        header.addSubview(titleButton)
-        header.addSubview(newGlass)
-        header.addSubview(fullGlass)
-        header.addSubview(collapseGlass)
-
         container.addSubview(content.view)
         container.addSubview(drawer)
-        drawer.addSubview(header)
         drawer.addSubview(composer)
 
-        headerHeight = header.heightAnchor.constraint(equalToConstant: 0)
         // Everything about where the drawer's edges are is held rather than
-        // stated inline, because at full they all move at once: see
+        // stated inline, because on a page they all move at once: see
         // `applyHeight`. The top is the odd one out, activated only there, and
         // it is what replaces the height while the conversation is a page.
         drawerLeading = drawer.leadingAnchor.constraint(equalTo: container.leadingAnchor,
-                                                        constant: Self.cardSideInset)
+                                                        constant: Self.barSideInset)
         drawerTrailing = drawer.trailingAnchor.constraint(equalTo: container.trailingAnchor,
-                                                          constant: -Self.cardSideInset)
+                                                          constant: -Self.barSideInset)
         drawerBottom = drawer.bottomAnchor.constraint(equalTo: container.bottomAnchor,
-                                                      constant: -Self.cardBottomInset)
+                                                      constant: -Self.barBottomInset)
         drawerTop = drawer.topAnchor.constraint(equalTo: container.topAnchor)
         composerBottom = composer.bottomAnchor.constraint(equalTo: drawer.bottomAnchor,
                                                           constant: -12)
-        // The pane spans the drawer, inset in a card and flush on a page. What
+        // The pane spans the drawer, inset in a bar and flush on a page. What
         // the conversation does with that width is `AskView.setPage`'s: on a
         // page it becomes a column, and the scrolling stays full width so the
         // page is what scrolls.
@@ -2214,133 +2112,57 @@ final class DetailWithComposer: NSViewController {
             drawerBottom,
             drawerHeight,
 
-            header.topAnchor.constraint(equalTo: drawer.topAnchor),
-            header.leadingAnchor.constraint(equalTo: drawer.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: drawer.trailingAnchor),
-            headerHeight,
-            titleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor,
-                                                 constant: 20),
-            titleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            titleButton.trailingAnchor.constraint(lessThanOrEqualTo:
-                newGlass.leadingAnchor, constant: -8),
-
-            // Left to right: start another, resize, close. The two that change
-            // how much room the conversation has stay together, and the one
-            // that ends it is on the outside, where a dismissal belongs.
-            newGlass.trailingAnchor.constraint(equalTo: fullGlass.leadingAnchor,
-                                               constant: -8),
-            newGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            newGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            newGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            // **The button is the disc, not the glyph in the middle of it.**
-            // Sized to its symbol it was a 14 point target inside a 30 point
-            // circle, so half of what looks like the control did nothing, and
-            // the hover fill it now draws would have been a small blob floating
-            // inside the glass rather than the disc lighting up.
-            newButton.widthAnchor.constraint(equalTo: newGlass.widthAnchor),
-            newButton.heightAnchor.constraint(equalTo: newGlass.heightAnchor),
-            newButton.centerXAnchor.constraint(equalTo: newGlass.centerXAnchor),
-            newButton.centerYAnchor.constraint(equalTo: newGlass.centerYAnchor),
-
-            fullGlass.trailingAnchor.constraint(equalTo: collapseGlass.leadingAnchor,
-                                                constant: -8),
-            fullGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            fullGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            fullGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            fullButton.widthAnchor.constraint(equalTo: fullGlass.widthAnchor),
-            fullButton.heightAnchor.constraint(equalTo: fullGlass.heightAnchor),
-            fullButton.centerXAnchor.constraint(equalTo: fullGlass.centerXAnchor),
-            fullButton.centerYAnchor.constraint(equalTo: fullGlass.centerYAnchor),
-            collapseGlass.trailingAnchor.constraint(equalTo: header.trailingAnchor,
-                                                    constant: -20),
-            collapseGlass.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            collapseGlass.widthAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            collapseGlass.heightAnchor.constraint(equalToConstant: Self.collapseDiameter),
-            collapseButton.widthAnchor.constraint(equalTo: collapseGlass.widthAnchor),
-            collapseButton.heightAnchor.constraint(equalTo: collapseGlass.heightAnchor),
-            collapseButton.centerXAnchor.constraint(equalTo: collapseGlass.centerXAnchor),
-            collapseButton.centerYAnchor.constraint(equalTo: collapseGlass.centerYAnchor),
-
-            composer.topAnchor.constraint(equalTo: header.bottomAnchor),
+            composer.topAnchor.constraint(equalTo: drawer.topAnchor),
             composerLeading,
             composerTrailing,
             composerBottom,
         ])
 
-        // **A conversation you go back to opens as a page.** Not a card, and not
-        // whatever the screen underneath happened to be: reaching for History
-        // is asking to read something, and a card is the shape for asking about
-        // the meeting behind it rather than for reading a conversation that is
-        // not about it. Picked out of the home page it opened as a panel over a
-        // greeting it had nothing to do with, which is the state this replaces.
+        // **A conversation on screen is a page, and there is no second
+        // answer.** It used to be a card resting over whatever was behind it
+        // when it came from a meeting, and a page when it came from the list,
+        // so where the same conversation appeared depended on which control
+        // had been pressed. One shape means every route in agrees for free: a
+        // question just asked, the History menu on either screen, the recent
+        // list under the greeting, the "Also about this" link on a meeting, the
+        // Chats tab, and `LISTEN_CHAT` at launch.
         //
-        // This is the only fires-on-open hook, so every route in agrees without
-        // anybody having to keep them in step: the History menu on either
-        // screen, the recent list under the greeting, the "Also about this"
-        // link on a meeting, and `LISTEN_CHAT` at launch. Starting a
-        // conversation is untouched and still belongs to wherever it was
-        // started, which is what `newConversation` says.
-        composer.onWantsOpen = { [weak self] in
-            guard let self else { return }
-            self.putAway = false
-            switch self.pending {
-            case .page:
-                // Opened, not grown, so there is no card under it and Back does
-                // not put one there. See `overACard`.
-                self.overACard = false
-                self.onWantsPage?()
-            case .card:
-                self.extent = .standard
-                self.applyHeight(animated: true)
-            }
-        }
+        // Starting a conversation is untouched and still belongs to wherever it
+        // was started, which is what `newConversation` says.
+        composer.onWantsPage = { [weak self] in self?.onWantsPage?() }
         // Straight through: what the list of conversations shows has changed,
         // and only the window knows whether that list is on screen.
         composer.onSaved = { [weak self] in self?.onChatsChanged?() }
-        composer.onExpand = { [weak self] in
-            guard let self else { return }
-            self.putAway = false
-            self.extent = .standard
-            self.applyHeight(animated: true)
-        }
-        // The card's own title menu, opened from the bar that has no title.
-        // See `showTitleMenu` for why there is only one set of rows.
+        // The chevron in the bar, which is the way back to a conversation the
+        // bar is still holding. See `leavePage`, which is the one thing that
+        // leaves one there.
+        composer.onExpand = { [weak self] in self?.onWantsPage?() }
+        // The page's own conversations, from the bar that has no title.
         composer.onHistory = { [weak self] anchor in
             self?.popUpHistory(from: anchor)
         }
-        composer.onHeightChanged = { [weak self] height in
-            guard let self else { return }
-            self.wantedHeight = height
-            // A question asked after the drawer was put away brings it back.
-            // Collapsing means "not now", not "never again", and the alternative
-            // is an answer streaming into a bar nobody can see.
-            // A question asked after the drawer was put away brings it back:
-            // collapsing means "not now", not "never again".
-            if height > Self.barCeiling { self.putAway = false }
-            // **Recorded and not acted on while a press is tearing the
-            // conversation down.** Emptying the composer reports a height, and
-            // that report arrives in the middle of the gesture, before the
-            // press has finished saying what the drawer should be: it applied
-            // itself, snapped the card shut unanimated, and the animated pass
-            // that followed found the height already there and had nothing to
-            // move. See `settling`.
-            guard !self.settling else { return }
-            self.applyHeight(animated: self.composer.hasConversation)
-        }
+        // **Nothing is interpreted, which is the whole of what this hook used
+        // to be for.** It carried a height, and a height over `barCeiling` was
+        // how the drawer learned there was a conversation to open a card
+        // around: a number doing the work of a decision, with a `putAway` latch
+        // and a `settling` flag either side of it to stop a report arriving
+        // mid-gesture from re-opening what a press had just closed. The bar is
+        // the only thing this drawer sizes now, and `AskView.barHeight` is
+        // where that number comes from.
+        composer.onSizeChanged = { [weak self] in self?.applyHeight() }
         view = container
         // **Laid out once, here, before anything is on screen.**
         //
         // Everything below is decided in `applyHeight`: the drawer's height,
-        // whether the header exists, whether the panel is drawn, and whether
-        // the composer well has been given a pass since its bounds last moved.
-        // Until now the first call came from `AskView`'s first height report,
-        // which arrives when agent detection finishes, about a second after the
-        // window appears. For that second the drawer wore the height it was
-        // built with and a header nobody had told to collapse: `titleButton`
-        // and the two size discs were drawn around a zero-height header, so the
-        // first thing on screen at launch was the word "Button", which is
-        // AppKit's placeholder title for an `NSButton` that has none, next to
-        // two empty glass circles, over a squashed composer.
+        // whether the panel is drawn, and whether the composer well has been
+        // given a pass since its bounds last moved. Until now the first call
+        // came from `AskView`'s first size report, which arrives when agent
+        // detection finishes, about a second after the window appears. For that
+        // second the drawer wore the height it was built with, and back when it
+        // had a header nobody had told to collapse, the first thing on screen
+        // at launch was the word "Button", which is AppKit's placeholder title
+        // for an `NSButton` that has none, next to two empty glass circles,
+        // over a squashed composer.
         //
         // Safe here and nowhere earlier. `applyHeight` reads `container`, which
         // is set at the top of this method, and never `self.view`, which would
@@ -2349,125 +2171,35 @@ final class DetailWithComposer: NSViewController {
         applyHeight()
     }
 
-    /// Anything taller than this is a conversation rather than a bar, which is
-    /// what the collapse control and the page-covering flag both key off.
-    private static let barCeiling: CGFloat = 200
+    /// A bar under the page, or the page.
+    ///
+    /// **Two states, and there used to be three.** The middle one was a card:
+    /// a glass panel resting over the meeting, grown from the bar by the first
+    /// question and closed again by a cross in its own header. It cost a second
+    /// gesture to read an answer properly, a second set of controls onto the
+    /// same conversation, and the machinery that decided when a bar had become
+    /// a card: a height report, a `barCeiling` to compare it against, a
+    /// `putAway` latch so a press could not be undone by the report that
+    /// followed it, and a `settling` flag so a report arriving mid-gesture was
+    /// recorded rather than applied. All four are gone with the state they
+    /// existed for.
+    ///
+    /// The window owns which of the two this is: `enterPage` and `leavePage`
+    /// are the only things that write it.
+    private var pageMode = false
 
-    /// How much of the page the conversation is allowed to have.
-    ///
-    /// Three rather than two, because "as much as it needs" and "all of it" are
-    /// different answers: a follow-up wants the page still visible behind it,
-    /// and reading a long answer wants the room.
-    enum Extent { case bar, standard, full }
-    private var extent: Extent = .bar
-
-    /// Set when somebody collapses on purpose, so the next reported height does
-    /// not immediately reopen what they just put away. Cleared by asking again,
-    /// which is the one gesture that means "show me".
-    private var putAway = false
-
-    /// Set while a press is emptying the composer, so the height it reports on
-    /// the way is recorded rather than applied.
-    ///
-    /// Closing, starting another and deleting all clear the conversation and
-    /// then say what the drawer should be. The clearing reports a height by
-    /// itself, halfway through, and that report used to lay the drawer out
-    /// from a state the press had not finished writing: the card jumped shut
-    /// and the animated pass that was meant to close it arrived at a height
-    /// that was already there.
-    private var settling = false
-
-    /// Empty the composer without the drawer reacting to it, then decide.
-    private func settle(_ work: () -> Void) {
-        settling = true
-        work()
-        settling = false
-    }
-
-    /// One-way, because the control is only on screen while the card is open.
-    /// It used to toggle, from the days when the header was permanent; a cross
-    /// that reopens what it just closed would be a lie about which of the two
-    /// it is.
-    ///
-    /// **And it lets the conversation go, rather than only hiding it.**
-    /// Collapsing kept it current: the bar came back, and the next question
-    /// silently continued a conversation with nothing on screen to say which
-    /// one, or that there was one at all. Closing something means it is not
-    /// there any more. Nothing is lost by it, because History holds every
-    /// conversation and this one is one click into that menu, which is the
-    /// same bargain `startNew` already makes.
-    ///
-    /// The caret goes too. A field still blinking under a card that has just
-    /// been put away is the same claim the cross was drawn to withdraw.
-    ///
-    /// **`putAway` is set here, and it used to be cleared.** Clearing it
-    /// contradicted both the sentence above and `putAway`'s own definition,
-    /// which is "set when somebody collapses on purpose"; `leavePage` cites
-    /// this method by name as its reason for setting it. It also disarmed the
-    /// only guard against the next reported height: `applyHeight` re-expands a
-    /// bar whose `wantedHeight` is over `barCeiling` unless `putAway` says
-    /// otherwise, so a tall report arriving after the press would reopen what
-    /// the press had just closed.
-    ///
-    /// **Corrected by reading, not by reproducing, and that distinction is
-    /// worth keeping.** It was found while chasing a report of an Ask panel
-    /// that opened itself after a recording and would not close, and it is
-    /// not known to be that bug: `verify_ask_close.sh` closes a real
-    /// conversation and passes on 0.24.1 as well, so on the paths that script
-    /// walks, the old line was already harmless. `closeConversation` empties
-    /// the composer before it collapses, so the height reported next is an
-    /// empty one and stays under the ceiling. What is not established is that
-    /// every path leaves it empty. This makes the guard match its
-    /// documentation either way.
-    ///
-    /// Set after `settle` and not before, because a height reported while the
-    /// composer is being emptied clears `putAway` on its way past. See
-    /// `onHeightChanged`, where that clearing is what lets a real question
-    /// bring the drawer back.
-    @objc private func closeConversation() {
-        settle {
-            composer.startNew()
-            composer.endComposing()
-        }
-        putAway = true
-        extent = .bar
-        applyHeight(animated: true)
-    }
-
-    /// The card's resize disc, which now means "read this properly".
-    ///
-    /// **It is a mode change, not a taller card.** Full used to be a third
-    /// extent of this drawer: the page covered the content pane while the
-    /// sidebar went on listing recordings, so the list underneath went on
-    /// selecting them and nothing on screen moved. The window owns that state
-    /// now, and all this does is ask, which is why the disc no longer toggles:
-    /// the way back is Back, in the title bar, where the way out of settings is.
-    @objc private func toggleFull() {
-        // Grown from the card this disc is on, so the card is where Back goes
-        // and the window may say so. See `overACard`.
-        overACard = true
-        onWantsPage?()
-    }
-
-    /// The conversations about the page this card is resting on, and a way to
+    /// The conversations about the page the bar is standing on, and a way to
     /// start another.
     ///
-    /// The same rows as the toolbar's History, because they are the same
-    /// question asked from two controls six points apart: this one names the
-    /// conversation you are in, that one names the page you are on, and a menu
-    /// under each that disagreed about which conversations exist would be one
-    /// screen with two histories.
-    @objc private func showTitleMenu() { popUpHistory(from: titleButton) }
-
-    /// **Two controls, one menu, and the anchor is the only difference.**
-    /// The title is on the header, which exists only while a conversation is
-    /// open; History is on the starters line, which exists only while one is
-    /// not. Between them every state of the card has a route to the rows, and
-    /// no state has two.
+    /// **One control onto these rows, and there were three.** The toolbar had a
+    /// History item, the card's header had the same menu under the
+    /// conversation's title, and the bar has this. Two of the three are gone:
+    /// the card went with the state, and the toolbar item was removed before it
+    /// for the same reason, which is that a page has one place to ask "did I
+    /// already ask this?" and it is six points from the field.
     ///
-    /// Anchored to whichever was pressed. It used to be anchored to
-    /// `titleButton` unconditionally, from when that was the only caller, and
-    /// before that to a button this class still owned but had stopped putting
+    /// Anchored to whatever was pressed, which is `AskView.historyButton`. It
+    /// used to be anchored to a button this class owned but had stopped putting
     /// on screen: the menu opened relative to a view with no window, so it was
     /// built, popped, and invisible.
     private func popUpHistory(from anchor: NSView) {
@@ -2559,33 +2291,29 @@ final class DetailWithComposer: NSViewController {
     var openConversationID: String? { composer.currentID }
 
     @objc private func deleteConversation() {
-        settle { composer.discard() }
+        composer.discard()
         // **A page stays a page.** Deleting from the chat mode leaves the mode
         // up with an empty composer in it, which is what New chat there does and
         // for the same reason: the sidebar beside it is still the list of
         // conversations, and dropping somebody back onto a meeting because they
-        // threw one away would be answering a different question. From a card it
-        // still collapses, because what is behind that card is the page the
-        // conversation was about.
-        if extent != .full { extent = .bar }
-        putAway = false
+        // threw one away would be answering a different question. This menu is
+        // only ever on that page, so there is no second case any more.
         applyHeight(animated: true)
         // The row has gone from disk, so it has to go from the list.
         onChatsChanged?()
     }
 
-    /// Start another one. The card's own disc, the History menu's row, and the
-    /// page's New chat are all this.
+    /// Start another one. The History menu's row and the page's New chat are
+    /// both this.
     ///
-    /// **It stays where it was asked from.** From a card or a bar it collapses,
-    /// because the composer with nothing in it is a bar and a meeting is behind
-    /// it. From the page it stays a page: New chat there is the toolbar button
-    /// somebody pressed while reading a conversation full width, and dropping
-    /// them back onto the meeting would be answering a different question.
+    /// **It stays where it was asked from**, which is now always the page: New
+    /// chat is the toolbar button somebody pressed while reading a
+    /// conversation, and dropping them back onto the meeting would be answering
+    /// a different question. From the bar's History menu it is the same call
+    /// with nothing to change, because an empty composer in a bar is what the
+    /// bar already is.
     @objc func newConversation() {
-        settle { composer.startNew() }
-        putAway = false
-        if extent != .full { extent = .bar }
+        composer.startNew()
         applyHeight(animated: true)
         composer.focusField()
         // Nothing has been written, so the list has not changed. What has
@@ -2598,80 +2326,50 @@ final class DetailWithComposer: NSViewController {
     /// from inside this class: what makes a page is the mode, and this is only
     /// its geometry.
     func enterPage() {
-        putAway = false
-        extent = .full
+        pageMode = true
         applyHeight(animated: true)
     }
 
     /// Give it back. The other half of `enterPage`, called as the window leaves
     /// chat mode for whatever it is going back to.
     ///
-    /// **Where it lands depends on whether there was a card.** Grown from one,
-    /// the conversation goes back over the meeting it is about, which is where
-    /// it was a moment ago. Opened out of the list, there is no card to go back
-    /// to and the page behind it has nothing to do with the conversation, so the
-    /// drawer becomes a bar and the conversation is one row into the list it
-    /// came from. `overACard` is that test, and it is why the state exists.
-    func leavePage(keepingCard: Bool) {
-        // **An answer still being written outranks all of it.** Cancelling a
-        // forty-second run because somebody clicked away is the one loss on this
-        // path that cannot be undone by opening the conversation again, so a
-        // running one comes down to a card and stays readable over whatever page
-        // is underneath.
-        if composer.isRunning || (keepingCard && overACard && composer.hasConversation) {
-            extent = .standard
-        } else {
-            // **And otherwise it is let go, exactly as the cross lets it go.**
-            // Left loaded in a bar, the next question would silently continue a
-            // conversation about last month's meetings from under a placeholder
-            // offering to answer about this one. Nothing is lost: the list it
-            // came from is one press of Chats away, and it is the first row.
-            settle {
-                composer.startNew()
-                composer.endComposing()
-            }
-            extent = .bar
+    /// **The conversation is let go, and the bar it leaves behind is empty.**
+    /// Left loaded, the next question would silently continue a conversation
+    /// about last month's meetings from under a placeholder offering to answer
+    /// about this one. Nothing is lost: the list it came from is one press of
+    /// Chats away, and it is the first row.
+    ///
+    /// **An answer still being written is the one exception.** Cancelling a
+    /// forty-second run because somebody pressed Back is the only loss on this
+    /// path that cannot be undone by opening the conversation again, so the run
+    /// keeps going and the conversation stays loaded: it persists its own answer
+    /// when it lands, and the chevron in the bar is the way back to it. That
+    /// chevron exists for this state and no other. See `AskView.onExpand`.
+    ///
+    /// It used to have a `keepingCard` argument, because a conversation grown
+    /// from a card went back over the meeting it was about. There are no cards
+    /// to go back to.
+    func leavePage() {
+        if !composer.isRunning {
+            composer.startNew()
+            composer.endComposing()
         }
-        overACard = false
-        // Set for `closeConversation`'s reason: the drawer is being put down
-        // deliberately, and the height the composer reports next must not
-        // reopen what a mode change has just closed.
-        putAway = extent == .bar
+        pageMode = false
         applyHeight(animated: true)
     }
 
-    /// How a conversation arrives on screen.
+    /// Load a conversation and show it, which is always as a page. The one
+    /// entry point, so a link on a page, a row in the list and a pick from a
+    /// menu cannot come apart.
     ///
-    /// **A page or a card, and the caller says which.** Both used to be one
-    /// call, and this class decided: everything opened became a page. That was
-    /// right for the list and wrong for the "Also about this" link on a meeting,
-    /// which put away the transcript whose own conversation had just been
-    /// clicked.
-    enum Presentation {
-        /// The mode, with the conversations in the sidebar. Reading one.
-        case page
-        /// A card over the page it is about. Carrying on with one.
-        case card
-    }
-
-    /// Load a conversation and show it. The one entry point, so a link on a
-    /// page, a row in the list and a pick from a menu cannot come apart.
-    ///
-    /// **Filled, then sized, and the sizing is asked for rather than inferred.**
-    /// Sizing first meant `applyHeight` read the *previous* conversation, found
-    /// it empty, forced the bar and hid the view that the turns were about to be
-    /// drawn into: a full-height drawer with a header and nothing under it.
-    /// `onWantsOpen` fires after the turns are in, which is the only moment at
-    /// which un-hiding shows anything.
-    func open(_ chat: Chat, as presentation: Presentation) {
-        pending = presentation
-        putAway = false
+    /// **Filled, then shown, and the showing is asked for rather than
+    /// inferred.** `AskView.onWantsPage` fires after the turns are in, which is
+    /// the only moment at which un-hiding shows anything: the other way round,
+    /// the pane was laid out for the *previous* conversation, found it empty and
+    /// hid the view the turns were about to be drawn into.
+    func open(_ chat: Chat) {
         composer.open(chat)
     }
-
-    /// What the conversation being opened asked to be shown as, read by the
-    /// `onWantsOpen` hook a moment later.
-    private var pending: Presentation = .page
 
     /// Whether this screen has a composer at all.
     ///
@@ -2682,12 +2380,12 @@ final class DetailWithComposer: NSViewController {
     /// owns that rule, in `LibraryWindow.updateComposer`, because only it knows
     /// which screen is up.
     ///
-    /// The whole drawer goes, not just the bar. `applyHeight` decides which of
-    /// the glass, the header and the page background are visible, and hiding
-    /// them one by one here would be a second opinion about the same thing;
-    /// hiding their parent leaves that logic to run untouched and simply not be
-    /// seen. The reported inset goes to zero with it, or the pane would reserve
-    /// a strip at the bottom for a card that is not there.
+    /// The whole drawer goes, not just the pane inside it. `applyHeight`
+    /// decides which of the glass and the page background are visible, and
+    /// hiding them one by one here would be a second opinion about the same
+    /// thing; hiding their parent leaves that logic to run untouched and simply
+    /// not be seen. The reported inset goes to zero with it, or the pane would
+    /// reserve a strip at the bottom for a bar that is not there.
     var showsComposer = true {
         didSet {
             guard showsComposer != oldValue else { return }
@@ -2703,66 +2401,26 @@ final class DetailWithComposer: NSViewController {
         // hangs with no window and nothing on stderr. Measured exactly once,
         // which was one time too many.
         guard let container else { return }
-        // A conversation that has just started opens itself. One that is still
-        // an empty composer is a bar however this was last left, so a new
-        // question does not inherit the size of the last answer.
-        // **An empty card is a bar, and an empty page is still a page.** The
-        // rule is that a conversation nobody has started does not inherit the
-        // size of the last answer. New chat on a page is the exception, and the
-        // only one: somebody who is in the chat page and asks for a fresh
-        // conversation has said where they want to be.
-        if !composer.hasConversation, extent == .standard { extent = .bar }
-        else if extent == .bar, wantedHeight > Self.barCeiling, !putAway {
-            extent = .standard
-        }
-        let expanded = extent != .bar
-        // **Full is a page, not a bigger card.** It used to be the same inset,
-        // rounded, glass panel grown until it nearly touched the window's
-        // edges, which is the worst of both: a frame drawn a few points inside
-        // a frame, and a blurred transcript behind text nobody is reading it
-        // against any more. Somebody who asks for all the room has stopped
-        // looking at the page underneath. So the edges go, the glass gives way
-        // to the window's own background, the conversation becomes a column
-        // that scrolls with the page rather than inside a panel, and the header
-        // strip goes with the card it belonged to: a page's controls are the
-        // window's toolbar, which is the one strip of chrome it has.
-        //
-        // The card is untouched: `standard` is still a panel resting over a
-        // meeting, because that is the state where the page still matters.
-        let page = extent == .full
+        // **A page is not a bigger bar.** Full width used to be one more size of
+        // this drawer: an inset, rounded, glass panel grown until it nearly
+        // touched the window's edges, which is the worst of both, a frame drawn
+        // a few points inside a frame with a blurred transcript behind text
+        // nobody is reading it against any more. Somebody reading an answer has
+        // stopped looking at the page underneath. So the edges go, the glass
+        // gives way to the window's own background, the conversation becomes a
+        // column that scrolls with the page rather than inside a panel, and
+        // what chrome it needs is the window's toolbar.
+        let page = pageMode
 
         // **The bar's height is asked for, never assumed.** Hardcoding it below
         // what `AskView` needs squeezed the well until autolayout gave way
         // somewhere else, and the send button came back a flattened oval.
-        let bar = composer.barHeight
-        let body: CGFloat
-        switch extent {
-        case .bar:
-            body = bar
-        case .standard:
-            // **A size of its own, not whatever `AskView` last reported.** That
-            // report is the bar's height when a conversation was loaded rather
-            // than asked, so expanding resolved to a bar with a header on top:
-            // the awkward middle state, where a sliver of answer showed between
-            // two rows of chrome. `wantedHeight` says *whether* to open itself,
-            // never how far.
-            body = min(Self.standardHeight, max(bar, container.bounds.height - 140))
-        case .full:
-            // The whole container. The height is not what holds it there,
-            // though: the top edge is pinned below, so a window resize refits
-            // the page without anybody having to notice it happened. This
-            // number is only what gets reported and what the collapse animates
-            // from.
-            body = container.bounds.height
-        }
-        // The header belongs to the card. On a page its three controls are in
-        // the toolbar, where a page's controls belong, and a strip of chrome
-        // under a strip of chrome would be the same buttons twice.
-        let strip = expanded && !page ? Self.headerHeightPoints : 0
-        let target = body + strip
-
-        headerHeight.constant = strip
-        header.isHidden = !expanded || page
+        //
+        // On a page it is the whole container, and the height is not what holds
+        // it there: the top edge is pinned below, so a window resize refits the
+        // page without anybody having to notice it happened. This number is
+        // only what gets reported and where the animation back to a bar starts.
+        let target = page ? container.bounds.height : composer.barHeight
         // **No panel around a bare composer.** With nothing to hold, the glass
         // was a frame drawn around a control that already has its own, which
         // reads as a container missing its contents. It comes back the moment
@@ -2783,7 +2441,7 @@ final class DetailWithComposer: NSViewController {
         // **And no glass at all on a page.** A material exists to say what is
         // behind it; on a page nothing is, so the glass would be a blur of a
         // transcript the reader has just asked to be rid of.
-        backdrop.isHidden = page || (!expanded && !composer.hasConversation
+        backdrop.isHidden = page || (!composer.hasConversation
             && !composer.isActive)
         pageBackground.isHidden = !page
         // Hidden rather than merely covered. An opaque background is enough for
@@ -2791,27 +2449,30 @@ final class DetailWithComposer: NSViewController {
         // under a full-screen conversation is a page VoiceOver can read and
         // nobody can see.
         //
-        // **`showsComposer` is part of it, because the extent survives the
-        // drawer going away.** Leaving a conversation at full and then arriving
-        // on a screen with no composer hid the drawer and left the pane
-        // underneath hidden with it: an empty window, in Settings and on the
-        // recording screen alike, since nothing in either path puts the extent
-        // back to a bar. Nothing is a page while the drawer is away, which is
-        // what the two lines at the end of this method already say.
+        // **`showsComposer` is part of it, because `pageMode` survives the
+        // drawer going away.** Leaving a conversation on a page and then
+        // arriving on a screen with no composer hid the drawer and left the
+        // pane underneath hidden with it: an empty window, in Settings and on
+        // the recording screen alike, since nothing in either path puts the
+        // drawer back to a bar. Nothing is a page while the drawer is away,
+        // which is what the line at the end of this method already says.
         content.view.isHidden = page && showsComposer
 
         // The edges, all of which move together. Zero on every side is what
-        // makes this a page rather than a taller card, and the pane goes flush
+        // makes this a page rather than a taller bar, and the pane goes flush
         // with them: the room the toolbar needs at the top, and the column the
         // conversation is read in, are both `AskView`'s to leave.
-        drawerLeading.constant = page ? 0 : Self.cardSideInset
-        drawerTrailing.constant = page ? 0 : -Self.cardSideInset
-        drawerBottom.constant = page ? 0 : -Self.cardBottomInset
+        drawerLeading.constant = page ? 0 : Self.barSideInset
+        drawerTrailing.constant = page ? 0 : -Self.barSideInset
+        drawerBottom.constant = page ? 0 : -Self.barBottomInset
         composerLeading.constant = page ? 0 : Self.composerInset
         composerTrailing.constant = page ? 0 : -Self.composerInset
-        // The card's own bottom inset goes with the edges, so the composer
-        // keeps the distance from the window's floor it had before.
+        // The bar's own bottom inset goes with the edges, so the composer keeps
+        // the distance from the window's floor it had before.
         composerBottom.constant = page ? -Self.pageBottomPad : -12
+        // One call, and it used to be two: the pane was told its width and then
+        // told again whether its own controls were on screen, with the same
+        // boolean, from the two states that no longer differ.
         composer.setPage(page)
         // Deactivate before activating, so the two never both hold the drawer's
         // vertical extent and log a conflict on the way through.
@@ -2822,28 +2483,6 @@ final class DetailWithComposer: NSViewController {
             drawerTop.isActive = false
             drawerHeight.isActive = true
         }
-        // The clock and the chevron belong to the bar. Expanded, this header
-        // carries the title and the size controls, and a second clock under it
-        // would be the same action offered twice, six points apart.
-        composer.setExpanded(expanded)
-
-        // One direction only, because this control is only ever on a card: the
-        // header it sits in is hidden on a page, where the way back is Back in
-        // the title bar. It used to be a toggle drawn either way round, from
-        // when full was a size of this drawer rather than a mode of the window.
-        fullButton.image = NSImage(
-            systemSymbolName: "arrow.up.left.and.arrow.down.right",
-            accessibilityDescription: "Fill the page")
-        fullButton.toolTip = "Fill the page"
-        let name = composer.hasConversation ? composer.conversationTitle : ""
-        titleButton.attributedTitle = NSAttributedString(
-            // One trailing space, because `imageHugsTitle` puts the chevron
-            // against the last letter with nothing between them.
-            string: name.isEmpty ? "" : name + " ",
-            attributes: [.font: NSFont.systemFont(ofSize: 11),
-                         .foregroundColor: NSColor.secondaryLabelColor])
-        titleButton.isHidden = name.isEmpty
-
         // Animated on a press, immediate when the height was merely recomputed.
         // A bar easing itself taller because agent detection finished is motion
         // nobody asked for, and the first frame of the window is not a gesture.
@@ -2874,10 +2513,6 @@ final class DetailWithComposer: NSViewController {
             drawerHeight.constant = target
             settleComposer()
         }
-        // Nothing is covered and nothing is a page while the drawer is away, so
-        // the two owners of that state are told rather than left holding what
-        // was true before Settings opened.
-        onCoveringChanged?(showsComposer && expanded)
         // The drawer's own bottom margin counts: what the page loses is
         // everything from the container's floor to the drawer's top edge.
         //
@@ -2887,12 +2522,9 @@ final class DetailWithComposer: NSViewController {
         // height instead would leave it scrolled somewhere else on the way
         // back.
         onDrawerHeight?(page || !showsComposer
-                        ? 0 : drawerHeight.constant + Self.cardBottomInset)
+                        ? 0 : drawerHeight.constant + Self.barBottomInset)
     }
 
-    /// Always present, so the history and the way back are never taken away.
-    /// Tall enough to hold the collapse disc with air around it.
-    private static let headerHeightPoints: CGFloat = 44
     /// Lay the composer out again once the height has finished moving.
     ///
     /// `ComposerWell` positions its field, model control and send button by
@@ -2904,29 +2536,20 @@ final class DetailWithComposer: NSViewController {
         composer.layoutSubtreeIfNeeded()
     }
 
-    /// Enough for an answer and its question with the page still behind it.
-    private static let standardHeight: CGFloat = 560
-    private static let collapseDiameter: CGFloat = 30
-
-    /// What makes the card a card: inset from the window's edges on three
+    /// What makes the bar a bar: inset from the window's edges on three
     /// sides. All three go to zero on a page.
-    private static let cardSideInset: CGFloat = 16
-    private static let cardBottomInset: CGFloat = 14
-    /// The card's two bottom margins added up, so the composer sits the same
+    private static let barSideInset: CGFloat = 16
+    private static let barBottomInset: CGFloat = 14
+    /// The bar's two bottom margins added up, so the composer sits the same
     /// distance off the floor whichever of the two it is in.
     private static let pageBottomPad: CGFloat = 26
-    /// The pane's margin inside a card. A page has none of its own: see
+    /// The pane's margin inside a bar. A page has none of its own: see
     /// `AskView.setPage`.
     private static let composerInset: CGFloat = 24
 
-    private var collapseGlass: NSView!
-    private let fullButton = HoverButton(.fill(idle: 0))
-    private var fullGlass: NSView!
-    private let newButton = HoverButton(.fill(idle: 0))
-    private var newGlass: NSView!
     private var backdrop: NSView!
     /// The page's own opaque background, and the whole of why a page is not a
-    /// window-sized card. An `NSBox` rather than a layer-backed view because a
+    /// window-sized panel. An `NSBox` rather than a layer-backed view because a
     /// box redraws its `fillColor` when the appearance changes and a
     /// `CGColor` on a layer does not: see `DetailView.styleCard`.
     private let pageBackground = NSBox()
@@ -2944,34 +2567,14 @@ final class DetailWithComposer: NSViewController {
     /// even when the height happens not to change.
     private var pageNow = false
 
-    /// **Is there a card under this page, or is the page where it opened?**
-    ///
-    /// It decides where `leavePage` lands. Grown from a card, the conversation
-    /// goes back over the meeting it is about, because that is where it was.
-    /// Opened out of the list it did not come from anywhere: the conversation is
-    /// about some other day's meeting, or about the library, and resting it over
-    /// whatever page happens to be behind it would be a card about one thing
-    /// sitting on another.
-    ///
-    /// **This used to decide whether there was a way out at all.** The way back
-    /// was a toolbar item that collapsed the page onto its card, so a
-    /// conversation opened from History had no card, no item, and no route to
-    /// the library short of starting another conversation or deleting this one:
-    /// the sidebar could not do it either, since it went on listing recordings
-    /// under a page that hid the pane they were shown in. A mode has a Back
-    /// button whatever it was entered from, and this is left deciding only where
-    /// Back goes.
-    private(set) var overACard = false
-
     private lazy var drawerHeight =
         drawer.heightAnchor.constraint(equalToConstant: 84)
 }
 
 extension DetailWithComposer: NSMenuDelegate {
-    /// One menu reaches here: the chat page's actions pull-down. The menu popped
-    /// up under the drawer's title is built and thrown away by `showTitleMenu`,
-    /// so it needs no placeholder and would show one if it were given it, and
-    /// the toolbar's History belongs to the window now.
+    /// One menu reaches here: the chat page's actions pull-down. The bar's
+    /// History menu is built and thrown away by `popUpHistory`, so it needs no
+    /// placeholder and would show one if it were given it.
     func menuNeedsUpdate(_ menu: NSMenu) {
         fillChatActions(menu, forPullDown: true)
     }
@@ -3254,15 +2857,16 @@ extension LibraryWindow: NSMenuDelegate {
         return "Earlier"
     }
 
-    /// Open one of the page's own conversations, over the page it is about.
+    /// Open one of the page's own conversations.
     ///
-    /// A card rather than the mode, which is the whole reason this menu is
-    /// scoped: it names the conversations about the meeting on screen, so
-    /// picking one has no business putting that meeting away.
+    /// The menu is scoped to the page it was opened from, which is what makes
+    /// it worth having beside the field: these are the conversations about the
+    /// meeting on screen. Reading one is the mode, like reading any other, and
+    /// Back comes home to this meeting.
     @objc private func openSourceConversation(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let chat = Chat.load(id: id) else { return }
-        composerHost?.open(chat, as: .card)
+        composerHost?.open(chat)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

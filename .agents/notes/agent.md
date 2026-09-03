@@ -874,6 +874,11 @@ moves focus to the window.
 
 ## New chat is a button on the card, and the chevron became a cross
 
+> **Superseded: the card is gone.** See "A question goes to the page, and
+> the card is gone" at the end of this file. What follows is the state
+> before that, kept because the measurements are still the reason the
+> pieces that stayed are shaped the way they are.
+
 Two things about the drawer's header, both from the same reading of it.
 
 Starting another conversation was reachable only through a list of old ones: the
@@ -911,6 +916,11 @@ that change how much room the conversation has stay together, and the one that
 ends it is on the outside.
 
 ## The height report is what reopened the card the cross had just closed
+
+> **Superseded: the card is gone.** See "A question goes to the page, and
+> the card is gone" at the end of this file. What follows is the state
+> before that, kept because the measurements are still the reason the
+> pieces that stayed are shaped the way they are.
 
 Pressing the cross emptied the conversation and left the card up: the three
 header discs still there, the panel still the height of an answer, and nothing
@@ -2791,6 +2801,11 @@ scroll bar in either is the recordings list's.
 
 ## The toolbar's History is gone, and the menu under the card is the one that stays
 
+> **Superseded: the card is gone.** See "A question goes to the page, and
+> the card is gone" at the end of this file. What follows is the state
+> before that, kept because the measurements are still the reason the
+> pieces that stayed are shaped the way they are.
+
 Three controls opened onto one set of rows. `ChatNav` is the list, the card's own
 title menu asks "what else did I ask here" from six points above where a question
 is typed, and the toolbar's History asked the same thing from the far corner of
@@ -2941,6 +2956,11 @@ card exists to prevent.
 
 ## The cross's `putAway` was inverted, and the bug it was chased for is still open
 
+> **Superseded: the card is gone.** See "A question goes to the page, and
+> the card is gone" at the end of this file. What follows is the state
+> before that, kept because the measurements are still the reason the
+> pieces that stayed are shaped the way they are.
+
 `closeConversation` set `putAway = false`. That contradicts `putAway`'s own
 definition, "set when somebody collapses on purpose", the sentence above the
 method saying a cross that reopens what it closed would be a lie about which of
@@ -3020,6 +3040,11 @@ length in every request.
 
 ## History is the card's title menu, from the bar that has no title
 
+> **Superseded: the card is gone.** See "A question goes to the page, and
+> the card is gone" at the end of this file. What follows is the state
+> before that, kept because the measurements are still the reason the
+> pieces that stayed are shaped the way they are.
+
 A card with a conversation in it grows a header, and that header's title opens
 the conversations about this page (`showTitleMenu`). A card with nothing in it
 yet has no header at all. So on every meeting nobody had asked about, there was
@@ -3065,3 +3090,88 @@ worth not repeating:
 A real stall needs the network taken away for more than ten seconds while the
 transfer stays open. Until somebody arranges that, the fix stands on the code
 rather than on a measurement.
+
+## A question goes to the page, and the card is gone
+
+Asking used to grow a card: a glass panel resting over the meeting, inset from
+the window's edges, with a header carrying the conversation's title, a disc to
+start another, a disc to grow it into a page, and a cross to close it. Reading
+the answer properly then took a second gesture on the second of those discs.
+The page it grew into is the screen this now goes to directly.
+
+**Two reasons, and neither is about the card being ugly.**
+
+- **Nobody asks a question in order to read it through glass.** The card's
+  argument was that a question about the meeting wants the meeting still on
+  screen behind it. That is true of the composer, which is why the bar still
+  sits over the transcript and still grows its chips and its panel when the
+  field takes the caret. It stops being true the moment there is an answer:
+  what somebody wanted is the answer, and it was being drawn in a panel over
+  the thing they had stopped looking at, at whatever height the drawer had
+  guessed.
+- **One conversation had two shapes, and which one you got depended on the
+  control you pressed.** "Also about this" on a meeting opened a card; the same
+  conversation from the Chats list opened a page; the recent list under the
+  greeting opened a page because the home page had nothing to rest a card on.
+  `DetailWithComposer.Presentation` was that fork, and every new route in had
+  to pick a side.
+
+**What went with it.** The middle state is the reason all of this existed:
+
+- `Extent.standard`, `standardHeight`, and the header strip: `titleButton`,
+  `collapseButton`, `fullButton`, `newButton` and their four glass discs.
+- The machinery that decided when a bar had become a card. `AskView` reported
+  a height, 560 while there was a conversation and `barHeight` otherwise;
+  `applyHeight` compared it against `barCeiling` and opened itself. A number
+  was doing the work of a decision, and it needed two flags to stay honest:
+  `putAway`, so the report that follows a press could not undo it, and
+  `settling`, so a report arriving mid-gesture was recorded rather than
+  applied. `AskView.wantsRoom` was the other end of the same wire, and every
+  path that emptied the composer had to remember to clear it.
+- `overACard`, which decided where Back went, and the `keepingCard` argument
+  that carried it from `LibraryWindow.enter` into `leavePage`. `chatReturn` was
+  already the answer to that question and still is.
+- `DetailView.drawerCovering`, which hid the home page's greeting and mascot
+  while a card stood over them. A page hides the whole pane, so there is
+  nothing left to argue with.
+
+**What replaced it is one line in `ask`.** `onWantsPage` fires after the
+question and the shimmering answer are both in the view, which is the same
+moment `open` fires it, so a question and a conversation opened from a list
+arrive by the same route. The window turns that into `Mode.chat`: the sidebar
+becomes the list of conversations, the toolbar becomes New chat and the
+actions ellipsis, and Back goes wherever the mode was entered from.
+
+**Two controls stay on the bar**, and neither is a card:
+
+- **History**, on the starters line, which is the conversations about the page
+  you are standing on. It was already there, and the card's title menu was the
+  second control onto those rows.
+- **The chevron**, which is the way back to a conversation the bar is still
+  holding. There is exactly one state that happens in: pressing Back while an
+  answer is streaming keeps the run rather than cancelling it, because a
+  forty-second answer thrown away by a navigation is the one loss on that path
+  that cannot be undone by opening the conversation again. The run persists its
+  own answer when it lands.
+
+**A queued question takes the page too**, and that is a consequence rather
+than a decision. Pressing Back while an answer runs keeps the run; if a
+follow-up was waiting behind it, `finish` asks it, `ask` asks for the page, and
+the window goes back to the conversation on its own a minute after somebody
+navigated away from it. The alternative is an answer streaming into a bar
+nobody can see, which is what the card was brought back for on the same path,
+so this is the old rule with a page instead of a card. It needs a question
+queued *and* Back pressed before the first answer lands, and Stop is still the
+way to take a waiting question back.
+
+**Asking now stops playback**, because entering the mode does: `enter(.chat)`
+calls `detail.stopPlayback` for the reason settings does, which is that a
+transport nobody can see is a transport nobody can pause. Growing a card to
+full width already did this; the difference is that it now happens on the
+question rather than on a second press.
+
+Verified by `verify_ask_handoff.sh`, which replaced `verify_ask_close.sh`: a
+question puts the answer on a page with Back and New chat in the title bar and
+neither of the card's two controls anywhere in the tree, Back leaves the
+composer where it was with the conversation let go, asking again takes the page
+again, and `LISTEN_CHAT` at launch opens a page rather than a panel over one.

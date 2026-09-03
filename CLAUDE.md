@@ -251,7 +251,7 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 - The tags are text in the note row, and pills everywhere else
 - An agent may tag the user's own note, and still may not rewrite it
 
-### `.agents/notes/window.md` (71k)
+### `.agents/notes/window.md` (141k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -324,6 +324,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Notes and the transcript are tabs, and the count is what tabs cost
 - Chats is the third tab, and it took the conversations off "Also about this"
 - The tab is gone when Ask is off, and `NSSegmentedControl` cannot hide a segment
+- Asking whether the responder is in settings *opened* settings
 - The gap under the tab bar belongs to the column, not to the first line in it
 
 ### `.agents/notes/appkit.md` (35k)
@@ -444,7 +445,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A retry that never says why is a stall nobody can fix
 - Which environment a build reaches is a property of how it was installed
 
-### `.agents/notes/agent.md` (148k)
+### `.agents/notes/agent.md` (172k)
 
 Asking questions about the library, through an agent CLI the user already has
 or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
@@ -488,8 +489,8 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - A reference is an id the model wrote, and a number the reader clicks
 - Save as note did nothing on the screen most questions are asked from
 - Clicking away gives up the caret, and the whole bar counts as inside
-- New chat is a button on the card, and the chevron became a cross
-- The height report is what reopened the card the cross had just closed
+- New chat is a button on the card, and the chevron became a cross (superseded)
+- The height report is what reopened the card the cross had just closed (superseded)
 - Claude and Codex are harnesses; an OpenAI-compatible endpoint is one POST
 - `MCP.call` is a function, and stdio is one transport onto it
 - Every tool failure comes back as a result, never as an error
@@ -539,7 +540,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - One question waits, and Stop is the way to take it back
 - The stop button drew itself as Ask for the whole run
 - Every control on the Ask surfaces was silent until it was pressed
-- A conversation you go back to opens as a page
+- A conversation you go back to opens as a page, and now so does a question
 - The meeting being recorded has no composer, and an extent outlived its drawer
 - Delete is a verb on the conversation, so it is not on History
 - The status line holds its slot, so a message never moves the composer
@@ -552,7 +553,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The search field belongs where the list it swaps with keeps its own
 - The chats home page is the library's home page, and three numbers said otherwise
 - An empty page needs the greeting the home page has
-- The toolbar's History is gone, and the menu under the card is the one that stays
+- The toolbar's History is gone, and the menu under the card is the one that stays (superseded: the bar's is the one that stays)
 - The allowlist is an argument, because only one of three backends honoured it
 - "Install with npm" under an installed CLI reads as "not installed"
 - An unknown sign-in state was trusted for the life of the process
@@ -561,11 +562,12 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The wizard's save path is not scripted, and the reason is the Keychain service
 - Ask is off until somebody turns it on, and onboarding is where they are asked
 - The setup card stands alone, and takes the composer's place rather than sitting over it
-- The cross's `putAway` was inverted, and the bug it was chased for is still open
+- The cross's `putAway` was inverted, and the bug it was chased for is still open (superseded)
 - "Catch me up" was a sentence no user of this app can say
 - The fourth recording chip is `Positions`, and it comes and goes
-- History is the card's title menu, from the bar that has no title
+- History is the card's title menu, from the bar that has no title (superseded)
 - What could not be verified: the download stall
+- A question goes to the page, and the card is gone
 
 ### `.agents/notes/telemetry.md` (8k)
 
@@ -661,13 +663,15 @@ One script stands in for one, over the app built in the working directory:
 ./verify_ask_page.sh    # the Ask surfaces on a meeting page: which starters
                         # are offered (Positions only when every speaker is
                         # named and there are two of them), History on the
-                        # card, and the Chats tab counting, listing, saying
+                        # bar, and the Chats tab counting, listing, saying
                         # what to do when empty, and being absent with
                         # `askEnabled` off (uitest copy)
-./verify_ask_close.sh   # closing a conversation with the cross, against a stub
-                        # that actually answers, which no other Ask script has.
-                        # `LISTEN_APP=` points it at a released build; see its
-                        # header for what it does not establish (uitest copy)
+./verify_ask_handoff.sh # a question takes the whole page and Back comes home,
+                        # against a stub that actually answers, which no other
+                        # Ask script has. It replaced `verify_ask_close.sh`,
+                        # which pressed the cross on the card this deleted.
+                        # `LISTEN_APP=` points it at a released build (uitest
+                        # copy)
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
 ./verify_search.sh      # a search result shows the sentence that matched and

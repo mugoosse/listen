@@ -118,9 +118,9 @@ final class AskView: NSView {
     /// A person used to get none, on the argument that a pane already narrowed
     /// to one name has a question in it. That was wrong in the way the library
     /// was wrong before it got four of its own: the chips are what say which
-    /// *kind* of question the pane can answer, and somebody standing on a card
-    /// that lists three calls has no way of knowing "what do I still owe them"
-    /// is one of them.
+    /// *kind* of question the pane can answer, and somebody standing on a
+    /// person's page that lists three calls has no way of knowing "what do I
+    /// still owe them" is one of them.
     ///
     /// The four are the shapes that are only answerable because the subject is
     /// a person: what we last talked about, what is outstanding between us,
@@ -165,17 +165,16 @@ final class AskView: NSView {
     /// The starters and the drawer's collapsed-state controls, on one line.
     private let starterLine = NSStackView()
     private let expandButton = HoverButton()
-    /// The conversations about this page, on the card about to start another.
+    /// The conversations about this page, on the bar about to start another.
     ///
-    /// **The drawer's title menu, in the state that has no title.** A card with
-    /// a conversation in it grows a header, and that header's title opens the
-    /// history; a card with nothing in it yet has no header at all, so on every
-    /// meeting nobody had asked about there was no route to that meeting's own
-    /// past conversations from the one place somebody is standing when "did I
-    /// already ask this?" occurs to them. The toolbar's History item is gone
-    /// (see `LibraryWindow.chatsItem`) and is not coming back: this is the same
-    /// rows in the same menu, six points from the field, rather than a third
-    /// control onto them.
+    /// **The one control onto those rows, and there were three.** The card the
+    /// drawer used to grow carried the same menu under the conversation's
+    /// title, and the toolbar carried a History item; both are gone. This is
+    /// the one that was kept, because it is six points from where a question is
+    /// actually typed, and it is up in exactly the state where "did I already
+    /// ask this?" occurs to somebody: standing over a meeting, about to ask
+    /// about it. See `LibraryWindow.chatsItem` for the toolbar item's removal,
+    /// and `ChatNav` for the list.
     private let historyButton = HoverButton()
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
@@ -253,12 +252,6 @@ final class AskView: NSView {
     private var chat = Chat()
     /// Has a context ever been shown? See `show`.
     private var loaded = false
-    /// Set by asking, cleared by merely arriving somewhere. Only a question
-    /// deserves to take the page.
-    private var wantsRoom = false
-    /// The drawer's last reported state, so the caret can be re-evaluated when
-    /// the conversation changes without the height changing.
-    private var expandedNow = false
     /// Is the field being typed into? What the starter chips and the drawer's
     /// panel both key off. See `setComposing`.
     private var composing = false
@@ -372,12 +365,18 @@ final class AskView: NSView {
         expandButton.action = #selector(expandPressed)
         expandButton.isHidden = true
 
-        // A word and a chevron at the drawer title's own size and weight,
-        // because the two controls open one menu and must not be two shapes.
-        // The chevron is the button's `image` rather than a typed character for
-        // the reason `DetailWithComposer.titleButton` records, and there is one
-        // trailing space in the title because `imageHugsTitle` otherwise puts
-        // it against the last letter.
+        // A word and a chevron at 11 points, the size the drawer's own header
+        // used for the same menu before that header was deleted.
+        //
+        // **A symbol, not a typed glyph.** The caret used to be "⌄" appended to
+        // the title string, U+2304 DOWN ARROWHEAD, and it sat visibly below the
+        // words next to it: that character is centred on its own em box rather
+        // than on the x-height of the run it lands in, and it comes from
+        // whatever fallback font happens to carry it, so it matched neither the
+        // baseline nor the weight. An SF Symbol is laid out against the title's
+        // own line, which is the whole reason `AnswerTurn`'s disclosure is an
+        // image too. There is one trailing space in the title because
+        // `imageHugsTitle` otherwise puts the glyph against the last letter.
         historyButton.attributedTitle = NSAttributedString(
             string: "History ",
             attributes: [.font: NSFont.systemFont(ofSize: 11),
@@ -401,8 +400,8 @@ final class AskView: NSView {
         starterLine.translatesAutoresizingMaskIntoConstraints = false
         starterLine.addArrangedSubview(starterRow)
         starterLine.addArrangedSubview(spacer)
-        // The word before the glyph, so the chevron that opens the card sits at
-        // the card's own edge the way the header's discs do.
+        // The word before the glyph, so the chevron sits at the bar's own
+        // trailing edge with History inboard of it.
         starterLine.addArrangedSubview(historyButton)
         starterLine.addArrangedSubview(expandButton)
         // The spacer is what pushes the controls to the trailing edge, and it
@@ -475,10 +474,10 @@ final class AskView: NSView {
             equalToConstant: Self.statusHeight)
 
         // **The four things that are a column on a page.** Everything on this
-        // pane is pinned to both of its sides in a card, which is right there
-        // because a card is already a column: it is inset from the window and
-        // sits over the meeting. A page is as wide as the window, and the same
-        // constraints made a 168 character line of it. See `setPage`.
+        // pane is pinned to both of its sides in a bar, which is right there
+        // because a bar is already inset from the window and only one control
+        // high. A page is as wide as the window, and the same constraints made
+        // a 168 character line of it. See `setPage`.
         //
         // The scroll view is deliberately not one of them. It stays pinned to
         // both edges, so the thing that scrolls is the page rather than a panel
@@ -615,10 +614,10 @@ final class AskView: NSView {
 
     /// Show it only where it belongs: a page with nothing in it.
     ///
-    /// Never in a card or a bar, which are a strip over a meeting and have no
-    /// room for a mascot, and never once a question has been asked, because then
-    /// the page has its subject. The wording is the library's, adjusted for the
-    /// one thing that differs: what is in the sidebar beside it is the
+    /// Never in the bar, which is a strip over a meeting and has no room for a
+    /// mascot, and never once a question has been asked, because then the page
+    /// has its subject. The wording is the library's, adjusted for the one
+    /// thing that differs: what is in the sidebar beside it is the
     /// conversations rather than the recordings.
     private func updateWelcome() {
         let show = isPage && !hasConversation
@@ -661,25 +660,63 @@ final class AskView: NSView {
         ]
     }
 
-    /// A card, or a page.
+    /// A bar, or a page. The two states this pane has, and the window owns
+    /// which of them it is in.
+    ///
+    /// **There used to be a third, and it is the whole of what this change
+    /// removed.** A card was a panel resting over the meeting, grown from the
+    /// bar by the first question and closed again by a cross in its own header;
+    /// a page was that card grown a second time. Two gestures to read an
+    /// answer, two sets of controls onto the same conversation, and a state in
+    /// between that was neither. A question goes to the page now, and so does
+    /// opening a conversation: see `onWantsPage`.
     ///
     /// The pane is the same in both: the difference is that a page is as wide
     /// as the window, so the conversation becomes a column in the middle of it
     /// and the space above it makes room for the toolbar the page's controls
-    /// now live in. The window owns which of the two this is.
+    /// live in.
+    ///
+    /// **Idempotent, because `redraw` calls it to re-derive the bar's
+    /// controls.** Starting a new conversation changes what there is to go back
+    /// to without changing which of the two states this is, and the chevron in
+    /// the bar was left offering to open a conversation that no longer existed.
     func setPage(_ on: Bool) {
-        guard on != isPage else { return }
-        isPage = on
-        applyWidths()
-        // **The conversation stops at the toolbar rather than scrolling under
-        // it.** A content inset was the other way, and is what `DetailView`
-        // does with its notes pane, but the page's own controls sit in that
-        // strip now: text sliding under a glass group with History and New chat
-        // in it is legible through the glass and reads as two things in one
-        // place.
-        scrollTop.constant = on ? Self.pageTopPad : 0
-        updateWelcome()
+        // **The conversation is taken out of the view, not merely squeezed.**
+        // In a bar the scroll view still had the whole answer in it at a few
+        // points high: legible through the glass and scrollable with a
+        // trackpad, which is a conversation nobody asked to see behind a bar
+        // that says it is put away.
+        //
+        // Stated on every call rather than only on a change, because `redraw`
+        // calls this with the state the pane is already in and that is the call
+        // that hides it at launch.
+        scroll.isHidden = !on
+        if on != isPage {
+            isPage = on
+            applyWidths()
+            // **The conversation stops at the toolbar rather than scrolling
+            // under it.** A content inset was the other way, and is what
+            // `DetailView` does with its notes pane, but the page's own
+            // controls sit in that strip: text sliding under a glass group with
+            // History and New chat in it is legible through the glass and reads
+            // as two things in one place.
+            scrollTop.constant = on ? Self.pageTopPad : 0
+            updateWelcome()
+            needsLayout = true
+        }
+        updateBarControls()
+        // **Un-hiding is not enough.** The turns are added while the scroll
+        // view is hidden, because the drawer only becomes a page once the
+        // conversation is loaded, and a scroll view whose document was built
+        // out of sight comes back with nothing laid out in it. Same staleness
+        // as `ComposerWell`, same cure: ask for the pass explicitly.
+        guard on else { return }
         needsLayout = true
+        layoutSubtreeIfNeeded()
+        scrollToEnd()
+        trace("askview page: scroll \(scroll.frame.height) high over a document of "
+              + "\(scroll.documentView?.frame.height ?? 0), invitation "
+              + "\(invitation.frame.height)")
     }
 
     /// Pick one of the three widths and put the other two away.
@@ -1009,7 +1046,6 @@ final class AskView: NSView {
         // Nothing is lost by dropping it. Every conversation is in History, and
         // a meeting's own are named on the page under "Also about this".
         chat = Chat()
-        wantsRoom = false
         redraw()
     }
 
@@ -1035,7 +1071,6 @@ final class AskView: NSView {
         // Fresh, for the reason `show(_:)` records. Their conversations are in
         // History like everybody else's.
         chat = Chat()
-        wantsRoom = false
         redraw()
     }
 
@@ -1053,31 +1088,27 @@ final class AskView: NSView {
         person = chat.person
         field.placeholderString = placeholder(for: recording, person: person)
         loaded = true
-        // Picked out of the history on purpose, so this one does deserve room,
-        // and deserves to survive whatever selection arrives next.
-        wantsRoom = true
+        // Picked out on purpose, so it deserves to survive whatever selection
+        // arrives next.
         pinned = true
         redraw()
-        onWantsOpen?()
+        onWantsPage?()
     }
 
     /// Start a new conversation, keeping whatever is on screen as its subject.
     ///
-    /// **`wantsRoom` goes with the turns.** It is set by asking and by opening
-    /// something from History, and it is the whole of the height report: while
-    /// it is true `reportHeight` says 560 whatever is in the view. Leaving it
-    /// set here meant the empty conversation this leaves behind still claimed a
-    /// card's worth of room, and the drawer believed it: `applyHeight` reads
-    /// the last reported height to decide whether a bar should open itself, so
-    /// pressing the cross cleared the answers and then immediately reopened the
-    /// card around nothing. Both header discs land here, so both did it. The
-    /// other three fresh-conversation paths, `show`, `show(person:)` and
-    /// `discard`, already cleared it; this was the one that did not.
+    /// **It reports no size of its own, and there used to be a `wantsRoom`
+    /// here that did.** A conversation asked for 560 points from the drawer
+    /// and an empty one asked for a bar, so every path that emptied the
+    /// composer had to remember to clear the flag or the drawer would reopen a
+    /// panel around nothing. Nothing reads a height to decide what to show any
+    /// more: a conversation is on the page or it is not, and the page is a mode
+    /// the window is put into by a question or by an open. See
+    /// `DetailWithComposer.applyHeight`.
     func startNew() {
         stop()
         chat = Chat()
         pinned = false
-        wantsRoom = false
         redraw()
     }
 
@@ -1114,7 +1145,7 @@ final class AskView: NSView {
 
     private func redraw() {
         trace("askview redraw: \(chat.turns.count) turns, id \(chat.id ?? "none"), "
-              + "scrollHidden \(scroll.isHidden), expandedNow \(expandedNow)")
+              + "scrollHidden \(scroll.isHidden), page \(isPage)")
         for view in turns.arrangedSubviews { view.removeFromSuperview() }
         answering = nil
         // The bubble has just been removed with everything else, so this is the
@@ -1152,11 +1183,10 @@ final class AskView: NSView {
         // And the composer's width goes with it: an empty page is as wide as the
         // pane, a conversation is a column. See `applyWidths`.
         applyWidths()
-        // And the caret is re-evaluated here rather than only when the drawer
-        // resizes. Starting a new conversation changes what there is to expand
-        // without changing any height, so the caret was left offering to open a
-        // conversation that no longer existed.
-        setExpanded(expandedNow)
+        // And the bar's controls are re-evaluated here rather than only when
+        // the drawer resizes. Starting a new conversation changes what there is
+        // to go back to without changing which state the pane is in.
+        setPage(isPage)
         scrollToEnd()
     }
 
@@ -1173,7 +1203,7 @@ final class AskView: NSView {
         composing = on
         watchClicks(on)
         drawStarters()
-        reportHeight()
+        reportSize()
     }
 
     /// Watch for the click that means somebody has stopped asking.
@@ -1245,7 +1275,7 @@ final class AskView: NSView {
         starterRow.isHidden = false
         // Built per person rather than looked up, because the prompts name
         // them. The chips are redrawn on every context change, so this runs
-        // when the card does: `show(person:)` ends in `redraw`.
+        // when the context does: `show(person:)` ends in `redraw`.
         var offered: [(String, String)]
         if let person {
             offered = Self.personStarters(for: person)
@@ -1338,7 +1368,7 @@ final class AskView: NSView {
             // corrected itself a second later, when detection finished and the
             // branches below reported a height for the first time, which made
             // it look like a loading state rather than a layout fault.
-            reportHeight()
+            reportSize()
             // Once, and the callback puts the real state up.
             AgentCLI.warmUp { [weak self] in self?.updateStatus() }
             return
@@ -1350,12 +1380,12 @@ final class AskView: NSView {
             say("")
             showNotice(found)
             setAskable(false)
-            reportHeight()
+            reportSize()
             return
         }
         showNotice(nil)
         setAskable(true)
-        reportHeight()
+        reportSize()
         // A provider's catalogue goes stale while the app sits in the menu bar
         // for a week. This is a date comparison in the common case and a few
         // background HTTP GETs when it is not, and it lands in the cache for
@@ -1393,10 +1423,11 @@ final class AskView: NSView {
         say("")
     }
 
-    /// Pressed on the clock and on the chevron in the starters line. The drawer
-    /// owns what they mean, because only it knows how tall it is.
-    /// Carries the button, because the menu has to pop up from the control
-    /// that was pressed and that control lives here, not in the drawer.
+    /// Pressed on the chevron in the starters line, which is the way back to a
+    /// conversation the bar is still holding. There is one state that happens
+    /// in: leaving the page while an answer is still being written keeps the
+    /// run rather than cancelling it, so the conversation outlives the page it
+    /// was on. See `DetailWithComposer.leavePage`.
     var onExpand: (() -> Void)?
 
     @objc private func expandPressed() { onExpand?() }
@@ -1413,42 +1444,22 @@ final class AskView: NSView {
     /// **Three conditions, and each one is a state it would otherwise be wrong
     /// in.** Composing, for the reason the chips wait for the caret: the drawer
     /// draws no panel until somebody means to ask, so a word sitting there
-    /// would be unbacked text lying on the transcript. Not expanded, because
-    /// the card's header carries the same menu under the conversation's title
-    /// and a page's carries it in the toolbar, and offering it twice six points
-    /// apart is what the toolbar's History item was removed for. And only where
-    /// somebody is listening: `DetailView` holds an `AskView` of its own that
-    /// nothing currently puts on screen, and a control that opens no menu is
-    /// worse than no control.
+    /// would be unbacked text lying on the transcript. Not on a page, whose own
+    /// History is in the toolbar beside New chat, and offering it twice six
+    /// points apart is what the toolbar's History item was removed for. And
+    /// only where somebody is listening: `DetailView` holds an `AskView` of its
+    /// own that nothing currently puts on screen, and a control that opens no
+    /// menu is worse than no control.
     private func updateHistoryButton() {
-        historyButton.isHidden = onHistory == nil || !composing || expandedNow
+        historyButton.isHidden = onHistory == nil || !composing || isPage
     }
 
-    /// Both controls belong to the collapsed bar. Expanded, the drawer's own
-    /// header carries the title and the size controls, and a second clock under
-    /// it would be the same action offered twice, six points apart.
-    func setExpanded(_ on: Bool) {
-        expandedNow = on
-        expandButton.isHidden = on || !hasConversation
+    /// Both of the bar's own controls, which are only ever on the bar: on a
+    /// page the conversation is the page, and History and New chat are in the
+    /// toolbar.
+    private func updateBarControls() {
+        expandButton.isHidden = isPage || !hasConversation
         updateHistoryButton()
-        // **The conversation is taken out of the view, not merely squeezed.**
-        // Collapsed, the scroll view still had the whole answer in it at a few
-        // points high: legible through the glass and scrollable with a
-        // trackpad, which is a conversation nobody asked to see behind a bar
-        // that says it is put away.
-        scroll.isHidden = !on
-        // **Un-hiding is not enough.** The turns are added while this is hidden,
-        // because the drawer only asks to expand once the conversation is
-        // loaded, and a scroll view whose document was built out of sight comes
-        // back with nothing laid out in it. Same staleness as `ComposerWell`,
-        // same cure: ask for the pass explicitly.
-        guard on else { return }
-        needsLayout = true
-        layoutSubtreeIfNeeded()
-        scrollToEnd()
-        trace("askview expanded: scroll \(scroll.frame.height) high over a document of "
-              + "\(scroll.documentView?.frame.height ?? 0), invitation "
-              + "\(invitation.frame.height)")
     }
 
     /// The height this needs as a bar: the well, its status line, and the
@@ -1531,29 +1542,35 @@ final class AskView: NSView {
     /// started it. See `Chat.displayTitle`.
     var conversationTitle: String { chat.displayTitle }
 
-    /// How tall this needs to be as a bar, told to whoever is constraining it.
+    /// Something that changes `barHeight` has changed, so lay the bar out
+    /// again.
     ///
     /// The setup card is the reason this exists. It is several lines and a
     /// button, and in a bar sized for the well alone it is clipped to nothing:
     /// the one state that has something important to say would be the one state
-    /// you cannot read. So the owner is told a number rather than guessing one.
-    var onHeightChanged: ((CGFloat) -> Void)?
-
-    /// Fired when a conversation has been loaded and wants to be on screen.
+    /// you cannot read.
     ///
-    /// Separate from the height report, which the drawer has to interpret. This
-    /// one is unambiguous, and it arrives *after* the turns are in, so the view
-    /// being un-hidden already has something in it.
-    var onWantsOpen: (() -> Void)?
+    /// **It carries no number, and it used to carry one the drawer then
+    /// interpreted.** The report was 560 while there was a conversation and
+    /// `barHeight` otherwise, and the drawer read the difference as "open the
+    /// card": a height was doing the work of a decision, and every path that
+    /// cleared the composer had to be careful what it reported on the way. The
+    /// drawer asks `barHeight` for itself now, and what a conversation gets is
+    /// a page rather than a taller bar.
+    var onSizeChanged: (() -> Void)?
+
+    /// Fired when a conversation belongs on the page: opened from a list, or a
+    /// question just asked.
+    ///
+    /// It arrives *after* the turns are in, so the view being un-hidden already
+    /// has something in it.
+    var onWantsPage: (() -> Void)?
 
     /// Fired whenever the conversation has been written to disk. See `persist`.
     var onSaved: (() -> Void)?
 
-    private func reportHeight() {
-        // A conversation needs the room a bar does not have. The owner clamps
-        // this to what the window can spare, so asking for more than exists is
-        // safe and asking for a share of an unknown height is not.
-        onHeightChanged?(wantsRoom || run != nil ? 560 : barHeight)
+    private func reportSize() {
+        onSizeChanged?()
     }
 
     /// Everything that has to agree about whether a question can be asked.
@@ -1661,7 +1678,7 @@ final class AskView: NSView {
         let bubble = QuestionTurn(text, waiting: true)
         queuedTurn = bubble
         addTurn(bubble)
-        reportHeight()
+        reportSize()
         scrollToEnd()
         return true
     }
@@ -1673,7 +1690,7 @@ final class AskView: NSView {
         queued = nil
         queuedTurn?.removeFromSuperview()
         queuedTurn = nil
-        reportHeight()
+        reportSize()
         return text
     }
 
@@ -1736,6 +1753,18 @@ final class AskView: NSView {
         answer.begin(with: chosen.name)
         updateSendButton()
         scrollToEnd()
+
+        // **A question takes the page, and this is the line that says so.**
+        // The bar used to grow into a card here, by way of a height report the
+        // drawer interpreted, and reading the answer properly then took a
+        // second gesture on a disc in that card's header. Nobody asks a
+        // question in order to read it through glass over the transcript: the
+        // answer is the thing you wanted, so it gets the window.
+        //
+        // Filled, then shown, for the reason `open` records: the turns are in
+        // by now, so the view being un-hidden already has the question and the
+        // shimmering answer in it.
+        onWantsPage?()
 
         start(text, status: chosen, path: path, resuming: chat.session)
         // **Again, and this is the call that makes the button a Stop.** `run` is
@@ -1986,12 +2015,6 @@ final class AskView: NSView {
         chat.turns.append(turn)
         addTurn(view(for: turn, asking: turn.text))
         persist()
-        // The first turn is what turns the bar into a conversation, so the
-        // height has to be re-asked here rather than only when the status
-        // changes: an answer streaming into a view with no room to draw it is
-        // indistinguishable from a question that was never sent.
-        wantsRoom = true
-        reportHeight()
     }
 
     /// Write the conversation, naming what it is about.
@@ -2044,7 +2067,6 @@ final class AskView: NSView {
         pinned = false
         if let id = chat.id { Chat.forget(id: id) }
         chat = Chat()
-        wantsRoom = false
         redraw()
     }
 

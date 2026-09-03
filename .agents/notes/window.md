@@ -2450,3 +2450,46 @@ would be asking the table which row a point is over for every pointer move acros
 the transcript standing in the same rectangle.
 
 Verified by `verify_ask_page.sh`.
+
+## Asking whether the responder is in settings *opened* settings
+
+`enter(.library)` ends by putting the first responder back on the sidebar if it
+is inside the settings section list, which is the keystroke case: leaving
+settings with the section table focused would otherwise leave the focus ring on
+a list that is no longer on screen.
+
+The test was written as
+
+```swift
+if let table = sidebar.view.window?.firstResponder as? NSView,
+   table.isDescendant(of: settingsNav.view) {
+```
+
+and `settingsNav.view` *loads the view controller*. `SettingsNavViewController`
+selects its first row as it comes up, that selection posts
+`tableViewSelectionDidChange`, which calls `onSelect`, which calls
+`LibraryWindow.showPane`, which puts the General settings pane into
+`detailHost`. So on the way back to the library from chat mode, with settings
+never opened this session, the branch put the transcript back and the General
+pane replaced it a moment later: **pressing Back on a conversation landed on
+Settings › General, with the recording list still beside it and no way to tell
+what had happened.**
+
+The same loop is documented twice in `SettingsNav.refreshBadges`, which guards
+it with a `reloading` flag and a state comparison because it once hung the app
+on the first draw. This is the third way in, and it does not go through
+`refreshBadges` at all.
+
+**Measured on 0.30.0 as well**, which is the build in `/Applications`, by
+asking a question, growing the card to full width and pressing Back: "Your
+name" in the content pane, no transcript. It was found while the Ask card was
+being removed rather than caused by it, and that is why it went unnoticed for
+so long: it needed a conversation grown to full width and then dismissed, which
+was two discs and a Back, and it is now what one question and a Back does.
+
+The fix is `settingsNav.isViewLoaded` in front of the test, which costs
+nothing: the question can only be true when settings has been open, and that is
+exactly when the view is loaded.
+
+Verified by `verify_ask_handoff.sh`, case 2, which asserts that Back out of a
+conversation lands on the home page's own sentence and not on "Your name".

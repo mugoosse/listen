@@ -207,7 +207,7 @@ final class DetailView: NSView {
     /// `kinsight` and the write-up of it tagged `kinsight` are two filings, and
     /// nothing here infers one from the other. This is also the only place a
     /// note about a single meeting can be tagged by hand, because such a note
-    /// is read in this drawer and never gets a page of its own in the sidebar.
+    /// is read in this pane and never gets a page of its own in the sidebar.
     private let noteTagChips = TagChips()
     /// The greeting over an empty pane, with the mascot beside it.
     ///
@@ -239,18 +239,10 @@ final class DetailView: NSView {
     /// notes.** They were together there on the argument that both are somebody
     /// else's reading of this meeting, which is true and was not enough: an
     /// agent's note is a document the Notes tab already holds and opens in
-    /// place, and a conversation is a card that covers the page. One line
+    /// place, and a conversation is a page you leave this one for. One line
     /// offering both, in one run of accent-coloured text, made the difference
     /// between them a thing you found out by clicking.
     private let chatList = ChatList()
-
-    /// True while the conversation drawer is open over this pane.
-    ///
-    /// Only the centred sentence cares. A page with a meeting on it is happy to
-    /// be partly covered, but "Select something from the list, or ask about
-    /// your library below" over a conversation that has already started is the
-    /// pane arguing with the drawer on top of it.
-    private var drawerCovering = false
 
     /// How much of the bottom of this pane the drawer is covering.
     ///
@@ -292,14 +284,6 @@ final class DetailView: NSView {
         chatListBottom?.constant = -(RecordButton.clearance + points)
     }
 
-    /// Told by the window, because only the window knows how tall the drawer is.
-    func setDrawerCovering(_ on: Bool) {
-        guard drawerCovering != on else { return }
-        drawerCovering = on
-        // Cheap and idempotent, and it re-derives both labels from the state
-        // they are actually computed from rather than guessing which applies.
-        if recording == nil { show(nil) } else { updateEmpty() }
-    }
     private let askView = AskView()
     /// Analog's artifact switcher, which is the part of their notes design worth
     /// copying: a recording has any number of notes and they are all the same
@@ -1708,7 +1692,7 @@ final class DetailView: NSView {
         let chats = Chat.all()
             .filter { $0.sources.isEmpty && $0.person == nil }
             .prefix(5)
-        guard !chats.isEmpty, !drawerCovering else {
+        guard !chats.isEmpty else {
             recentChats.isHidden = true
             return
         }
@@ -2310,7 +2294,7 @@ final class DetailView: NSView {
         if showPicture { message = "" }
 
         empty.stringValue = message
-        empty.isHidden = message.isEmpty || drawerCovering
+        empty.isHidden = message.isEmpty
         transcribing.isHidden = !showPicture
         // The transcript goes away while the picture is up, or a re-run draws
         // the picture on top of the paragraphs it is in the middle of replacing.
@@ -2437,9 +2421,9 @@ final class DetailView: NSView {
         guard let recording else {
             readingOrigin = .zero
             setChromeHidden(true)
-            empty.isHidden = drawerCovering
+            empty.isHidden = false
             greeting.stringValue = Self.greetingText()
-            greeting.isHidden = drawerCovering
+            greeting.isHidden = false
             showRecentChats()
             let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
             // The character welcomes a new library. In a library that already
@@ -2447,7 +2431,7 @@ final class DetailView: NSView {
             // decoration and make the detail pane feel less calm.
             // The mascot now belongs to the greeting rather than to an empty
             // library, so it is here whenever the pane is.
-            emptyIcon.isHidden = drawerCovering
+            emptyIcon.isHidden = false
             // Selecting is no longer the only thing you can do here. The
             // composer under this sentence asks about the whole library, so an
             // instruction to go and pick something first is now untrue as well
@@ -5179,10 +5163,6 @@ final class DetailViewController: NSViewController {
         detail.showTranscript()
     }
 
-    func setDrawerCovering(_ on: Bool) {
-        loadViewIfNeeded()
-        detail.setDrawerCovering(on)
-    }
 
     var onOpenChat: ((Chat) -> Void)? {
         get { detail.onOpenChat }

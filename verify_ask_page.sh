@@ -1,6 +1,6 @@
 #!/bin/bash
 # The Ask surfaces on a meeting page: which starters are offered, History on
-# the card, and the Chats tab.
+# the composer bar, and the Chats tab.
 #
 # Three claims, all of them about the same screen and all of them needing the
 # same fixture, which is why they are one script:
@@ -10,7 +10,7 @@
 #      up" is gone from this set (it says "I missed this meeting", which
 #      nobody using Listen can truthfully say) and Positions is absent while
 #      anybody is still `Speaker B`, and on a memo with one voice on it.
-#   2. History is on the card's own line while the composer is in use, which
+#   2. History is on the bar's own line while the composer is in use, which
 #      is the only route to a meeting's past conversations before one is open.
 #   3. Chats is a third tab beside Recording and Notes, it counts, it lists,
 #      it says what to do when it is empty, and it is not there at all with
@@ -165,9 +165,9 @@ check $? "and Positions, which is the one the labelling pays for"
 ! field "$dump" "Catch me up"
 check $? "Catch me up is gone from a meeting you were in"
 
-echo "2. History is on the card, next to the chips"
+echo "2. History is on the bar, next to the chips"
 field "$dump" "History"
-check $? "the card offers the conversations about this page"
+check $? "the bar offers the conversations about this page"
 
 echo "3. Positions is absent while anybody is still a letter"
 dump=$(compose "Weekly review")
@@ -230,7 +230,7 @@ check $? "the bar is still there"
 ! field "$dump" "Chats"
 check $? "and its third segment is not, because there is no composer to fill it"
 ! field "$dump" "History"
-check $? "nor is the card's History, because there is no card"
+check $? "nor is History, because there is no composer to put it on"
 
 kill $APP 2>/dev/null; sleep 1
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1

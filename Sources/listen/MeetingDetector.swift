@@ -43,9 +43,15 @@ final class MeetingDetector {
     /// True while something is on a call, so the start is reported on the edge
     /// rather than every three seconds.
     private var active = false
-    /// Answered "Not now" for this one. Re-arms when it goes quiet, so
-    /// declining a call does not decline every later call from the same app.
-    private var suppressed: String?
+    /// Apps not to offer to record until they leave the call they are on.
+    /// Re-arms when one goes quiet, so declining a call does not decline every
+    /// later call from the same app.
+    ///
+    /// A set rather than one identifier, because `captureEnded` puts everything
+    /// currently on a call into it and two apps can be on one at once: a Meet
+    /// tab in Chrome with Zoom still open behind it suppressed only whichever
+    /// of them was listed first.
+    private var suppressed: Set<String> = []
     /// Consecutive polls with nothing on a call. Two are required before a
     /// meeting is called over, because a single poll landing in a gap between
     /// speakers would otherwise end an hour-long recording halfway through.
@@ -100,7 +106,7 @@ final class MeetingDetector {
         pollTask?.cancel()
         pollTask = nil
         active = false
-        suppressed = nil
+        suppressed = []
         quietPolls = 0
     }
 
@@ -110,16 +116,48 @@ final class MeetingDetector {
     /// Without it, declining a call that is still running means being asked
     /// again three seconds later, forever.
     func suppress(_ bundleID: String) {
-        suppressed = bundleID
+        suppressed.insert(bundleID)
         active = false
         quietPolls = 0
     }
 
     /// Called when capture ends for any reason, so the next call is detected as
     /// a new one rather than as a continuation of the one that just stopped.
+    ///
+    /// **Whatever is on a call at this moment is suppressed**, for the same
+    /// reason "Not now" suppresses. Re-arming the edge while the call is still
+    /// running means the very call that was just stopped is detected as a new
+    /// meeting on the next poll: a second recording starts, the panel asks
+    /// about it again, and stopping that one starts a third.
+    ///
+    /// Measured on 3 September 2026, demonstrating the app during a Google Meet
+    /// call: pressing Stop in Listen without leaving the call left a new
+    /// recording every three seconds until "No" was pressed, because "No" was
+    /// the only route into `suppress`. Stopping by hand says the recording is
+    /// over, not that the meeting is, and only the user restarting it or the
+    /// call actually ending should start another.
+    ///
+    /// A meeting that ended on its own suppresses nothing, because by then
+    /// nobody is on a call: two quiet polls are what got here.
+    ///
+    /// Sampling the callers here rather than reusing the last poll's list costs
+    /// one walk of the process list on the main thread, which is what
+    /// `Capture.start` already pays. The poll is up to three seconds stale, and
+    /// three seconds is exactly the window somebody pressing Stop as a call ends
+    /// lands in.
     func captureEnded() {
         active = false
         quietPolls = 0
+        // Nothing to suppress and nobody to ask, so do not walk the process
+        // list for it. This runs on every stop, including with detection
+        // turned off, where there is no poll to re-arm.
+        guard pollTask != nil else { return }
+        let onACall = Self.activeCallers()
+        if !onACall.isEmpty {
+            suppressed.formUnion(onACall)
+            trace("capture ended while \(onACall.joined(separator: ", ")) "
+                + "is still on a call; not offering to record it again")
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -129,9 +167,11 @@ final class MeetingDetector {
 
         // Clear the suppression against the unfiltered set, so an app leaving
         // the call really does re-arm it.
-        if let s = suppressed, !callers.contains(s) { suppressed = nil }
+        if !suppressed.isEmpty { suppressed.formIntersection(callers) }
 
-        let eligible = callers.filter { $0 != suppressed && !Settings.skippedBundleIDs.contains($0) }
+        let eligible = callers.filter {
+            !suppressed.contains($0) && !Settings.skippedBundleIDs.contains($0)
+        }
 
         if let first = eligible.first {
             quietPolls = 0
@@ -192,6 +232,7 @@ final class MeetingDetector {
     ///
     /// `nonisolated` so the poll loop can run it off the main actor.
     nonisolated static func activeCallers() -> [String] {
+        if let path = fakeCallers { return fakedCallers(path) }
         let me = ProcessInfo.processInfo.processIdentifier
         var seen: [String] = []
         for process in report() where process.input && process.output {
@@ -233,6 +274,29 @@ final class MeetingDetector {
             let parent = parentBundleID(id)
             guard parent != ownBundleID else { continue }
             if !seen.contains(parent) { seen.append(parent) }
+        }
+        return seen
+    }
+
+    /// A file standing in for the process list, one bundle identifier per line.
+    ///
+    /// `LISTEN_FAKE_CALLERS=/tmp/callers` makes every read of the callers come
+    /// from that file, re-read on each poll, so a call can be joined and left
+    /// by writing to it. It is here for the reason `LISTEN_TAP_TEAR` is: the
+    /// alternative is holding a real meeting to test a state machine, and the
+    /// state machine is the part that has been wrong. `verify_meeting_stop.sh`
+    /// is what uses it.
+    ///
+    /// A missing or empty file is nobody on a call, which is how a meeting ends.
+    private nonisolated static let fakeCallers = ProcessInfo.processInfo
+        .environment["LISTEN_FAKE_CALLERS"]
+
+    private nonisolated static func fakedCallers(_ path: String) -> [String] {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        var seen: [String] = []
+        for line in text.split(whereSeparator: \.isNewline) {
+            let id = line.trimmingCharacters(in: .whitespaces)
+            if !id.isEmpty && !seen.contains(id) { seen.append(id) }
         }
         return seen
     }

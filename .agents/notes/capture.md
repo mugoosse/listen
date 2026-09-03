@@ -358,6 +358,60 @@ icon, because it is a daemon rather than an app: the row shows the name in the
 detail pane and no icon in the list, which is the right answer rather than a
 missing one.
 
+### Stopping by hand during a call started the next recording, and the one after that
+
+Measured on 3 September 2026, demonstrating the app from inside a Google Meet
+call: pressing Stop in Listen without leaving the call put a new recording on
+disk about three seconds later, with the panel asking about it again. Stopping
+that one started a third. It only ended when "No" was pressed, and the library
+was left holding a row of recordings a few seconds long.
+
+Every part of that was the code doing what it was told. `captureEnded()` reset
+the edge state so the next call would be detected as a new one, `evaluate` then
+found Chrome still running an input and an output stream, and a rising edge is
+exactly what starts a recording. Nothing distinguished "the meeting ended" from
+"the user stopped recording a meeting that is still going", and only "No" ever
+reached `suppress`.
+
+So `captureEnded()` now suppresses whatever is on a call at the moment capture
+ends, which is the same rule "Not now" uses and re-arms the same way, when the
+app leaves the call. **A meeting that ended on its own suppresses nothing**,
+because two quiet polls are what got there and nobody is on a call by then, so
+the automatic stop is unaffected and the next meeting is still detected.
+
+Two details are load-bearing:
+
+- **The callers are sampled at the stop, not read from the last poll.** The
+  poll is up to three seconds stale, and three seconds is exactly the window
+  somebody pressing Stop as a call winds down lands in. It is one walk of the
+  process list on the main thread, which is what `Capture.start` already pays
+  to stamp `app_bundle_id`.
+- **`suppressed` is a set.** It held one identifier while "Not now" was the
+  only writer. Everything on a call goes in at once now, and a Meet tab in
+  Chrome with Zoom open behind it is two.
+
+The failed-start path gets the same treatment for free: `meetingStarted` calls
+`captureEnded()` when `Capture.start` throws, and before this that retried the
+same failing start every three seconds for as long as the call ran.
+
+Stopping by hand is not a decline, so nothing is deleted and no question is
+asked. Starting again is Record, which is the explicit action that says the
+rest of this call is worth keeping.
+
+`LISTEN_FAKE_CALLERS=<path>` is how all four states are checked without holding
+a meeting: a file of bundle identifiers, one per line, standing in for the
+process list and re-read on every poll, so joining a call is a write and leaving
+one is a truncation. `verify_meeting_stop.sh` drives it against the built app
+and asserts the loop is gone, that leaving the call re-arms detection, and that
+a meeting ending on its own still stops the recording and still detects the
+call after it. Ten assertions, all passing on 3 September 2026.
+
+**The file has to be empty at launch.** `start()` seeds `active` from whatever
+it can see, because a call already running when Listen starts is one it
+deliberately never claims. The first draft of the script wrote Chrome into the
+file before launching, traced `meeting detection on, a call is already running`,
+and failed two assertions for the harness rather than for the code.
+
 ## Nothing asks "keep this recording?" any more
 
 SPEC 5.3's Keep and Discard step is gone, in favour of the fallback SPEC 5.3

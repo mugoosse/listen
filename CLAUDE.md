@@ -93,6 +93,7 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - Meeting detection asks while recording, not before
 - Dictating made Listen a call, and the guard was on the pid rather than on the app
 - The app the call was in is a field, and never the title
+- Stopping by hand during a call started the next recording, and the one after that
 - Nothing asks "keep this recording?" any more
 - A dead tap and a quiet far side are the same silence, and only one is a failure
 - Rebuilding the tap from the IO proc's own queue deadlocks it
@@ -674,6 +675,12 @@ One script stands in for one, over the app built in the working directory:
                         # warning on screen and playback of a recording whose
                         # mic file is empty. Plays a phrase aloud; needs the
                         # lid open for the three-channel case, and says so
+./verify_meeting_stop.sh  # what happens after Stop while the call is still
+                        # running: nothing else is recorded, the app leaving
+                        # the call re-arms detection, and a meeting that ends
+                        # on its own still stops the recording and still
+                        # detects the next call. `LISTEN_FAKE_CALLERS` stands
+                        # in for the process list, so no meeting is needed
 ./verify_tap_routes.sh  # whether the system audio tap survives each output
                         # route, by playing speech through it and checking what
                         # arrived. --with-mic puts a headset in its call

@@ -35,6 +35,9 @@ text that became a paragraph once you had asked five questions.
 - Opening a past conversation from Chats used to say what it was about only in
   the row you clicked to get there. A chip above the first message now names
   the meeting or person, and clicking it goes straight there.
+- Deselecting a recording while its Chats tab was open used to leave that tab
+  showing, pinned above the home page's own greeting and its own list of
+  recent questions. It goes with everything else now.
 
 ### A steadier "Worked for Xs"
 

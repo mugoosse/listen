@@ -132,6 +132,12 @@ final class AnswerTurn: NSView {
         blocks.orientation = .vertical
         blocks.alignment = .leading
         blocks.spacing = 10
+        // A collapsing row's own animated frame is what NSStackView shrinks;
+        // its text is not, so an unclipped label keeps drawing at full size
+        // inside that shrinking rect and visibly rides up into the header
+        // above it while it fades. Clipped to the stack's own bounds instead.
+        blocks.wantsLayer = true
+        blocks.layer?.masksToBounds = true
 
         activity.isHidden = true
 
@@ -492,11 +498,33 @@ final class AnswerTurn: NSView {
             // `animator()` on an arranged subview is what makes `NSStackView`
             // animate the space closing rather than snapping it shut.
             for view in moving {
-                view.animator().alphaValue = hide ? 0 : 1
                 view.animator().isHidden = hide
             }
-            context.allowsImplicitAnimation = true
-            self.superview?.layoutSubtreeIfNeeded()
+            // No forced `layoutSubtreeIfNeeded()` here, on `self` or on
+            // anything above it. `NSStackView` already animates its own
+            // reveal from the `isHidden` calls above; asking some ancestor
+            // to resolve Auto Layout again inside the same transaction raced
+            // that built-in animation instead of joining it; "Worked for Xs"
+            // visibly jumped for exactly as long as this call was here,
+            // measured against three different ancestors (`self`, `turns`,
+            // the window's content view) before it was removed outright.
+            //
+            // **The alpha fade is its own, shorter group when collapsing.**
+            // Revealing starts from invisible, so the space opening under a
+            // static header is never covering anything: there is nothing to
+            // see until the fade has already put something there. Collapsing
+            // starts from fully opaque, and the two steps shared one 0.2s
+            // pace here, so the still-legible text was dragged upward with
+            // its closing space and read as the paragraph momentarily
+            // overlapping the header before it vanished. Fading it out in
+            // under half the time means it is gone well before the space
+            // has visibly moved, which is what the reveal already looked
+            // like for free.
+            NSAnimationContext.runAnimationGroup { fade in
+                fade.duration = hide ? 0.08 : 0.2
+                fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                for view in moving { view.animator().alphaValue = hide ? 0 : 1 }
+            }
         }
     }
 

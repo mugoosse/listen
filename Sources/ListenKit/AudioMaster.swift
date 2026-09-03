@@ -296,6 +296,16 @@ public enum AudioMaster {
 
     private static func read(_ url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
+        // **A track can be a header and nothing else, and reading it throws.**
+        // A call whose microphone never opened leaves a 44-byte `mic.wav`, and
+        // `read(into:)` fails a zero-capacity buffer with avfaudio -50 rather
+        // than returning nothing. That threw out of `make`, so `pushMasters`
+        // never stamped the recording and re-failed every pass for ever, while
+        // the other Mac, told by the heartbeat that this one holds the audio,
+        // sat on "Retrying sync: Audio is not available in iCloud yet". The
+        // empty side still counts as a track: the file exists, so `make` keeps
+        // both channels and the master splits back the way it was captured.
+        guard file.length > 0 else { return [] }
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                    sampleRate: file.fileFormat.sampleRate,
                                    channels: 1, interleaved: false)!

@@ -782,3 +782,52 @@ other, ask `listen sync status` on the Mac and the Sync pane on the phone
 which environment each is in before suspecting anything cleverer; the status
 command prints it precisely because this question is otherwise unanswerable
 in the field.
+
+## An empty track threw out of the master build, and only the other Mac said so
+
+Measured on 2026-09-03, on the live library. A 22-minute WhatsApp call recorded
+on 2026-09-02 sat on mb-flame as "Retrying sync: Audio is not available in
+iCloud yet" for a day, with the whole transcript on screen under it. The two
+halves, read from the state directories:
+
+    MacBook Pro  last-pass.json  audio 2026-09-02-123026-F884: … avfaudio -50
+                 base.json       no master: stamp, alone among 61 recordings
+    mb-flame     last-pass.json  "Up to date"
+                 the folder      sidecars all present, no audio, no master.flac
+
+The recording's `mic.wav` was 44 bytes, a header and no frames, because the
+microphone never opened for that call. `AudioMaster.read` sized its buffer from
+`file.length`, and `AVAudioFile.read(into:)` fails a zero-capacity buffer with
+`Code=-50 … {false condition=buffer.frameCapacity != 0}` rather than reading
+nothing. That threw out of `AudioMaster.make`, `pushMasters` never stamped
+`master:<id>`, and the recording stayed owed and re-failed every pass for ever.
+
+**The stall was invisible on the Mac that caused it and named on the Mac that
+could do nothing about it.** The heartbeat republishes `holdsAudio` from disk
+every pass, and this Mac does hold the raw tracks, so flame's `pullMasters`
+correctly wanted the master, correctly fetched, and correctly got nothing. Its
+sentence is true and points at the container; the error was two machines away in
+`last-pass.json`. When a recording is stuck fetching audio, read the *author's*
+last pass before believing anything on the screen in front of you.
+
+The guard is one line in `read`, and the empty side still counts as a track: the
+file exists, so `make` keeps `channels == 2` and the master splits back into a
+silent `mic.wav` beside the real system track. Dropping to one channel would
+have been the bug in "A one-channel master is two different things", with the
+whole far side landing in `mic.wav` on every other device and every speaker in
+it read as the user. Verified by compiling `AudioMaster.swift` and
+`AudioFile.swift` on their own against the real 44-byte `mic.wav` and five
+seconds of tone: before, `THREW: … -50`; after, `master.flac layout=tracks
+channels=2`, splitting back to two tracks of 79861 frames.
+
+No recovery step is needed for a recording already stuck this way. Nothing was
+stamped, so it is still owed, and the first pass on the fixed build publishes it.
+Measured on the recording above, from the two `last-pass.json` files:
+
+    17:59:19  the old build's final pass      avfaudio error -50
+    18:01:16  first pass on the fixed build   "sent audio for 1"
+    18:02:31  mb-flame's next pass            "got audio for 1"
+
+A day of "Retrying sync" ended 75 seconds after the first pass that could build
+the file, and the master that landed is 22.0 MB, 2 channels, 1331.39 seconds
+against the metadata's 1331.365.

@@ -444,6 +444,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - "Syncing transcript" outlived sync being off at all
 - A retry that never says why is a stall nobody can fix
 - Which environment a build reaches is a property of how it was installed
+- An empty track threw out of the master build, and only the other Mac said so
 
 ### `.agents/notes/agent.md` (172k)
 

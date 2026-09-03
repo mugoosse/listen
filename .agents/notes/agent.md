@@ -2967,6 +2967,87 @@ is not established is that every path leaves it empty.
 happened in rather than more guesses. Worth asking for: whether the panel
 covered the whole meeting page, and what was pressed just before it appeared.
 
+## "Catch me up" was a sentence no user of this app can say
+
+The recording set's fourth chip read:
+
+    I missed this meeting. Tell me what I need to know in under 150 words.
+
+Listen records from the Mac somebody is sitting at. Every recording in the
+library is therefore a meeting they were in, so the first sentence of that
+prompt is false on every page it was ever offered on, and it was offered on all
+of them. It is gone rather than reworded: "summarise what happened" is what
+`Summarise` already says, and a second chip saying it in fewer words is a chip
+that teaches nothing.
+
+The name survives in the library and person sets, where it is true: there it
+means "what happened lately across several meetings", which is a shape neither
+`Summarise` nor `Decisions` covers.
+
+## The fourth recording chip is `Positions`, and it comes and goes
+
+The three that are always there read a meeting as one document: `Summarise`,
+`Action items`, `Decisions`. `Positions` reads it as several people who wanted
+different things, and it is the only chip on any of the three lists whose value
+depends on work the user has done:
+
+    Go through this meeting person by person: what did each one argue for, push
+    back on, or worry about? Say where they did not agree, and say so plainly
+    if nobody disagreed.
+
+`AskView.speakerStarter(for:)` withholds it unless `recording.speakers.count >
+1` and `Labelling.waits(recording)` is false. Both halves matter and neither is
+about what the agent knows:
+
+- **Every speaker named**, because "Speaker A pushed for the October date and
+  Speaker B objected" is a paragraph nobody can act on. A chip that produces
+  one teaches that the pane cannot answer this, which is the wrong lesson: it
+  can, once somebody has said who is who.
+- **Two speakers at least**, because a memo has nobody to disagree with. `Me`
+  alone is not a room.
+
+It is absent rather than disabled, and it does not nag. The sidebar's to-do
+lens is where unnamed speakers are asked about, and `Recording.stateText`
+records why a badge on a row was the wrong shape for that.
+
+`Labelling.waits` is the lens's own question, cached against `turns.json`'s
+modification date, so this costs a dictionary read per redraw of the chips
+rather than a decode of the transcript.
+
+**The prompt does not name the speakers.** The agent reads them off the
+transcript either way, so listing them would only be the guard restated at
+length in every request.
+
+## History is the card's title menu, from the bar that has no title
+
+A card with a conversation in it grows a header, and that header's title opens
+the conversations about this page (`showTitleMenu`). A card with nothing in it
+yet has no header at all. So on every meeting nobody had asked about, there was
+no route to that meeting's past conversations from the one place somebody is
+standing when "did I already ask this?" occurs to them: the toolbar's History
+item is gone (see `LibraryWindow.chatsItem`), and the card had nothing.
+
+`AskView.historyButton` is a word and a chevron on the starters line, at the
+title's own 11 points and 8-point symbol so the two controls are one shape.
+Both call `DetailWithComposer.popUpHistory(from:)`, which is `showTitleMenu`
+with the anchor pulled out: **one set of rows, two anchors, and never both on
+screen at once.** That last part is the rule that keeps this from being the
+third control onto one menu that the toolbar item was removed for:
+
+    historyButton.isHidden = onHistory == nil || !composing || expandedNow
+
+- `composing`, for the reason the chips wait for the caret: the drawer draws no
+  panel until somebody means to ask, so a word sitting there would be unbacked
+  text lying on the transcript.
+- `expandedNow`, because the header carries the same menu under the
+  conversation's title, and a page carries it in the toolbar.
+- `onHistory == nil`, because `DetailView` still holds an `AskView` of its own
+  that nothing puts on screen, and a control that opens no menu is worse than
+  no control.
+
+Verified by `verify_ask_page.sh`, which is also where the chip claims above are
+asserted.
+
 ## What could not be verified: the download stall
 
 `ModelChoice.inFlightBytes` following its temp file through a stall is reasoned

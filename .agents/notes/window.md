@@ -2382,3 +2382,71 @@ player card on the other tab, because a card's top edge is where it says it is
 and a line of text carries its leading above the cap height: measured against
 each other on the two tabs, equal constants read as the Notes tab being the
 tighter of the two.
+
+
+## Chats is the third tab, and it took the conversations off "Also about this"
+
+The line under the tab bar read `Also about this: <agent note>, <conversation>,
+<conversation>`, all of them accent-coloured links in one run of 11-point text.
+They were put together on the argument that both are somebody else's reading of
+this meeting, which is true and was not enough:
+
+- **They do different things when pressed.** A note opens in the box directly
+  under the line. A conversation opens a card over the whole page. Two links
+  that look identical and behave differently is a difference you find out by
+  clicking.
+- **It read as a sentence rather than as a list.** Two conversations wrapped it
+  onto a second line and five made it a paragraph, and none of them said when
+  it was asked or how much of it there is.
+
+So the conversations became `Tab.chats`, a third segment beside Recording and
+Notes, drawn by `ChatList`: `ChatCell` rows in an `NSTableView`, which is the
+conversation list's own row, for the reason `ChatNav` gives about the recordings
+list. A row says the question and then when it was last had and how many
+questions are in it. Not what it is about: every row is about the meeting whose
+page this is, so `ChatNav`'s third fact would be the same word on every row.
+
+The notes half stayed on the line, and `showRelated` no longer reads `Chat` at
+all.
+
+**The count is the same bargain the Notes tab already made.** `Chats · 2`, read
+off `ChatList.count` rather than recounted, so the tab and the rows it opens
+onto cannot disagree.
+
+**Empty, it points at the composer.** "Nothing asked about this meeting yet. Ask
+a question below and it will be listed here." The card is at the foot of this
+very window, so the only useful thing an empty state here can say is which
+gesture fills it. It is laid out at `14 + RecordingCell.textInset` from the
+list's leading edge, which is where the first row's text will be, so the tab
+does not move sideways when the first question is asked.
+
+**Two points of inset, and the reason is that this tab is a table.** The other
+two documents are laid out against the pane's own 24. `.inset` style holds rows
+14 off the table's edge and `RecordingCell.textInset` adds 8 inside that, which
+is the 22 the sidebar states, so the pane's 24 on top of it put every
+conversation title a control's width in from the meeting's name above it. 2 + 22
+is the 24, measured on screen rather than reasoned about.
+
+## The tab is gone when Ask is off, and `NSSegmentedControl` cannot hide a segment
+
+`Settings.askEnabled` takes the composer off the window (`updateComposer`), so a
+tab whose empty state says "ask a question below" would be pointing at something
+that is not there.
+
+Setting `segmentCount` is the only way to take a segment off, and it discards
+the labels and widths of the segments it keeps. So `DetailView.setTabs` writes
+all of them again on every call and is the only place the count and the widths
+are written; `updateTabLabels` writes titles into segments `setTabs` has already
+decided exist, and returns early when there is no third one.
+
+Settings is a mode of this window rather than a second window, so the toggle can
+be thrown with a meeting's Chats tab up behind it. `DetailView.askEnabledChanged`
+puts anybody standing there back on Recording first, which is the same fault
+`LibraryWindow.askEnabledChanged` already fixes for chat mode.
+
+The hover on the rows is armed and disarmed with the tab: `ChatList` overrides
+`isHidden` to start and stop its `TableHover`. A local event monitor left running
+would be asking the table which row a point is over for every pointer move across
+the transcript standing in the same rectangle.
+
+Verified by `verify_ask_page.sh`.

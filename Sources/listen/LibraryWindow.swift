@@ -383,6 +383,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             }
             rebuildToolbar()
             updateComposer()
+            // And the meeting page's third tab, which is Ask-shaped: see
+            // `DetailView.setTabs`.
+            detail.askEnabledChanged()
         }
         // One row's visibility, never `MainMenu.install` again: see the note
         // there. Rebuilding the menu bar from inside the card's Not now button
@@ -481,7 +484,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // exchange for a list nobody is looking at would be a directory listing
         // per answer. Entering the mode reloads anyway.
         composerHost.onChatsChanged = { [weak self] in
-            guard let self, self.mode == .chat else { return }
+            guard let self else { return }
+            // The meeting page's own Chats tab, whose count is the reason the
+            // tab is worth having. Unguarded by mode, unlike the list below:
+            // this is one directory listing for the recording on screen, and
+            // the pane refuses it when it has not been built.
+            self.detail.chatsChanged()
+            guard self.mode == .chat else { return }
             self.chatNav.reload()
             self.syncChatSelection()
         }
@@ -2294,6 +2303,11 @@ final class DetailWithComposer: NSViewController {
             self.extent = .standard
             self.applyHeight(animated: true)
         }
+        // The card's own title menu, opened from the bar that has no title.
+        // See `showTitleMenu` for why there is only one set of rows.
+        composer.onHistory = { [weak self] anchor in
+            self?.popUpHistory(from: anchor)
+        }
         composer.onHeightChanged = { [weak self] height in
             guard let self else { return }
             self.wantedHeight = height
@@ -2443,7 +2457,20 @@ final class DetailWithComposer: NSViewController {
     /// conversation you are in, that one names the page you are on, and a menu
     /// under each that disagreed about which conversations exist would be one
     /// screen with two histories.
-    @objc private func showTitleMenu() {
+    @objc private func showTitleMenu() { popUpHistory(from: titleButton) }
+
+    /// **Two controls, one menu, and the anchor is the only difference.**
+    /// The title is on the header, which exists only while a conversation is
+    /// open; History is on the starters line, which exists only while one is
+    /// not. Between them every state of the card has a route to the rows, and
+    /// no state has two.
+    ///
+    /// Anchored to whichever was pressed. It used to be anchored to
+    /// `titleButton` unconditionally, from when that was the only caller, and
+    /// before that to a button this class still owned but had stopped putting
+    /// on screen: the menu opened relative to a view with no window, so it was
+    /// built, popped, and invisible.
+    private func popUpHistory(from anchor: NSView) {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let fresh = NSMenuItem(title: "New conversation",
@@ -2451,13 +2478,9 @@ final class DetailWithComposer: NSViewController {
         fresh.target = self
         menu.addItem(fresh)
         LibraryWindow.shared.appendSourceHistory(to: menu)
-        // Anchored to the control that was pressed. It used to be anchored to
-        // a button this class still owned but had stopped putting on screen,
-        // so the menu opened relative to a view with no window: built, popped,
-        // and invisible.
         menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: titleButton.bounds.maxY + 4),
-                   in: titleButton)
+                   at: NSPoint(x: 0, y: anchor.bounds.maxY + 4),
+                   in: anchor)
     }
 
     /// The chat page's actions menu, beside New chat in the toolbar.

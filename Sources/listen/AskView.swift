@@ -25,16 +25,60 @@ import ListenKit
 final class AskView: NSView {
     /// Questions worth putting on screen before anybody types.
     ///
-    /// Four, and all four are about *this* meeting. A starter chip is a way of
-    /// saying what the pane is for, so a general one ("summarise") teaches less
-    /// than a specific one and costs the same. They disappear once there is a
-    /// conversation, because by then the pane has explained itself.
+    /// Three unconditionally, and all of them about *this* meeting. A starter
+    /// chip is a way of saying what the pane is for, so a general one
+    /// ("summarise") teaches less than a specific one and costs the same. They
+    /// disappear once there is a conversation, because by then the pane has
+    /// explained itself.
+    ///
+    /// **"Catch me up" was the fourth, and it is gone rather than reworded.**
+    /// It read "I missed this meeting. Tell me what I need to know in under 150
+    /// words", which is a sentence nobody using this app can truthfully say:
+    /// Listen records from the Mac somebody is sitting at, so every recording
+    /// in the library is a meeting they were in. The chip kept its name in the
+    /// library and person sets, where it means "what happened lately" rather
+    /// than "I was not there", and those two are unaffected.
+    ///
+    /// The fourth chip here is `speakerStarter`, which is not always offered.
     private static let starters: [(String, String)] = [
         ("Summarise", "Summarise this meeting in a short paragraph, then the key points as bullets."),
         ("Action items", "What did each person commit to in this meeting? Say who owns each one, and say so plainly if nobody did."),
         ("Decisions", "What was actually decided in this meeting, and what was left open?"),
-        ("Catch me up", "I missed this meeting. Tell me what I need to know in under 150 words."),
     ]
+
+    /// A fourth, for a meeting whose speakers have all been named.
+    ///
+    /// The three above read a meeting as one document. This one reads it as
+    /// several people who wanted different things, which is the only question
+    /// here that the labelling is what makes answerable, and it is the reason
+    /// it comes and goes rather than sitting there greyed out.
+    ///
+    /// **Absent while anybody is still `Speaker A`, and the answer is why.**
+    /// "Speaker A pushed for the October date and Speaker B objected" is a
+    /// paragraph nobody can act on, and a chip that produces one teaches that
+    /// the pane cannot do this rather than that the labelling is not finished.
+    /// Nagging about the labelling is not this chip's job either: the to-do
+    /// lens in the sidebar is where that is asked, and `Recording.stateText`
+    /// records why a badge on a row was the wrong shape for it.
+    ///
+    /// `Labelling.waits` is that same lens's question, cached against
+    /// `turns.json`'s modification date, so this costs a dictionary read per
+    /// redraw rather than a decode of the transcript.
+    ///
+    /// Two speakers at least, because a voice memo has nobody to disagree with
+    /// and `Me` alone is not a room.
+    ///
+    /// **The prompt does not name them.** The agent reads the names off the
+    /// transcript either way, so listing them here would only be the guard
+    /// above restated at length. The guard is about the answer being readable,
+    /// never about what the agent knows.
+    private static func speakerStarter(for recording: Recording) -> (String, String)? {
+        guard recording.speakers.count > 1, !Labelling.waits(recording) else { return nil }
+        return ("Positions",
+                "Go through this meeting person by person: what did each one "
+                + "argue for, push back on, or worry about? Say where they did "
+                + "not agree, and say so plainly if nobody disagreed.")
+    }
 
     /// And four for the library, where the same four would be wrong.
     ///
@@ -121,6 +165,18 @@ final class AskView: NSView {
     /// The starters and the drawer's collapsed-state controls, on one line.
     private let starterLine = NSStackView()
     private let expandButton = HoverButton()
+    /// The conversations about this page, on the card about to start another.
+    ///
+    /// **The drawer's title menu, in the state that has no title.** A card with
+    /// a conversation in it grows a header, and that header's title opens the
+    /// history; a card with nothing in it yet has no header at all, so on every
+    /// meeting nobody had asked about there was no route to that meeting's own
+    /// past conversations from the one place somebody is standing when "did I
+    /// already ask this?" occurs to them. The toolbar's History item is gone
+    /// (see `LibraryWindow.chatsItem`) and is not coming back: this is the same
+    /// rows in the same menu, six points from the field, rather than a third
+    /// control onto them.
+    private let historyButton = HoverButton()
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
     /// alternatives rather than neighbours: one invites a question and the other
@@ -316,6 +372,27 @@ final class AskView: NSView {
         expandButton.action = #selector(expandPressed)
         expandButton.isHidden = true
 
+        // A word and a chevron at the drawer title's own size and weight,
+        // because the two controls open one menu and must not be two shapes.
+        // The chevron is the button's `image` rather than a typed character for
+        // the reason `DetailWithComposer.titleButton` records, and there is one
+        // trailing space in the title because `imageHugsTitle` otherwise puts
+        // it against the last letter.
+        historyButton.attributedTitle = NSAttributedString(
+            string: "History ",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor])
+        historyButton.image = NSImage(systemSymbolName: "chevron.down",
+                                      accessibilityDescription: "")
+        historyButton.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
+        historyButton.imagePosition = .imageTrailing
+        historyButton.imageHugsTitle = true
+        historyButton.toolTip = "Conversations about this page"
+        historyButton.setAccessibilityLabel("History")
+        historyButton.target = self
+        historyButton.action = #selector(historyPressed)
+        historyButton.isHidden = true
+
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
         starterLine.orientation = .horizontal
@@ -324,6 +401,9 @@ final class AskView: NSView {
         starterLine.translatesAutoresizingMaskIntoConstraints = false
         starterLine.addArrangedSubview(starterRow)
         starterLine.addArrangedSubview(spacer)
+        // The word before the glyph, so the chevron that opens the card sits at
+        // the card's own edge the way the header's discs do.
+        starterLine.addArrangedSubview(historyButton)
         starterLine.addArrangedSubview(expandButton)
         // The spacer is what pushes the controls to the trailing edge, and it
         // is the only thing in the row allowed to grow. Sideways, and only
@@ -1128,6 +1208,10 @@ final class AskView: NSView {
     }
 
     private func drawStarters() {
+        // First, because the guard below returns for a row with no chips in it
+        // and the History control is not a chip: it is on the same line, and it
+        // is up in states the chips are not.
+        updateHistoryButton()
         for view in starterRow.arrangedSubviews { view.removeFromSuperview() }
         // Only on an empty conversation. Four chips under a page of answers is
         // a toolbar, and this is an invitation.
@@ -1162,11 +1246,19 @@ final class AskView: NSView {
         // Built per person rather than looked up, because the prompts name
         // them. The chips are redrawn on every context change, so this runs
         // when the card does: `show(person:)` ends in `redraw`.
-        let offered: [(String, String)]
+        var offered: [(String, String)]
         if let person {
             offered = Self.personStarters(for: person)
+        } else if let recording {
+            offered = Self.starters
+            // Appended rather than folded into the array, because whether it is
+            // there is a fact about this recording and the other three are a
+            // fact about the pane. Three chips is the ordinary state of a
+            // meeting nobody has labelled yet, and that is a row that is short
+            // rather than a row with a gap in it.
+            if let extra = Self.speakerStarter(for: recording) { offered.append(extra) }
         } else {
-            offered = recording != nil ? Self.starters : Self.libraryStarters
+            offered = Self.libraryStarters
         }
         for (label, prompt) in offered {
             starterRow.addArrangedSubview(StarterChip(label) { [weak self] in
@@ -1309,12 +1401,36 @@ final class AskView: NSView {
 
     @objc private func expandPressed() { onExpand?() }
 
+    /// Pressed on History, which is the drawer's own menu opened from the bar.
+    /// Carries the button, because the menu has to pop up from the control that
+    /// was pressed and that control lives here rather than in the drawer.
+    var onHistory: ((NSView) -> Void)?
+
+    @objc private func historyPressed() { onHistory?(historyButton) }
+
+    /// Up whenever the chips are, and never beside the drawer's own header.
+    ///
+    /// **Three conditions, and each one is a state it would otherwise be wrong
+    /// in.** Composing, for the reason the chips wait for the caret: the drawer
+    /// draws no panel until somebody means to ask, so a word sitting there
+    /// would be unbacked text lying on the transcript. Not expanded, because
+    /// the card's header carries the same menu under the conversation's title
+    /// and a page's carries it in the toolbar, and offering it twice six points
+    /// apart is what the toolbar's History item was removed for. And only where
+    /// somebody is listening: `DetailView` holds an `AskView` of its own that
+    /// nothing currently puts on screen, and a control that opens no menu is
+    /// worse than no control.
+    private func updateHistoryButton() {
+        historyButton.isHidden = onHistory == nil || !composing || expandedNow
+    }
+
     /// Both controls belong to the collapsed bar. Expanded, the drawer's own
     /// header carries the title and the size controls, and a second clock under
     /// it would be the same action offered twice, six points apart.
     func setExpanded(_ on: Bool) {
         expandedNow = on
         expandButton.isHidden = on || !hasConversation
+        updateHistoryButton()
         // **The conversation is taken out of the view, not merely squeezed.**
         // Collapsed, the scroll view still had the whole answer in it at a few
         // points high: legible through the glass and scrollable with a

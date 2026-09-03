@@ -322,6 +322,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The list has one icon column, and notes were 24 points inside it
 - The handoff row was a section heading, and every part of that was wrong
 - Notes and the transcript are tabs, and the count is what tabs cost
+- Chats is the third tab, and it took the conversations off "Also about this"
+- The tab is gone when Ask is off, and `NSSegmentedControl` cannot hide a segment
 - The gap under the tab bar belongs to the column, not to the first line in it
 
 ### `.agents/notes/appkit.md` (35k)
@@ -560,6 +562,9 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Ask is off until somebody turns it on, and onboarding is where they are asked
 - The setup card stands alone, and takes the composer's place rather than sitting over it
 - The cross's `putAway` was inverted, and the bug it was chased for is still open
+- "Catch me up" was a sentence no user of this app can say
+- The fourth recording chip is `Positions`, and it comes and goes
+- History is the card's title menu, from the bar that has no title
 - What could not be verified: the download stall
 
 ### `.agents/notes/telemetry.md` (8k)
@@ -653,6 +658,12 @@ One script stands in for one, over the app built in the working directory:
 ./verify_ask_toggle.sh  # `Settings.askEnabled`: nothing Ask-shaped in the
                         # window with it off, all of it back with it on, and
                         # the card's Not now turning it off again (uitest copy)
+./verify_ask_page.sh    # the Ask surfaces on a meeting page: which starters
+                        # are offered (Positions only when every speaker is
+                        # named and there are two of them), History on the
+                        # card, and the Chats tab counting, listing, saying
+                        # what to do when empty, and being absent with
+                        # `askEnabled` off (uitest copy)
 ./verify_ask_close.sh   # closing a conversation with the cross, against a stub
                         # that actually answers, which no other Ask script has.
                         # `LISTEN_APP=` points it at a released build; see its

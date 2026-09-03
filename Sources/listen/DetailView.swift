@@ -169,7 +169,7 @@ final class DetailView: NSView {
     /// cannot be read at the same time, which is the trade the stacked layout
     /// was making in the other direction, and the count on the Notes tab is
     /// what keeps a written note from becoming invisible behind it.
-    private enum Tab { case recording, notes }
+    private enum Tab { case recording, notes, chats }
     /// Recording, always, until somebody says otherwise.
     ///
     /// A meeting is what was said; the note is what you made of it, and you
@@ -181,17 +181,24 @@ final class DetailView: NSView {
     private var tab: Tab = .recording
     /// The tab bar, on the row the mode picker used to have to itself.
     ///
-    /// `.selectOne`, unlike `modePicker` next door: these are two documents and
+    /// `.selectOne`, unlike `modePicker` next door: these are documents and
     /// exactly one of them is up, so pressing the selected one again must do
     /// nothing rather than leave the pane showing neither.
     ///
-    /// Fixed widths so the bar does not resize under the pointer when the note
-    /// count changes. 104 is "Recording" at the control's own font plus its
-    /// padding, measured, and the Notes segment matches it rather than hugging
-    /// a shorter word: two tabs of different widths read as one being more
-    /// important than the other.
+    /// Fixed widths so the bar does not resize under the pointer when a count
+    /// changes. 104 is "Recording" at the control's own font plus its padding,
+    /// measured, and the other segments match it rather than hugging a shorter
+    /// word: tabs of different widths read as one being more important than the
+    /// others.
+    ///
+    /// **Three segments, and the third is not always there.** Chats is built
+    /// with the control and removed from it when `Settings.askEnabled` is off:
+    /// with Ask off there is no composer on this window at all, so a tab whose
+    /// empty state says "ask a question below" would point at a card that does
+    /// not exist. `setTabs` is what applies that, and it is the only place the
+    /// segment count is written.
     private let tabPicker = NSSegmentedControl(
-        labels: ["Recording", "Notes"], trackingMode: .selectOne,
+        labels: ["Recording", "Notes", "Chats"], trackingMode: .selectOne,
         target: nil, action: nil)
     /// What the note being read is filed under.
     ///
@@ -210,22 +217,32 @@ final class DetailView: NSView {
     private let greeting = NSTextField(labelWithString: "")
     /// The conversations about the library, listed on the screen you land on.
     ///
-    /// This is what replaced the history control. A clock beside the composer
-    /// was a fourth place to look for something the app can simply show: the
-    /// library screen lists its own, a recording page names its own on the
-    /// "Also about this" line, and the open conversation's title carries the
-    /// rest.
+    /// This is what replaced the history control on this screen. The library
+    /// screen lists its own here, a recording page has a Chats tab, and the
+    /// card carries the rest: its title while a conversation is open, and
+    /// History on the starters line while one is not.
     private let recentChats = LinkLine()
-    /// The conversations that have asked about this meeting.
+    /// The agent notes about this meeting that are not the user's own, on one
+    /// line above the note being read.
     ///
-    /// The back half of `Chat.recordings`, and the reason a conversation names
-    /// its sources at all: without this a question asked about a meeting is
-    /// reachable only from the composer's history, so a month later the meeting
-    /// cannot tell you it has already been asked about. Between the note and the
-    /// transcript because it is about the page rather than about either half.
+    /// **It named the conversations too, and no longer does.** They are a tab
+    /// now: see `chatList`. What is left here is the notes half, which belongs
+    /// on this line because every link in it opens a document in the box
+    /// directly underneath, and the line is on the Notes tab only for the same
+    /// reason.
     private let chatLinks = LinkLine()
     private var chatLinksTop: NSLayoutConstraint!
     private var chatLinksHeight: NSLayoutConstraint!
+    /// The same conversations as a tab of their own. See `ChatList`.
+    ///
+    /// **It took the conversations off `chatLinks`, and that line kept the
+    /// notes.** They were together there on the argument that both are somebody
+    /// else's reading of this meeting, which is true and was not enough: an
+    /// agent's note is a document the Notes tab already holds and opens in
+    /// place, and a conversation is a card that covers the page. One line
+    /// offering both, in one run of accent-coloured text, made the difference
+    /// between them a thing you found out by clicking.
+    private let chatList = ChatList()
 
     /// True while the conversation drawer is open over this pane.
     ///
@@ -272,6 +289,7 @@ final class DetailView: NSView {
         // the reason this file records twice over: an inset is a scroll offset
         // and will not hold a view in place.
         notesBottom?.constant = -(RecordButton.clearance + points)
+        chatListBottom?.constant = -(RecordButton.clearance + points)
     }
 
     /// Told by the window, because only the window knows how tall the drawer is.
@@ -354,6 +372,7 @@ final class DetailView: NSView {
     /// background, so what is under the last line is the pane. See
     /// `setBottomInset`, which is the only thing that moves it.
     private var notesBottom: NSLayoutConstraint!
+    private var chatListBottom: NSLayoutConstraint!
     private var playerTop: NSLayoutConstraint!
     private var playerHeight: NSLayoutConstraint!
     /// The find bar's pair. Closed is 0 and 0, which puts `findBar.bottom`
@@ -598,7 +617,7 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, noteTagChips, greeting,
+                  chatLinks, chatList, noteTagChips, greeting,
                   recentChats, empty, emptyIcon, transcribing, live, findBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -695,6 +714,12 @@ final class DetailView: NSView {
         // whatever the conversation drawer is covering. `setBottomInset` is the
         // only other thing that touches it.
         notesBottom = notesScroll.bottomAnchor.constraint(
+            equalTo: bottomAnchor, constant: -RecordButton.clearance)
+        // The same floor as the note, for the same reason: a list whose last
+        // row is behind the conversation card is a conversation you cannot get
+        // to. A constraint rather than a content inset, which this file records
+        // twice over as a scroll offset that will not hold a view in place.
+        chatListBottom = chatList.bottomAnchor.constraint(
             equalTo: bottomAnchor, constant: -RecordButton.clearance)
         noteInfoHeight.priority = .defaultHigh
 
@@ -820,6 +845,21 @@ final class DetailView: NSView {
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
+            // The transcript's box, because it is the third document about this
+            // meeting and the three take turns in one reading area.
+            //
+            // **2, so that a row's text lands on the page's own column.** This
+            // one is a table and the other two are not: `.inset` style holds
+            // the rows 14 off the table's edge and `RecordingCell.textInset`
+            // adds the 8 inside that, which is the 22 the sidebar states. The
+            // pane's own 24 on top of it put every conversation title a
+            // control's width in from the meeting's name above it, which reads
+            // as a list that belongs to something else. 2 + 22 is the 24.
+            chatList.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8),
+            chatList.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            chatList.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            chatListBottom,
+
             // Flush to the pane's edges rather than inset like the transcript,
             // because the bottom of it is a bar. Its own padding puts the note's
             // text where the transcript's would be, so the reading position does
@@ -940,12 +980,13 @@ final class DetailView: NSView {
         // the Notes segment grows a count as soon as anything is written there.
         // Left to autosize, the bar changed width under the pointer the first
         // time somebody typed a note.
-        tabPicker.setWidth(104, forSegment: 0)
-        tabPicker.setWidth(104, forSegment: 1)
-        // Both halves of the page are documents, so the bar says so out loud
-        // for anybody driving this with the keyboard or a screen reader. The
+        // Every tab on the bar is a document, so the bar says so out loud for
+        // anybody driving this with the keyboard or a screen reader. The
         // segments carry their own labels; this names what they switch.
         tabPicker.setAccessibilityLabel("What to show for this recording")
+        setTabs()
+
+        chatList.onOpen = { [weak self] chat in self?.openChat(chat) }
 
         modePicker.selectedSegment = 0
         modePicker.selectedSegmentBezelColor = Brand.tint
@@ -1199,7 +1240,12 @@ final class DetailView: NSView {
         endEditing()
         // Before the note leaves the screen, never after.
         saveYours()
-        let wanted: Tab = sender.selectedSegment == 1 ? .notes : .recording
+        let wanted: Tab
+        switch sender.selectedSegment {
+        case 1: wanted = .notes
+        case 2: wanted = .chats
+        default: wanted = .recording
+        }
         guard wanted != tab else { return }
         tab = wanted
         if tab == .notes {
@@ -1207,6 +1253,14 @@ final class DetailView: NSView {
             // Re-read on the way in rather than only on selection, so opening
             // the tab is also the gesture that picks up what an agent wrote.
             reloadNotes(reset: false)
+        }
+        // Same argument, one tab along: an answer streaming into the card at
+        // the foot of this window rewrites `chat.json`, and the first exchange
+        // is what gives a conversation its title at all, so arriving here is
+        // the moment to look again.
+        if tab == .chats {
+            stopPlayback()
+            reloadChats()
         }
         applyShowing()
         // After the hiding is done, because `findMatches` reads the note only
@@ -1383,6 +1437,26 @@ final class DetailView: NSView {
     /// rebuilding the text view scrolls it back to the top, and losing your
     /// place in a note because you switched to another app and back is exactly
     /// the failure `renderTurns(scrollToTop:)` exists to avoid next door.
+    /// Re-read the conversations about this meeting, for the tab and its count.
+    ///
+    /// Cheap enough to be unconditional: `Chat.about` is one listing of the
+    /// conversation directory, filtered on a field, and it is asked once per
+    /// selection rather than once per row of anything.
+    private func reloadChats() {
+        chatList.show(recording)
+        updateTabLabels()
+    }
+
+    /// A conversation somewhere in the library has been written to or thrown
+    /// away, so this meeting's list of them may be stale.
+    ///
+    /// The window calls it, because only the window hears about an answer
+    /// landing in the card at the foot of this page. Deliberately unguarded by
+    /// which tab is up: the count in the bar is the whole reason the tab is
+    /// worth having, and a count that only refreshes once you are already
+    /// looking at the list says nothing.
+    func chatsChanged() { reloadChats() }
+
     private func reloadNotes(reset: Bool) {
         guard let recording else {
             notes = []
@@ -1532,6 +1606,40 @@ final class DetailView: NSView {
         onOpenChat?(chat)
     }
 
+    /// How many segments the bar has, and how wide they are.
+    ///
+    /// **Rebuilt rather than hidden, because `NSSegmentedControl` cannot hide a
+    /// segment.** Setting `segmentCount` is the only way to take one off, and
+    /// it discards the labels and widths of the segments it keeps, so both are
+    /// written again here every time. That also makes this the one place the
+    /// widths are stated: `updateTabLabels` writes titles into segments this
+    /// method has already decided exist, and a count written by a method that
+    /// did not know Chats was gone would land on the wrong tab.
+    ///
+    /// Ask off takes the third one away for the reason `updateComposer` gives
+    /// for taking the composer away: with the feature off there is no card at
+    /// the foot of this window, so a tab whose empty state says "ask a question
+    /// below" would be pointing at something that is not there.
+    private func setTabs() {
+        let wanted = Settings.askEnabled ? 3 : 2
+        if tabPicker.segmentCount != wanted { tabPicker.segmentCount = wanted }
+        tabPicker.setLabel("Recording", forSegment: 0)
+        for segment in 0..<wanted { tabPicker.setWidth(104, forSegment: segment) }
+    }
+
+    /// Ask has been switched on or off in Settings.
+    ///
+    /// **The tab has to go, and so does anybody standing on it.** Settings is a
+    /// mode of this window rather than a second window, so the toggle can be
+    /// thrown with a meeting's Chats tab up behind it, and leaving somebody on
+    /// a list of conversations they can no longer add to is the same fault
+    /// `askEnabledChanged` already fixes for chat mode.
+    func askEnabledChanged() {
+        if !Settings.askEnabled, tab == .chats { tab = .recording }
+        setTabs()
+        applyShowing()
+    }
+
     /// How many notes about this meeting have anything in them, on the tab.
     ///
     /// **The one thing tabs cost, bought back.** Stacked, a note was visible
@@ -1558,6 +1666,13 @@ final class DetailView: NSView {
             }
         }
         tabPicker.setLabel(written > 0 ? "Notes · \(written)" : "Notes", forSegment: 1)
+        // The same bargain as the note count, one tab along: a meeting that has
+        // been asked about and one that has not are otherwise the same bar.
+        // Read off the list rather than counted again, so the tab and the rows
+        // it opens onto cannot disagree.
+        guard tabPicker.segmentCount > 2 else { return }
+        tabPicker.setLabel(chatList.count > 0 ? "Chats · \(chatList.count)" : "Chats",
+                           forSegment: 2)
     }
 
     /// Everything else written about this recording, on one line.
@@ -1567,11 +1682,17 @@ final class DetailView: NSView {
     /// document on the page indistinguishable from the read-only ones beside
     /// it, and it hid conversations entirely because they are not notes.
     ///
-    /// So: agent notes and conversations together, named and reachable, in a
-    /// line that collapses to nothing when there are neither. They are the same
-    /// kind of thing from the page's point of view, which is somebody else's
-    /// reading of this meeting, and the difference between them is what happens
-    /// when you press one.
+    /// So: the agent notes, named and reachable, in a line that collapses to
+    /// nothing when there are none.
+    ///
+    /// **The conversations were here too, and that grouping was the mistake.**
+    /// They were put together on the argument that both are somebody else's
+    /// reading of this meeting, which is true and was not enough: a note opens
+    /// in the box directly under this line and a conversation opens a card over
+    /// the whole page, so the difference between two links that look identical
+    /// was something you found out by pressing one. The conversations have a
+    /// tab now, where a list can say when each one was had and how long it is.
+    /// See `chatList`.
     /// "What's cooking, Maxime?", or without the name when there is none.
     ///
     /// The name is the one in Settings, which is also what the microphone track
@@ -1623,13 +1744,12 @@ final class DetailView: NSView {
 
     private func showRelated() {
         let others = notes.filter { !Notes.isYours($0) }
-        let chats = recording.map { Chat.about($0.id) } ?? []
         let away = showingNote != nil && !showingYours
         // On the Notes tab only: it is the line that swaps the document
         // underneath it, so on the transcript it would be a row of links to a
         // pane that is not on screen.
         let show = showing == .page && tab == .notes
-            && (!others.isEmpty || !chats.isEmpty || away)
+            && (!others.isEmpty || away)
         chatLinks.isHidden = !show
         chatLinksHeight.isActive = !show
         // The top is the column's, not this line's: see `chatLinksTop`. Only
@@ -1665,12 +1785,6 @@ final class DetailView: NSView {
             if !first { add(", ", link: nil) }
             first = false
             add(note.title, link: NoteLink.scheme + note.slug)
-        }
-        for chat in chats {
-            guard let id = chat.id else { continue }
-            if !first { add(", ", link: nil) }
-            first = false
-            add(chat.displayTitle, link: ChatLink.scheme + id)
         }
         chatLinks.textStorage?.setAttributedString(line)
         chatLinks.invalidateIntrinsicContentSize()
@@ -1914,7 +2028,7 @@ final class DetailView: NSView {
         // Everything else keeps the card, with or without a transport in it.
         setPlayer(hasAudio: hasAudio,
                   hidden: showing == .ask || recording?.isLive == true
-                      || tab == .notes)
+                      || tab != .recording)
         // **Every piece of the page is gated on there being a page.** The
         // heading, the note and the transcript are furniture belonging to a
         // meeting, and with nothing selected the pane's whole content is one
@@ -1939,12 +2053,18 @@ final class DetailView: NSView {
         // screen is about until the job finishes, and a tab bar over it would
         // be offering two documents that do not exist yet.
         let onNotes = readable && tab == .notes
+        let onChats = readable && tab == .chats
         setModeBarCollapsed(!readable)
         tabPicker.isHidden = !readable
-        tabPicker.selectedSegment = tab == .notes ? 1 : 0
+        switch tab {
+        case .recording: tabPicker.selectedSegment = 0
+        case .notes: tabPicker.selectedSegment = 1
+        case .chats: tabPicker.selectedSegment = 2
+        }
         updateTabLabels()
         scroll.isHidden = !open || tab != .recording
         notesScroll.isHidden = !onNotes
+        chatList.isHidden = !onChats
         // **The note's filing, not the recording's, so it goes with the note.**
         // Pinned to the tab row, so a strip left behind would draw over the
         // tabs themselves rather than merely be wrong.
@@ -2509,6 +2629,10 @@ final class DetailView: NSView {
         // `chat.json`, and both have to happen whether or not Ask is up.
         askView.show(recording)
         reloadNotes(reset: true)
+        // Always, and not only on the way into the tab: the count in the bar is
+        // read off this list, so a meeting arriving with two conversations
+        // behind it has to say so before anybody presses anything.
+        reloadChats()
         // The tab bar is opened by `applyShowing` and by nothing else, so that
         // a pane with no two documents on it, one being transcribed or one being
         // recorded, cannot be left with a bar over it.
@@ -4960,6 +5084,23 @@ final class DetailViewController: NSViewController {
     var isShowingLive: Bool { detail.isShowingLive }
 
     var isLoadingTranscript: Bool { detail.isLoadingTranscript }
+
+    /// The Chats tab comes and goes with `Settings.askEnabled`, and the window
+    /// is the only thing that hears the toggle. `loadViewIfNeeded` first,
+    /// because Settings can be entered before any meeting has been opened.
+    func askEnabledChanged() {
+        loadViewIfNeeded()
+        detail.askEnabledChanged()
+    }
+
+    /// A conversation has been written to or thrown away somewhere. Only
+    /// forwarded while the pane exists: the tab's count is re-read on every
+    /// selection anyway, so building the pane to tell it about a conversation
+    /// nobody is looking at would be work for a screen that is not up.
+    func chatsChanged() {
+        guard isViewLoaded else { return }
+        detail.chatsChanged()
+    }
 
     var isFinding: Bool { detail.isFinding }
     func openFind() { detail.openFind() }

@@ -176,6 +176,9 @@ final class AskView: NSView {
     /// about it. See `LibraryWindow.chatsItem` for the toolbar item's removal,
     /// and `ChatNav` for the list.
     private let historyButton = HoverButton()
+    /// A conversation reopened from History names what it was about, and
+    /// clicking it goes there. See `updateSourceChip`.
+    private let sourceChip = ChipButton("")
     private let notice = SetupNotice()
     /// The chips and the setup notice, in one slot above the composer. They are
     /// alternatives rather than neighbours: one invites a question and the other
@@ -271,6 +274,10 @@ final class AskView: NSView {
     /// both, which `persist` already handles by adding to `recordings` rather
     /// than replacing it.
     private var pinned = false
+    /// What `sourceChip` points at, or nil while it is off screen. See
+    /// `updateSourceChip`.
+    private enum SourceLink { case recording(String); case person(String) }
+    private var sourceLink: SourceLink?
     private var run: AgentSession?
     /// The view being written into while an answer streams.
     private var answering: AnswerTurn?
@@ -391,6 +398,9 @@ final class AskView: NSView {
         historyButton.target = self
         historyButton.action = #selector(historyPressed)
         historyButton.isHidden = true
+
+        sourceChip.target = self
+        sourceChip.action = #selector(openSource)
 
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
@@ -1174,6 +1184,7 @@ final class AskView: NSView {
             }
             addTurn(built)
         }
+        updateSourceChip()
         // The chips are drawn by `updateStatus`, which is the only thing that
         // knows whether there is anything to ask.
         updateStatus()
@@ -1188,6 +1199,43 @@ final class AskView: NSView {
         // to go back to without changing which state the pane is in.
         setPage(isPage)
         scrollToEnd()
+    }
+
+    /// Show `sourceChip` when a reopened conversation names one clear
+    /// subject, in the same order `ChatNav.subtitle` already uses to say
+    /// what a chat is about: a person first, then exactly one recording.
+    ///
+    /// Gated on `pinned` rather than on `recording`/`person` alone, because
+    /// those are also set while a fresh question is being asked from a
+    /// meeting's own Ask tab or from somebody's card, where a link back to
+    /// the page already on screen would be chrome about nothing. `pinned`
+    /// is only true once a conversation has been picked out of History.
+    private func updateSourceChip() {
+        if let name = chat.person, !name.isEmpty, pinned {
+            sourceLink = .person(name)
+            sourceChip.setLabel(name)
+            sourceChip.image = NSImage(systemSymbolName: "person",
+                                       accessibilityDescription: nil)
+        } else if pinned, chat.sources.count == 1, let recording {
+            sourceLink = .recording(recording.id)
+            sourceChip.setLabel(recording.displayTitle)
+            sourceChip.image = NSImage(systemSymbolName: "waveform",
+                                       accessibilityDescription: nil)
+        } else {
+            sourceLink = nil
+            return
+        }
+        sourceChip.imagePosition = .imageLeading
+        sourceChip.invalidateIntrinsicContentSize()
+        turns.insertArrangedSubview(sourceChip, at: 0)
+    }
+
+    @objc private func openSource() {
+        switch sourceLink {
+        case .recording(let id): LibraryWindow.shared.reveal(id)
+        case .person(let name): LibraryWindow.shared.showPerson(name)
+        case nil: break
+        }
     }
 
     /// The field gained or lost the caret.

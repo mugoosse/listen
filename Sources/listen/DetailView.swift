@@ -2432,13 +2432,18 @@ final class DetailView: NSView {
             // The mascot now belongs to the greeting rather than to an empty
             // library, so it is here whenever the pane is.
             emptyIcon.isHidden = false
-            // Selecting is no longer the only thing you can do here. The
-            // composer under this sentence asks about the whole library, so an
-            // instruction to go and pick something first is now untrue as well
-            // as unhelpful: this screen is a place you can work from.
+            // Selecting is no longer the only thing you can do here. With Ask
+            // on, the composer under this sentence asks about the whole
+            // library, so an instruction to go and pick something first is
+            // untrue as well as unhelpful: this screen is a place you can
+            // work from. With Ask off there is no composer to point at (see
+            // `Settings.askEnabled`), so the second half offers the one other
+            // thing this screen can do instead: start the next recording.
             empty.stringValue = libraryIsEmpty
-                ? "No recordings yet. Start a new recording from the sidebar."
-                : "Select something from the list, or ask about your library below."
+                ? "No recordings yet. Press New Recording to capture your first meeting or voice memo."
+                : Settings.askEnabled
+                    ? "Select something from the list, or ask about your library below."
+                    : "Select something from the list, or press New Recording to start your next meeting or voice memo."
             return
         }
 

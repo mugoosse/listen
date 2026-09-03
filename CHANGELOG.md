@@ -32,6 +32,17 @@ text that became a paragraph once you had asked five questions.
 - Agent notes stay on the "Also about this" line, where they belong: pressing
   one opens it in the box directly underneath.
 - With Ask switched off in Settings there is no third tab at all.
+- Opening a past conversation from Chats used to say what it was about only in
+  the row you clicked to get there. A chip above the first message now names
+  the meeting or person, and clicking it goes straight there.
+
+### A steadier "Worked for Xs"
+
+Clicking an answer's working-out open to read it visibly moved the line that
+opened it, and closing it again briefly overlaid that same line with the
+paragraph sliding away underneath. Both were the disclosure's own animation
+catching content it should have left alone; the line stays put now, either
+way.
 
 ### The starter chips
 

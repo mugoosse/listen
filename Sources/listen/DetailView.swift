@@ -654,8 +654,9 @@ final class DetailView: NSView {
         // Not at the top of the pane: the window is `.fullSizeContentView` with
         // a transparent title bar, so the toolbar floats over the content and a
         // full-width bar up there runs under the ellipsis and the record
-        // capsule. `titleLabel`'s 38 works only because a title is left-aligned
-        // and those items are on the right.
+        // capsule. Left-aligned is not clearance either: `titleLabel` sat at 38
+        // on that reasoning and a long title ran under both, which is why it is
+        // 52 now and below everything in the title bar rather than beside it.
         //
         // Not an overlay either: it would cover the top of the transcript,
         // which is where the first match usually is, and every `scrollToVisible`
@@ -739,7 +740,18 @@ final class DetailView: NSView {
         ])
 
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 38),
+            // **52, because the record capsule ends at 39.5 and the title used
+            // to start at 38.** The window is `.fullSizeContentView`, so the
+            // toolbar floats over this view rather than sitting above it, and
+            // being left-aligned is not the clearance it looks like: a title
+            // long enough to fill the width runs the whole way under the
+            // capsule and the ellipsis. Measured off a screenshot at 2x, with
+            // the 28 point capsule bottom 39.5 points below the window's top
+            // edge, the label's frame began 1.5 points *above* it and only the
+            // text field's own 5 points of leading kept the glyphs out of it.
+            // 52 puts the frame 12.5 points clear and the capital letters 17.5,
+            // which is the gap the eye reads as deliberate at 22 point.
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 52),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),

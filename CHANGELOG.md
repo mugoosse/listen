@@ -8,6 +8,72 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.31.0 (2026-09-03)
+
+Conversations about a meeting get a tab of their own, the starter questions
+stop offering one that was never true, and pressing Stop during a call no
+longer starts the next recording.
+
+### Chats is a third tab
+
+The questions you have asked about a meeting used to be links in a line of
+small text under the tab bar, mixed in with any notes an agent had written
+about it: "Also about this: Weekly summary, What did we settle on the trial
+length?". Two links that look the same and do different things, in a run of
+text that became a paragraph once you had asked five questions.
+
+- **Recording**, **Notes** and **Chats** are the three tabs now. Chats lists
+  the conversations about the meeting, one row each, saying when it was last
+  had and how many questions are in it. Clicking one opens it over the page.
+- The tab carries a count, `Chats · 2`, the way the Notes tab does, so a
+  meeting you have already asked about does not look like one you have not.
+- With nothing on it the tab says so and points at the composer at the foot of
+  the window, which is one gesture away.
+- Agent notes stay on the "Also about this" line, where they belong: pressing
+  one opens it in the box directly underneath.
+- With Ask switched off in Settings there is no third tab at all.
+
+### The starter chips
+
+- **"Catch me up" is gone from a meeting's chips.** Its prompt began "I missed
+  this meeting", which is a sentence nobody using Listen can say: it records
+  from the Mac you are sitting at, so every recording in the library is a
+  meeting you were in. The chip keeps its name on the library and person
+  screens, where it means "what happened lately" and is true.
+- **Positions** takes its place, and only on a meeting where every speaker has
+  been named and there are at least two of them. It asks what each person
+  argued for, pushed back on or worried about, and where they did not agree.
+  It is withheld rather than greyed out while somebody is still "Speaker B",
+  because "Speaker A pushed for the October date and Speaker B objected" is an
+  answer nobody can act on. A meeting nobody has labelled gets three chips
+  rather than four, and nothing nags about it.
+
+### History on the composer
+
+A card with a conversation in it has always carried the conversations about
+that page under its title. A card with nothing in it yet had no title and no
+route to them at all, so a meeting you had asked about last week could not
+tell you so until you had asked about it again. **History** now sits at the
+right of the chips row and opens the same menu.
+
+### Stopping a recording during a call
+
+Pressing Stop while the meeting was still running left the detector armed
+against the call it had just stopped recording, so about three seconds later
+it started a second recording and asked about that one, and stopping that
+started a third. Stopping by hand now suppresses whatever is on a call at that
+moment, and re-arms when the app leaves the call, which is the rule "Not now"
+already followed. A meeting that ends on its own is unaffected: nobody is on a
+call by the time it stops, so nothing is suppressed and the next meeting is
+detected normally.
+
+### What it costs
+
+Nothing about how conversations are stored changed. They are the same
+`chats/*.json` files, and the conversation list reached from the home page
+still shows all of them across the whole library; the tab is a narrower view
+of the same set.
+
 ## 0.30.0 (2026-09-02)
 
 The note and the transcript are tabs on a recording's page rather than two

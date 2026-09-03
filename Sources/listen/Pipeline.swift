@@ -257,6 +257,10 @@ actor Pipeline {
                                      fallback: Merge.namespaced("?", "system"))
         }
 
+        /// The system track's sentences, taken before the mic pass appends to
+        /// `labelled`. What `echoedSentences` compares the microphone against.
+        let systemSegments = labelled
+
         if micHasSpeech {
             // The mic is the user, unless it is the room. See `decideRoom`.
             tally.say(room ? "transcribing the room" : "transcribing you")
@@ -339,12 +343,45 @@ actor Pipeline {
                     log("\(recording.id): the room separated into \(voices) "
                         + "voice(s), so the whole recording is \(Self.userLabel)")
                 }
-                labelled += transcript.segments.map {
+
+                // Whatever is left of the microphone once the far end's own
+                // words are taken back off it. This is the branch with no
+                // clusters to drop, so `bleedClusters` cannot reach it and the
+                // sentences are matched by their words instead. See
+                // `echoedSentences`.
+                let echoed = Self.echoedSentences(transcript.segments,
+                                                  against: systemSegments)
+                let mine = transcript.segments.enumerated()
+                    .filter { !echoed.contains($0.offset) }.map(\.element)
+                if !echoed.isEmpty {
+                    log("\(echoed.count) sentence(s) dropped from the "
+                        + "microphone: the far end coming back in through the "
+                        + "speakers")
+                }
+
+                labelled += mine.map {
                     LabelledSegment(start: $0.start, end: $0.end,
                                     speaker: Self.userLabel, text: $0.text)
                 }
-                await printUser(recording, from: mic, into: &embeddings,
-                                speech: &speech, tally: tally)
+
+                // **A microphone that held nothing but the far end has no
+                // voiceprint to give.** `printUser` builds the user's own print
+                // from this track, so filing one here puts somebody else's
+                // voice in the bank under the user's name, and the bank is
+                // what names speakers in every recording afterwards. Measured
+                // on the webinar this was found in: the print written for `Me`
+                // sits at cosine 0.75 from speaker A, which is
+                // `VoiceBank.certainThreshold`, while the meeting's two real
+                // speakers sit at 0.12 from each other. Only the 15-second
+                // `Voiceprint.minimumSpeechForEvidence` floor kept it out of
+                // use, and it did so by 1.6 seconds.
+                if mine.isEmpty, !echoed.isEmpty {
+                    log("\(recording.id): no voiceprint from the microphone, "
+                        + "every sentence on it was the far end")
+                } else {
+                    await printUser(recording, from: mic, into: &embeddings,
+                                    speech: &speech, tally: tally)
+                }
             }
         }
 
@@ -530,6 +567,126 @@ actor Pipeline {
             seconds > 0 && (covered[label] ?? 0) / seconds >= 0.8 ? label : nil
         })
     }
+
+    /// Microphone sentences that are the far end coming back in through the
+    /// speakers, matched by their words rather than by their timing.
+    ///
+    /// `bleedClusters` is the same problem on the other path, and it cannot
+    /// reach this one: it drops a **cluster**, and a recording read as a call
+    /// never clusters the microphone at all. Every sentence on that track is
+    /// labelled `Me` unconditionally, so a webinar watched on speakers with the
+    /// microphone open transcribes the hosts twice, once under their own
+    /// letters and once under the user's name.
+    ///
+    /// **Timing cannot decide this one, and that is measured.** The obvious
+    /// test is the one `bleedClusters` uses, how much of the microphone's
+    /// speech happens while the system track is speaking. Over the 54
+    /// recordings in the development library that holds a `Me` speaker, the
+    /// webinar reads 100% covered, but an ordinary call reaches **82.8%** at
+    /// paragraph granularity and **68.7%** sentence by sentence. There is no
+    /// line through that, and the cost of putting one in the wrong place is
+    /// the whole of what the user said.
+    ///
+    /// What separates cleanly is that an echo is not merely simultaneous with
+    /// the far end, it is **the same words**. Over the same library, weighted
+    /// by duration:
+    ///
+    /// | recording | mic words also on the system track |
+    /// |---|---|
+    /// | the webinar | 97.9% |
+    /// | next highest (a 29s call, 2 sentences) | 49.3% |
+    /// | third | 21.9% |
+    /// | median | 6.4% |
+    ///
+    /// **Per sentence, which is the opposite of what `bleedClusters` does, and
+    /// the reason is the same argument read the other way round.** Dropping by
+    /// overlap per sentence would delete exactly the interruptions, because an
+    /// interruption is by definition simultaneous. Dropping by word identity
+    /// cannot: an interruption's words are the interrupter's own. So the finer
+    /// grain is safe here, and it is worth having, because it leaves the three
+    /// things somebody says out loud during a webinar in the transcript instead
+    /// of taking the track away whole.
+    ///
+    /// The three constants were read off the same library. At 0.9 with a
+    /// four-word floor, **7 of 10726** `Me` sentences in it are dropped: all
+    /// six of the webinar's, and one stray, itself an echo on inspection
+    /// ("Yeah, I don't know." over a far end saying "okay yeah i think they
+    /// said ... okay i don't even know"). The floor is where the collateral
+    /// is, and it moves fast: three costs six strays, two costs 33, one costs
+    /// 268, which is every "yeah" that ever coincided with a "yeah". Five is
+    /// where it starts costing something instead, leaving two of the webinar's
+    /// six behind.
+    ///
+    /// **Four rather than three because the two errors are not equal.** A
+    /// sentence left in is a duplicate the reader can see and delete; a
+    /// sentence taken out is gone with nothing on screen to say so. So the
+    /// floor is set where the last real sentence is safe rather than where the
+    /// last echo is caught.
+    static func echoedSentences(_ mic: [ASRSegment],
+                                against system: [LabelledSegment]) -> Set<Int> {
+        guard !system.isEmpty else { return [] }
+        let spoken = system.map { (start: $0.start, end: $0.end, words: echoWords($0.text)) }
+        var echoed: Set<Int> = []
+        for (i, segment) in mic.enumerated() {
+            let words = echoWords(segment.text)
+            // Below the floor a sentence is too short to tell an echo from an
+            // agreement, and agreements are the ones a reader would miss.
+            guard words.count >= echoMinimumWords else { continue }
+            // Padded, because the two passes cut the same speech in different
+            // places: the sentence a mic segment echoes can start before it and
+            // end after it. See the measurement above, where one system
+            // sentence covered two mic ones.
+            var against: [String] = []
+            for other in spoken where other.end >= segment.start - echoWindow
+                                  && other.start <= segment.end + echoWindow {
+                against += other.words
+            }
+            guard !against.isEmpty else { continue }
+            if Double(commonRun(words, against)) / Double(words.count) >= echoWordMatch {
+                echoed.insert(i)
+            }
+        }
+        return echoed
+    }
+
+    /// Words for comparing one transcript against another: case and
+    /// punctuation carry nothing here, and the apostrophe is kept because
+    /// "it's" is one word and splitting it inflates every match.
+    ///
+    /// `isLetter` rather than an ASCII range, because half this library is
+    /// Dutch and French and "gedaan" must not become "gedaa" plus "n".
+    static func echoWords(_ text: String) -> [String] {
+        text.lowercased()
+            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
+            .map(String.init)
+    }
+
+    /// How many of `a`'s words appear in `b`, in order: the longest common
+    /// subsequence, not a set intersection.
+    ///
+    /// In order matters. A set would call any sentence built from common words
+    /// an echo of any long enough stretch of the far end, because "and", "the"
+    /// and "you" are in everything. The subsequence asks whether the far end
+    /// said *this sentence*, which is the actual question.
+    static func commonRun(_ a: [String], _ b: [String]) -> Int {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        var previous = [Int](repeating: 0, count: b.count + 1)
+        var current = previous
+        for i in 1...a.count {
+            for j in 1...b.count {
+                current[j] = a[i - 1] == b[j - 1]
+                    ? previous[j - 1] + 1
+                    : max(previous[j], current[j - 1])
+            }
+            swap(&previous, &current)
+        }
+        return previous[b.count]
+    }
+
+    /// See `echoedSentences` for all three.
+    static let echoWordMatch = 0.9
+    static let echoMinimumWords = 4
+    static let echoWindow: Double = 3
 
     /// File one voiceprint for the user, from the microphone track.
     ///

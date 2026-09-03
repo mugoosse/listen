@@ -105,7 +105,7 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - Two libraries turn three channels into a well-formed file of nothing
 - A failure at the first attempt had no second attempt, and the screen said "Recording from"
 
-### `.agents/notes/asr.md` (32k)
+### `.agents/notes/asr.md` (56k)
 
 How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 `TranscribingView`, and which model runs.
@@ -122,6 +122,8 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - One voice on the microphone is the user, whatever the flag says
 - Both tracks are clustered, so the letters are handed out once
 - The far end comes back in through the microphone
+- A webinar on speakers put the host in the transcript twice, under the user's name
+- The webinar host was filed as the user's own voiceprint, and 1.6 seconds saved the bank
 - A paragraph ends at a ten second silence, and discarding a speaker is why
 - The Whisper-era cleanup has not fired on Parakeet yet
 - The transcription queue has no database

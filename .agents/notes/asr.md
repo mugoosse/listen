@@ -313,8 +313,101 @@ sentences a reader most wants. The 0.8 is chosen, not measured, and the count is
 logged every run so that it can be.
 
 Only reachable through the override, since the inference never calls a hybrid
-meeting a room. On a call the mic's copy of the far end is still labelled `Me`,
-which is the pre-existing behaviour and is untouched here.
+meeting a room. On a call the mic's copy of the far end was still labelled `Me`.
+That last sentence used to end "which is the pre-existing behaviour and is
+untouched here", and the next section is what it cost.
+
+### A webinar on speakers put the host in the transcript twice, under the user's name
+
+Reported from a 51-minute webinar watched in a browser with the microphone open
+and the *webinar's* mute on. Muting in the meeting app stops the far end hearing
+you; it does nothing to Listen, which taps the input node raw. So the mic track
+held 13.4 seconds of the hosts coming back out of the speakers before macOS put
+the built-in mic into its call profile and the track went to digital zero for the
+remaining 3046 seconds.
+
+The recording is not a room: the system track carries the whole webinar, so
+`decideRoom` correctly infers `room: false` and the call path labels every
+sentence on the mic `Me` without clustering it. `bleedClusters` drops clusters,
+and there are none, so nothing was in the way. The result on screen was
+`Speaker A · 53%`, `Speaker B · 47%`, `Maxime · 1%`, with the user's first six
+paragraphs being speaker A's first six paragraphs word for word.
+
+**Coverage cannot decide this, and that is the measurement that mattered.** The
+obvious fix is to reuse `bleedClusters`' test on the call path: drop the mic when
+its speech is 80% covered by system speech. Over the 54 recordings in the
+development library that hold a `Me` speaker, the webinar reads 100% covered, but
+an ordinary call ("Call with Nadia", 496 seconds of the user talking) reaches
+**82.8%** at paragraph granularity and **68.7%** sentence by sentence. A
+threshold there is a coin toss with the whole of what the user said on the table.
+
+What separates is that an echo is not merely simultaneous with the far end, it is
+**the same words**. Weighted by duration, the fraction of the mic's words that
+are also being spoken on the system track at that moment:
+
+| recording | |
+|---|---|
+| the webinar | 97.9% |
+| next highest (a 29s call, two sentences) | 49.3% |
+| third | 21.9% |
+| median of the 49 | 6.4% |
+
+`Pipeline.echoedSentences` is that test, and it drops **per sentence**, which is
+the opposite of what `bleedClusters` does one section up. The argument against
+per-sentence dropping is that an interruption is by definition simultaneous, so
+an overlap rule deletes exactly the sentences a reader most wants. Word identity
+does not have that failure: an interruption's words are the interrupter's own. So
+the finer grain is safe here, and it earns its keep by leaving the three things
+somebody actually says out loud during a webinar in the transcript instead of
+taking the track away whole.
+
+The comparison is a longest common subsequence, not a set intersection: "and",
+"the" and "you" are in everything, and a set would call any sentence built from
+common words an echo of any long enough stretch of the far end. In order asks
+whether the far end said *this sentence*.
+
+**The floor is where the collateral is, and 4 rather than 3 is a measured
+choice.** At 0.9, dropping mic sentences of at least four words costs **7 of the
+library's 10726** `Me` sentences: all six of the webinar's, and one stray that is
+itself an echo ("Yeah, I don't know." over a far end saying "okay yeah i think
+they said ... okay i don't even know"). Three words costs six strays, two costs
+33, one costs 268, which is every "yeah" that ever coincided with a "yeah". Five
+leaves two of the webinar's six behind. A duplicate left in is one a reader can
+see and delete; a real sentence taken out is gone with nothing on screen to say
+so, so the floor sits where the last real sentence is safe rather than where the
+last echo is caught.
+
+Verified by re-transcribing the recording itself against a scratch
+`LISTEN_LIBRARY`: `A` and `B` only, no `Me`, no duplicated paragraphs, and the
+two log lines below. The two control calls were re-transcribed the same way and
+dropped nothing, including the 68.7% one.
+
+    6 sentence(s) dropped from the microphone: the far end coming back in
+    through the speakers
+    2026-09-03-170119-3097: no voiceprint from the microphone, every sentence
+    on it was the far end
+
+### The webinar host was filed as the user's own voiceprint, and 1.6 seconds saved the bank
+
+The second half of the same bug, and the worse half. `printUser` builds the
+user's own voiceprint from the mic track, and on this recording the mic track was
+the webinar host. The print written under `Me` sits at **cosine 0.7477 from
+speaker A**, where the meeting's two genuine speakers sit at 0.1226 from each
+other. It is speaker A's voice, filed under the user's name, in the bank that
+names speakers in every recording afterwards.
+
+`VoiceBank.certainThreshold` is 0.75. So the print was one thousandth of a point
+below the strength at which Listen names somebody without asking.
+
+The only thing that kept it out of use is that `Voiceprint.isEvidence` requires
+15 seconds and the bleed lasted 13.4. **That is a threshold about length standing
+in for one about provenance**, and it held by 1.6 seconds. Two more sentences of
+the host through the speakers and the bank would have learned the user's voice
+from a stranger, silently, with the recording looking exactly the same.
+
+So the guard is now explicit: when every sentence on the microphone was the far
+end, `printUser` is not called at all and the recording files no print for the
+user. Nothing is inferred from the length of the bleed.
 
 ### A silent system track used to be transcribed
 

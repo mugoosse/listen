@@ -152,6 +152,8 @@ enum CLI {
             voices(rest)
         case "sources":
             sources()
+        case "language":
+            language(rest)
         case "calendar":
             calendar(rest)
         case "contacts":
@@ -388,6 +390,73 @@ enum CLI {
     /// and "why is my meeting called that?" is otherwise unanswerable, because
     /// the candidate that won, the ones that lost and the window they were
     /// judged in are all gone by the time anybody looks.
+    /// What the library knows about which language each meeting was held in.
+    ///
+    /// This exists for the same reason `listen calendar` does: the decision it
+    /// reports leaves nothing behind on its own. A model was chosen, a meeting
+    /// was read, and whether that was the right model is invisible afterwards
+    /// unless something prints the two numbers side by side.
+    ///
+    /// Three columns and each answers a different question. `said` is the
+    /// language a multilingual transcript identified as, and is blank for every
+    /// v2 transcript because v2's output is English whatever went in. `w/s` is
+    /// the word rate `SpokenLanguage.looksMisheard` scores, and is the only
+    /// column that can catch v2 having been handed the wrong meeting. `flag`
+    /// is that verdict.
+    private static func language(_ args: [String]) -> Never {
+        let library = Recording.all()
+        let onlyFlagged = args.contains("--flagged")
+        // Written out rather than padded: `padding(toLength:)` truncates, which
+        // is the trap `.agents/notes/agent.md` records against it.
+        print("  model     said   w/s   flag   recording")
+        var flagged: [Recording] = []
+        for recording in library.reversed() {
+            guard let transcript = recording.storedTranscript,
+                  !transcript.segments.isEmpty else { continue }
+            let density = SpokenLanguage.density(of: recording)
+            let misheard = SpokenLanguage.looksMisheard(recording)
+            if misheard { flagged.append(recording) }
+            if onlyFlagged && !misheard { continue }
+            let model = ModelChoice.forRepo(transcript.model)?.id ?? "legacy"
+            let said = SpokenLanguage.of(recording) ?? ""
+            print(String(format: "  %-8@  %-5@  %5@  %-5@  %@ %@",
+                         model, said,
+                         density.map { String(format: "%.2f", $0) } ?? "-",
+                         misheard ? "THIN" : "",
+                         recording.id, recording.displayTitle))
+        }
+
+        // The people half, which is what actually chooses a model for the next
+        // meeting. Only a multilingual transcript votes, so this list is empty
+        // until somebody has re-run one meeting with v3.
+        print("")
+        var voters: [String: [String: Int]] = [:]
+        for person in People.all(in: library) where !person.isYou {
+            let seen = SpokenLanguage.languages(of: person.label, in: library)
+            if seen.contains(where: { $0.key != "en" }) { voters[person.label] = seen }
+        }
+        if voters.isEmpty {
+            print("nobody has a language on record yet. A person gets one when a "
+                  + "meeting they are in is read by a model that could have "
+                  + "chosen a language, which today means re-running it with v3.")
+        } else {
+            print("people with a language on record:")
+            for (name, seen) in voters.sorted(by: { $0.key < $1.key }) {
+                let parts = seen.sorted { $0.value > $1.value }
+                    .map { "\(SpokenLanguage.name(of: $0.key)) x\($0.value)" }
+                print("  \(SpeakerName.display(name)): \(parts.joined(separator: ", "))")
+            }
+        }
+
+        if !flagged.isEmpty {
+            print("")
+            print("\(flagged.count) recording(s) below \(SpokenLanguage.wordsPerCarryingSecond) "
+                  + "words per carrying second: an English-only model reading another language "
+                  + "produces a thin transcript, not a broken one.")
+        }
+        exit(0)
+    }
+
     private static func calendar(_ args: [String]) -> Never {
         let rest = Array(args.dropFirst())
         switch args.first ?? "status" {
@@ -1585,6 +1654,11 @@ enum CLI {
                                  list and write take --tag.
       tags <sub>                 what a recording or a note is about, in your
                                  words. add and remove take --note <slug>.
+      language [--flagged]       which language each meeting was held in, and
+                                 which of them an English-only model may have
+                                 misread. A transcript v2 wrote cannot be asked
+                                 its language, so the column is blank there and
+                                 the words-per-second one is the check instead
       calendar <sub>             the calendars on this Mac, and what they name
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report

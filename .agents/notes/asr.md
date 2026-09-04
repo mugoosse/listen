@@ -651,6 +651,30 @@ sentence in a transcript it is about to throw away.
 
 ## The model is chosen during the call, because afterwards it costs an hour
 
+**Superseded: the pull-down described below was removed in 0.32.0.** What
+follows is kept because the mechanism it built is still the one in use, and
+because the reason it stopped earning its keep is the useful half.
+
+The argument for it was that Transcribe Again is "an hour of work undone and
+redone after the meeting". That premise is gone. The app now notices on its own
+that an English-only model misread a meeting and reads it again without anybody
+watching, so the fallback costs one automatic pass rather than an hour of
+somebody's attention. What was left was a permanent control on the recording
+screen, on every call, for a decision almost nobody makes, whose only remaining
+value is saving the second pass. That did not pay for the room it took or for
+the "Parakeet v2 · English only" jargon it put in front of somebody mid-meeting,
+especially once setup stopped naming models at all.
+
+The **toolbar ellipsis kept its rows**, and that is the deliberate half of the
+decision. A menu item costs no screen space, and somebody who knows at 15:27
+that this call is in Dutch can still say so and skip the double pass.
+`chooseModelSelected` is now the only mid-call model control, and
+`Recording.setModel` still has exactly the two callers it needs: that menu, and
+the rescue in `Queue.transcribe`.
+
+Everything below still holds, minus the pane's own control.
+
+
 Transcribe Again was the only control over the model, and it is the expensive
 one: it is offered after a meeting has been read once with the wrong model, and
 paying for it means transcribing an hour of audio twice. The person who knows a
@@ -730,6 +754,216 @@ That same first attempt proved the File menu half by accident. Pressing its
 Transcribe Again model row against a running recording did nothing, because AX
 goes through `NSMenu`'s own validation and `validateMenuItem` now answers false
 while live. On the build before this one it would have queued the job.
+
+## v3 is not a better v2, and the difference is the proper nouns
+
+The plan was to make v3 the default and delete the choice. `SPEC.md` had left it
+open since milestone 0 ("Whether v3 is worth shipping at all... Measure before
+deciding"), and the leaderboard gap is 6.05% against 6.34%, which is nothing.
+The measurement says the opposite, and it took the library's own meetings to see
+it.
+
+Six English meetings, ten tracks, 18,833 words, both models over identical
+audio. Divergence is 13.6%, which is already more than a third of a point of WER
+suggests. About half of that is style: v3 keeps every "um" and writes "gonna"
+where v2 writes "going to". The other half is the thing that matters.
+
+**v3 loses 39% of the domain's proper nouns.** Counted as occurrences, over the
+same audio, so it needs no reference transcript: a name either survives or it
+does not.
+
+| | v2 | v3 |
+|---|---|---|
+| Claude | 9 | 5 |
+| ChatGPT | 5 | 1 |
+| DeepSeek | 7 | 2 |
+| WhatsApp | 8 | 3 |
+| Kinsight | 8 | 4 |
+| **total** | **62** | **38** |
+
+Total word count is flat (18,782 against 18,642), so v3 is not dropping speech.
+It is mishearing names: "connect the MCP with Claude" becomes "with Cloud", "do
+you use WhatsApp?" becomes "What do you use? What's up?", Kinsight becomes "kin
+site" in two words and lower case. Acronyms are untouched, 9/9 for API and 6/6
+for MCP. It is the multi-syllable brand names, which are the whole vocabulary of
+the meetings in this library.
+
+**The dictionary makes the gap worse rather than better, and that is the part
+worth remembering.** The corrections in it were tuned against v2's mistakes:
+`cloud code -> Claude Code` has fired 26 times, `kinsite -> Kinsight` catches one
+word. v3 fails in different shapes, bare "cloud" and "kin site" in two words, so
+none of the existing rules fire. Applying the user's own rules to both outputs
+widens the gap from 39% to 54%. **A model swap invalidates an accumulated
+dictionary**, which is a cost nothing else in the app would have shown.
+
+So v2 stays the default, v3 is reached for on evidence, and the asymmetry is
+the design: v3 on English costs 39% of the names, v2 on Dutch costs the meeting.
+
+## A transcript v2 wrote cannot be asked what language it is in
+
+The obvious way to catch the Dutch-through-v2 failure is to language-identify the
+finished transcript. It does not work, and it fails confidently.
+
+Measured over three real Dutch calls, `NLLanguageRecognizer` over v2's output:
+**English at 0.994 to 1.000**. Every word v2 wrote *is* an English word, so the
+identification is correct about the text and useless about the meeting.
+
+That is why `StoredTranscript.language` is Optional and nil means "nobody
+knows" rather than "English", and why `SpokenLanguage.canReport` gates every
+read of it on the model having been one that could have chosen. The same field
+on a v3 transcript is worth having: all eight v3 transcripts in the library come
+back `nl` at 1.000, and that is what gives a *person* a language, which is what
+`listen language` reports and what a future pre-run choice would read.
+
+## The wrong model leaves a thin transcript, and thin is per second of audio
+
+The signal that does work is how little v2 writes. Handed phonemes it has no
+words for, the decoder does not invent at the rate it transcribes: it emits
+sparse, short, confident fragments.
+
+**The first version of this measured words per second of transcript and was
+wrong.** It separated cleanly on the six calls it was built from, then flagged
+two English voice memos out of the real library. The cause is structural rather
+than a bad threshold: Parakeet's segments run straight through a thinking pause,
+so a solo memo where somebody stops to think is mostly silence inside its own
+segments and its rate collapses for a reason that has nothing to do with
+language. Every transcript-only statistic tried next was worse. Type-token ratio
+runs **backwards**: a decoder guessing at Dutch produces more varied English than
+a person giving a briefing, not less.
+
+The denominator has to be the audio. `Pipeline.signal` already counts the
+seconds of a track that carry anything, for a different question, and it is the
+right one: silence stops counting against the model, and what is left is how much
+the decoder wrote for the speech it was actually given.
+
+Calibrated against `Pipeline.signal` itself and not a proxy, which mattered: an
+ffmpeg `silencedetect` version of the same idea gave a threshold of 1.12, and
+`signal` counts a second as carrying if any of it peaks over 0.01, so it calls
+far more of a track voiced and every number moves.
+
+- Five Dutch calls, re-read with v2 by the real pipeline: 0.37, 0.39, 0.43,
+  0.46, 0.47. All five flagged.
+- Forty-one English v2 recordings across the whole library: 1.11 to 5.24. The
+  nearest is a call at 1.11; the two memos the first version flagged sit at 2.44
+  and 2.92.
+
+0.79 is the midpoint, 1.7x above the thickest Dutch call and 1.4x below the
+thinnest English one. `LISTEN_THIN_FLOOR` sweeps it and `verify_language.sh`
+asserts both edges.
+
+**Dutch is the only language behind the number**, which is the honest limit of
+it. The mechanism should hold for anything v2 cannot read.
+
+## The model chooses itself on the second pass, and never downloads to do it
+
+Automatic model choice is a re-run, not a better first guess, and that is the
+whole design. Everything that could inform a first guess is absent or unreliable
+at the moment it would be needed: the calendar has no event for a WhatsApp call,
+a voiceprint only exists for somebody already recorded and named, and the audio
+cannot be language-identified without decoding it. The transcript can. So
+`Queue.transcribe` decodes once, asks `SpokenLanguage.rescue`, and decodes again
+if the answer is thin. About 20 seconds wasted on an hour-long call, against a
+transcript that was previously wrong in a way nobody could see.
+
+Four conditions, and each one is load-bearing:
+
+1. An English-only model produced it, so the thinness means something.
+2. The transcript is thin against the audio.
+3. **A multilingual model is already on disk.** Setup deliberately downloads
+   one, so for most users this returns nil and the answer is to offer the
+   download on screen, where the size can be named before the press. Starting
+   2.5 GB inside a job nobody is watching is the one thing that would make an
+   automatic choice worse than no choice.
+4. Nobody has corrected the transcript by hand, because a re-run discards every
+   one of those edits.
+
+It cannot loop: the pass it asks for is by a multilingual model, and a thin
+reading is only ever claimed of one that is not. A failed rescue leaves the
+first transcript alone rather than turning a readable meeting into a failed one,
+and the model is filed against the recording **before** the second run for the
+same reason `enqueue` files one before the first: a crash in between must not
+re-run the pass that already failed.
+
+Verified end to end against a scratch library of symlinked audio, on 0.32.0: two
+Dutch calls with no transcript, queued at launch, both decoded with v2, both
+flagged, both re-read with v3, both landing `asr_model: v3`, `language: nl` and
+actual Dutch on disk.
+
+## The one-model install is the common one, and it was the silent one
+
+`SpokenLanguage.rescue` refuses to download, which is right and used to end the
+story. Setup fetches a single model, so the ordinary new install has only the
+English-only one; for them the rescue always returns nil, no second pass ever
+happens, and the app knew the transcript was wrong and said **nothing at all**.
+That is the same silence this whole feature exists to break, reproduced one
+level down.
+
+`SpokenLanguage.missingModel` is the other half: same evidence as `rescue`,
+opposite answer about the disk. When it fires, the meeting page carries a row
+between the subtitle and the speaker chips:
+
+> This does not look like English, and the model that read it only reads English.
+> **[ Get Parakeet v3 (2.51 GB) and read it again ]**
+
+Four things about it.
+
+1. **A row, not a clause on the subtitle line.** That is where `micWasSilent`
+   puts its warning, and the difference is that one is a fact to read and this
+   is a thing to press. The size has to be legible before the press, because
+   pressing it starts a transfer.
+2. **It goes through `retranscribe`**, the same path the ellipsis menu uses, so
+   it gets the same overwrite warning and the same queueing. `ASR.load` fetches
+   the weights inside the job and reports the transfer into the sidebar row, so
+   nothing on this page drives `ModelDownload`. That also avoids clobbering
+   `ModelDownload.onChange`, which is a single closure the Models pane owns.
+3. **It is absent when the model is on disk**, because then the rescue already
+   ran before anybody opened the page, and an offer would point at work that has
+   already happened.
+4. **Not gated on `hasHumanEdits`**, unlike the rescue. Somebody hand-correcting
+   a transcript that was never in English is fixing a translation by hand, and
+   telling them a model exists that would have read it properly is worth more
+   than protecting those edits. It is a button, not an action, and Transcribe
+   Again still warns before discarding anything.
+
+Verified against a scratch library with `HF_HOME` pointed at an empty cache, so
+v3 reads as absent: the row and its button are in the AX tree on the thin Dutch
+call, and absent both on an English meeting and on the same Dutch call with the
+real cache, where the rescue owns the case.
+
+## Setup asks which languages, not which model
+
+The model step used to say "Speech model" and "Pick the model that transcribes
+your meetings", with two radios reading "Parakeet v2" and "Parakeet v3". Nobody
+can answer that. It is also the highest-stakes question in setup and the only
+one whose wrong answer is silent: an English-only model handed another language
+writes fluent nonsense for ever, and the person who would have said "some of my
+calls are in Dutch" was never asked.
+
+It now asks "Which languages are your meetings in?" and the radios are "English
+only" and "English and other languages". `ModelChoice.answer` holds those, and
+`ModelChoice.tradeoff` holds what the choice costs in words somebody will
+recognise when it goes wrong ("Loses about 4 in 10 mentions of names like
+Claude, WhatsApp or ChatGPT, which it hears as 'cloud' and 'what's up'"), which
+is the measurement above rather than a hedge.
+
+Settings still names the models, deliberately. Somebody there has been through
+the question once and is looking for the thing they picked.
+
+## What is deliberately not here: Meta's Muse Voice Transcribe
+
+Asked for in September 2026 off the Artificial Analysis post: 3.1% WER on
+AA-WER Streaming, genuinely at the top of that board. **Meta is not releasing
+the weights.** It is API-only at $3 per 1,000 audio-minutes, so putting it in
+Listen would mean uploading meeting audio to Meta, which is the promise in the
+Models pane ("Parakeet runs on this Mac. Nothing is uploaded.") and most of the
+reason the app exists.
+
+Two further reasons it would not be the comparison it looks like: it is a
+streaming model, and Listen is offline whole-file on purpose (`Diarizer` records
+the same choice for the same reason), and 3.1% on AA-WER is not comparable to
+Parakeet's 6.05% on the Open ASR Leaderboard, which is a different dataset.
+Muse Glimmer shows Meta will publish weights for some models, so the thing to
+watch is an open-weights speech release, not this one.
 
 ## The model is cached twice, and deleting one copy does not test anything
 

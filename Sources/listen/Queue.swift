@@ -292,6 +292,47 @@ final class Queue {
         renewal = nil
 
         var finished = Recording.find(id) ?? recording
+
+        // The model chose itself, and this is where. An English-only model
+        // handed another language writes fluent nonsense and reports success,
+        // so the only moment anything can notice is here, with the transcript
+        // on disk and the audio still beside it. See `SpokenLanguage.rescue`
+        // for why this is a second pass rather than a better first guess, and
+        // for the four conditions that have to hold.
+        var rescued: ModelChoice?
+        if case .success = result, let better = SpokenLanguage.rescue(for: finished) {
+            rescued = better
+            log("\(id) reads thin for an English-only model: reading it again "
+                + "with \(better.title)")
+            CloudSyncHost.shared.setActivity(CloudActivity(
+                recordingID: id, stage: .transcribing, fraction: 0,
+                detail: "Reading again with \(better.title)"))
+            // Filed before the run, exactly as `enqueue` files a chosen model,
+            // so a crash between here and the end does not lose the decision
+            // and re-run the same English-only pass a second time.
+            Recording.setModel(better, on: finished.folder)
+            do {
+                let second = try await pipeline.run(finished, using: better) { [weak self] step in
+                    Task { @MainActor in
+                        self?.progress = step
+                        CloudSyncHost.shared.setActivity(CloudActivity(
+                            recordingID: id, stage: .transcribing,
+                            fraction: step.overall, detail: step.message))
+                        self?.onProgress?(id)
+                    }
+                }
+                result = .success(second)
+                finished = Recording.find(id) ?? finished
+            } catch {
+                // The first transcript is still on disk and is still the best
+                // thing anybody has. A failed rescue must not turn a readable
+                // meeting into a failed one, so `result` is left alone.
+                log("re-reading \(id) with \(better.title) failed: "
+                    + "\(error.localizedDescription)")
+                rescued = nil
+            }
+        }
+
         switch result {
         case .success(let transcript):
             finished.markTranscribed(transcript)
@@ -316,14 +357,18 @@ final class Queue {
         // which is what makes it the whole telemetry story for transcription:
         // a failure's stable code rides this event's outcome rather than a
         // separate `operation_failed`, or every failed run would count twice.
+        // The model that produced the transcript on disk, which is the rescue
+        // when there was one. Reporting the first model would file every
+        // rescued run under the model that could not read it.
+        let ran = rescued ?? choice
         switch result {
         case .success:
             Telemetry.recordingTranscribed(finished, outcome: "ok",
-                                           model: choice.id)
+                                           model: ran.id)
         case .failure(let error):
             Telemetry.recordingTranscribed(finished,
                                            outcome: Telemetry.code(for: error),
-                                           model: choice.id)
+                                           model: ran.id)
         }
 
         // The tracks this run made out of the master go with it.

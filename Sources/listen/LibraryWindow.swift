@@ -627,6 +627,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // pulled the clicked view out of the hierarchy mid-click, which is how a
         // rename followed by a click on a speaker aborted the app.
         detail.onChanged = { [weak self] in self?.sidebar.reload() }
+        // The offer on a meeting that was read by a model which could not read
+        // it. Straight into `retranscribe`, so it gets the same overwrite
+        // warning and the same queueing as the menu item, and the download the
+        // weights need happens inside the job where the sidebar row reports it.
+        detail.onUseModel = { [weak self] choice in
+            guard let recording = self?.selected else { return }
+            self?.retranscribe(recording, using: choice)
+        }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
         // A note names the meetings it is about, and those names are the way
         // back to them. This is what makes a synthesis of four catch-ups
@@ -3232,9 +3240,13 @@ extension LibraryWindow: NSMenuDelegate {
     /// there is nothing to confirm either. The choice sits in `metadata.json`
     /// until the meeting ends, and `Queue.transcribe` resolves it there.
     ///
-    /// A reload rather than nothing visible, because the pane's own picker is
-    /// the other half of this control and somebody who used the menu should not
-    /// have to wait a tick to see the bar below agree with them.
+    /// **This is the only mid-call model control left.** The recording pane had
+    /// a pull-down of its own, which was removed once the app started noticing
+    /// on its own that an English-only model had misread a meeting: a permanent
+    /// control on screen for every call, for a decision almost nobody makes,
+    /// stopped paying for itself. This stayed because a menu item costs no room
+    /// and still saves the double pass for somebody who knows at 15:27 that
+    /// this call is in Dutch. See `SpokenLanguage.rescue`.
     @objc func chooseModelSelected(_ sender: NSMenuItem) {
         guard let recording = selected,
               let id = sender.representedObject as? String,

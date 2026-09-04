@@ -299,11 +299,19 @@ final class Onboarding: NSObject, NSWindowDelegate {
             }
 
         case .model:
-            titleLabel.stringValue = "Speech model"
-            paragraph("Pick the model that transcribes your meetings. You can change "
-                      + "this later in Settings.")
+            titleLabel.stringValue = "Which languages are your meetings in?"
+            // The question is about languages, not about models, because that
+            // is the one a person can answer. Asked the other way this step
+            // reads "Parakeet v2 or Parakeet v3", which says nothing about
+            // anybody's own meetings, and getting it wrong is not a preference:
+            // an English-only model handed another language writes fluent
+            // nonsense and never says so. Only one model is downloaded, so this
+            // choice is the whole of what most people will ever have on disk.
+            paragraph("Listen downloads one model, and this decides which. You can "
+                      + "change it later in Settings, and any single meeting can "
+                      + "use the other one.")
             for choice in ModelChoice.all {
-                let radio = NSButton(radioButtonWithTitle: choice.title,
+                let radio = NSButton(radioButtonWithTitle: choice.answer,
                                      target: self, action: #selector(pickModel(_:)))
                 radio.tag = ModelChoice.all.firstIndex { $0.id == choice.id } ?? 0
                 // Nothing is selected until the user selects it. `modelChosen`
@@ -317,11 +325,20 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 // pane that cannot be undone in a second.
                 radio.isEnabled = !ModelDownload.shared.isDownloading
                 body.addArrangedSubview(radio)
-                let detail = NSTextField(labelWithString:
-                    choice.isDownloaded ? choice.blurb + " · already on disk"
-                                        : choice.detail)
+                // The trade-off, not the blurb, and the size after it. The
+                // blurb names the model's coverage, which the radio above has
+                // just said; what is left to tell somebody is what the choice
+                // costs them, in words they will recognise when it goes wrong.
+                let detail = NSTextField(wrappingLabelWithString:
+                    choice.tradeoff + (choice.isDownloaded
+                        ? " Already on disk."
+                        : " \(ModelChoice.humanBytes(choice.approxBytes)) download."))
                 detail.font = .systemFont(ofSize: 11)
                 detail.textColor = .secondaryLabelColor
+                // A wrapping label reports a one-line `fittingSize`, so without
+                // a width to wrap against it lays out one line high and the
+                // card clips it. See `.agents/notes/appkit.md`.
+                detail.preferredMaxLayoutWidth = 420
                 body.addArrangedSubview(detail)
             }
 
@@ -520,7 +537,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 primary.title = status.phaseKey == "loading" ? "Loading…" : "Downloading…"
                 primary.isEnabled = false
             } else if !Settings.modelChosen {
-                primary.title = "Choose a model"
+                // Named after the question above it, which asks about languages
+                // rather than models. "Choose a model" under "Which languages
+                // are your meetings in?" is the disabled button telling
+                // somebody to answer a question the pane is not asking.
+                primary.title = "Pick one to continue"
                 primary.isEnabled = false
             } else if case .failed = status {
                 primary.title = "Try again"

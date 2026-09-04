@@ -739,9 +739,14 @@ final class ModelsPane: Pane {
 
     override func build() {
         heading("Speech model")
-        note("Parakeet runs on this Mac. Nothing is uploaded.")
+        note("Parakeet runs on this Mac. Nothing is uploaded. A meeting that "
+             + "looks like it was held in another language is read again "
+             + "automatically, but only with a model already on disk.")
 
         for choice in ModelChoice.all {
+            // The model's own name here, not the language answer setup asks
+            // for. Somebody in Settings has already been through that question
+            // once and is looking for the thing they picked.
             let radio = NSButton(radioButtonWithTitle: choice.title, target: nil, action: nil)
             radio.state = Settings.model.id == choice.id ? .on : .off
             let handler = ActionHandler { [weak self] _ in

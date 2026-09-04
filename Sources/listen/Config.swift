@@ -60,16 +60,45 @@ struct ModelChoice {
     /// languages" is a claim nobody can check from the outside, and the
     /// decision it informs is whether *your* language is in that 25.
     var languages: [String] = []
+    /// This model as an answer to "which languages are your meetings in".
+    ///
+    /// Setup asks that rather than "which model", because it is the question
+    /// somebody can answer. "Parakeet v2" tells a person nothing about their
+    /// own meetings, and the whole cost of getting this wrong is paid in a
+    /// language they knew about and the app never asked for.
+    let answer: String
+    /// What choosing it costs, in the terms it actually costs them.
+    ///
+    /// Measured, not hedged. Both numbers come from running the two models over
+    /// six of this library's own English meetings: v3 found 38 of the 62 domain
+    /// proper nouns v2 found, turning Claude into "cloud", WhatsApp into
+    /// "what's up" and ChatGPT into "GBT". Naming the words is the point. "Less
+    /// accurate" is a claim nobody can act on, and the reader is about to spend
+    /// 2.5 GB on the answer.
+    let tradeoff: String
     /// Measured on disk.
     let approxBytes: Int64
 
     var detail: String { blurb + " · \(Self.humanBytes(approxBytes)) download" }
+
+    /// Whether this model could have chosen a language, which decides whether
+    /// its transcript can be asked what language it is in.
+    ///
+    /// Read off `languages` rather than stored separately, because that list is
+    /// already the answer to "which languages can it read" and two fields
+    /// saying one thing is how they come apart. See `SpokenLanguage.canReport`,
+    /// which is the only reason this exists.
+    var isMultilingual: Bool { languages.count > 1 }
 
     static let all: [ModelChoice] = [
         .init(id: "v2", title: "Parakeet v2",
               blurb: "English only · most accurate",
               coverage: "English only",
               repo: "mlx-community/parakeet-tdt-0.6b-v2",
+              answer: "English only",
+              tradeoff: "Most accurate on names and technical terms. A meeting "
+                      + "in another language comes out as English nonsense, so "
+                      + "Listen watches for that and offers the other model.",
               approxBytes: 2_471_601_146),
         .init(id: "v3", title: "Parakeet v3",
               blurb: "25 languages · may misdetect short clips",
@@ -86,6 +115,10 @@ struct ModelChoice {
                 "Maltese", "Polish", "Portuguese", "Romanian", "Russian",
                 "Slovak", "Slovenian", "Spanish", "Swedish", "Ukrainian",
               ],
+              answer: "English and other languages",
+              tradeoff: "Reads 25 languages. Loses about 4 in 10 mentions of "
+                      + "names like Claude, WhatsApp or ChatGPT, which it hears "
+                      + "as \"cloud\" and \"what's up\".",
               approxBytes: 2_508_579_601),
     ]
 

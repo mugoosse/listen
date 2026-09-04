@@ -17,6 +17,23 @@ struct StoredTranscript: Codable {
     /// expected is invisible: the transcript reads as what the model said, and
     /// the only way to find out otherwise is to listen to the meeting again.
     var dictionary: [String: Int] = [:]
+
+    /// The language the text was identified as, when the model that produced it
+    /// could have chosen one.
+    ///
+    /// Provenance, not a cache: the same argument as `transcribed_by`. It is
+    /// written once, by the run that made these words, and every later reader
+    /// gets the answer without re-running identification over a whole meeting.
+    ///
+    /// **Nil means "nobody knows", never "English".** It is nil for every
+    /// transcript v2 made, because an English-only decoder emits English
+    /// whatever it was handed: measured over three Dutch calls, v2's output
+    /// identifies as English at 0.994 to 1.000. A reader that treats nil as
+    /// English rediscovers the bug this field exists to make visible.
+    ///
+    /// Last in the struct because the memberwise initialiser is positional and
+    /// three call sites already pass `dictionary`.
+    var language: String? = nil
 }
 
 extension StoredTranscript {
@@ -37,6 +54,10 @@ extension StoredTranscript {
         wordLevel = try c.decode(Bool.self, forKey: .wordLevel)
         cleanup = try c.decode([String: Int].self, forKey: .cleanup)
         dictionary = try c.decodeIfPresent([String: Int].self, forKey: .dictionary) ?? [:]
+        // Absent in every transcript written before 0.32.0, and absent for ever
+        // in the ones v2 wrote. Both mean the same thing here, which is why the
+        // field is Optional rather than defaulted: nobody knows.
+        language = try c.decodeIfPresent(String.self, forKey: .language)
     }
 }
 
@@ -454,13 +475,22 @@ actor Pipeline {
             trace("  rules: \(rules)")
         }
 
+        // Identified now, by the run that made these words, so no later reader
+        // has to re-run it over a whole meeting. Nil unless the model that ran
+        // could have chosen a language: see `StoredTranscript.language`.
+        let spoken = SpokenLanguage.canReport(model)
+            ? SpokenLanguage.identify(cleaned.map(\.text).joined(separator: " "))
+            : nil
+        if let spoken { log("transcript identified as \(SpokenLanguage.name(of: spoken))") }
+
         let stored = StoredTranscript(
             segments: cleaned,
             duration: recording.metadata.duration,
             model: model,
             wordLevel: wordLevel,
             cleanup: fired,
-            dictionary: rules)
+            dictionary: rules,
+            language: spoken)
 
         try write(stored, turns: Merge.turns(from: cleaned),
                   embeddings: embeddings, speech: speech, to: recording)
@@ -760,7 +790,11 @@ actor Pipeline {
         let (cleaned, fired) = Merge.clean(assigned)
         return StoredTranscript(segments: cleaned, duration: transcript.duration,
                                 model: transcript.model,
-                                wordLevel: transcript.hasWordTimings, cleanup: fired)
+                                wordLevel: transcript.hasWordTimings, cleanup: fired,
+                                language: SpokenLanguage.canReport(transcript.model)
+                                    ? SpokenLanguage.identify(
+                                        cleaned.map(\.text).joined(separator: " "))
+                                    : nil)
     }
 
     /// Say how the track was cut, on stderr, every run.

@@ -130,7 +130,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - A job that saves the copy it started with erases the hour it ran for
 - A recording with no audio is not a job waiting to happen
 - The model belongs to the recording, and the language is not a setting
-- The model is chosen during the call, because afterwards it costs an hour
+- The model is chosen during the call, because afterwards it costs an hour (superseded: the pane's pull-down is gone, the ellipsis kept its rows)
 - Transcribing again destroys hand corrections, and now says so
 - The model is cached twice, and deleting one copy does not test anything
 - The cache root is not always `~/.cache/huggingface`
@@ -141,6 +141,13 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - MLX keeps every buffer it ever freed, until it is told a limit
 - A threshold measured on a 47-minute meeting drops the far end of a 9-second call
 - The model download reset to 0% and stayed there, on a reading of 41 KB
+- v3 is not a better v2, and the difference is the proper nouns
+- A transcript v2 wrote cannot be asked what language it is in
+- The wrong model leaves a thin transcript, and thin is per second of audio
+- The model chooses itself on the second pass, and never downloads to do it
+- The one-model install is the common one, and it was the silent one
+- Setup asks which languages, not which model
+- What is deliberately not here: Meta's Muse Voice Transcribe
 
 ### `.agents/notes/speakers.md` (77k)
 
@@ -675,6 +682,13 @@ One script stands in for one, over the app built in the working directory:
                         # which pressed the cross on the card this deleted.
                         # `LISTEN_APP=` points it at a released build (uitest
                         # copy)
+./verify_language.sh    # the threshold that decides a meeting was read by
+                        # the wrong model: five non-English calls flagged, the
+                        # two English voice memos that the first version of the
+                        # metric wrongly flagged not flagged, no v2 transcript
+                        # claiming a language, and LISTEN_THIN_FLOOR sweeping
+                        # it. Symlinks the real audio into a scratch library
+                        # and asserts sync refuses that library first
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
 ./verify_search.sh      # a search result shows the sentence that matched and

@@ -21,6 +21,27 @@ final class DetailView: NSView {
     let titleLabel = NSTextField(string: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let chips = SpeakerChips()
+
+    /// The offer to fetch the model that could have read this meeting.
+    ///
+    /// **This is the whole of what a one-model install gets**, and most
+    /// installs are one-model: setup downloads a single set of weights, so
+    /// `SpokenLanguage.rescue` cannot fire for them and the automatic second
+    /// pass never happens. Without this the app knew the transcript was wrong,
+    /// refused to start a 2.5 GB download unattended, and therefore said
+    /// nothing, which is the same silence the whole feature exists to break.
+    ///
+    /// A row rather than a clause on the subtitle line, which is where
+    /// `micWasSilent` puts its warning. That one is a fact to read and this one
+    /// is a thing to press, and the size has to be legible before the press:
+    /// pressing it starts a transfer, and the notes are emphatic that a
+    /// download's cost is named before somebody commits to it and not
+    /// discovered inside the job.
+    private let languageNotice = NSView()
+    private let languageNoticeLabel = NSTextField(labelWithString: "")
+    private let languageNoticeButton = NSButton(title: "", target: nil, action: nil)
+    /// The model the button would fetch, so the action does not re-derive it.
+    private var languageNoticeModel: ModelChoice?
     private let tagChips = TagChips()
     private let playerCard = NSView()
     /// Find in page. Collapsed to nothing until Cmd-F, see `findTop`.
@@ -389,6 +410,16 @@ final class DetailView: NSView {
     /// A conversation named on this page, handed to whoever owns the composer.
     var onOpenChat: ((Chat) -> Void)?
 
+    /// Read this recording again with a model that is not on this Mac yet.
+    ///
+    /// Handed up rather than done here, so the offer goes through the same
+    /// `retranscribe` the ellipsis menu uses: one path that files the model on
+    /// the recording, warns about hand corrections and queues the job, and one
+    /// place to change it. `ASR.load` fetches the weights inside the job and
+    /// reports the transfer into the sidebar row, so nothing here drives the
+    /// downloader itself.
+    var onUseModel: ((ModelChoice) -> Void)?
+
     private var player: AVAudioPlayer?
     private var tick: Timer?
     private var turnViews: [TurnView] = []
@@ -414,6 +445,8 @@ final class DetailView: NSView {
     /// where the chips would be.
     private var chipsTop: NSLayoutConstraint!
     private var chipsHeight: NSLayoutConstraint!
+    private var languageNoticeTop: NSLayoutConstraint!
+    private var languageNoticeHeight: NSLayoutConstraint!
 
     /// Whether the transcript follows the playhead. Turned off the moment the
     /// user scrolls, because scrolling away during playback is a decision, and
@@ -599,7 +632,9 @@ final class DetailView: NSView {
             modeBar.addSubview(v)
         }
 
-        for v in [titleLabel, subtitleLabel, chips, tagChips, playerCard, modeBar,
+        buildLanguageNotice()
+
+        for v in [titleLabel, subtitleLabel, languageNotice, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, chatList, noteTagChips, greeting,
                   recentChats, empty, emptyIcon, transcribing, live, findBar] {
@@ -608,7 +643,16 @@ final class DetailView: NSView {
         }
         live.isHidden = true
 
-        chipsTop = chips.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor,
+        // The chips hang off the notice rather than off the subtitle, and the
+        // notice collapses to nothing when there is no offer to make. With its
+        // height and its own top inset both at zero its bottom sits exactly on
+        // the subtitle's, so the row below keeps the layout it had before this
+        // view existed. Same shape as `chipsHeight` below, and for the same
+        // reason: a hidden view still occupies its frame.
+        languageNoticeTop = languageNotice.topAnchor.constraint(
+            equalTo: subtitleLabel.bottomAnchor, constant: 0)
+        languageNoticeHeight = languageNotice.heightAnchor.constraint(equalToConstant: 0)
+        chipsTop = chips.topAnchor.constraint(equalTo: languageNotice.bottomAnchor,
                                               constant: 10)
         chipsHeight = chips.heightAnchor.constraint(equalToConstant: 24)
 
@@ -756,6 +800,12 @@ final class DetailView: NSView {
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+
+            languageNoticeTop,
+            languageNoticeHeight,
+            languageNotice.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            languageNotice.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                                     constant: -24),
 
             playerTop,
             playerHeight,
@@ -2132,6 +2182,71 @@ final class DetailView: NSView {
         updatePlayerActivity()
         updateEmpty()
     }
+    /// The label, the button and the frame they sit in. Built once.
+    private func buildLanguageNotice() {
+        languageNotice.wantsLayer = true
+        languageNotice.layer?.cornerRadius = 6
+        // The same orange `micWasSilent` uses on the line above, at the low
+        // alpha a background can carry. One warning colour on this page.
+        languageNotice.layer?.backgroundColor =
+            NSColor.systemOrange.withAlphaComponent(0.12).cgColor
+
+        languageNoticeLabel.font = .systemFont(ofSize: 11)
+        languageNoticeLabel.textColor = .secondaryLabelColor
+        languageNoticeLabel.translatesAutoresizingMaskIntoConstraints = false
+        languageNotice.addSubview(languageNoticeLabel)
+
+        languageNoticeButton.bezelStyle = .rounded
+        languageNoticeButton.controlSize = .small
+        languageNoticeButton.font = .systemFont(ofSize: 11, weight: .medium)
+        languageNoticeButton.target = self
+        languageNoticeButton.action = #selector(useOfferedModel)
+        languageNoticeButton.translatesAutoresizingMaskIntoConstraints = false
+        languageNotice.addSubview(languageNoticeButton)
+
+        NSLayoutConstraint.activate([
+            languageNoticeLabel.leadingAnchor.constraint(
+                equalTo: languageNotice.leadingAnchor, constant: 10),
+            languageNoticeLabel.centerYAnchor.constraint(
+                equalTo: languageNotice.centerYAnchor),
+            languageNoticeButton.leadingAnchor.constraint(
+                equalTo: languageNoticeLabel.trailingAnchor, constant: 10),
+            languageNoticeButton.trailingAnchor.constraint(
+                equalTo: languageNotice.trailingAnchor, constant: -8),
+            languageNoticeButton.centerYAnchor.constraint(
+                equalTo: languageNotice.centerYAnchor),
+        ])
+    }
+
+    /// Offer the other model, when this recording looks like it needed it.
+    ///
+    /// Only when the model is **not** on disk. With it on disk the recording
+    /// was already read again automatically by `SpokenLanguage.rescue` before
+    /// anybody saw this page, so an offer here would point at work that has
+    /// already happened.
+    private func showLanguageNotice(for recording: Recording) {
+        guard let missing = SpokenLanguage.missingModel(for: recording) else {
+            languageNoticeModel = nil
+            languageNotice.isHidden = true
+            languageNoticeHeight.constant = 0
+            languageNoticeTop.constant = 0
+            return
+        }
+        languageNoticeModel = missing
+        languageNoticeLabel.stringValue =
+            "This does not look like English, and the model that read it only reads English."
+        languageNoticeButton.title =
+            "Get \(missing.title) (\(ModelChoice.humanBytes(missing.approxBytes))) "
+            + "and read it again"
+        languageNotice.isHidden = false
+        languageNoticeHeight.constant = 30
+        languageNoticeTop.constant = 10
+    }
+
+    @objc private func useOfferedModel() {
+        guard let choice = languageNoticeModel else { return }
+        onUseModel?(choice)
+    }
 
     /// Put the transcription picture up with a made-up position.
     ///
@@ -2539,6 +2654,8 @@ final class DetailView: NSView {
             subtitleLabel.stringValue = facts
             subtitleLabel.textColor = .secondaryLabelColor
         }
+
+        showLanguageNotice(for: recording)
 
         // Who is in this recording and what it is about, on one line above the
         // player. Collapsed to nothing when there is neither, so a live or
@@ -5071,6 +5188,13 @@ final class DetailViewController: NSViewController {
     var onChanged: (() -> Void)? {
         get { detail.onChanged }
         set { detail.onChanged = newValue }
+    }
+
+    /// Forwarded for the same reason the rest of these are: the offer to fetch
+    /// a model lives on the page, and queueing the job belongs to the window.
+    var onUseModel: ((ModelChoice) -> Void)? {
+        get { detail.onUseModel }
+        set { detail.onUseModel = newValue }
     }
 
     /// Forwarded so the window can tell the Ask pane how much room its floating

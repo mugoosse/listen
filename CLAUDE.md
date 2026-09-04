@@ -584,7 +584,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 
-### `.agents/notes/telemetry.md` (8k)
+### `.agents/notes/telemetry.md` (13k)
 
 What the apps send, and what reading it back for the first time proved wrong.
 `Telemetry`, `TelemetrySchema`, `TELEMETRY.md`, `verify_telemetry.sh`, the
@@ -601,6 +601,9 @@ PostHog project.
 - A burst of sync failures was a throttle, and the edge trigger was right
 - What the project keeps is not what the privacy page promises
 - `$exception` has never fired
+- The phone was dark, and nothing in the project could say why
+- Registered super-properties are sticky, and absence has to be said out loud
+- An event in the last thirty seconds of a session was never sent
 
 ### `.agents/notes/release.md` (20k)
 

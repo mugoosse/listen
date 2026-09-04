@@ -41,7 +41,7 @@ public enum TelemetrySchema {
     /// Stamped on every event. Bucket boundaries are forever once shipped,
     /// because moving one silently would make week 12 incomparable with week
     /// 11; this number is the escape hatch when one genuinely has to move.
-    public static let schemaVersion = 3
+    public static let schemaVersion = 4
 
     // MARK: - Events
 
@@ -70,6 +70,41 @@ public enum TelemetrySchema {
         case askCompleted = "ask_completed"
         case featureUsed = "feature_used"
         case operationFailed = "operation_failed"
+
+        /// One attempt to send a recording's audio off the phone that actually
+        /// began sending bytes.
+        ///
+        /// **The event this product most needed and did not have.** A user's
+        /// 45-minute memo sat at 9% for a day and nothing anywhere recorded
+        /// that a transfer had started, how far it got, or why it stopped: the
+        /// whole diagnosis had to be done by reading code. `progress_bucket`
+        /// is where an interrupted upload stopped, which is the difference
+        /// between "uploads are slow" and "uploads never finish".
+        ///
+        /// Once per attempt, not once per pass. An upload that is still with
+        /// the system is not an attempt that has ended.
+        case audioTransfer = "audio_transfer"
+        /// A Mac took a phone recording's audio out of the pipe and wrote it to
+        /// disk. The far end of `audio_transfer`, and the pair is the only way
+        /// to see the crossing at all: with no person profiles the two sides
+        /// are two installs and nothing joins them, so the question has to be
+        /// answered by comparing counts rather than by following one recording.
+        case audioReceived = "audio_received"
+        /// A recording has been waiting far too long for something to happen to
+        /// it. Edge-triggered, once per recording per install, so a library
+        /// that is stuck says so once rather than every two minutes for a day.
+        case recordingStalled = "recording_stalled"
+        /// What a sync pass did, at a rate a person could read.
+        ///
+        /// Emitted on a change of outcome and otherwise at most twice an hour,
+        /// because a two-minute poll is 720 passes a day and per-pass events
+        /// would swamp both the quota and every chart in the project. What is
+        /// wanted from it is the shape of a day, not a trace.
+        case syncPass = "sync_pass"
+        /// The app got to a window. Carries how long that took and how much
+        /// library it had to do it with, which is the difference between "the
+        /// app is slow" and "this library is large".
+        case appLaunched = "app_launched"
     }
 
     // MARK: - Property allowlist
@@ -80,6 +115,20 @@ public enum TelemetrySchema {
     public static let superProperties: Set<String> = [
         "platform", "app_build", "os_major", "install_age_bucket",
         "acquisition_channel", "schema_version",
+        // Whether this install belongs to whoever builds the app.
+        //
+        // **The filter that existed before this was a `distinct_id` written
+        // into the project by hand, and it went stale silently.** That id is
+        // the SDK's random per-install value: it is deleted when telemetry is
+        // switched off and made afresh when it is switched back on, so a
+        // reinstall, a new Mac, or one trip through the privacy switch
+        // produced an install the filter no longer named, and the only symptom
+        // was a number that was suddenly not zero. A property the device
+        // asserts about itself survives all three.
+        //
+        // Absent rather than false for everybody else, so it costs nothing on
+        // the events that make up the actual data.
+        "internal",
     ]
 
     /// Per-event properties, keyed by `Event.rawValue`. The send filter keeps
@@ -111,6 +160,22 @@ public enum TelemetrySchema {
         ],
         Event.featureUsed.rawValue: ["feature"],
         Event.operationFailed.rawValue: ["subsystem", "code", "retryable"],
+        Event.audioTransfer.rawValue: [
+            "outcome", "bytes_bucket", "duration_bucket", "progress_bucket",
+            "retry", "foreground",
+        ],
+        Event.audioReceived.rawValue: [
+            "bytes_bucket", "duration_bucket", "wait_bucket",
+        ],
+        Event.recordingStalled.rawValue: [
+            "stage", "source", "age_bucket", "holder",
+        ],
+        Event.syncPass.rawValue: [
+            "outcome", "duration_bucket", "moved", "reason",
+        ],
+        Event.appLaunched.rawValue: [
+            "launch_bucket", "library_bucket", "pending",
+        ],
     ]
 
     // MARK: - Closed vocabularies
@@ -135,6 +200,123 @@ public enum TelemetrySchema {
         case sync
         case dictation
         case library
+        /// The window itself, for the one failure a user reports as "it froze
+        /// my laptop" and no other event can describe.
+        case ui
+    }
+
+    /// How one attempt to send a recording's audio ended.
+    ///
+    /// `interrupted` is the interesting one and the reason this event exists:
+    /// it means bytes moved and then stopped, which used to be indistinguishable
+    /// from an upload that never started.
+    public enum TransferOutcome: String, Sendable {
+        case completed, interrupted, failed
+    }
+
+    /// What a pass came to. `timeout` is the watchdog having to end one, which
+    /// is a different fact from a pass that failed and said why.
+    public enum PassOutcome: String, Sendable {
+        case ok, failed, timeout, throttled
+    }
+
+    /// What a stalled recording was waiting for when the clock ran out. Named
+    /// from the recording's own state rather than from a sync stage, because
+    /// the sync stage is exactly what is missing when nothing is happening.
+    public enum StallStage: String, Sendable {
+        /// On a phone, with no Mac having taken it.
+        case awaitingUpload = "awaiting_upload"
+        /// A Mac has the audio and no transcript has come back.
+        case awaitingTranscript = "awaiting_transcript"
+        /// This device has the row and no audio, and nobody has offered any.
+        case awaitingAudio = "awaiting_audio"
+    }
+
+    /// How far an interrupted upload got, which is the whole diagnostic value
+    /// of `audio_transfer`. Coarse on purpose: the question is "did it barely
+    /// start or nearly finish", not the exact percentage.
+    public static func progressBucket(_ fraction: Double) -> String {
+        switch fraction {
+        case ..<0.1: return "under_10"
+        case ..<0.5: return "10_50"
+        case ..<0.9: return "50_90"
+        case ..<1: return "90_100"
+        default: return "complete"
+        }
+    }
+
+    /// Audio sizes, in the shape the phone actually produces: 16 kHz mono
+    /// 16-bit is 32 kB/s, so these are roughly under 3 minutes, 3 to 16, 16 to
+    /// 52, 52 minutes to 2.6 hours, and longer.
+    public static func bytesBucket(_ bytes: Int) -> String {
+        switch bytes {
+        case ..<5_000_000: return "under_5_mb"
+        case ..<30_000_000: return "5_30_mb"
+        case ..<100_000_000: return "30_100_mb"
+        case ..<300_000_000: return "100_300_mb"
+        default: return "over_300_mb"
+        }
+    }
+
+    /// How long a transfer or a pass took. Longer at the top than
+    /// `durationBucket`, because the thing being measured here is a network
+    /// crossing rather than a conversation.
+    public static func transferBucket(seconds: Double) -> String {
+        switch seconds {
+        case ..<10: return "under_10_s"
+        case ..<60: return "10_60_s"
+        case ..<300: return "1_5_min"
+        case ..<900: return "5_15_min"
+        case ..<3600: return "15_60_min"
+        default: return "over_1_h"
+        }
+    }
+
+    /// How long something has been waiting. The boundaries are the ones the
+    /// product's own promises sit on: a pass is two minutes, a claim expires
+    /// after six hours, and a day is when somebody writes to support.
+    public static func waitBucket(seconds: Double) -> String {
+        switch seconds {
+        case ..<300: return "under_5_min"
+        case ..<3600: return "5_60_min"
+        case ..<21_600: return "1_6_h"
+        case ..<86_400: return "6_24_h"
+        default: return "over_1_day"
+        }
+    }
+
+    /// How long the app took to get to a window.
+    public static func launchBucket(seconds: Double) -> String {
+        switch seconds {
+        case ..<1: return "under_1_s"
+        case ..<3: return "1_3_s"
+        case ..<10: return "3_10_s"
+        case ..<30: return "10_30_s"
+        default: return "over_30_s"
+        }
+    }
+
+    /// How much library there is, since almost every "it is slow" report is
+    /// really a question about size.
+    public static func libraryBucket(_ recordings: Int) -> String {
+        switch recordings {
+        case ..<10: return "under_10"
+        case ..<50: return "10_50"
+        case ..<200: return "50_200"
+        case ..<1000: return "200_1000"
+        default: return "over_1000"
+        }
+    }
+
+    /// How long the main thread was unavailable. Two seconds is where a person
+    /// starts to notice; thirty is where they say the machine froze.
+    public static func stallBucket(seconds: Double) -> String {
+        switch seconds {
+        case ..<5: return "2_5_s"
+        case ..<15: return "5_15_s"
+        case ..<30: return "15_30_s"
+        default: return "over_30_s"
+        }
     }
 
     public enum AskOutcome: String, Sendable {

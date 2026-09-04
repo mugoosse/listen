@@ -807,6 +807,16 @@ extension Settings {
         set { defaults.set(newValue, forKey: preferredTranscriberKey) }
     }
 
+    /// Whether this install belongs to whoever builds Listen, so its rows can
+    /// be excluded from every chart without naming an id that goes stale.
+    ///
+    /// Managed first, then a plain default. Nothing in the app reads it but the
+    /// telemetry super-properties, and it is deliberately not in Settings: it
+    /// is a developer's switch, not a user's.
+    static var isInternalInstall: Bool {
+        forcedBool("telemetryInternal") ?? defaults.bool(forKey: "telemetryInternal")
+    }
+
     private static let keepAudioKey = "keepAudio"
 
     /// Whether this Mac keeps a copy of every recording's audio.

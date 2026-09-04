@@ -21,6 +21,11 @@ public struct CloudReport: Sendable, Equatable {
     public var freedBytes = 0
     public var conflicts: [String] = []
     public var errors: [String] = []
+    /// The same failures as closed words, for telemetry. Parallel to `errors`
+    /// rather than folded into it, because one is a sentence for a person and
+    /// the other is a category for a chart, and the sentence can contain
+    /// anything CloudKit felt like writing.
+    public var errorCodes: [String] = []
     /// The server asked mid-pass for a pause the store's own wait could not
     /// absorb. Deliberately not an error: everything it interrupted will
     /// finish on a quiet retry, so it stays out of `errors`, which screens
@@ -28,6 +33,60 @@ public struct CloudReport: Sendable, Equatable {
     /// that retry; see `CloudSync.syncNow` on the phone and
     /// `CloudSyncHost.syncNow` on the Mac.
     public var throttled = false
+
+    /// One recording's audio crossing, measured where it happened.
+    ///
+    /// **Carried in the report rather than sent from here.** `ListenKit` does
+    /// not import PostHog and must not: it is shared source, compiled into both
+    /// apps, and the two have different consent machinery. So the core records
+    /// what it saw and the host layer decides whether anybody is allowed to
+    /// know. That split is why these are plain numbers with no ids in them.
+    public struct AudioCrossing: Sendable, Equatable {
+        public var bytes: Int
+        public var seconds: Double
+        /// How far it got, for one that did not finish.
+        public var fraction: Double
+        public var outcome: TelemetrySchema.TransferOutcome
+        /// Whether this recording had been offered before.
+        public var retry: Bool
+        /// How long between the recording being made and this crossing, for
+        /// the receiving side. Zero when the sender does not know.
+        public var waited: Double
+
+        public init(bytes: Int, seconds: Double, fraction: Double,
+                    outcome: TelemetrySchema.TransferOutcome,
+                    retry: Bool = false, waited: Double = 0) {
+            self.bytes = bytes; self.seconds = seconds; self.fraction = fraction
+            self.outcome = outcome; self.retry = retry; self.waited = waited
+        }
+    }
+
+    /// Audio this pass sent, on the device that holds it.
+    public var audioSent: [AudioCrossing] = []
+    /// Audio this pass took out of the pipe, on the device that claimed it.
+    public var audioReceived: [AudioCrossing] = []
+
+    /// Recordings that have been waiting too long for anything to happen.
+    ///
+    /// The id is here because the host has to edge-trigger on it: an event per
+    /// stalled recording per pass would be one library's bad day repeated
+    /// every two minutes. It never leaves the process.
+    public struct Stall: Sendable, Equatable {
+        public var id: String
+        public var stage: TelemetrySchema.StallStage
+        public var source: String
+        public var age: Double
+        /// Whether any device claims to hold the audio.
+        public var holder: String
+
+        public init(id: String, stage: TelemetrySchema.StallStage,
+                    source: String, age: Double, holder: String) {
+            self.id = id; self.stage = stage; self.source = source
+            self.age = age; self.holder = holder
+        }
+    }
+
+    public var stalls: [Stall] = []
 
     public var didSomething: Bool {
         pushedRecordings + pulledRecordings + pulledSidecars + pushedNotes
@@ -40,6 +99,10 @@ public struct CloudReport: Sendable, Equatable {
     /// after the work it interrupted when the caller can say.
     public mutating func note(_ error: Error, about subject: String? = nil) {
         if case StoreError.busy = error { throttled = true; return }
+        // The closed word for it, taken here for the same reason the sentence
+        // is: this is the last place the error object exists. See
+        // `SyncTrouble.shortCode` for why it is not derived from the sentence.
+        errorCodes.append(SyncTrouble.shortCode(error))
         // Mapped to a sentence a person can act on before it is a string,
         // because from here it is only ever a string: this line is what the
         // Sync pane and `listen sync status` show. See `SyncTrouble`.
@@ -419,6 +482,57 @@ public struct CloudSyncCore: Sendable {
             let name = CloudNaming.recordName(.recording, recording.id, key: key)
             guard let record = try? await store.fetch(name, in: .library) else { continue }
             base[audioOn: recording.id] = record.audioOn
+        }
+    }
+
+    /// How long a recording may sit with nothing happening to it before that
+    /// is worth reporting.
+    ///
+    /// Six hours, matching `claimGrace`: past that the product's own rules say
+    /// a Mac that took the audio has had long enough, so a recording still
+    /// waiting is waiting on something nobody is going to fix by itself. Short
+    /// enough to catch a bad morning, long enough that a closed lid overnight
+    /// is not one.
+    static let stallAfter: TimeInterval = 6 * 3600
+
+    /// Recordings that have been waiting far too long, so a stall is a number
+    /// somewhere rather than a message on one person's screen.
+    ///
+    /// **The whole reason this exists**: a user's memo sat for a day and the
+    /// only evidence anywhere was a sentence on her Mac, which named the wrong
+    /// cause. Nothing counted it, so nothing could have noticed that it was
+    /// happening to anyone else. The ids never leave the process; the host
+    /// edge-triggers on them and sends buckets.
+    public func findStalls(_ devices: [CloudRecords.DeviceBlob],
+                           into report: inout CloudReport, now: Date = Date()) {
+        for recording in library.all() {
+            guard !recording.hasTranscript else { continue }
+            guard let recordedAt = recording.metadata.recorded_at
+                .flatMap(Metadata.parser.date(from:)) else { continue }
+            let age = now.timeIntervalSince(recordedAt)
+            guard age > CloudSyncCore.stallAfter else { continue }
+
+            // Named from what this device can see, because that is what a
+            // person looking at this screen can see too.
+            let stage: TelemetrySchema.StallStage
+            if recording.hasAudio {
+                // This device holds the bytes and nothing has been made from
+                // them: on a phone that is an upload nobody took, on a Mac a
+                // transcript that never ran.
+                stage = ingests ? .awaitingTranscript : .awaitingUpload
+            } else {
+                stage = .awaitingAudio
+            }
+            let holders = devices.filter { blob in
+                blob.isLive(now) && (blob.holdsAudio ?? []).contains(recording.id)
+            }
+            report.stalls.append(CloudReport.Stall(
+                id: recording.id, stage: stage,
+                source: recording.metadata.source ?? "unknown",
+                age: age,
+                // The kind of device, never its name. "an iPhone has it and no
+                // Mac has taken it" is the shape of the answer that matters.
+                holder: holders.first.map { $0.kind.lowercased() } ?? "nobody"))
         }
     }
 
@@ -1791,6 +1905,11 @@ public struct CloudSyncCore: Sendable {
         // hammered and one that is stuck does not win by silence.
         var base = state.base
         let sentKey = "audio:" + recording.id
+        // Read before the switch below consumes it. A recording that already
+        // carried a marker is one this phone has tried to send before, which is
+        // the difference between "uploads are failing" and "uploads fail once
+        // and then work".
+        let wasOffered = base[sent: sentKey] != nil
         switch base[sent: sentKey] {
         case CloudSyncCore.acknowledged:
             reportActivity(recording.id,
@@ -1862,13 +1981,37 @@ public struct CloudSyncCore: Sendable {
             // first second leaves no record that anything was ever sent.
             base[sent: sentKey] = CloudSyncCore.inflightPrefix + Metadata.stamp(now)
             state.base = base
-            _ = try await store.save(try CloudRecords.transfer(
-                id: recording.id, from: device, metadata: metadata,
-                audio: audio, key: key), progress: { value in
-                    activity?(CloudActivity(recordingID: recording.id,
-                                            stage: .uploadingAudio,
-                                            fraction: value))
-                })
+            // Measured here because here is the only place that knows. The
+            // fraction is kept in a box the progress closure can write to, so
+            // an upload that is cut off still says how far it got, which is
+            // the one number that separates "slow" from "never finishes".
+            let began = Date()
+            let reached = Fraction()
+            do {
+                _ = try await store.save(try CloudRecords.transfer(
+                    id: recording.id, from: device, metadata: metadata,
+                    audio: audio, key: key), progress: { value in
+                        reached.set(value)
+                        activity?(CloudActivity(recordingID: recording.id,
+                                                stage: .uploadingAudio,
+                                                fraction: value))
+                    })
+            } catch {
+                report.audioSent.append(CloudReport.AudioCrossing(
+                    bytes: audio.count,
+                    seconds: Date().timeIntervalSince(began),
+                    fraction: reached.value,
+                    // Bytes moved and then stopped is a different fact from a
+                    // request that was refused outright, and the first is the
+                    // one worth chasing.
+                    outcome: reached.value > 0 ? .interrupted : .failed,
+                    retry: wasOffered))
+                throw error
+            }
+            report.audioSent.append(CloudReport.AudioCrossing(
+                bytes: audio.count,
+                seconds: Date().timeIntervalSince(began),
+                fraction: 1, outcome: .completed, retry: wasOffered))
             base[sent: sentKey] = "offered:" + Metadata.stamp(now)
             state.base = base
             report.pushedRecordings += 1
@@ -1883,6 +2026,22 @@ public struct CloudSyncCore: Sendable {
             state.base = base
             report.note(error, about: "upload \(recording.id)")
             reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
+        }
+    }
+
+    /// A box the progress closure can write into, so an upload that is cut off
+    /// can still say how far it got. The closure is `@Sendable` and this is
+    /// read after it, which is what rules out a plain captured `var`.
+    final class Fraction: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Double = 0
+        func set(_ value: Double) {
+            lock.lock(); defer { lock.unlock() }
+            stored = max(stored, value)
+        }
+        var value: Double {
+            lock.lock(); defer { lock.unlock() }
+            return stored
         }
     }
 
@@ -1936,6 +2095,7 @@ public struct CloudSyncCore: Sendable {
                 // the bytes used to arrive inside the listing, where nothing
                 // was watching them.
                 reportActivity(blob.id, .downloadingAudio, fraction: 0)
+                let fetchBegan = Date()
                 guard let full = try await store.fetch(
                     record.name, in: .transfer, progress: { value in
                         activity?(CloudActivity(recordingID: blob.id,
@@ -1962,6 +2122,20 @@ public struct CloudSyncCore: Sendable {
                 try blob.metadata.write(to: folder.appendingPathComponent("metadata.json"),
                                         options: .atomic)
                 report.claimed += 1
+                // The far end of `audioSent`. With no person profiles the two
+                // devices are two installs and nothing joins them, so the only
+                // way to see whether recordings actually cross is to compare
+                // how many were sent against how many were received. `waited`
+                // is the number a user would recognise: how long between making
+                // the recording and a Mac having it.
+                let recordedAt = (try? JSONDecoder().decode(Metadata.self, from: blob.metadata))
+                    .flatMap { $0.recorded_at }
+                    .flatMap(Metadata.parser.date(from:))
+                report.audioReceived.append(CloudReport.AudioCrossing(
+                    bytes: audio.count,
+                    seconds: Date().timeIntervalSince(fetchBegan),
+                    fraction: 1, outcome: .completed,
+                    waited: recordedAt.map { now.timeIntervalSince($0) } ?? 0))
 
                 // Only now. This is what lets the phone let go, and the whole
                 // reason it is written after the bytes rather than before.

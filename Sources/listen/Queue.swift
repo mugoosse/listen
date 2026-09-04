@@ -159,6 +159,7 @@ final class Queue {
 
     /// Give the slot back and move on, for a recording this Mac may not take.
     private func decline(_ id: String) {
+        MainThreadWatch.ended(.transcribing)
         running = nil
         progress = nil
         onChange?(id)
@@ -180,6 +181,7 @@ final class Queue {
         CloudSyncHost.shared.setActivity(
             CloudActivity(recordingID: id, stage: .startingTranscription))
         onChange?(id)
+        MainThreadWatch.began(.transcribing)
         Task { await self.start(recording) }
     }
 
@@ -378,6 +380,9 @@ final class Queue {
         // until it expires is fifteen minutes in which nothing retries.
         await CloudSyncHost.shared.releaseTranscriptionLease(id)
 
+        // The heaviest thing this app does is over. `advance` may start
+        // another immediately, which sets it again.
+        MainThreadWatch.ended(.transcribing)
         running = nil
         progress = nil
         onChange?(id)

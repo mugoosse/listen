@@ -253,3 +253,78 @@ the project rather than against the code.
 reports have arrived in five days across seven installs. That is consistent
 with no crashes and consistent with the path being broken, and nothing in the
 data separates the two. It is unproven end to end in production.
+
+## The phone was dark, and nothing in the project could say why
+
+Measured on 2026-09-04, against project 259056, over the previous 30 days:
+
+| event | platform | count | installs |
+|---|---|---|---|
+| dictation_completed | mac | 358 | 3 |
+| operation_failed | mac | 205 | 6 |
+| recording_completed | mac | 59 | 6 |
+| recording_transcribed | mac | 39 | 8 |
+| installation_activated | **iphone** | **1** | **1** |
+
+One iPhone event, ever, on 27 August, and nothing since. Zero
+`recording_completed` from any phone in thirty days, on an app whose whole job
+on that device is recording. The iOS app is not uninstrumented: it has twelve
+call sites including `recordingCompleted` and the sync failure. So either
+nobody with a reporting build has recorded anything in a month, or the builds
+people actually have cannot report, and **nothing in the data distinguishes
+those.**
+
+`Telemetry.blocked` on iOS is true unless `Bundle.main.appStoreReceiptURL`
+exists, so a build Xcode installed sends nothing by design. That is correct and
+it is also indistinguishable, from outside, from the switch being off, from a
+build made before the project existed, and from an install that is simply not
+being used.
+
+So the phone now says which of those it is, on screen, in Settings under
+Privacy: `Telemetry.status` names the reason and `Telemetry.installID` shows
+the id with a tap to copy it. The Mac has had both since the day nobody could
+say which rows were whose, and the phone is the device that needed it more,
+because there is no `listen telemetry` to run on it over SSH.
+
+**Do not read the sync work's before-and-after against this data until that
+question is settled.** The Mac half will be visible; the phone half may be a
+population of one.
+
+## Registered super-properties are sticky, and absence has to be said out loud
+
+`PostHogSDK.register` persists its properties into the SDK's own storage and
+attaches them to every event of every later launch. So a super-property that
+stops applying keeps being sent for ever: an install marked `internal` once was
+internal permanently, whatever the preference said afterwards, and the same is
+true of `acquisition_channel` for anybody who clears theirs.
+
+Both are now unregistered explicitly in the `else` branch rather than merely
+omitted from the dictionary.
+
+**Found by asserting the absence rather than only the presence**, which is the
+half that is easy not to write: `verify_telemetry.sh` case 7 checks both that an
+internal install is marked and that an ordinary one is not, and only the second
+failed. Two false leads on the way, both worth knowing:
+
+- The failure looked like a stale `defaults` value, because it survived
+  `defaults delete` of the whole domain. It was not: cfprefsd does cache, and a
+  domain delete followed immediately by a launch is genuinely racy, so that case
+  writes the key false rather than deleting it. But the real cause was the SDK.
+- `verify_telemetry.sh` tests `Listen.app`, so `./build.sh` alone changes
+  nothing it sees. Two runs were spent on a fix that was never in the bundle.
+
+## An event in the last thirty seconds of a session was never sent
+
+The SDK batches for thirty seconds. Nothing flushed on quit, so a launch, a
+look and a quit sent the first event and nothing else, and any dictation or
+failure in the last half minute of any session was lost with the process.
+
+`app_launched` flushes on purpose, and `applicationWillTerminate` flushes what
+is queued. One request per launch is a fair price for the event being reliable,
+and it doubles as the liveness signal the iPhone question above needs: an
+install that is alive says so once per launch, which is the difference between
+"not used" and "cannot report".
+
+Found because the new `app_launched` assertion failed while the event was
+plainly being captured: it was sitting in a queue the harness killed. The same
+thing had been happening to real sessions the whole time.

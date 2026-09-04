@@ -182,8 +182,27 @@ enum Telemetry {
             "install_age_bucket": TelemetrySchema.installAgeBucket(days: participationDays),
             "schema_version": TelemetrySchema.schemaVersion,
         ]
+        // **Registered super-properties are sticky, so "absent" has to be said
+        // out loud.** `register` writes them into the SDK's own storage and
+        // they are attached to every event of every later launch, so a
+        // property that stops applying keeps being sent for ever: an install
+        // marked internal once was internal permanently, whatever the
+        // preference said afterwards. Found by the verify script asserting the
+        // absence rather than only the presence, which is the half that is
+        // easy not to write.
         if let channel = Settings.telemetryChannel {
             props["acquisition_channel"] = channel
+        } else {
+            PostHogSDK.shared.unregister("acquisition_channel")
+        }
+        // Managed first, then a plain default: the second Mac is reached over
+        // SSH and `defaults write com.mgo.listen telemetryInternal -bool true`
+        // is the whole setup there. See `TelemetrySchema.superProperties` for
+        // why the old `distinct_id` filter could not do this job.
+        if Settings.isInternalInstall {
+            props["internal"] = true
+        } else {
+            PostHogSDK.shared.unregister("internal")
         }
         PostHogSDK.shared.register(props)
     }
@@ -413,6 +432,86 @@ enum Telemetry {
             "code": code,
             "retryable": retryable,
         ])
+    }
+
+    /// One sync pass, at a rate somebody could read.
+    ///
+    /// `moved` rather than a count per kind: the question this answers is
+    /// whether passes are doing anything and how long they take, and a row of
+    /// counters would be a trace of one library rather than the shape of a day.
+    static func syncPass(_ outcome: TelemetrySchema.PassOutcome,
+                         seconds: Double, moved: Bool, reason: String? = nil) {
+        var properties: [String: Any] = [
+            "outcome": outcome.rawValue,
+            "duration_bucket": TelemetrySchema.transferBucket(seconds: seconds),
+            "moved": moved,
+        ]
+        // Only for the outcomes where it says something. A `reason` on an `ok`
+        // pass would be a free-text field on the most common event in the
+        // project, which is how a schema stops being a schema.
+        if let reason, outcome != .ok { properties["reason"] = reason }
+        capture(.syncPass, properties)
+    }
+
+    /// A phone recording's audio landing on this Mac.
+    static func audioReceived(_ crossing: CloudReport.AudioCrossing) {
+        capture(.audioReceived, [
+            "bytes_bucket": TelemetrySchema.bytesBucket(crossing.bytes),
+            "duration_bucket": TelemetrySchema.transferBucket(seconds: crossing.seconds),
+            "wait_bucket": TelemetrySchema.waitBucket(seconds: crossing.waited),
+        ])
+    }
+
+    /// A recording that has been waiting far longer than anything should.
+    static func recordingStalled(_ stall: CloudReport.Stall) {
+        capture(.recordingStalled, [
+            "stage": stall.stage.rawValue,
+            "source": stall.source,
+            "age_bucket": TelemetrySchema.waitBucket(seconds: stall.age),
+            "holder": stall.holder,
+        ])
+    }
+
+    /// The main thread stopped answering for long enough that somebody noticed.
+    ///
+    /// Rides `operation_failed` rather than getting an event of its own,
+    /// because it is a failure with a subsystem and a code and that is exactly
+    /// what that event is for. `retryable` is false: nothing retries a stall,
+    /// it either happened or it did not.
+    static func mainThreadStalled(seconds: Double, phase: String) {
+        capture(.operationFailed, [
+            "subsystem": TelemetrySchema.Subsystem.ui.rawValue,
+            "code": "ui.main_thread_stall." + TelemetrySchema.stallBucket(seconds: seconds)
+                + "." + phase,
+            "retryable": false,
+        ])
+    }
+
+    /// How long the app took to get to a window, and what it had to carry.
+    ///
+    /// **Flushed rather than left in the queue, and that is the point of it.**
+    /// The SDK batches for thirty seconds, so every event in the last half
+    /// minute of a session dies with the process: a launch, a look, and a quit
+    /// sent nothing at all. That also made an install indistinguishable from a
+    /// dead one, which is the confusion an iPhone sending a single event in a
+    /// month left nobody able to resolve. One request per launch is a fair
+    /// price for knowing an install is alive.
+    static func appLaunched(seconds: Double, recordings: Int, pending: Int) {
+        capture(.appLaunched, [
+            "launch_bucket": TelemetrySchema.launchBucket(seconds: seconds),
+            "library_bucket": TelemetrySchema.libraryBucket(recordings),
+            "pending": TelemetrySchema.cappedAskCount(pending),
+        ])
+        flush()
+    }
+
+    /// Send whatever is queued now.
+    ///
+    /// Used at launch and at quit. Everything else can wait for the SDK's own
+    /// batching, which is what keeps this from being a request per event.
+    static func flush() {
+        guard enabled, started else { return }
+        PostHogSDK.shared.flush()
     }
 
     static func setChannel(_ channel: TelemetrySchema.AcquisitionChannel?) {

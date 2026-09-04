@@ -44,6 +44,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        let launchBegan = Date()
+        var launched: (Double, Int, Int)?
         trace("launched, build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
 
         // Before anything reads it, and above the preview branch because it
@@ -173,6 +175,20 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Onboarding.shared.show()
         } else {
             LibraryWindow.shared.show()
+            // Measured around `show` and nothing else, so the number means "how
+            // long until there was a window" rather than "how long until the
+            // app had finished every last thing at launch". The library size
+            // and the pending count travel with it because almost every report
+            // that the app is slow is really a question about one of those, and
+            // there was no way to tell from outside.
+            let recordings = Recording.all()
+            // Measured here and sent below, because consent is applied after
+            // this point and `capture` is a no-op until it is. Sending here
+            // dropped the event silently, which the verify script caught and a
+            // reading of the code did not.
+            launched = (Date().timeIntervalSince(launchBegan), recordings.count,
+                        recordings.filter { !$0.hasTranscript && $0.hasAudio }.count)
+            MainThreadWatch.ended(.launching)
             // Arm the dictation shortcut and warm the speech model. Deliberately
             // not on a first run: nothing has been granted, no model has been
             // chosen, so there is no tap to install and nothing to warm. Setup's
@@ -186,6 +202,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // here unless Settings, Privacy turns it back off.
         Telemetry.migrateToDefaultOnIfNeeded()
         Telemetry.startIfConsented()
+        // Now that there is somewhere for it to go. See where it was measured.
+        if let launched {
+            Telemetry.appLaunched(seconds: launched.0, recordings: launched.1,
+                                  pending: launched.2)
+        }
+        // Started as early as consent allows, because launch is the phase the
+        // stall reports are about. See `MainThreadWatch`.
+        MainThreadWatch.begin()
         // Stamped last so anything above that wants "what did this app run as
         // last time" reads the previous launch's answer.
         Settings.lastSeenVersion = AppInfo.version
@@ -1112,5 +1136,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ note: Notification) {
         if Capture.shared.isRecording { _ = Capture.shared.stop() }
+        // The queue batches for thirty seconds, so a session shorter than that
+        // used to send nothing but its first event, and every dictation or
+        // failure in the last half minute of any session was lost. Nothing here
+        // is worth delaying a quit for, so this is a send and not a wait.
+        Telemetry.flush()
+        MainThreadWatch.stop()
     }
 }

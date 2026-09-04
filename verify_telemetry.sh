@@ -168,7 +168,20 @@ else fail "activation was not existing on an install that had been set up"; fi
 if [ "$(defaults read "$DOMAIN" telemetryConsent 2>/dev/null)" = "1" ]; then
     pass "consent reads yes after the override"
 else fail "consent was not flipped to yes"; fi
-
+# Schema v4's own check, and it rides case 2 because `app_launched` fires from
+# the branch a set-up install takes. A new event has to pass the same filter as
+# every other one, and the filter drops anything whose name is not a key in
+# `allowedProperties`: a v4 event arriving here is the proof that the schema
+# and the allowlist agree, which is the one way a new event silently sends
+# nothing.
+if grep -q '"event":"app_launched"' "$CAPTURE" \
+   || grep -q '"event": *"app_launched"' "$CAPTURE"; then
+    pass "a schema v4 event reaches the wire"
+else fail "app_launched never arrived, so the v4 allowlist and the events disagree"; fi
+if grep -q '"schema_version":4' "$CAPTURE" \
+   || grep -q '"schema_version": *4' "$CAPTURE"; then
+    pass "and it is stamped with the schema it was written for"
+else fail "the schema version on the wire is not 4"; fi
 # --- case 3: a no recorded AFTER migration is respected ---------------------
 # telemetryDefaultOnMigrated is set here, which is what distinguishes this
 # from case 2: the migration already ran once on this install, so this no is
@@ -216,5 +229,47 @@ fi
 
 defaults delete "$DOMAIN" >/dev/null 2>&1
 echo
+
+# --- case 7: the internal marker, which replaces a stale distinct_id --------
+# The old way to keep the developer's own rows out of every chart was a
+# `distinct_id` typed into the project by hand. That id is deleted when
+# telemetry is switched off and made fresh when it is switched back on, so the
+# filter went stale silently and the only symptom was a number that stopped
+# being zero. This is the replacement, and it is only worth having if it
+# actually reaches the wire.
+# **Last on purpose.** An earlier version of this ran between cases 2 and 3 and
+# the absence half failed on the *next* run of the script: `defaults` is cached
+# by cfprefsd, and a key written here was still being served to the app after
+# the domain had been deleted. Nothing follows it now, and both halves of the
+# claim are made here rather than one of them being made three cases earlier.
+say "7. the internal marker, and its absence"
+defaults delete "$DOMAIN" >/dev/null 2>&1
+defaults write "$DOMAIN" telemetryConsent -bool false
+defaults write "$DOMAIN" onboarded -bool true
+# **Written false rather than deleted**, and that is not fussiness. Deleting the
+# whole domain and immediately relaunching left the app still reading `true`
+# from a previous run: cfprefsd serves a cached snapshot and a domain delete
+# does not reliably invalidate it before the next process starts. The assertion
+# is about what an install that has not opted in sends, and false is that
+# install as surely as absent is, without the race.
+defaults write "$DOMAIN" telemetryInternal -bool false
+launch 10
+# The property has to be absent for everybody who is not the developer, or a
+# filter that excludes internal installs would exclude the whole population.
+if grep -q '"internal"' "$CAPTURE"; then
+    fail "an ordinary install claimed to be internal"
+else pass "an ordinary install does not claim to be internal"; fi
+
+defaults delete "$DOMAIN" >/dev/null 2>&1
+defaults write "$DOMAIN" telemetryConsent -bool false
+defaults write "$DOMAIN" onboarded -bool true
+defaults write "$DOMAIN" telemetryInternal -bool true
+launch 10
+if grep -q '"internal":true' "$CAPTURE" \
+   || grep -q '"internal": *true' "$CAPTURE"; then
+    pass "an internal install is marked on the wire"
+else fail "telemetryInternal did not reach the events"; fi
+defaults delete "$DOMAIN" telemetryInternal >/dev/null 2>&1
+
 if [ "$FAILURES" = "0" ]; then echo "telemetry: all checks passed"; exit 0
 else echo "telemetry: $FAILURES check(s) FAILED"; exit 1; fi

@@ -52,4 +52,36 @@ public enum SyncTrouble {
             return error.localizedDescription
         }
     }
+
+    /// The same set of problems as a closed word, for telemetry.
+    ///
+    /// **Deliberately not derived from the sentence.** `plain` falls through to
+    /// `localizedDescription` for anything it does not name, and that string is
+    /// written by CloudKit, varies with the system language, and can carry
+    /// container and record identifiers. Sending it would put unbounded text
+    /// from a library nobody controls into an analytics property. So this is a
+    /// second mapping over the same codes, and everything it does not
+    /// recognise is `other`: a count of unknown problems is a reason to come
+    /// and look, which is all a telemetry field is for.
+    public static func shortCode(_ error: Error) -> String {
+        if error is StoreError { return "store" }
+        guard let ck = error as? CKError else { return "other" }
+        if ck.code == .partialFailure,
+           let inner = ck.partialErrorsByItemID?.values.first(where: {
+               ($0 as? CKError)?.code != .batchRequestFailed
+           }) {
+            return shortCode(inner)
+        }
+        switch ck.code {
+        case .quotaExceeded: return "quota"
+        case .notAuthenticated: return "signed_out"
+        case .networkUnavailable, .networkFailure: return "offline"
+        case .permissionFailure, .managedAccountRestricted: return "not_permitted"
+        case .serviceUnavailable, .zoneBusy, .requestRateLimited: return "busy"
+        case .incompatibleVersion: return "too_old"
+        case .serverRecordChanged: return "conflict"
+        case .unknownItem: return "missing"
+        default: return "other"
+        }
+    }
 }

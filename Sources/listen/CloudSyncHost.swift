@@ -242,6 +242,7 @@ final class CloudSyncHost {
             if passID == pass {
                 running = false; passID = nil; progress = nil
                 passStarted = nil; passTask = nil
+                MainThreadWatch.ended(.syncing)
             }
             lastRun = Date()
         }
@@ -257,6 +258,7 @@ final class CloudSyncHost {
         // matters: an abandoned step still runs its `defer { state.base = base }`
         // eventually, and the later it runs the more of a newer pass's work it
         // writes over.
+        MainThreadWatch.began(.syncing)
         let task = Task { @MainActor in await self.performPass(pass) }
         passTask = task
         let report = await task.value
@@ -411,6 +413,12 @@ final class CloudSyncHost {
         // needs, however many other devices have a copy.
         await core.reclaim(devices, protecting: Queue.shared.activeIDs, into: &report)
 
+        // Last, and reading only what the pass has already established. A
+        // recording nothing is happening to is invisible by definition, so
+        // something has to go looking on purpose; before this the only evidence
+        // a library was stuck was a sentence on one person's screen.
+        core.findStalls(devices, into: &report)
+
         lastReport = report
         // On disk as well as in memory, because `listen sync status` is a
         // fresh process: the one command a stalled install gets asked to run
@@ -433,6 +441,7 @@ final class CloudSyncHost {
             Telemetry.failure(.sync, code: "sync.pass_failed", retryable: true)
         }
         lastPassFailed = failed
+        reportPass(report, since: passStarted ?? Date())
         // Deletions applied on another device's say-so are the one write here
         // the user did not make on this Mac, so they are the one thing a pass
         // leaves in the activity log. Counts only: `CloudReport` carries no
@@ -442,6 +451,53 @@ final class CloudSyncHost {
         }
 
         return report
+    }
+
+    /// When the last `sync_pass` was sent, and what it said.
+    private var lastPassSent: Date?
+    private var lastPassOutcome: TelemetrySchema.PassOutcome?
+    /// Recordings already reported as stalled, so a library having a bad day
+    /// says so once rather than every two minutes until somebody notices.
+    private var reportedStalls: Set<String> = []
+
+    /// Twice an hour is the ceiling for an unchanged outcome.
+    ///
+    /// The poll is every two minutes, so an event per pass would be 720 a day
+    /// per install: enough to swamp the quota and every chart in the project
+    /// with the most boring fact it has. What is wanted is the shape of a day,
+    /// so a change of outcome always goes and a steady state goes rarely.
+    private static let passReportEvery: TimeInterval = 30 * 60
+
+    /// The pass's own telemetry, rate limited.
+    private func reportPass(_ report: CloudReport, since started: Date) {
+        let seconds = Date().timeIntervalSince(started)
+        let outcome: TelemetrySchema.PassOutcome =
+            report.errors.isEmpty ? (report.throttled ? .throttled : .ok) : .failed
+
+        // Always on a change, and otherwise rarely. An install whose passes go
+        // from fine to failing is the event worth having; an install whose
+        // passes are fine is one line an hour.
+        let changed = outcome != lastPassOutcome
+        let due = lastPassSent.map { Date().timeIntervalSince($0) >= Self.passReportEvery } ?? true
+        if changed || due {
+            Telemetry.syncPass(outcome, seconds: seconds, moved: report.didSomething,
+                               reason: report.errorCodes.first)
+            lastPassSent = Date()
+            lastPassOutcome = outcome
+        }
+
+        // Every arrival, because they are rare and each one is a recording
+        // crossing between two devices, which is the thing nothing could see.
+        for crossing in report.audioReceived { Telemetry.audioReceived(crossing) }
+
+        // Edge-triggered per recording. `reportedStalls` is trimmed to what is
+        // still stalled so a recording that recovers and stalls again months
+        // later is reported again, and so this cannot grow without bound.
+        let stalled = Set(report.stalls.map(\.id))
+        for stall in report.stalls where !reportedStalls.contains(stall.id) {
+            Telemetry.recordingStalled(stall)
+        }
+        reportedStalls = stalled
     }
 
     private func sharedStore() -> CloudKitStore {

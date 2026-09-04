@@ -83,6 +83,11 @@ The SDK also stamps its own context: OS name and version, app version and
 build, and SDK name and version. Nothing else of its automatic context
 survives the filter, and `$device_name` is stripped explicitly.
 
+`internal` is present, and true, only on installs belonging to whoever builds
+Listen, set by a preference that is deliberately not in Settings. It exists so
+those rows can be excluded from every chart without naming an install ID that
+goes stale the moment telemetry is switched off and on again.
+
 ## Events
 
 ### `installation_activated`
@@ -163,12 +168,60 @@ A closed list, and the fact only: `note_saved` (never the note), `sync_enabled`,
 `keep_audio_toggle`.
 
 ### `operation_failed`
-`subsystem` (`capture`, `model_download`, `sync`, `dictation`, `library`),
-`code` (a fixed identifier such as `model_download.failed` or
-`sync.pass_failed`), `retryable` (bool). Error text never travels: a raw
+`subsystem` (`capture`, `model_download`, `sync`, `dictation`, `library`,
+`ui`), `code` (a fixed identifier such as `model_download.failed`,
+`sync.pass_failed`, `sync.pass_timeout`, or `ui.main_thread_stall.<bucket>
+.<phase>` when the window stopped responding for more than two seconds),
+`retryable` (bool). Error text never travels: a raw
 error message routinely contains file names, and file names are content.
 Sync failures are edge-triggered, one event when a failure starts rather
 than one per retry.
+
+### `audio_transfer`
+Sent by the iPhone, once per attempt to send a recording's audio that actually
+began sending bytes. `outcome` (`completed`, `interrupted`, `failed`),
+`bytes_bucket`, `duration_bucket`, `progress_bucket` (how far an interrupted
+one got: `under_10`, `10_50`, `50_90`, `90_100`, `complete`), `retry` (bool,
+whether this recording had been offered before), `foreground` (bool, whether
+the app was on screen).
+
+This event exists because a 45-minute memo once sat at 9% for a day and
+nothing anywhere recorded that a transfer had begun, how big it was, or where
+it stopped. No id, no title, no duration of the recording itself: how many
+bytes in what shape of bucket, and where it got to.
+
+### `audio_received`
+Sent by the Mac that takes a phone recording's audio out of iCloud.
+`bytes_bucket`, `duration_bucket`, `wait_bucket` (how long between the
+recording being made and a Mac having it). The far end of `audio_transfer`,
+and the pair is the only way to see whether recordings cross at all: the two
+devices are two installs and nothing joins them, so the question is answered by
+comparing counts rather than by following one recording.
+
+### `recording_stalled`
+One event the first time a recording has been waiting more than six hours with
+nothing happening to it. `stage` (`awaiting_upload`, `awaiting_transcript`,
+`awaiting_audio`), `source` (`iphone`, `mac`, ...), `age_bucket`, `holder`
+(the *kind* of device that has the audio: `iphone`, `mac`, or `nobody`; never
+which one). Edge-triggered per recording, so a library having a bad day says so
+once rather than every two minutes.
+
+### `sync_pass`
+`outcome` (`ok`, `failed`, `timeout`, `throttled`), `duration_bucket`, `moved`
+(bool, whether anything actually changed), and `reason` on the outcomes that
+are not `ok`: a closed word such as `quota`, `signed_out`, `offline`,
+`not_permitted`, `busy`, `too_old`, `conflict`, `missing`, `store` or `other`.
+The reason is mapped from the error code and never from the error's text,
+because CloudKit's own wording varies by language and can contain identifiers.
+
+Sent on a change of outcome and otherwise at most twice an hour. The poll runs
+every two minutes, so an event per pass would be 720 a day per install.
+
+### `app_launched`
+`launch_bucket` (how long until there was a window), `library_bucket` (how many
+recordings, in a bucket), `pending` (how many are waiting to be transcribed,
+capped at 24). Sent immediately rather than batched, which also makes it the
+signal that an install is alive at all.
 
 ### `$exception`
 A crash report: stack trace, app build, OS version. Captured by the PostHog

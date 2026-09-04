@@ -8,6 +8,115 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.32.0 (2026-09-04)
+
+A recording made on an iPhone now reaches your Mac without anybody keeping an
+app open, one stalled transfer no longer stops everything else syncing, a
+meeting spoken in a language the English-only model cannot read is read again by
+one that can, and voiceprints the library had lost the name of can be put back.
+
+### Your Mac said iCloud was at fault when your iPhone had not sent the audio
+
+A 45-minute voice memo sat for a day under "Retrying sync: Audio is not
+available in iCloud yet". The sentence was true about iCloud and pointed at the
+wrong place: the audio had never left the phone.
+
+An iPhone reports every recording whose audio is on its own disk, because that
+is what lets a Mac tell it when it is safe to let go. A Mac read that as "there
+is a copy in iCloud to fetch", asked, and got nothing, because a phone
+deliberately never publishes one: the Mac that receives the recording publishes
+it instead, so that a conversation is not sent up twice. That question was asked
+on every pass, on every Mac, for every phone recording waiting to arrive.
+
+- A Mac no longer asks for a copy that cannot exist. It says what is actually
+  true, which is that it is waiting for audio from your iPhone.
+- The iPhone stops saying "Waiting for your Mac" while it is the phone that has
+  not sent the recording yet. Both halves of that state used to share one
+  heading and they have opposite repairs.
+- Recordings behind the phantom are no longer starved. A Mac fetches three
+  recordings' audio per pass, and the newest recordings in a library are exactly
+  the ones waiting to arrive from a phone, so three of those took every slot and
+  audio from your other Mac never arrived at all.
+
+### An upload survives you putting the phone down
+
+**This half needs the iPhone app updated as well.** The two changes are a pair:
+the phone's is inert without this release and this release is harmless without
+the phone's.
+
+The phone used to send a recording's audio only while Listen was open and on
+screen, and any interruption threw away everything sent so far and started
+again from zero. A 45-minute memo is 87 MB, so locking the phone in the middle
+of one meant it never finished. The transfer is now handed to iOS itself, which
+completes it in the background across app switches, a locked screen, and the
+app being closed.
+
+- An interrupted upload is not started again from scratch while the system is
+  still carrying it. Without that guard a relaunch enqueued a second copy of the
+  whole recording, and then a third.
+- The file waiting to be uploaded is kept somewhere iOS will not reclaim while
+  it is being read.
+
+### One stuck transfer no longer stops everything
+
+New recordings stopped appearing on a Mac until the app was quit and reopened.
+A sync pass is allowed to run one at a time, and nothing in Listen ever set a
+time limit on a network call: CloudKit's own default for a file transfer is
+seven days, so one transfer that stopped moving held that slot for as long as it
+liked and every later pass was dropped and forgotten.
+
+- Every call is now bounded, generously: ten minutes for a file, one minute for
+  everything else. Ten minutes is 87 MB on a poor connection, so a slow transfer
+  is never mistaken for a stuck one.
+- A pass still going after twenty minutes is cancelled, and the next one runs.
+- A Mac no longer downloads a waiting recording's audio every two minutes before
+  deciding whether to take it. It reads the list without the audio, decides, and
+  fetches once. That also means the recording page can finally show a real
+  percentage while a phone memo lands.
+
+### A meeting the English-only model could not read is read again
+
+An English-only decoder handed another language writes fluent, confident,
+invented English and reports success, which leaves no trace anywhere. Asking the
+transcript what language it is in answers English at 0.994 to 1.000, because
+every word in it is an English word.
+
+How thin the transcript is can be asked instead. Words per second of carrying
+audio: five Dutch calls score 0.37 to 0.47, forty-one English recordings score
+1.11 to 5.24, and the midpoint is 0.79. Below that, Listen reads the meeting
+again with a model that reads 25 languages, and never downloads one to do it.
+
+Setup now asks which languages you meet in rather than which model to use, since
+it downloads one and the wrong answer is silent. The multilingual model did not
+become the default: over six English meetings it finds 38 of the 62 domain
+proper nouns the English-only one finds, turning Claude into "cloud" and
+WhatsApp into "what's up".
+
+### Voiceprints the library had lost the name of
+
+Reported as a question: a meeting was re-transcribed and the speaker labels did
+not come back. Measured across the library afterwards, 27 of 60 recordings held
+a voiceprint under a label no transcript used, and 10 people were missing from
+the voice bank entirely. Nobody reports that, because it does not present as a
+defect. It presents as the voice matching being mediocre.
+
+`listen voices --repair` prints what it would do and `--apply` does it, the same
+shape `calendar backfill` uses, because it rewrites the one file a recording
+cannot regenerate. Anything with more than one candidate on either side is
+skipped: a name with no voice is better than somebody else's voice under your
+name. On the development library that was 19 repairs and 10 people back.
+
+### Statistics
+
+The anonymous usage statistics gained events about sync, because none of the
+problems above were visible in them and all of them had to be found by reading
+code. What is added is how large a transfer was, how long it took and where an
+interrupted one stopped, how long a recording has been waiting, and how long the
+app took to open. Sizes in rough buckets, and the kind of device holding a
+recording rather than which one. Still never recordings, transcripts, titles or
+names, and still one switch in Settings, Privacy that turns all of it off.
+TELEMETRY.md is the complete list.
+
 ## 0.31.1 (2026-09-03)
 
 A webinar watched on speakers no longer puts its hosts in the transcript twice,

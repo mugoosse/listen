@@ -328,3 +328,59 @@ install that is alive says so once per launch, which is the difference between
 Found because the new `app_launched` assertion failed while the event was
 plainly being captured: it was sitting in a queue the harness killed. The same
 thing had been happening to real sessions the whole time.
+
+## The phone was blocked by a receipt Apple stopped writing
+
+The answer to the question above, and it was not "nobody used it".
+
+Every tester is on TestFlight, and the live build is 403, uploaded 2026-09-02,
+which carries the telemetry that landed on 2026-08-27. Read from App Store
+Connect rather than assumed, because "which build do they actually have" is the
+question the whole diagnosis turns on and nothing in the repo records it:
+
+```
+build 403  uploaded 2026-09-02  VALID
+build 362  uploaded 2026-08-29  VALID
+build 357  uploaded 2026-08-27  VALID
+```
+
+So the code was there and it sent nothing. `Telemetry.blocked` was true, through
+`isDistributionBuild`:
+
+```swift
+guard let url = Bundle.main.appStoreReceiptURL else { return false }
+return FileManager.default.fileExists(atPath: url.path)
+```
+
+**`appStoreReceiptURL` is deprecated as of iOS 18, and the receipt file is not
+written for an app that never touches StoreKit.** Listen never does. So on
+current iOS a perfectly good TestFlight install answers `false` to "are you a
+distribution build", blocks itself, and goes quiet. Silently, and by design:
+that gate exists so a build Xcode installed cannot count as an install, and it
+was doing exactly what it was told with a signal that had stopped meaning
+anything.
+
+The evidence was in the shape of the data all along and nobody had put the two
+halves together: nine Mac installs reporting, one iPhone event ever, on a
+product whose iPhone half is the part people carry.
+
+The signal that still works is the provisioning profile. Xcode embeds
+`embedded.mobileprovision` in development and ad-hoc builds; an App Store build
+has none, and a TestFlight build **is** an App Store build. The receipt is kept
+as a second opinion so a device that does write one is still recognised.
+
+**The simulator has no profile either**, and would therefore have read as a
+distribution install and pointed every e2e script at the real project. That is
+a `#if targetEnvironment(simulator)` and it is the reason to be careful with
+this class of check: each of these signals is an absence, and an absence is true
+of more things than the one you are thinking about.
+
+Two lessons worth more than the fix:
+
+- **A gate that fails closed fails silently.** Nothing anywhere said "telemetry
+  is off because this is not a distribution build". `Telemetry.status` now says
+  which of the four reasons applies, on screen, because the phone has no
+  `listen telemetry` to run.
+- **Read the build list before believing a population.** "One iPhone event in
+  thirty days" was treated as a fact about usage for a week. It was a fact about
+  a boolean.

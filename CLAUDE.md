@@ -192,6 +192,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A room needs a higher threshold than a call, and 0.6 filed two people as one
 - Three words are not a person, and one of them withheld a title for ever
 - The bank knew everybody except its owner
+- A renamed speaker can leave their voice behind, and nothing said so
 
 ### `.agents/notes/calendar.md` (15k)
 
@@ -584,7 +585,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 
-### `.agents/notes/telemetry.md` (13k)
+### `.agents/notes/telemetry.md` (16k)
 
 What the apps send, and what reading it back for the first time proved wrong.
 `Telemetry`, `TelemetrySchema`, `TELEMETRY.md`, `verify_telemetry.sh`, the
@@ -602,6 +603,7 @@ PostHog project.
 - What the project keeps is not what the privacy page promises
 - `$exception` has never fired
 - The phone was dark, and nothing in the project could say why
+- The phone was blocked by a receipt Apple stopped writing
 - Registered super-properties are sticky, and absence has to be said out loud
 - An event in the last thirty seconds of a session was never sent
 

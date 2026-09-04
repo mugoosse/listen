@@ -259,14 +259,62 @@ enum CLI {
     /// `--apply` runs the same `VoiceBank.autoAssign` the pipeline runs, so a
     /// recording transcribed before this existed can be caught up without
     /// re-running an hour of audio.
+    /// Put voiceprints back under the name their transcript uses.
+    ///
+    /// Prints and changes nothing without `--apply`, the same shape as
+    /// `calendar backfill`, because it rewrites the one file in a recording
+    /// that cannot be regenerated: the audio can be transcribed again, but a
+    /// voiceprint whose cluster has been renamed away is only recoverable by
+    /// somebody naming the speaker again from memory.
+    private static func repairVoices(apply: Bool) -> Never {
+        let found = VoiceBank.repairs()
+        guard !found.isEmpty else {
+            print("every voiceprint is filed under the name its transcript uses.")
+            exit(0)
+        }
+
+        print("\(found.count) voiceprint(s) filed under a label no transcript uses:")
+        print("")
+        for r in found {
+            let score = r.similarity.map { String(format: "  (%.3f against their voice "
+                                                 + "elsewhere)", $0) } ?? ""
+            print("  \(r.recordingID)  \(r.title)")
+            print("      \(r.key)  ->  \(r.name)\(score)")
+            print("      \(r.why)")
+        }
+        print("")
+
+        // Named rather than counted, because the point of the repair is which
+        // people come back to the bank, and a number does not say whether the
+        // one you were missing is among them.
+        let people = Set(found.map(\.name)).sorted()
+        print("\(people.count) voice(s) would return to the bank: "
+              + people.joined(separator: ", "))
+
+        guard apply else {
+            print("")
+            print("nothing changed. Run `listen voices --repair --apply` to file them.")
+            exit(0)
+        }
+
+        var done = 0
+        for r in found where VoiceBank.apply(r) { done += 1 }
+        print("")
+        print("filed \(done) of \(found.count).")
+        exit(0)
+    }
+
     private static func voices(_ args: [String]) -> Never {
         var ids: [String] = []
         var apply = false
+        var repair = false
         for arg in args {
             if arg == "--apply" { apply = true }
+            else if arg == "--repair" { repair = true }
             else if arg.hasPrefix("-") { fail("unknown option `\(arg)`. Try `listen help`.") }
             else { ids.append(arg) }
         }
+        if repair { repairVoices(apply: apply) }
         guard let first = ids.first, let recording = Recording.find(first) else {
             fail("voices needs a recording. `listen list` prints them.")
         }
@@ -1663,6 +1711,11 @@ enum CLI {
       contacts <sub>             which email addresses belong to which person
       calibrate                  voiceprint threshold report
       voices <id> [--apply]      who the bank thinks each unnamed speaker is
+      voices --repair [--apply]  put voiceprints back under the name their
+                                 transcript uses. A speaker renamed away from
+                                 the cluster holding their voice is missing
+                                 from the bank entirely, so they are never
+                                 suggested again. Prints without --apply
       sources                    what meeting detection sees, run during a call
       audio [<id>] [--build]     what audio this Mac holds and which devices
                                  are keeping it. An id narrows it to one

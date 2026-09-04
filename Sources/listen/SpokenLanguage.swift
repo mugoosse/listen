@@ -33,6 +33,22 @@ enum SpokenLanguage {
         ModelChoice.forRepo(repo)?.isMultilingual ?? false
     }
 
+    /// Whether this model is one this app knows to read English and nothing
+    /// else, which is what makes a dense transcript evidence of English and a
+    /// thin one evidence of the wrong model.
+    ///
+    /// **Not the negation of `canReport`.** A legacy import names a model this
+    /// app has never had (`imported: mlx-whisper + pyannote`), so `forRepo`
+    /// returns nil for it and every "is it multilingual?" question answers no
+    /// by default. Whisper reads Dutch perfectly well, so a dense legacy
+    /// transcript says nothing about which language it was, and a thin one is
+    /// not this bug. Both inferences need a model that is known, and known to
+    /// be English-only.
+    static func isEnglishOnly(_ repo: String) -> Bool {
+        guard let choice = ModelChoice.forRepo(repo) else { return false }
+        return !choice.isMultilingual
+    }
+
     /// How many words it takes before an identification is worth having.
     ///
     /// `NLLanguageRecognizer` will answer for three words and the answer is a
@@ -51,14 +67,75 @@ enum SpokenLanguage {
 
     /// The language this recording was held in, as far as anything can tell.
     ///
-    /// Nil for a recording transcribed by an English-only model, which is not
-    /// the same as "English": it is "nobody knows", and the difference is the
-    /// whole point. A caller that treats nil as English rediscovers the bug.
+    /// Two different kinds of answer, and both are earned rather than assumed.
+    ///
+    /// From a **multilingual** transcript it is a reading: the model could have
+    /// chosen any of 25 languages and the text says which it chose. Measured at
+    /// 0.990 to 1.000 confidence on this library's recordings.
+    ///
+    /// From an **English-only** transcript it is an inference, and only when
+    /// the transcript is comfortably dense: v2 reads English and nothing else,
+    /// so a v2 transcript that comes back at a normal word rate is evidence
+    /// that the audio *was* English. Thin means it was not (`looksMisheard`),
+    /// and the band between the two means nobody knows.
+    ///
+    /// Nil is still "nobody knows" and never "English". That was the whole of
+    /// this function before English could vote, and the reason it could not is
+    /// worth keeping in view: a v2 transcript of Dutch audio identifies as
+    /// English at 0.994 to 1.000, so the *words* may never be asked. Only the
+    /// density may answer, and only from above.
     static func of(_ recording: Recording) -> String? {
-        guard let transcript = recording.storedTranscript,
-              canReport(transcript.model) else { return nil }
+        guard let transcript = recording.storedTranscript else { return nil }
         if let stored = transcript.language { return stored }
-        return identify(transcript.segments.map(\.text).joined(separator: " "))
+        if canReport(transcript.model) {
+            return identify(transcript.segments.map(\.text).joined(separator: " "))
+        }
+        guard isEnglishOnly(transcript.model),
+              let density = cachedDensity(of: recording) else { return nil }
+        return density >= wordsPerCarryingSecondEnglish ? "en" : nil
+    }
+
+    /// Above this, an English-only model was reading English.
+    ///
+    /// A separate number from `wordsPerCarryingSecond`, higher, and the gap
+    /// between them is deliberately "no opinion". The two thresholds answer
+    /// opposite questions and should fail in opposite directions: below 0.79
+    /// the claim is that a meeting was misread, which is worth making early;
+    /// above this one the claim is that somebody speaks English, which is worth
+    /// making only where the measurement supports it.
+    ///
+    /// Measured: the thinnest genuinely English recording in a 64-recording
+    /// library reads 1.11, and the next is 1.47. 1.20 sits above the first, so
+    /// that one abstains rather than votes, and roughly forty of the forty-one
+    /// English recordings still have their say.
+    static let wordsPerCarryingSecondEnglish = 1.20
+
+    /// `density(of:)` reads both WAVs, and `languages(of:)` asks per person, so
+    /// an uncached read would scan the same hour of audio once for everybody in
+    /// it. Keyed on the transcript's modification date, which is the fix
+    /// `People` names for exactly this ("a cache keyed on the file's
+    /// modification date, not a database") and which makes a stale entry
+    /// impossible: re-transcribing rewrites the file.
+    ///
+    /// Not persisted, and never consulted by anything that decides a model. It
+    /// only spares repeated reads inside one process.
+    private nonisolated(unsafe) static var densityCache: [String: (Date?, Double?)] = [:]
+    private nonisolated(unsafe) static let densityLock = NSLock()
+
+    private static func cachedDensity(of recording: Recording) -> Double? {
+        let stamp = (try? FileManager.default.attributesOfItem(
+            atPath: recording.transcriptURL.path)[.modificationDate]) as? Date
+        densityLock.lock()
+        if let hit = densityCache[recording.id], hit.0 == stamp {
+            densityLock.unlock()
+            return hit.1
+        }
+        densityLock.unlock()
+        let value = density(of: recording)
+        densityLock.lock()
+        densityCache[recording.id] = (stamp, value)
+        densityLock.unlock()
+        return value
     }
 
     // MARK: - Catching the English-only model handed another language
@@ -128,7 +205,7 @@ enum SpokenLanguage {
     /// that reads nil as "fine" is making a claim this cannot support.
     static func density(of recording: Recording) -> Double? {
         guard let transcript = recording.storedTranscript,
-              !canReport(transcript.model) else { return nil }
+              isEnglishOnly(transcript.model) else { return nil }
         // Both tracks, because the transcript is the merge of both and a rate
         // over one of them would be measuring half the words against all the
         // audio, or the reverse.

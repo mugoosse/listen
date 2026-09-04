@@ -152,7 +152,15 @@ enum TranscriptEditor {
                 }
                 return true
             }) else { return false }
-            VoiceBank.remove(speaker, in: recording)
+            // Pooled into the target rather than deleted. Merging says these two
+            // clusters are one person, so the source's print is evidence about
+            // the target's voice and throwing it away loses exactly the
+            // recording where the diarizer split somebody in two, which is the
+            // case merge exists for. `VoiceBank.rename` already keeps whichever
+            // print was built from more speech when a name collides, so this
+            // goes through it and inherits that rule instead of writing a
+            // second one.
+            VoiceBank.rename(speaker, to: target, in: recording)
             return true
 
         case .retext(let index, let was, let text):

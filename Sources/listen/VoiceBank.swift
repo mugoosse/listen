@@ -344,6 +344,116 @@ enum VoiceBank {
         write(bank, to: recording)
     }
 
+    // MARK: - Repairing a bank that lost track of a name
+
+    /// A voiceprint sitting under a label the transcript no longer uses, and
+    /// the person in that transcript who has no print at all.
+    struct Repair {
+        var recordingID: String
+        var title: String
+        /// The name in the transcript, which has nothing in the bank.
+        var name: String
+        /// The key holding the print, which is in no transcript.
+        var key: String
+        /// Cosine against that person's centroid built from other recordings,
+        /// or nil when they have no print anywhere else to check against.
+        var similarity: Float?
+        var why: String
+    }
+
+    /// Every voiceprint this library has lost the name of.
+    ///
+    /// **The damage is invisible and it degrades the feature people notice.**
+    /// A person named in a transcript whose print is filed under `A` is absent
+    /// from the bank, so they are never suggested in any later recording. That
+    /// does not read as a bug: it reads as the voice matching being mediocre,
+    /// which is not something anybody reports. Measured on a real 60-recording
+    /// library: 27 recordings affected and 10 people missing entirely.
+    ///
+    /// Two shapes, both conservative, and a third case deliberately left alone.
+    ///
+    /// 1. **A longer name form.** The transcript says `Ann` and the bank says
+    ///    `Ann Jacobs`, which is a person auto-named from a contact and then
+    ///    shortened by hand. One name is a prefix of the other, so there is
+    ///    nothing to guess.
+    /// 2. **A single leftover cluster.** Exactly one named speaker with no
+    ///    print and exactly one orphan key. Verified against the person's own
+    ///    centroid from other recordings when they have one, and refused below
+    ///    `matchThreshold` however alone the candidate is: a count of one is
+    ///    not evidence, and re-filing somebody else's voice under a name is
+    ///    worse than leaving the name without a voice.
+    ///
+    /// Anything with more than one candidate on either side is skipped. The
+    /// mapping from cluster to person is genuinely gone there, and a guess
+    /// would poison the bank in the direction that is hardest to notice.
+    static func repairs(in library: [Recording] = Recording.all()) -> [Repair] {
+        var out: [Repair] = []
+        for recording in library {
+            let bank = recording.voiceprints
+            guard !bank.isEmpty else { continue }
+            let speakers = Set(recording.speakers)
+
+            let orphans = bank.keys.filter {
+                !speakers.contains($0) && $0 != Pipeline.userLabel
+                    // A namespaced key belongs to a track rather than a person
+                    // (`Merge.namespaced`), and a cluster the merge dropped is
+                    // not a name anybody lost.
+                    && !$0.contains(":")
+            }
+            let unbanked = speakers.filter {
+                !isPlaceholder($0) && $0 != Pipeline.userLabel && bank[$0] == nil
+            }
+            guard !orphans.isEmpty, !unbanked.isEmpty else { continue }
+
+            for name in unbanked.sorted() {
+                // Shape 1: the same person under a fuller or shorter name.
+                let byName = orphans.filter {
+                    $0.hasPrefix(name + " ") || name.hasPrefix($0 + " ")
+                }
+                var key: String?
+                var why = ""
+                if byName.count == 1 {
+                    key = byName[0]
+                    why = "the same name, written in full"
+                } else if unbanked.count == 1 && orphans.count == 1 {
+                    key = orphans[0]
+                    why = "the only voice in this recording nobody is named for"
+                }
+                guard let key, let print = bank[key] else { continue }
+
+                // Checked against the rest of the library wherever that is
+                // possible. `centroid` pools every print filed under the name,
+                // so this asks "does the voice in this key sound like the
+                // person the transcript says was here".
+                var score: Float?
+                let elsewhere = named(excluding: recording)
+                    .filter { $0.0 == name }
+                    .map { unit($0.1.embedding) }
+                if !elsewhere.isEmpty {
+                    score = cosine(print.embedding, centroid(of: elsewhere))
+                    guard let s = score, s >= matchThreshold else { continue }
+                }
+                out.append(Repair(recordingID: recording.id,
+                                  title: recording.displayTitle,
+                                  name: name, key: key, similarity: score, why: why))
+            }
+        }
+        return out
+    }
+
+    /// Move one lost print back under the name the transcript uses.
+    ///
+    /// Through `rename`, so it inherits the collision rule and the clearing of
+    /// the `auto` flag rather than writing a second copy of either.
+    @discardableResult
+    static func apply(_ repair: Repair) -> Bool {
+        guard let recording = Recording.find(repair.recordingID),
+              recording.voiceprints[repair.key] != nil,
+              recording.voiceprints[repair.name] == nil else { return false }
+        rename(repair.key, to: repair.name, in: recording)
+        return Recording.find(repair.recordingID)?.voiceprints[repair.name] != nil
+    }
+
     // MARK: - Writing
 
     /// Move a voiceprint to its new name, keeping the bank aligned with the
@@ -351,7 +461,29 @@ enum VoiceBank {
     /// transcript says "Anna", and the next recording gets no suggestion.
     static func rename(_ speaker: String, to name: String, in recording: Recording) {
         var bank = recording.voiceprints
-        guard var moving = bank.removeValue(forKey: speaker) else { return }
+        guard var moving = bank.removeValue(forKey: speaker) else {
+            // **Said out loud, because this branch is how a voice goes missing
+            // without anybody noticing.** There is nothing wrong with it: a
+            // cluster the diarizer produced no embedding for has no print to
+            // move, and the rename of the transcript still stands. What is
+            // wrong is that it is indistinguishable from a rename that carried
+            // the print, and the result is a person who is named in the
+            // transcript and absent from the bank, so they are never suggested
+            // again in any later recording.
+            //
+            // Measured on a real library before this line existed: 27 of 60
+            // recordings held a print under a label the transcript no longer
+            // used, and 10 people were missing from the bank entirely. Whether
+            // this branch is how they got there was never provable after the
+            // fact, which is the whole reason it now leaves a trace.
+            // `listen voices --repair` is the other half.
+            if !bank.isEmpty {
+                log("no voiceprint to move for \(speaker) in \(recording.id): "
+                    + "renamed to \(name) in the transcript only. "
+                    + "The bank holds \(bank.keys.sorted().joined(separator: ", "))")
+            }
+            return
+        }
         // A human has touched this speaker, so whatever the bank decided about
         // it earlier is now somebody's decision and counts as evidence again.
         // This is the only route back: nothing else clears the flag, which is

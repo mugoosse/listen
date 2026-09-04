@@ -826,20 +826,26 @@ actor Pipeline {
         try enc.encode(transcript).write(to: recording.transcriptURL, options: .atomic)
         try enc.encode(turns).write(to: recording.turnsURL, options: .atomic)
 
-        if !embeddings.isEmpty {
-            // One embedding per speaker per recording, stored next to the audio.
-            // There is deliberately no separate database: the set of sidecar
-            // files is the voice bank, so deleting a recording cannot strand an
-            // entry in it.
-            let bank = embeddings.mapValues { vector in
-                Voiceprint(embedding: vector, speech: 0)
-            }
-            var withSpeech = bank
-            for (label, seconds) in speech {
-                withSpeech[label]?.speech = seconds
-            }
-            try enc.encode(withSpeech).write(to: recording.embeddingsURL, options: .atomic)
+        // **Cleared rather than left behind when a run produces none.** The
+        // guard used to skip the write entirely, which keeps the *previous*
+        // run's voiceprints on disk under labels that came from a different
+        // pass: the transcript says one thing and the bank another, and the
+        // stale entries go on being offered as suggestions in later
+        // recordings. A run that identified nobody has to say so.
+        guard !embeddings.isEmpty else {
+            try? FileManager.default.removeItem(at: recording.embeddingsURL)
+            return
         }
+
+        // One embedding per speaker per recording, stored next to the audio.
+        // There is deliberately no separate database: the set of sidecar files
+        // is the voice bank, so deleting a recording cannot strand an entry in
+        // it.
+        var withSpeech = embeddings.mapValues { Voiceprint(embedding: $0, speech: 0) }
+        for (label, seconds) in speech {
+            withSpeech[label]?.speech = seconds
+        }
+        try enc.encode(withSpeech).write(to: recording.embeddingsURL, options: .atomic)
     }
 
     /// Run the user's dictionary over every segment, and report what fired.

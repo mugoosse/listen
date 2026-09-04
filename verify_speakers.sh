@@ -59,6 +59,10 @@ check() {  # <what> <expected> <actual>
   else fail=$((fail+1)); printf '  FAIL  %s\n        want %s\n        got  %s\n' "$1" "$2" "$3"; fi
 }
 
+# For the assertions whose answer is a shape rather than a value.
+ok()  { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
+
 # Every speaker in the transcript with how many turns they hold, as one line.
 tally() {  # <id>
   python3 -c "
@@ -298,6 +302,61 @@ print(sum(1 for s in d['segments'] if s['speaker'] == 'Nick'))")" \
                                    "$(segments_of $MEETING Nick)"
 "$BIN" edit $MEETING --delete "$text" >/dev/null 2>&1
 check "deleting it again finds nothing" "$((was - 1))" "$(segments_of $MEETING Me)"
+
+echo
+echo "== a voiceprint follows the name, and can be put back when it did not =="
+# The failure this fences off is invisible: a speaker renamed away from the
+# cluster holding their voice is absent from the bank, so they are never
+# suggested in any later recording. That reads as the voice matching being
+# mediocre rather than as a bug, which is why nobody reports it. Measured on a
+# real library before `--repair` existed: 27 of 60 recordings affected and 10
+# people missing from the bank entirely.
+#
+# On $WORKSHOP rather than $MEETING. The long meeting holds four named speakers
+# and one stray print, which is exactly the ambiguity the repair refuses to
+# guess at, so it is the wrong fixture for the happy path and a good reminder
+# that the refusal is deliberate.
+
+bank_keys() {  # <id>
+    python3 -c "
+import json
+print(','.join(sorted(json.load(open('$LISTEN_LIBRARY/recordings/$1/embeddings.json')).keys())))"
+}
+
+"$BIN" label $WORKSHOP Nick $NEW >/dev/null 2>&1
+case "$(bank_keys $WORKSHOP)" in
+    *$NEW*) ok "renaming moves the voiceprint to the new name" ;;
+    *) bad "renaming left the print behind: $(bank_keys $WORKSHOP)" ;;
+esac
+
+# Break it the way the real library was broken: the print left under a cluster
+# label the transcript no longer uses.
+python3 - <<PY
+import json
+p = "$LISTEN_LIBRARY/recordings/$WORKSHOP/embeddings.json"
+b = json.load(open(p))
+b["ZZDead"] = b.pop("$NEW")
+json.dump(b, open(p, "w"))
+PY
+check "the repair finds a print filed under a dead cluster" "1" \
+      "$("$BIN" voices --repair 2>/dev/null | grep -c "ZZDead  ->  $NEW")"
+case "$(bank_keys $WORKSHOP)" in
+    *$NEW*) bad "a preview changed the bank: $(bank_keys $WORKSHOP)" ;;
+    *) ok "a preview changes nothing" ;;
+esac
+
+# The long meeting's four unnamed voices and one stray print stay untouched.
+check "an ambiguous recording is refused, not guessed at" "0" \
+      "$("$BIN" voices --repair 2>/dev/null | grep -c "$MEETING")"
+
+"$BIN" voices --repair --apply >/dev/null 2>&1
+case "$(bank_keys $WORKSHOP)" in
+    *$NEW*) ok "--apply files it back under the transcript's name" ;;
+    *) bad "--apply did not file it back: $(bank_keys $WORKSHOP)" ;;
+esac
+check "a second run finds nothing left to do" "0" \
+      "$("$BIN" voices --repair 2>/dev/null | grep -c "ZZDead")"
+"$BIN" label $WORKSHOP $NEW Nick >/dev/null 2>&1
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

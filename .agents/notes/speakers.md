@@ -1362,3 +1362,111 @@ file: a cache that never expired would be a to-do list that does not go down as
 the work is done, which is worse than no list. Behind an `NSLock`, which is the
 rule `MeetingCalendar` sets and for the same reason: the sidebar asks on the main
 thread and the MCP server asks through `RecordingFilter` on another.
+
+## A renamed speaker can leave their voice behind, and nothing said so
+
+Reported as a question rather than a bug, which is exactly the shape of it: a
+meeting was re-transcribed, the title came back, and the speaker labels did not.
+"I would have thought the voice profiles would have been persisted and applied."
+
+They are, and they were. `VoiceBank.autoAssign` runs from
+`Recording.markTranscribed` after every run including a re-run, and on that
+recording it worked: the user's own voice was re-identified at +0.919 and named
+without being asked. The two people it failed on failed for two different
+reasons, and only one of them is a bug.
+
+**One of them was never recoverable.** Franco appears in no other recording, so
+his only voiceprint was the one that run had just overwritten, and
+`VoiceBank.named(excluding:)` deliberately skips the recording being named
+anyway. A voice that exists in exactly one transcript does not survive
+re-transcribing it. That is worth knowing before promising anybody otherwise.
+
+**The other is the bug.** Martijn is in a second recording, and there his
+voiceprint is filed under `A` while the transcript says `Martijn`. `named` skips
+placeholder keys, so **Martijn had never been in the bank at all**, and no
+amount of re-running would have found him.
+
+### The damage is invisible, which is why it had gone unreported
+
+Measured across the library: **27 of 60 recordings held a print under a label
+the transcript no longer used, and 10 people were missing from the bank
+entirely** (Ann, Chloe, Céline, Daniel, Dea, Eduard, Joris, Marcia, Martijn,
+Rita).
+
+Nobody reports this, because it does not present as a defect. It presents as the
+voice matching being mediocre: new recordings simply fail to suggest people the
+app should know. The one number that would have shown it, "how many named
+speakers have no voiceprint", was not printed anywhere.
+
+Two shapes, and the fix for each is different:
+
+- **A longer name form.** The transcript says `Ann`, the bank says `Ann Jacobs`:
+  a speaker auto-named from a contact, then shortened by hand. Since a person
+  *is* a name string here, those were two different people, which is why
+  `listen language` had been listing "Ann: Dutch x4" and "Ann Jacobs: Dutch x1"
+  as separate rows.
+- **A leftover cluster.** The transcript says `Marcia`, the bank says `A`. The
+  diarizer split one person across two clusters; the one carrying the text had
+  no embedding, and the one carrying the embedding got no text. Confirmed by
+  scoring the orphan against the person's own centroid elsewhere: +0.786 and
+  +0.778, both above the certain threshold, so the leftover print really is
+  theirs.
+
+### What could not be established
+
+**The rename path is correct and has been since v0.1.0.** `VoiceBank.rename` was
+wired into `TranscriptEditor` in the first library commit, every rename route
+goes through it, and a fresh transcribe-then-rename on the current build moves
+the print correctly. The orphan state could not be reproduced. It happened as
+recently as the day this was written, on a shipped build, so it is not purely
+historical, and the cause is still open.
+
+What that produced instead is a trace. `VoiceBank.rename` returns silently when
+there is no print under the old label, which is the correct thing to do and
+indistinguishable from having moved one. It now logs, naming the recording and
+what the bank does hold, so the next occurrence leaves evidence rather than a
+person quietly missing from the bank.
+
+### Two neighbouring bugs, found while looking
+
+Both real, both fixed, neither the cause:
+
+1. **Merging discarded a voiceprint.** `.merge` moved the segments and then
+   called `VoiceBank.remove` on the source, so folding two clusters into one
+   person threw away the evidence from one of them. Exactly backwards: merging
+   is somebody saying these two voices are one person, which makes the source's
+   print evidence about the target. It goes through `rename` now and inherits
+   the existing collision rule, keeping whichever print was built from more
+   speech.
+2. **A run that identified nobody left the previous run's bank on disk.**
+   `Pipeline.write` skipped writing embeddings when the new set was empty, so a
+   re-transcribe whose diarization produced nothing kept prints keyed to labels
+   from a different pass, and went on offering them as suggestions. It now
+   clears the file instead.
+
+### `listen voices --repair`
+
+Prints, and changes nothing without `--apply`, the shape `calendar backfill`
+already uses. It rewrites the one file in a recording that cannot be
+regenerated: audio can be transcribed again, a voiceprint whose cluster has been
+renamed away can only be recovered by a human naming the speaker from memory.
+
+Two rules, and one deliberate refusal:
+
+1. A name that is a prefix of the orphan key, or the reverse. Nothing to guess.
+2. Exactly one named speaker with no print and exactly one orphan key, **checked
+   against that person's centroid from other recordings whenever they have one
+   and refused below `matchThreshold`**. Being alone is not evidence, and
+   filing somebody else's voice under a name is worse than a name with no voice.
+3. Anything with more than one candidate on either side is skipped. The long
+   workshop recording in `verify_speakers.sh` holds four named speakers and one
+   stray print, and the mapping there is genuinely gone.
+
+Measured on the real library: 19 repairs across 17 recordings, returning those
+10 people to the bank, idempotent on a second run.
+
+**It does not undo the loss in the recording that prompted it**, and that is
+worth stating plainly. Franco has no print anywhere to file. Martijn's cluster
+in that recording produced no embedding at all, so there is nothing to move
+there either. The repair puts him back in the bank for every *future* recording,
+which is the part that was silently broken.

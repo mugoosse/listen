@@ -364,10 +364,24 @@ The evidence was in the shape of the data all along and nobody had put the two
 halves together: nine Mac installs reporting, one iPhone event ever, on a
 product whose iPhone half is the part people carry.
 
-The signal that still works is the provisioning profile. Xcode embeds
-`embedded.mobileprovision` in development and ad-hoc builds; an App Store build
-has none, and a TestFlight build **is** an App Store build. The receipt is kept
-as a second opinion so a device that does write one is still recognised.
+**The first replacement was wrong, and the shipped IPA said so.** It tested for
+the profile being *absent*, on the received wisdom that an App Store build
+carries none. `build/export/Listen.ipa` is build 403, the build every tester
+has, and it carries one: the check fell straight through to the same receipt
+test and would have changed nothing at all. One `unzip` would have saved the
+commit, and did not happen because the reasoning felt solid.
+
+What separates them is the profile's **contents**, read off both real artifacts:
+
+    iOS Team Store Provisioning Profile (build 403)
+        ProvisionedDevices absent,     get-task-allow false
+    iOS Team Provisioning Profile: eu.jacarandalabs.listen.dev
+        ProvisionedDevices present (4), get-task-allow true
+
+A development or ad-hoc profile lists the devices it is good for; a TestFlight
+or App Store one cannot, because it is for everybody. An App Store *download*
+has no profile at all, since Apple strips it, so a missing profile is a third
+distribution case rather than a fourth development one.
 
 **The simulator has no profile either**, and would therefore have read as a
 distribution install and pointed every e2e script at the real project. That is
@@ -383,4 +397,14 @@ Two lessons worth more than the fix:
   `listen telemetry` to run.
 - **Read the build list before believing a population.** "One iPhone event in
   thirty days" was treated as a fact about usage for a week. It was a fact about
-  a boolean.
+  a boolean. App Store Connect answers "which build do they have" in one API
+  call, and nothing in this repo records it.
+- **The elimination that made this certain**, before any of the artifacts were
+  opened: `PostHogSDK` subscribes to `didEnterBackground` and flushes
+  unconditionally, and that subscription is not gated on
+  `captureApplicationLifecycleEvents`, which Listen sets false. So had the SDK
+  ever started, the first backgrounding would have delivered everything queued.
+  Nothing arrived, so nothing was captured, so the SDK never started, so
+  `blocked` was true, and on a TestFlight build the only reachable cause is
+  `isDistributionBuild`. Worth keeping as a shape: when a thing sends nothing at
+  all, ask what would have had to be true for it to send *something*.

@@ -28,6 +28,24 @@ final class CloudSyncHost {
     private var again = false
     private var subscribed = false
     private var passID: UUID?
+    /// When the pass now running started, and the task running it.
+    ///
+    /// Both exist for the watchdog. Every CloudKit call is bounded now, so the
+    /// ordinary stall ends itself, but a completion block that never fires at
+    /// all is not a timeout and nothing below this layer can end it. That is
+    /// what parked sync until the app was relaunched.
+    private var passStarted: Date?
+    private var passTask: Task<CloudReport, Never>?
+
+    /// The ceiling on one pass, comfortably above the store's own asset bound
+    /// so a slow transfer is never mistaken for a stuck one.
+    ///
+    /// `CloudKitStore.Bound.asset` is ten minutes for a single asset and a pass
+    /// moves at most three masters plus an ingest, so a pass that is genuinely
+    /// working can legitimately run for a while. Twenty minutes is past
+    /// anything healthy and far short of the seven days a hung call used to
+    /// cost. Being wrong costs a cancelled pass and a retry two minutes later.
+    private static let passCeiling: TimeInterval = 20 * 60
 
     /// What the last pass did, for the Devices pane to show. A sync that
     /// reports nothing is indistinguishable from one that silently failed.
@@ -89,7 +107,10 @@ final class CloudSyncHost {
         // See `Backups`.
         Backups.runIfDue()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            Task { @MainActor in await CloudSyncHost.shared.syncNow() }
+            Task { @MainActor in
+                CloudSyncHost.shared.endAStuckPass()
+                await CloudSyncHost.shared.syncNow()
+            }
         }
         Task { await syncNow() }
         trace("cloud sync: on, every \(Int(interval))s")
@@ -117,6 +138,47 @@ final class CloudSyncHost {
             onActivity?(id)
         }
         trace("cloud sync: off")
+    }
+
+    /// Cancel a pass that has been going far too long, so the next one can run.
+    ///
+    /// **This is what stopped "quit the app and reopen it and they show up".**
+    /// A pass is guarded by one flag, and a CloudKit call that never came back
+    /// held that flag for as long as it liked: nothing set a timeout, and the
+    /// default for an asset is seven days. Every later pass was dropped into
+    /// `again` and forgotten, so a recording made on the phone did not appear
+    /// until the process was restarted and the flag went with it.
+    ///
+    /// Bounding the operations came first and fixes the ordinary case. This is
+    /// for the case a timeout cannot reach: a completion block that never fires
+    /// is not a slow transfer, and nothing below this layer can end one.
+    ///
+    /// Cancelled rather than merely disowned. The flag could be cleared on its
+    /// own and the generation guard in `syncNow` would keep the next pass safe,
+    /// but the abandoned one would still be inside a core function holding a
+    /// snapshot of `state.base` taken before it stalled, and it writes that
+    /// snapshot back when it finally unwinds. The later that happens, the more
+    /// of a newer pass's work it overwrites, which is the shape of
+    /// "A pass never re-offers an unchanged record". Cancelling makes it unwind
+    /// now, while its snapshot is still nearly current.
+    func endAStuckPass() {
+        guard running, let started = passStarted,
+              Date().timeIntervalSince(started) > CloudSyncHost.passCeiling else { return }
+        trace("cloud sync: a pass has been running for "
+              + "\(Int(Date().timeIntervalSince(started)))s, cancelling it")
+        passTask?.cancel()
+        // Disowned as well as cancelled, because cancellation is a request. If
+        // the stalled call really cannot be ended, waiting for it to notice is
+        // the wedge again with an extra step. Clearing `passID` is what makes
+        // this safe: the abandoned pass's `defer` only acts when the generation
+        // still matches, so when it eventually unwinds it clears nothing and
+        // cannot disturb whichever pass is running by then.
+        running = false
+        passID = nil
+        progress = nil
+        passStarted = nil
+        passTask = nil
+        Telemetry.failure(.sync, code: "sync.pass_timeout", retryable: true)
     }
 
     private var soon: Timer?
@@ -168,8 +230,50 @@ final class CloudSyncHost {
         let pass = UUID()
         passID = pass
         progress = "Starting"
-        defer { running = false; passID = nil; progress = nil; lastRun = Date() }
+        // **Guarded by the generation, because this pass may not be the one
+        // still running when it ends.** No CloudKit operation in the store sets
+        // a timeout, and the default for an asset is seven days, so a stalled
+        // transfer can hold a pass open long past the point where something
+        // else has given up on it and started another. Ungated, this line would
+        // then clear that pass's flag and null its `passID` out from under it,
+        // turning one stall into two. `lastRun` is outside: a pass that
+        // finished, however late, really did run.
+        defer {
+            if passID == pass {
+                running = false; passID = nil; progress = nil
+                passStarted = nil; passTask = nil
+            }
+            lastRun = Date()
+        }
 
+        passStarted = Date()
+        // **In a task of its own, so something can end it.** Every store call
+        // is bounded now, but a completion block that never fires is not a
+        // timeout and nothing below this layer can end one. The watchdog
+        // cancels this handle, the store's operations are cancellation-aware,
+        // and the core's loops check `Task.isCancelled` between records, which
+        // is what makes the cancellation arrive rather than being swallowed by
+        // a per-record catch. Cancelling rather than merely clearing the flag
+        // matters: an abandoned step still runs its `defer { state.base = base }`
+        // eventually, and the later it runs the more of a newer pass's work it
+        // writes over.
+        let task = Task { @MainActor in await self.performPass(pass) }
+        passTask = task
+        let report = await task.value
+
+        // Whatever arrived mid-pass, now. Cleared before running so a pass that
+        // is itself interrupted asks once more rather than looping.
+        if again {
+            again = false
+            running = false
+            return await syncNow()
+        }
+        return report
+    }
+
+    /// The pass itself, with no reentrancy or lifecycle of its own: `syncNow`
+    /// owns those and this owns the work.
+    private func performPass(_ pass: UUID) async -> CloudReport {
         let library = ListenKit.Library.mac()
 
         // The key, made here when this Mac is the first device to sync. This
@@ -337,13 +441,6 @@ final class CloudSyncHost {
             ActivityLog.append("sync_deleted", ["count": report.deletedLocally])
         }
 
-        // Whatever arrived mid-pass, now. Cleared before running so a pass that
-        // is itself interrupted asks once more rather than looping.
-        if again {
-            again = false
-            running = false
-            return await syncNow()
-        }
         return report
     }
 

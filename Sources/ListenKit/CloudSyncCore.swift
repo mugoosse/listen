@@ -352,6 +352,10 @@ public struct CloudSyncCore: Sendable {
         guard !owing.isEmpty else { return }
         if owing.count > 1 { progress?("Fetching \(owing.count) transcripts") }
         for (index, id) in owing.enumerated() {
+            // A cancelled pass has to stop here, or the per-record catch
+            // below swallows the cancellation and the loop walks the rest of
+            // the library making failed calls. See `CloudSyncHost`'s watchdog.
+            if Task.isCancelled { break }
             guard FileManager.default.fileExists(atPath: library.folder(for: id).path) else {
                 base[owed: id] = false
                 continue
@@ -648,6 +652,7 @@ public struct CloudSyncCore: Sendable {
             base[owed: recording.id] = false
             base[audioOn: recording.id] = nil
             base[master: recording.id] = nil
+            base[masterMiss: recording.id] = nil
             base[pinned: recording.id] = false
             return true
         }
@@ -801,6 +806,10 @@ public struct CloudSyncCore: Sendable {
         guard !owed.isEmpty else { return }
 
         for (index, recording) in owed.enumerated() {
+            // A cancelled pass has to stop here, or the per-record catch
+            // below swallows the cancellation and the loop walks the rest of
+            // the library making failed calls. See `CloudSyncHost`'s watchdog.
+            if Task.isCancelled { break }
             progress?("Preparing audio \(index + 1) of \(owed.count)")
             do {
                 guard let built = try AudioMaster.make(micURL: recording.micURL,
@@ -859,17 +868,86 @@ public struct CloudSyncCore: Sendable {
         defer { state.base = base }
 
         var holders: Set<String> = []
+        var holderNames: [String: String] = [:]
         for blob in devices where blob.id != device && blob.isLive(now) {
-            holders.formUnion(blob.holdsAudio ?? [])
+            for id in blob.holdsAudio ?? [] {
+                holders.insert(id)
+                if holderNames[id] == nil { holderNames[id] = blob.name }
+            }
         }
         guard !holders.isEmpty else { return }
 
-        let wanted = library.all().filter { !$0.hasAudio && holders.contains($0.id) }
+        // **Both filters run before the batch, not after.** `library.all()` is
+        // newest first and the batch is three, so filtering a `prefix(3)`
+        // leaves the three newest holding the slots and skipping, which is the
+        // starvation this is here to end rather than a smaller version of it.
+        let wanted = library.all()
+            .filter { !$0.hasAudio && holders.contains($0.id) }
+            .filter { canHaveMaster($0, base: base) }
+            .filter { !missedRecently($0.id, base: base, now: now) }
             .prefix(CloudSyncCore.masterBatch)
         for (index, recording) in wanted.enumerated() {
+            // A cancelled pass has to stop here, or the per-record catch
+            // below swallows the cancellation and the loop walks the rest of
+            // the library making failed calls. See `CloudSyncHost`'s watchdog.
+            if Task.isCancelled { break }
             progress?("Fetching audio \(index + 1) of \(wanted.count)")
-            await receiveMaster(recording, base: &base, into: &report)
+            switch await receiveMaster(recording, base: &base, into: &report) {
+            case .got:
+                base[masterMiss: recording.id] = nil
+            case .absent:
+                base[masterMiss: recording.id] = Metadata.stamp(now)
+                // Truthful, because `canHaveMaster` has already taken out every
+                // recording nobody is going to publish. What is left is a Mac
+                // that holds the tracks and has not got to this one yet, and it
+                // publishes three a pass.
+                reportActivity(recording.id, .waitingForMac,
+                               detail: holderNames[recording.id].map {
+                                   "Waiting for \($0) to send the audio"
+                               } ?? "Waiting for another device to send the audio")
+            case .failed:
+                break
+            }
         }
+    }
+
+    /// Whether a master could exist for this recording at all.
+    ///
+    /// Only a device holding the raw tracks publishes one, and a phone never
+    /// does: `listen-ios` runs its pass without `pushMasters` on purpose, so
+    /// that a conversation is not sent up twice. But the phone's heartbeat
+    /// still reports the recording in `holdsAudio`, because that field is about
+    /// bytes on its disk and the reclaim invariant depends on it staying that
+    /// way. Read together, those two facts asked the container, every pass, for
+    /// a file nothing was ever going to write.
+    ///
+    /// A nil `audioOn` means the container has never named a holder, which for
+    /// a phone recording means no Mac has ever had the tracks. Gated on
+    /// `source` as well, because `audioOn` cannot tell "asked, nobody holds it"
+    /// from "never asked", and that keeps this to the recordings the phone
+    /// made. `fetchMaster` is unaffected: a tap is an instruction and asks
+    /// whatever the policy believes.
+    private func canHaveMaster(_ recording: Recording, base: SyncState) -> Bool {
+        guard recording.metadata.source == "iphone" else { return true }
+        return base[audioOn: recording.id] != nil
+    }
+
+    /// Ten minutes, against a two-minute poll and three masters a pass.
+    ///
+    /// A second Mac meeting a forty-recording library legitimately misses most
+    /// of them at first: the publisher clears three a pass, so it needs about
+    /// fourteen passes, which is twenty-eight minutes. Ten re-asks roughly three
+    /// times across that window and keeps the design's "whole library within the
+    /// hour"; thirty would turn that hour into a day. Shorter than `offerRecheck`
+    /// because a master has a publisher working through a queue, where a
+    /// transfer has one that has already finished.
+    static let masterRetry: TimeInterval = 10 * 60
+
+    private func missedRecently(_ id: String, base: SyncState, now: Date) -> Bool {
+        guard let stamp = base[masterMiss: id],
+              let when = Metadata.parser.date(from: stamp) else { return false }
+        let age = now.timeIntervalSince(when)
+        return age >= 0 && age < CloudSyncCore.masterRetry
     }
 
     /// Fetch one recording's audio because somebody asked for it, and keep it.
@@ -894,9 +972,25 @@ public struct CloudSyncCore: Sendable {
             base[pinned: id] = true
             return true
         }
-        let received = await receiveMaster(recording, base: &base, into: &report)
-        if received { base[pinned: id] = true }
-        return received
+        // A tap is an instruction, so it asks whatever the policy believes: no
+        // `canHaveMaster` guard and no backoff window. It does clear the miss
+        // stamp on success, so the policy path stops skipping a recording this
+        // proved is there.
+        switch await receiveMaster(recording, base: &base, into: &report) {
+        case .got:
+            base[pinned: id] = true
+            base[masterMiss: id] = nil
+            return true
+        case .absent:
+            // Overwrites the `.downloadingAudio` the attempt itself reported,
+            // which would otherwise sit at 0% under a recording nothing is
+            // sending.
+            reportActivity(id, .waitingForMac,
+                           detail: "No device has sent this recording's audio yet")
+            return false
+        case .failed:
+            return false
+        }
     }
 
     /// Let go of one recording's audio on this device, because somebody asked.
@@ -924,31 +1018,46 @@ public struct CloudSyncCore: Sendable {
         return true
     }
 
+    /// What one attempt at a master came back with.
+    ///
+    /// `absent` and `failed` are both "no audio arrived" and they are not the
+    /// same event. Absent repeats deterministically until some other device
+    /// publishes, so it is the one worth remembering; a thrown error is usually
+    /// the network, which would otherwise stamp a backoff on every recording it
+    /// touched and leave the whole library waiting after the connection came
+    /// back. See `pullMasters`.
+    enum MasterFetch { case got, absent, failed }
+
     /// Take one master down and write it beside the recording. Shared by the
     /// policy path and the asked-for path so the two cannot verify differently.
-    @discardableResult
     private func receiveMaster(_ recording: Recording, base: inout SyncState,
-                               into report: inout CloudReport) async -> Bool {
+                               into report: inout CloudReport) async -> MasterFetch {
         do {
             let name = CloudRecords.masterName(recording.id, key: key)
             // Absent is ordinary: the device that holds the tracks has not
             // published this one yet, and it publishes three a pass.
+            //
+            // **Ordinary is not the same as worth reporting.** This said
+            // `.retrying`, "Audio is not available in iCloud yet", and it was
+            // the sentence a user read for a day under a recording whose audio
+            // had never left her phone. It blames the container for a file
+            // nothing was ever going to put there. The caller decides what to
+            // say now, because only the caller knows whether anybody is
+            // expected to publish one.
             reportActivity(recording.id, .downloadingAudio, fraction: 0)
             guard let record = try await store.fetch(name, in: .masters, progress: { value in
                 activity?(CloudActivity(recordingID: recording.id,
                                         stage: .downloadingAudio,
                                         fraction: value))
             }) else {
-                reportActivity(recording.id, .retrying,
-                               detail: "Audio is not available in iCloud yet")
-                return false
+                return .absent
             }
             let blob = try CloudRecords.openMaster(record, key: key)
             guard blob.id == recording.id,
                   let audio = try CloudRecords.openMasterAudio(record, blob, key: key)
             else {
                 report.errors.append("audio \(recording.id): the copy did not verify")
-                return false
+                return .failed
             }
             try audio.write(to: AudioMaster.url(in: recording.folder, blob.layout),
                             options: .atomic)
@@ -956,11 +1065,11 @@ public struct CloudSyncCore: Sendable {
             report.pulledMasters += 1
             reportActivity(recording.id, recording.hasTranscript ? .ready : .queued,
                            fraction: 1)
-            return true
+            return .got
         } catch {
             report.note(error, about: "audio \(recording.id)")
             reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
-            return false
+            return .failed
         }
     }
 
@@ -1030,6 +1139,10 @@ public struct CloudSyncCore: Sendable {
         let mine = stamps.filter { base[sent: $0.0.id] != $0.1 && !base[owed: $0.0.id] }
         if mine.count > 4 { progress?("Checking \(mine.count) recordings") }
         for (index, pair) in mine.enumerated() {
+            // The longest loop in a pass, and the one a cancellation most needs
+            // to be able to end: it walks the whole library and every iteration
+            // can be a round trip. See `CloudSyncHost`'s watchdog.
+            if Task.isCancelled { break }
             let (recording, stamp) = pair
             let storedState = recording.metadata.state.flatMap(Metadata.State.init(rawValue:))
             let finishedStates: Set<Metadata.State> = [.done, .needs_labelling, .failed]
@@ -1701,6 +1814,26 @@ public struct CloudSyncCore: Sendable {
                 reportActivity(recording.id, .waitingForMac)
                 return
             }
+        case let marker? where marker.hasPrefix(CloudSyncCore.inflightPrefix):
+            // **Handed to the system and not yet acknowledged.** The upload is
+            // long-lived, so it continues after this app is suspended or killed
+            // and finishes without anything here watching. Without this marker
+            // the next launch would find no stamp, find no record in the
+            // container yet because the transfer is still going up, and enqueue
+            // a second copy of the same 86 MB. Then a third. Whichever landed
+            // first would win and the losers would come back as
+            // `serverRecordChanged`, which reaches the screen as "another device
+            // updated this first": a false sentence, on top of an unbounded
+            // queue of uploads over somebody's cellular connection.
+            let stamp = String(marker.dropFirst(CloudSyncCore.inflightPrefix.count))
+            if let when = Metadata.parser.date(from: stamp),
+               now.timeIntervalSince(when) < CloudSyncCore.inflightGrace {
+                reportActivity(recording.id, .uploadingAudio)
+                return
+            }
+            // Past the window the container is asked, which is the branch
+            // below: either the daemon finished and the record is there, or it
+            // did not and this offers again.
         default:
             // Nil, or the bare "1" earlier builds stamped: both mean "ask the
             // container", and the answer leaves a stamped offer either way.
@@ -1723,6 +1856,12 @@ public struct CloudSyncCore: Sendable {
             let metadataURL = recording.folder.appendingPathComponent("metadata.json")
             guard let metadata = try? Data(contentsOf: metadataURL) else { return }
             reportActivity(recording.id, .uploadingAudio, fraction: 0)
+            // **Written before the save and flushed, because the save may
+            // outlive the process.** This is the whole point of the marker: it
+            // has to be on disk by the time the upload starts, or a kill in the
+            // first second leaves no record that anything was ever sent.
+            base[sent: sentKey] = CloudSyncCore.inflightPrefix + Metadata.stamp(now)
+            state.base = base
             _ = try await store.save(try CloudRecords.transfer(
                 id: recording.id, from: device, metadata: metadata,
                 audio: audio, key: key), progress: { value in
@@ -1735,10 +1874,32 @@ public struct CloudSyncCore: Sendable {
             report.pushedRecordings += 1
             reportActivity(recording.id, .waitingForMac, fraction: 1)
         } catch {
+            // The in-flight marker goes with it. A save that threw in this
+            // process never reached the daemon, so there is nothing to wait
+            // out: leaving the marker would make the next pass sit on its
+            // hands for the whole grace period over an upload that is not
+            // happening.
+            base[sent: sentKey] = nil
+            state.base = base
             report.note(error, about: "upload \(recording.id)")
             reportActivity(recording.id, .retrying, detail: SyncTrouble.plain(error))
         }
     }
+
+    /// The marker written while an upload is with the system rather than with
+    /// this process. See the case that reads it in `upload`.
+    static let inflightPrefix = "inflight:"
+
+    /// How long a handed-over upload is believed before the container is asked
+    /// about it directly.
+    ///
+    /// Thirty minutes, from the size: a 45-minute memo is 86.6 MB at the
+    /// phone's 32 kB/s, and 86.6 MB over a poor but working 400 kbit link is
+    /// about 29 minutes. Past that, asking costs one fetch and answers the
+    /// question properly, which is the same shape as `offerRecheck` and for the
+    /// same reason. Being wrong in either direction is cheap: too short is one
+    /// extra fetch, too long is a delay before a failed upload is retried.
+    static let inflightGrace: TimeInterval = 30 * 60
 
     /// Ingest whatever is waiting, claiming each before spending anything on it.
     ///
@@ -1749,17 +1910,40 @@ public struct CloudSyncCore: Sendable {
     public func ingest(preferred: String?, window: TimeInterval = 300,
                        into report: inout CloudReport, now: Date = Date()) async {
         guard ingests else { return }
-        guard let changes = try? await store.changes(in: .transfer, since: nil) else { return }
+        // **Without the asset bodies**, which is what makes the comment above
+        // true rather than aspirational. `changes(in:since:)` defaults to
+        // bringing everything, so a pass that claimed nothing still pulled down
+        // every waiting transfer in full: an 86 MB memo re-downloaded every two
+        // minutes for as long as it sat there, on every Mac that was awake. The
+        // token stays nil on purpose, because `z4` is a pipe and a record this
+        // device declined to claim has to be offered again.
+        guard let changes = try? await store.changes(in: .transfer, since: nil,
+                                                     withAssets: false) else { return }
 
         for record in changes.changed {
+            // A cancelled pass has to stop here, or the per-record catch
+            // below swallows the cancellation and the loop walks the rest of
+            // the library making failed calls. See `CloudSyncHost`'s watchdog.
+            if Task.isCancelled { break }
             guard let claimed = try? await claim(record, preferred: preferred,
                                                  window: window, now: now), claimed
             else { continue }
             do {
                 let blob = try CloudRecords.openTransfer(record, key: key)
                 guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
-                reportActivity(blob.id, .downloadingAudio)
-                guard let sealed = record.assets["mic.wav"] else {
+                // Now, and only for the device that won. The fetch is also the
+                // first time this recording has a measured fraction to show:
+                // the bytes used to arrive inside the listing, where nothing
+                // was watching them.
+                reportActivity(blob.id, .downloadingAudio, fraction: 0)
+                guard let full = try await store.fetch(
+                    record.name, in: .transfer, progress: { value in
+                        activity?(CloudActivity(recordingID: blob.id,
+                                                stage: .downloadingAudio,
+                                                fraction: value))
+                    })
+                else { throw StoreError.unavailable("the transfer is no longer there") }
+                guard let sealed = full.assets["mic.wav"] else {
                     throw StoreError.unavailable("no audio on the transfer")
                 }
                 // Sealed exactly once, by `CloudRecords.transfer`. Sealing it

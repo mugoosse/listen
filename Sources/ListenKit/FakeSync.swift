@@ -1562,6 +1562,10 @@ public enum FakeSync {
         ok("the voiceprint zone, tombstones included, never reaches the phone")
 
         out += try await activitySeam(root: root)
+        out += try await phantomMasterSeam(root: root)
+        out += try await masterBackoffSeam(root: root)
+        out += try await assetlessIngestSeam(root: root)
+        out += try await inflightUploadSeam(root: root)
 
         return out
     }
@@ -1656,6 +1660,475 @@ public enum FakeSync {
         try check(seen.stages.last == .ready,
                   "the healed recording did not come back to ready")
         ok("the activity stream says syncing, then ready; a refusal says why and heals")
+
+        return out
+    }
+
+    /// A recorder for the activity stream, shared by the seams that assert on
+    /// what reached the screen.
+    ///
+    /// The callbacks are synchronous and cross-actor, so this is a locked box
+    /// rather than an actor: an actor would make `add` async and the core's
+    /// `activity` slot is not.
+    final class SeenActivity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var log: [(id: String, stage: CloudActivity.Stage, detail: String?)] = []
+        func add(_ activity: CloudActivity) {
+            lock.lock(); defer { lock.unlock() }
+            log.append((activity.recordingID, activity.stage, activity.detail))
+        }
+        func stages(_ id: String) -> [CloudActivity.Stage] {
+            lock.lock(); defer { lock.unlock() }
+            return log.filter { $0.id == id }.map(\.stage)
+        }
+        func details(_ id: String) -> [String] {
+            lock.lock(); defer { lock.unlock() }
+            return log.filter { $0.id == id }.compactMap(\.detail)
+        }
+    }
+
+    /// Ten seconds of a tone, as the WAV the recorders write.
+    private static func seedAudio(_ library: Library, id: String) throws {
+        let writer = try AudioFile.Writer(
+            url: library.folder(for: id).appendingPathComponent("mic.wav"))
+        var samples: [Int16] = []
+        for i in 0..<(AudioFile.sampleRate * 2) {
+            samples.append(Int16(3000 * sin(Double(i) * 440 * 2 * .pi
+                                            / Double(AudioFile.sampleRate))))
+        }
+        try writer.append(samples)
+        _ = try writer.close()
+    }
+
+    /// **The last field of an id is four hex digits**, and `Library.find`
+    /// silently returns nil for anything else while `Library.all` happily lists
+    /// it. A fixture id like `PH01` therefore passes every assertion made
+    /// through `all()` and fails only the ones made through `find`, which reads
+    /// as the code under test having done nothing. See `Metadata.isValidID`.
+    private static func phoneMetadata(_ id: String) -> String {
+        """
+        {"id":"\(id)","title":"Memo","source":"iphone","state":"pending",\
+        "duration":2,"recorded_at":"2026-08-30T09:00:00Z"}
+        """
+    }
+
+    /// A Mac must not ask iCloud for a master a phone was never going to
+    /// publish, and the recordings behind it must not starve.
+    ///
+    /// **The bug this is here to stop shipped, and cost a user a day.** The
+    /// phone's heartbeat reports every recording whose bytes are on its disk,
+    /// because that is what the reclaim invariant reads. `pullMasters` treated
+    /// that as "a master exists" and asked for one every pass, for ever, and
+    /// reported `.retrying` with "Audio is not available in iCloud yet" under a
+    /// recording whose audio had never left the phone. Two costs, and the
+    /// second is the worse one: a fetch per pass saying nothing, and a batch of
+    /// three filled by the newest recordings in the library, which are exactly
+    /// the un-ingested phone ones, so genuine masters behind them were never
+    /// reached at all.
+    private static func phantomMasterSeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let seen = SeenActivity()
+
+        // The Mac under test: keeps audio, so `pullMasters` applies to it.
+        let lib = try scratchLibrary(root.appendingPathComponent("phantom-mac"))
+        let mac = CloudSyncCore(library: lib, state: EngineState(library: lib),
+                                store: store, key: key, policy: .mac,
+                                device: "mac-phantom", ingests: true, keepAudio: true,
+                                activity: { seen.add($0) })
+
+        // A second Mac that really does hold tracks, and publishes a master
+        // from them. Its recording is **older** than the phone's, which is what
+        // puts it behind them in `library.all()` and is the whole starvation.
+        let publisherLib = try scratchLibrary(root.appendingPathComponent("phantom-pub"))
+        let publisher = CloudSyncCore(library: publisherLib,
+                                      state: EngineState(library: publisherLib),
+                                      store: store, key: key, policy: .mac,
+                                      device: "mac-publisher", ingests: true,
+                                      keepAudio: true)
+        let realID = "2026-08-29-090000-BEEF"
+        try seed(publisherLib, id: realID, metadata: """
+            {"id":"\(realID)","title":"Meeting","source":"mac","state":"done",\
+            "duration":2,"recorded_at":"2026-08-29T09:00:00Z"}
+            """, transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+        try seedAudio(publisherLib, id: realID)
+        var published = CloudReport()
+        await publisher.pushMasters(into: &published)
+        try check(published.pushedMasters == 1,
+                  "the publisher never published the master this seam needs")
+
+        // Three phone memos, newer than it, whose audio has never been
+        // ingested. `audioOn` is nil for each, which is the container saying no
+        // device has ever held the tracks.
+        let phoneIDs = ["2026-08-30-090000-0FA1",
+                        "2026-08-30-091000-0FA2",
+                        "2026-08-30-092000-0FA3"]
+        for id in phoneIDs {
+            try seed(lib, id: id, metadata: phoneMetadata(id), transcript: nil)
+        }
+        try seed(lib, id: realID, metadata: """
+            {"id":"\(realID)","title":"Meeting","source":"mac","state":"done",\
+            "duration":2,"recorded_at":"2026-08-29T09:00:00Z"}
+            """, transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+
+        let state = EngineState(library: lib)
+        for id in phoneIDs {
+            try check(state.base[audioOn: id] == nil,
+                      "the fixture already names a holder for \(id)")
+        }
+
+        // The roster the heartbeat would publish: a live phone holding all
+        // three memos, and the live publisher holding the meeting.
+        let now = Date()
+        let roster = [
+            CloudRecords.DeviceBlob(id: "phone-phantom", name: "iPhone", kind: "iPhone",
+                                    lastSeen: Metadata.stamp(now), appVersion: "test",
+                                    keepsAudio: true, holdsAudio: phoneIDs),
+            CloudRecords.DeviceBlob(id: "mac-publisher", name: "Studio", kind: "Mac",
+                                    lastSeen: Metadata.stamp(now), appVersion: "test",
+                                    keepsAudio: true, holdsAudio: [realID]),
+        ]
+
+        let before = await store.fetchCount
+        var pass = CloudReport()
+        await mac.pullMasters(roster, into: &pass, now: now)
+
+        // The meeting arrived, which it could not have done while three phantom
+        // recordings held every slot in a batch of three.
+        try check(pass.pulledMasters == 1,
+                  "the genuine master never arrived: \(pass.pulledMasters) pulled")
+        try check(lib.find(realID)?.hasAudio == true,
+                  "the recording behind the phone memos did not get its audio")
+        ok("a genuine master is not starved by newer phone recordings")
+
+        // And the phone's three cost nothing at all: one fetch happened, and it
+        // was the meeting's.
+        try check(await store.fetchCount == before + 1,
+                  "a pass asked the container \(await store.fetchCount - before) times "
+                  + "for \(CloudSyncCore.masterBatch) slots, so a phantom was asked about")
+        for id in phoneIDs {
+            try check(!seen.stages(id).contains(.retrying),
+                      "\(id) reported retrying for a master nothing publishes")
+            try check(lib.find(id)?.hasAudio == false,
+                      "\(id) somehow acquired audio")
+        }
+        ok("a phone recording nobody has ingested is never asked about, and never says retrying")
+
+        // Repeatedly, because the cost that mattered was per pass rather than
+        // once. Three more passes, no more fetches.
+        let settled = await store.fetchCount
+        for _ in 0..<3 {
+            var again = CloudReport()
+            await mac.pullMasters(roster, into: &again, now: now)
+        }
+        try check(await store.fetchCount == settled,
+                  "later passes spent \(await store.fetchCount - settled) fetches on "
+                  + "recordings that were already settled")
+        ok("and later passes spend nothing on them either")
+
+        return out
+    }
+
+    /// A master that is genuinely not published yet costs one fetch per window,
+    /// not one per pass, and the backoff is a policy that a tap ignores.
+    ///
+    /// Separate from the phantom above because the two look identical from the
+    /// container and are not the same event: here somebody really is going to
+    /// publish, and the answer is to ask less often rather than never.
+    private static func masterBackoffSeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let seen = SeenActivity()
+        let lib = try scratchLibrary(root.appendingPathComponent("backoff-mac"))
+        let mac = CloudSyncCore(library: lib, state: EngineState(library: lib),
+                                store: store, key: key, policy: .mac,
+                                device: "mac-backoff", ingests: true, keepAudio: true,
+                                activity: { seen.add($0) })
+
+        // A meeting another Mac holds the tracks for and has not published yet.
+        // It publishes three a pass, so this is the ordinary state of most of a
+        // library on a second Mac's first hour.
+        let id = "2026-08-29-100000-DEAD"
+        try seed(lib, id: id, metadata: """
+            {"id":"\(id)","title":"Meeting","source":"mac","state":"done",\
+            "duration":2,"recorded_at":"2026-08-29T10:00:00Z"}
+            """, transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+
+        let now = Date()
+        let roster = [CloudRecords.DeviceBlob(
+            id: "mac-slow", name: "Studio", kind: "Mac",
+            lastSeen: Metadata.stamp(now), appVersion: "test",
+            keepsAudio: true, holdsAudio: [id])]
+
+        let before = await store.fetchCount
+        var first = CloudReport()
+        await mac.pullMasters(roster, into: &first, now: now)
+        try check(await store.fetchCount == before + 1, "the first pass did not ask at all")
+        try check(first.errors.isEmpty, "an absent master was reported as an error")
+
+        // It says who it is waiting for, and it does not say "Retrying sync",
+        // which is the sentence that named the container for somebody else's
+        // unfinished work.
+        try check(seen.stages(id).contains(.waitingForMac),
+                  "an absent master said nothing about who is being waited for")
+        try check(!seen.stages(id).contains(.retrying),
+                  "an absent master still reports retrying")
+        try check(seen.details(id).contains { $0.contains("Studio") },
+                  "the wait did not name the device that has the audio")
+        ok("a master nobody has published yet names the device, not iCloud")
+
+        // Inside the window, the container is not asked again.
+        let asked = await store.fetchCount
+        var second = CloudReport()
+        await mac.pullMasters(roster, into: &second, now: now.addingTimeInterval(60))
+        try check(await store.fetchCount == asked,
+                  "a miss inside the window asked the container again")
+        ok("a miss costs one fetch per window rather than one per pass")
+
+        // **A tap is an instruction.** The Download audio button must work
+        // inside the window the policy is waiting out, or this backoff has
+        // reproduced the bug that `pin:` exists to prevent.
+        var tapped = CloudReport()
+        _ = await mac.fetchMaster(id, into: &tapped)
+        try check(await store.fetchCount == asked + 1,
+                  "asking for the audio by hand did nothing inside the backoff window")
+        ok("and a tap ignores it, because a tap is an instruction")
+
+        // Past the window, the policy asks again on its own.
+        let waited = await store.fetchCount
+        var third = CloudReport()
+        await mac.pullMasters(roster, into: &third,
+                              now: now.addingTimeInterval(CloudSyncCore.masterRetry + 60))
+        try check(await store.fetchCount == waited + 1,
+                  "the backoff never expired, so the audio would never arrive")
+        ok("and it expires, so a master published later still lands")
+
+        // And when it does land, the stamp goes, so nothing is skipped after.
+        let publisherLib = try scratchLibrary(root.appendingPathComponent("backoff-pub"))
+        let publisher = CloudSyncCore(library: publisherLib,
+                                      state: EngineState(library: publisherLib),
+                                      store: store, key: key, policy: .mac,
+                                      device: "mac-slow", ingests: true, keepAudio: true)
+        try seed(publisherLib, id: id, metadata: """
+            {"id":"\(id)","title":"Meeting","source":"mac","state":"done",\
+            "duration":2,"recorded_at":"2026-08-29T10:00:00Z"}
+            """, transcript: #"{"segments":[],"duration":2,"model":"parakeet-v3"}"#)
+        try seedAudio(publisherLib, id: id)
+        var pushed = CloudReport()
+        await publisher.pushMasters(into: &pushed)
+        try check(pushed.pushedMasters == 1, "the late publish did not happen")
+
+        // Past the *second* miss, not the first. The pass above asked again and
+        // was told no again, so it re-stamped: at `masterRetry * 2` this
+        // recording is still inside the window that stamp opened, and the seam
+        // read that correct skip as the master never arriving.
+        var landed = CloudReport()
+        await mac.pullMasters(roster, into: &landed,
+                              now: now.addingTimeInterval(CloudSyncCore.masterRetry * 3))
+        try check(landed.pulledMasters == 1, "the master published late never arrived")
+        try check(EngineState(library: lib).base[masterMiss: id] == nil,
+                  "the miss stamp outlived the master arriving")
+        ok("a master published late arrives, and clears the stamp behind it")
+
+        return out
+    }
+
+    /// A transfer is listed without its audio, claimed, and only then fetched,
+    /// and the claim must not take the audio with it.
+    ///
+    /// **The obvious version of this optimisation deletes somebody's memo.**
+    /// `claim` writes two fields back onto the transfer record, and a record
+    /// listed without its asset bodies has an empty `assets`. `MemoryStore`
+    /// stores what it is handed, so the claim would write the emptiness back
+    /// and the only copy of the recording between upload and ingest would be
+    /// gone. `StoredRecord.partial` is what stops it, and the assertion below
+    /// on the stored record after the claim is the one that catches it: every
+    /// other assertion here passes with the audio already destroyed, because
+    /// the destruction and the read happen in that order.
+    private static func assetlessIngestSeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let phoneLib = try scratchLibrary(root.appendingPathComponent("assetless-phone"))
+        let macLib = try scratchLibrary(root.appendingPathComponent("assetless-mac"))
+        let phone = CloudSyncCore(library: phoneLib, state: EngineState(library: phoneLib),
+                                  store: store, key: key, policy: .phone,
+                                  device: "phone-assetless", ingests: false)
+        let mac = CloudSyncCore(library: macLib, state: EngineState(library: macLib),
+                                store: store, key: key, policy: .mac,
+                                device: "mac-assetless", ingests: true, keepAudio: true)
+
+        let id = "2026-08-31-090000-FEED"
+        try seed(phoneLib, id: id, metadata: phoneMetadata(id), transcript: nil)
+        try seedAudio(phoneLib, id: id)
+        let original = try Data(contentsOf: phoneLib.folder(for: id)
+            .appendingPathComponent("mic.wav"))
+        try check(original.count > 10_000, "the fixture audio is too small to prove anything")
+
+        var offered = CloudReport()
+        await phone.upload(try unwrap(phoneLib.find(id), "the memo went missing"),
+                           into: &offered)
+        let name = CloudNaming.recordName(.audioTransfer, id, key: key)
+        try check(try await store.fetch(name, in: .transfer)?.assets["mic.wav"] != nil,
+                  "the phone did not upload its audio")
+
+        // The listing the Mac now takes carries no audio at all.
+        let before = await store.bytesFetched
+        let listed = try await store.changes(in: .transfer, since: nil, withAssets: false)
+        let offer = try unwrap(listed.changed.first { $0.name == name },
+                               "the transfer was not in the listing")
+        try check(offer.assets.isEmpty, "the listing brought the audio anyway")
+        try check(offer.partial, "the listing did not mark the record partial")
+        let listingCost = await store.bytesFetched - before
+        try check(listingCost < original.count / 4,
+                  "listing the pipe cost \(listingCost) bytes against an \(original.count) "
+                  + "byte recording, so the audio came with it")
+        ok("a transfer is listed without its audio, and the listing says so")
+
+        // The claim, which is the write that used to take the audio with it.
+        let sealedBefore = try unwrap(
+            try await store.fetch(name, in: .transfer)?.assets["mic.wav"],
+            "the transfer lost its audio before the claim")
+        try check(try await mac.claim(offer, preferred: nil, window: 300),
+                  "the Mac did not win an uncontested claim")
+        let afterClaim = try await store.fetch(name, in: .transfer)
+        let sealedAfter = try unwrap(
+            afterClaim?.assets["mic.wav"],
+            "claiming the transfer deleted its audio, which was the only copy")
+        try check(sealedAfter == sealedBefore, "the audio changed across a claim")
+        try check(afterClaim?.claimedBy == "mac-assetless",
+                  "the claim did not actually record who won")
+        ok("claiming a transfer read without its audio leaves the audio alone")
+
+        // And the whole path still works: the bytes land, unchanged.
+        var ingested = CloudReport()
+        await mac.ingest(preferred: nil, into: &ingested)
+        try check(ingested.claimed == 1, "the ingest did not happen: \(ingested.errors)")
+        let landed = try Data(contentsOf: macLib.folder(for: id)
+            .appendingPathComponent("mic.wav"))
+        try check(landed == original, "the audio that landed is not the audio that was sent")
+        ok("and the ingest still lands the bytes that were captured")
+
+        // A pass that claims nothing must not move the audio. This is the cost
+        // the change is for, as a number: the memo is already claimed by the
+        // Mac above, so a second Mac's pass declines it and should pay almost
+        // nothing for finding that out.
+        let otherLib = try scratchLibrary(root.appendingPathComponent("assetless-other"))
+        let other = CloudSyncCore(library: otherLib, state: EngineState(library: otherLib),
+                                  store: store, key: key, policy: .mac,
+                                  device: "mac-other", ingests: true, keepAudio: true)
+        try seed(phoneLib, id: "2026-08-31-091000-F00D",
+                 metadata: phoneMetadata("2026-08-31-091000-F00D"), transcript: nil)
+        try seedAudio(phoneLib, id: "2026-08-31-091000-F00D")
+        var second = CloudReport()
+        await phone.upload(try unwrap(phoneLib.find("2026-08-31-091000-F00D"), "gone"),
+                           into: &second)
+        // Claimed by the first Mac, so the second one may not have it.
+        var held = CloudReport()
+        await mac.ingest(preferred: nil, into: &held)
+        let quiet = await store.bytesFetched
+        var declined = CloudReport()
+        await other.ingest(preferred: nil, into: &declined)
+        let spent = await store.bytesFetched - quiet
+        try check(declined.claimed == 0, "the second Mac claimed a transfer it should not have")
+        try check(spent < original.count / 4,
+                  "a pass that claimed nothing still moved \(spent) bytes")
+        ok("a pass that claims nothing does not pay for the audio")
+
+        return out
+    }
+
+    /// An upload the system is still carrying must not be started again.
+    ///
+    /// The audio transfer is long-lived, which means `cloudd` finishes it after
+    /// this app is suspended or killed and there is no completion block left to
+    /// hear about it. The stop condition is the container, and the container
+    /// does not have the record until the upload lands, so between those two
+    /// moments every relaunch used to look exactly like "nothing has been sent"
+    /// and enqueue another copy of the whole recording.
+    private static func inflightUploadSeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let lib = try scratchLibrary(root.appendingPathComponent("inflight-phone"))
+        let phone = CloudSyncCore(library: lib, state: EngineState(library: lib),
+                                  store: store, key: key, policy: .phone,
+                                  device: "phone-inflight", ingests: false)
+
+        let id = "2026-08-31-100000-BEAD"
+        try seed(lib, id: id, metadata: phoneMetadata(id), transcript: nil)
+        try seedAudio(lib, id: id)
+        let memo = try unwrap(lib.find(id), "the memo went missing")
+        let state = EngineState(library: lib)
+
+        // An upload that starts and does not finish: the save throws, but the
+        // marker written before it is what a killed process would have left.
+        // Staged by hand rather than by killing a process, which a seam cannot
+        // do, and it is the same state either way.
+        await store.setFailNextSave(true)
+        var interrupted = CloudReport()
+        await phone.upload(memo, into: &interrupted, now: Date())
+        try check(!interrupted.errors.isEmpty, "the interrupted upload reported nothing")
+
+        // A save that threw in this process never reached the daemon, so the
+        // marker is cleared and the next pass may try again at once.
+        try check(state.base[sent: "audio:" + id] == nil,
+                  "a failed upload left a marker, so the retry would wait out the grace")
+        ok("an upload that failed in this process clears its marker and retries at once")
+
+        // Now the case that matters: the marker is on disk and the container
+        // has nothing, because the transfer is still going up.
+        let now = Date()
+        var staged = state.base
+        staged[sent: "audio:" + id] = CloudSyncCore.inflightPrefix + Metadata.stamp(now)
+        state.base = staged
+        let name = CloudNaming.recordName(.audioTransfer, id, key: key)
+        try check(try await store.fetch(name, in: .transfer) == nil,
+                  "the fixture already has the transfer, so this proves nothing")
+
+        let before = await store.bytesSaved
+        var relaunch = CloudReport()
+        await phone.upload(try unwrap(lib.find(id), "gone"), into: &relaunch,
+                           now: now.addingTimeInterval(60))
+        try check(await store.bytesSaved == before,
+                  "a relaunch mid-upload sent \(await store.bytesSaved - before) bytes again")
+        try check(try await store.fetch(name, in: .transfer) == nil,
+                  "a second copy of the transfer was enqueued")
+        ok("a relaunch while the system is still sending does not send it twice")
+
+        // Past the grace, the container is asked properly. It has nothing, so
+        // the phone offers again, which is the recovery for an upload that
+        // really did die with the process.
+        var recovered = CloudReport()
+        await phone.upload(try unwrap(lib.find(id), "gone"), into: &recovered,
+                           now: now.addingTimeInterval(CloudSyncCore.inflightGrace + 60))
+        try check(try await store.fetch(name, in: .transfer) != nil,
+                  "an upload that died with the process was never offered again")
+        try check(state.base[sent: "audio:" + id]?.hasPrefix("offered:") == true,
+                  "the recovered upload did not stamp an offer")
+        ok("and past the grace it asks the container, and offers again if nothing landed")
 
         return out
     }

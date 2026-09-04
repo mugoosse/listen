@@ -28,6 +28,132 @@ public actor CloudKitStore: RecordStore {
         database = CKContainer(identifier: containerID).privateCloudDatabase
     }
 
+    // MARK: - Bounding a call
+
+    /// How long one call may take before it is given up on.
+    ///
+    /// **Nothing here used to set either of these, and CloudKit's default for a
+    /// resource is seven days.** One asset transfer that stopped moving held a
+    /// pass open indefinitely, and because a pass is guarded by a single flag,
+    /// every later pass was dropped: new recordings stopped appearing until the
+    /// app was relaunched. That was the whole of "quit and reopen it and they
+    /// show up".
+    ///
+    /// Two numbers because the work is two shapes. A scalar record is a sealed
+    /// blob under CloudKit's 1 MB field ceiling and a minute is already
+    /// generous. An asset is tens of megabytes over whatever connection a phone
+    /// happens to be on: ten minutes is roughly 86 MB at 1.2 Mbit, which is a
+    /// bad hotel and not a broken transfer. Both are ceilings on a stall rather
+    /// than budgets for the work, so being wrong costs a retry on the next
+    /// pass, never a lost recording.
+    enum Bound {
+        case scalar, asset
+
+        var resource: TimeInterval {
+            switch self {
+            case .scalar: return 60
+            case .asset: return 600
+            }
+        }
+    }
+
+    /// A fresh configuration per operation. `CKOperation.Configuration` is a
+    /// class, so one shared instance mutated later would mutate every operation
+    /// still holding it.
+    private func configuration(_ bound: Bound,
+                               longLived: Bool = false) -> CKOperation.Configuration {
+        let made = CKOperation.Configuration()
+        made.timeoutIntervalForRequest = 60
+        // **No resource ceiling on a long-lived upload, deliberately.** The two
+        // settings fight: a long-lived operation is handed to the daemon so it
+        // can outlast the app, and a resource timeout tells that daemon to give
+        // up partway. Since the point of this one is to finish an 86 MB
+        // transfer across a screen lock and an app switch, the ceiling that
+        // ends a stall everywhere else is the wrong instrument here. What
+        // bounds it instead is `CloudSyncCore.inflightGrace`, after which the
+        // phone asks the container what actually happened.
+        made.timeoutIntervalForResource = longLived ? 24 * 60 * 60 : bound.resource
+        made.isLongLived = longLived
+        return made
+    }
+
+    /// Whether this save must survive the app going away.
+    ///
+    /// **Only the phone's audio transfer**, and not "any record with assets".
+    /// A recording record carries `transcript.json`, which is 314 KB and wants
+    /// the immediate error that drives a readable retry; a master is 25 MB on a
+    /// Mac that is not being suspended. Making either long-lived would trade a
+    /// sentence somebody can act on for a promise nobody is watching.
+    ///
+    /// A claim writes to the same record type and is excluded by the asset
+    /// test: since `ingest` reads the pipe without asset bodies, a claim's
+    /// record carries none.
+    private static func isLongLived(_ record: StoredRecord) -> Bool {
+        record.type == .audioTransfer && record.assets["mic.wav"] != nil
+    }
+
+    /// Where an asset waits while an upload that can outlive this process reads
+    /// it. Beside the sync state rather than in the library, because it is
+    /// bookkeeping about a transfer and not part of anybody's recordings.
+    private func stagingRoot() -> URL {
+        let root = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/ListenSync/staging")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return root
+    }
+
+    /// Drop staged files old enough that no upload can still want them.
+    ///
+    /// A day, which is well past `CloudSyncCore.inflightGrace`: by then the
+    /// phone has asked the container directly and either stamped the offer or
+    /// started again. Without this the directory grows by one whole recording
+    /// every time an upload is interrupted by the app being killed, which is
+    /// the exact case it exists for.
+    private func sweepStaging() {
+        let root = stagingRoot()
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for url in entries {
+            let when = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            if let when, when < cutoff { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    /// Holds an operation across the cancellation handler.
+    ///
+    /// `onCancel` is `@Sendable` and runs off the actor, and `CKOperation` is
+    /// not `Sendable`, so the obvious `onCancel: { operation.cancel() }` does
+    /// not compile in the iOS target, which builds this file in Swift 6 mode
+    /// while the Mac does not. The box also closes the ordering race: a task
+    /// cancelled before `database.add` runs would otherwise cancel nothing and
+    /// leave the continuation waiting for a callback that never comes, which is
+    /// the same wedge with a different cause.
+    private final class OperationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var operation: CKOperation?
+        private var cancelled = false
+
+        /// True when the task was already cancelled, so the caller must not add.
+        func hold(_ made: CKOperation) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !cancelled else { return false }
+            operation = made
+            return true
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let held = operation
+            operation = nil
+            lock.unlock()
+            held?.cancel()
+        }
+    }
+
     // MARK: - Zones
 
     /// Zones are created on first use rather than at launch, so an app that
@@ -37,8 +163,14 @@ public actor CloudKitStore: RecordStore {
         let id = CKRecordZone.ID(zoneName: zone.rawValue, ownerName: CKCurrentUserDefaultName)
         do {
             _ = try await pacing {
-                try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: id)],
-                                                     deleting: [])
+                // `configuredWith` because the convenience API takes no
+                // operation to configure, and an unbounded call here is the
+                // same wedge as an unbounded call anywhere else. Four paths in
+                // this file are this shape; the one that mattered is `changes`.
+                try await database.configuredWith(configuration: configuration(.scalar)) {
+                    try await $0.modifyRecordZones(saving: [CKRecordZone(zoneID: id)],
+                                                   deleting: [])
+                }
             }
         } catch let error as CKError where error.code == .serverRecordChanged {
             // Already there, which is the ordinary case on every launch but
@@ -162,7 +294,14 @@ public actor CloudKitStore: RecordStore {
             // than assumed. A throttle must not read as "not found": the
             // record is there, the server only wants a pause first.
             let fetched: CKRecord
-            do { fetched = try await pacing { try await database.record(for: id) } }
+            do {
+                fetched = try await pacing {
+                    try await database.configuredWith(
+                        configuration: configuration(.asset)) {
+                        try await $0.record(for: id)
+                    }
+                }
+            }
             catch let busy as StoreError { throw busy }
             catch { throw StoreError.notFound }
             guard fetched.recordChangeTag == record.changeTag else {
@@ -178,12 +317,27 @@ public actor CloudKitStore: RecordStore {
         subject["claimExpires"] = record.claimExpires as CKRecordValue?
         subject["audioOn"] = record.audioOn as CKRecordValue?
 
-        // Assets need a file on disk, so each one is written to a temporary
-        // location that is removed as soon as CloudKit has read it.
+        // **A long-lived upload outlives this process, and so must its file.**
+        // A phone's audio transfer is handed to `cloudd` and continues after
+        // the app is suspended or killed. `temporaryDirectory` is exactly the
+        // place iOS is entitled to reclaim while that is happening, and nothing
+        // on relaunch would recreate the file, so the upload would fail on a
+        // file that no longer exists with nothing anywhere saying why. Durable
+        // staging for that case, swept by age rather than by a `defer` that a
+        // killed process never runs.
+        let longLived = CloudKitStore.isLongLived(record)
+        if longLived { sweepStaging() }
         var temporaries: [URL] = []
-        defer { for url in temporaries { try? FileManager.default.removeItem(at: url) } }
+        defer {
+            // Only what this process is still responsible for. Removing a
+            // long-lived upload's file here would pull it out from under the
+            // daemon in the ordinary case where the app happens to survive.
+            if !longLived {
+                for url in temporaries { try? FileManager.default.removeItem(at: url) }
+            }
+        }
         for (name, data) in record.assets {
-            let url = FileManager.default.temporaryDirectory
+            let url = (longLived ? stagingRoot() : FileManager.default.temporaryDirectory)
                 .appendingPathComponent(UUID().uuidString)
             try data.write(to: url)
             temporaries.append(url)
@@ -200,7 +354,12 @@ public actor CloudKitStore: RecordStore {
         }
 
         do {
-            let saved = try await pacing { try await saveRecord(subject, progress: progress) }
+            let saved = try await pacing {
+                try await saveRecord(subject,
+                                     bound: record.assets.isEmpty ? .scalar : .asset,
+                                     longLived: longLived,
+                                     progress: progress)
+            }
             let stored = try translate(saved)
             lastKnown[record.name] = saved
             return stored
@@ -221,25 +380,35 @@ public actor CloudKitStore: RecordStore {
     /// Use the operation API because the convenience async save does not
     /// expose `perRecordProgressBlock`, which is CloudKit's measured asset
     /// upload progress.
-    private func saveRecord(_ record: CKRecord,
+    private func saveRecord(_ record: CKRecord, bound: Bound, longLived: Bool = false,
                             progress: StoreProgress?) async throws -> CKRecord {
-        try await withCheckedThrowingContinuation { continuation in
-            let operation = CKModifyRecordsOperation(recordsToSave: [record],
-                                                     recordIDsToDelete: nil)
-            operation.savePolicy = .ifServerRecordUnchanged
-            operation.isAtomic = true
-            operation.perRecordProgressBlock = { _, value in progress?(value) }
-            operation.modifyRecordsCompletionBlock = { saved, _, error in
-                if let error { continuation.resume(throwing: error); return }
-                guard let saved = saved?.first else {
-                    continuation.resume(throwing: StoreError.unavailable("no result"))
+        let box = OperationBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let operation = CKModifyRecordsOperation(recordsToSave: [record],
+                                                         recordIDsToDelete: nil)
+                operation.configuration = configuration(bound, longLived: longLived)
+                operation.savePolicy = .ifServerRecordUnchanged
+                operation.isAtomic = true
+                operation.perRecordProgressBlock = { _, value in progress?(value) }
+                operation.modifyRecordsCompletionBlock = { saved, _, error in
+                    if let error { continuation.resume(throwing: error); return }
+                    guard let saved = saved?.first else {
+                        continuation.resume(throwing: StoreError.unavailable("no result"))
+                        return
+                    }
+                    progress?(1)
+                    continuation.resume(returning: saved)
+                }
+                progress?(0)
+                guard box.hold(operation) else {
+                    continuation.resume(throwing: CancellationError())
                     return
                 }
-                progress?(1)
-                continuation.resume(returning: saved)
+                database.add(operation)
             }
-            progress?(0)
-            database.add(operation)
+        } onCancel: {
+            box.cancel()
         }
     }
 
@@ -249,7 +418,9 @@ public actor CloudKitStore: RecordStore {
         try await prepare(zone)
         let id = CKRecord.ID(recordName: name, zoneID: zoneID(zone))
         _ = try? await pacing {
-            try await database.modifyRecords(saving: [], deleting: [id])
+            try await database.configuredWith(configuration: configuration(.scalar)) {
+                try await $0.modifyRecords(saving: [], deleting: [id])
+            }
         }
         lastKnown[name] = nil
     }
@@ -288,9 +459,15 @@ public actor CloudKitStore: RecordStore {
         while more {
             do {
                 let result = try await pacing {
-                    try await database.recordZoneChanges(
-                        inZoneWith: zoneID(zone), since: serverToken,
-                        desiredKeys: withAssets ? nil : Self.keysWithoutAssets)
+                    // The listing that leaves asset bodies behind is small by
+                    // construction, so it gets the tight ceiling. This is the
+                    // call that carried the whole transfer zone every pass.
+                    try await database.configuredWith(
+                        configuration: configuration(withAssets ? .asset : .scalar)) {
+                        try await $0.recordZoneChanges(
+                            inZoneWith: zoneID(zone), since: serverToken,
+                            desiredKeys: withAssets ? nil : Self.keysWithoutAssets)
+                    }
                 }
                 for (_, outcome) in result.modificationResultsByID {
                     guard let record = try? outcome.get().record else { continue }
@@ -305,7 +482,15 @@ public actor CloudKitStore: RecordStore {
                     // takes and costs one fetch on a push this device is
                     // making anyway.
                     if withAssets { lastKnown[record.recordID.recordName] = record }
-                    if let stored = try? translate(record) { changed.append(stored) }
+                    if var stored = try? translate(record) {
+                        // Marked, so a caller that saves it back cannot be read
+                        // as asking for the assets to go. Harmless here, where
+                        // `save` re-reads the record before modifying it, and
+                        // load bearing in `MemoryStore`, which stores what it
+                        // is given. See `StoredRecord.partial`.
+                        stored.partial = !withAssets
+                        changed.append(stored)
+                    }
                 }
                 for deletion in result.deletions {
                     deleted.append(deletion.recordID.recordName)
@@ -343,7 +528,9 @@ public actor CloudKitStore: RecordStore {
         try await prepare(zone)
         let id = CKRecord.ID(recordName: name, zoneID: zoneID(zone))
         do {
-            let record = try await pacing { try await fetchRecord(id, progress: progress) }
+            let record = try await pacing {
+                try await fetchRecord(id, bound: .asset, progress: progress)
+            }
             lastKnown[name] = record
             return try translate(record)
         } catch let error as CKError where Self.isUnknownItem(error, for: id) {
@@ -366,22 +553,32 @@ public actor CloudKitStore: RecordStore {
     }
 
     /// Use the operation API for the matching measured asset download.
-    private func fetchRecord(_ id: CKRecord.ID,
+    private func fetchRecord(_ id: CKRecord.ID, bound: Bound,
                              progress: StoreProgress?) async throws -> CKRecord {
-        try await withCheckedThrowingContinuation { continuation in
-            let operation = CKFetchRecordsOperation(recordIDs: [id])
-            operation.perRecordProgressBlock = { _, value in progress?(value) }
-            operation.fetchRecordsCompletionBlock = { records, error in
-                if let error { continuation.resume(throwing: error); return }
-                guard let record = records?[id] else {
-                    continuation.resume(throwing: CKError(.unknownItem))
+        let box = OperationBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let operation = CKFetchRecordsOperation(recordIDs: [id])
+                operation.configuration = configuration(bound)
+                operation.perRecordProgressBlock = { _, value in progress?(value) }
+                operation.fetchRecordsCompletionBlock = { records, error in
+                    if let error { continuation.resume(throwing: error); return }
+                    guard let record = records?[id] else {
+                        continuation.resume(throwing: CKError(.unknownItem))
+                        return
+                    }
+                    progress?(1)
+                    continuation.resume(returning: record)
+                }
+                progress?(0)
+                guard box.hold(operation) else {
+                    continuation.resume(throwing: CancellationError())
                     return
                 }
-                progress?(1)
-                continuation.resume(returning: record)
+                database.add(operation)
             }
-            progress?(0)
-            database.add(operation)
+        } onCancel: {
+            box.cancel()
         }
     }
 

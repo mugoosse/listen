@@ -106,6 +106,17 @@ public struct SyncState: Codable, Sendable {
     /// disjoint from `sent:` and `note:`, because `pushDeletions` walks those
     /// two and treats a stamp whose folder has gone as a deletion to send.
     public static func audioOnKey(_ id: String) -> String { "audioOn:" + id }
+    /// When this device last asked the container for a master and was told
+    /// there is none yet.
+    ///
+    /// Nothing is stamped by a miss otherwise, so the same recordings were
+    /// asked about on every pass for ever. That is not only a wasted fetch: the
+    /// batch is three and `library.all()` is newest first, so three recordings
+    /// nobody has published yet occupied every slot and the ones behind them
+    /// were never reached. Its own prefix, disjoint from `sent:` and `note:`,
+    /// because `pushDeletions` walks those two and reads a stamp with no folder
+    /// as a deletion to send.
+    public static func masterMissKey(_ id: String) -> String { "masterMiss:" + id }
     /// A recording whose row has arrived and whose sidecars have not.
     ///
     /// The two-phase pull takes the change feed without its asset bodies, so
@@ -170,6 +181,13 @@ public struct SyncState: Codable, Sendable {
     public subscript(master id: String) -> String? {
         get { base[SyncState.masterKey(id)] }
         set { base[SyncState.masterKey(id)] = newValue }
+    }
+
+    /// When the container last said it has no master for this recording, so a
+    /// miss costs one fetch per window rather than one per pass.
+    public subscript(masterMiss id: String) -> String? {
+        get { base[SyncState.masterMissKey(id)] }
+        set { base[SyncState.masterMissKey(id)] = newValue }
     }
 
     /// Whether this device was asked to keep this one recording's audio.

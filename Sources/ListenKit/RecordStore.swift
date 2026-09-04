@@ -32,6 +32,23 @@ public struct StoredRecord: Sendable, Equatable {
     /// CloudKit calls it a change tag and the fake calls it a counter.
     public var changeTag: String?
 
+    /// Whether the asset bodies were left behind when this record was read.
+    ///
+    /// **The one thing a store may never do with a partial record is take its
+    /// empty `assets` as an instruction to remove them.** `changes(withAssets:
+    /// false)` exists so a device can decide what it wants before paying for
+    /// tens of megabytes, and the deciding usually ends in a save: `claim`
+    /// writes two fields back onto the very record whose audio is the only copy
+    /// of somebody's memo. `CloudKitStore` never had this problem, because it
+    /// re-reads the record before modifying it and CloudKit sends only the
+    /// fields that changed. `MemoryStore` stores whatever it is handed, so
+    /// without this flag the fake would silently drop the audio, and the fake
+    /// is what the seam suite is made of.
+    ///
+    /// Set by the read, honoured by the write, and false on anything a store
+    /// hands back: what is stored is always complete.
+    public var partial: Bool = false
+
     /// Where this record lives.
     ///
     /// Defaults to the type's usual zone, which is the answer for every record

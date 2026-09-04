@@ -422,7 +422,7 @@ that repo is being archived.**
 - `listen mcp --tools` is what makes the allowlist true (see `agent.md`)
 - `listen mcp connect-desktop` edits the Claude app's config, and refuses broken JSON
 
-### `.agents/notes/cloud-sync.md` (48k)
+### `.agents/notes/cloud-sync.md` (61k)
 
 How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 `CloudRecords`, `MemoryStore`, `FakeSync`, `AudioMaster`.
@@ -454,6 +454,11 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A retry that never says why is a stall nobody can fix
 - Which environment a build reaches is a property of how it was installed
 - An empty track threw out of the master build, and only the other Mac said so
+- A phone's `holdsAudio` is not a master, and the Mac blamed iCloud for a day
+- A miss with no stamp is a slot burned every pass
+- Three things about the verification harness, none of them the code
+- Nothing bounded a CloudKit call, and the default for an asset is seven days
+- A long-lived upload must not be startable twice
 
 ### `.agents/notes/agent.md` (172k)
 

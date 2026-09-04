@@ -95,6 +95,17 @@ public actor MemoryStore: RecordStore {
     public private(set) var fetchCount = 0
     public private(set) var saveCount = 0
 
+    /// And how much crossed, so a claim about cost can be a number rather than
+    /// a code path. A listing that leaves the asset bodies behind and one that
+    /// brings them are the same sequence of calls and differ by 86 MB, which is
+    /// invisible to a counter that only counts calls.
+    public private(set) var bytesFetched = 0
+    public private(set) var bytesSaved = 0
+
+    private static func weight(_ record: StoredRecord) -> Int {
+        record.payload.count + record.assets.values.reduce(0) { $0 + $1.count }
+    }
+
     // MARK: - RecordStore
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {
@@ -104,6 +115,7 @@ public actor MemoryStore: RecordStore {
             throw StoreError.unavailable("the fake container refused this save")
         }
         saveCount += 1
+        bytesSaved += MemoryStore.weight(record)
         // The record's own zone, not its type's. One type lives in two zones:
         // see `StoredRecord.zone`.
         let zone = record.zone
@@ -125,6 +137,14 @@ public actor MemoryStore: RecordStore {
 
         clock += 1
         var saved = record
+        // A record read without its asset bodies must not be able to delete
+        // them by being written back. See `StoredRecord.partial`: this is the
+        // line that makes the fake agree with CloudKit, which re-reads before
+        // it modifies and so never had the chance to get this wrong.
+        if record.partial, let existing {
+            saved.assets = existing.assets.merging(record.assets) { _, new in new }
+        }
+        saved.partial = false
         saved.changeTag = "t\(clock)"
         zones[zone, default: [:]][record.name] = saved
         history[zone, default: []].append((clock, record.name, false))
@@ -157,9 +177,11 @@ public actor MemoryStore: RecordStore {
             result.changed = result.changed.map { record in
                 var stripped = record
                 stripped.assets = [:]
+                stripped.partial = true
                 return stripped
             }
         }
+        bytesFetched += result.changed.reduce(0) { $0 + MemoryStore.weight($1) }
         return result
     }
 
@@ -192,7 +214,9 @@ public actor MemoryStore: RecordStore {
     public func fetch(_ name: String, in zone: CloudNaming.Zone) async throws -> StoredRecord? {
         try refuseIfThrottled()
         fetchCount += 1
-        return zones[zone]?[name]
+        let found = zones[zone]?[name]
+        bytesFetched += found.map(MemoryStore.weight) ?? 0
+        return found
     }
 
     // MARK: - Persistence

@@ -120,9 +120,15 @@ final class Queue {
             // every screen on this Mac and left `metadata.json` saying the
             // opposite, which is the copy sync publishes.
             recording.metadata.state = recording.effectiveState.rawValue
-            if recording.metadata.transcribe_finished == nil {
-                recording.metadata.transcribe_finished = Metadata.iso(Date())
-            }
+            // **`transcribe_finished` is deliberately left alone.** The first
+            // version of this stamped it with the time of the repair, and
+            // `transcribeDuration` subtracts one end from the other: a run of a
+            // few minutes that was healed six hours later read "transcribed in
+            // 6 h 17 min" on the recording page. Nobody knows when an
+            // interrupted run stopped, and `transcribeDuration` is already nil
+            // when either end is missing, which is the honest answer. Saying
+            // nothing beats saying a number that is wrong by two orders of
+            // magnitude.
             try? recording.save()
             healed += 1
         }

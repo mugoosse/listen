@@ -827,10 +827,52 @@ one rule both `Pipeline` call sites use, and `isEnglishOnly` refuses to treat a
 thin `apple:` transcript as evidence that the wrong model ran, because the right
 one did.
 
-**What was not measured is the number that decides anything**: proper nouns over
-the six English meetings that separated v2 from v3. `tools/measure_engines.sh`
-runs it, and until it has, Apple's accuracy here is a claim from somebody else's
-benchmark.
+The number that decides it was measured the day the seam landed, and it is the
+section below.
+
+## Apple's engine loses a quarter of this library's proper nouns
+
+Same method as v2 against v3, because the point is to be comparable: occurrences
+of the domain's names over identical audio, which needs no reference transcript
+because a name either survives or it does not. **Six English meetings, eleven
+tracks, 46,347 seconds of audio (12.9 hours), 53,193 words.**
+
+| | v2 | Apple |
+|---|---|---|
+| Claude | 47 | 36 |
+| ChatGPT | 12 | 16 |
+| DeepSeek | 7 | 0 |
+| WhatsApp | 9 | 8 |
+| Kinsight | 19 | 11 |
+| **total** | **94** | **71** |
+
+**Apple keeps 76% of them, where v3 kept 61%.** So it sits between the two
+Parakeets on the one axis this library has ever decided a model on, and it is
+not a replacement for v2.
+
+Total words are flat (53,193 against 54,175, Apple 1.8% higher), so it is not
+dropping speech, it is mishearing names. The same shape as v3 and the same
+lesson underneath it.
+
+**Part of the loss is spelling, not hearing, and that part is repairable.**
+DeepSeek reads 0 only because Apple never writes it as one word: it writes
+"deep seek" four times, "deep-seek" once and "deep sea" twice, so it heard five
+of the seven and spelled all five differently. Kinsight survives 21 times across
+its four spellings against v2's 34. ChatGPT is the one Apple wins, 16 to 12.
+
+That is the same trap `v3 is not a better v2` closes with, and it applies here
+unchanged: **a dictionary accumulated against one engine does not fire on
+another's mistakes.** The rules in this library were tuned to v2's errors, and
+Apple's are shaped differently, so switching engines silently discards work
+nobody can see being discarded.
+
+Speed is not a consideration and this settles that too: **277x realtime for v2,
+157x for Apple** over the same 12.9 hours. An hour-long meeting is 13 seconds
+against 23. Both are far enough past the point where anyone waits that the
+difference cannot decide anything.
+
+`0.747` mean confidence across 5,613 segments, which is a number to calibrate a
+needs-review lens against rather than a verdict on its own.
 
 ## SpeechTranscriber reads 10 languages, and Dutch is not one of them
 
@@ -901,20 +943,14 @@ a needs-review lens at a sentence without counting misheard-looking words after
 the fact. 0.851 mean on that track. Nil for Parakeet, and Optional rather than
 zero because absent and unconfident are opposite readings.
 
-## Both engines are deterministic, on one track so far
+## Both engines are deterministic
 
-`transcribe --format json` twice over the same 37 s file, byte for byte
-identical, for v2 and for Apple's engine. Parakeet's determinism was already
-established over a 3643 word track; Apple's was not established at all, and any
-control that compares two runs over re-encoded audio assumes it.
-
-One track is a first data point and not the claim. `tools/measure_engines.sh`
-runs the same check over whatever it is given, which is how it gets to be one.
-
-Speed on that track, for scale rather than as a finding: v2 183x realtime,
-Apple 73x. A 37 s file is mostly startup for the analyzer, so the interesting
-number is the one the script prints over real meetings. Speed was never the
-argument here anyway: Parakeet already does an hour in under a minute.
+`transcribe --format json` twice over the same input, byte for byte identical,
+for v2 and for Apple's engine: on a 37 s file and again on a 47 minute one.
+Parakeet's determinism was already established over a 3643 word track, which is
+what `listen-ios/tools/flac_control.sh` leans on when it asks whether a format
+conversion cost words. Apple's was not established at all, and the same control
+over an Apple transcript would have assumed it.
 
 ## A transcript v2 wrote cannot be asked what language it is in
 

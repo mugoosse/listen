@@ -149,12 +149,15 @@ struct ModelChoice {
                 + "Japanese, Korean, Portuguese, Cantonese",
         repo: appleRepo,
         answer: "One of the ten languages Apple's engine reads",
+        // Measured over six of this library's English meetings, 12.9 hours:
+        // 71 of the 94 domain proper nouns v2 found, against v3's 38 of 62 on
+        // the earlier set. Between the two Parakeets, and named in the same
+        // terms, because that is the number every model decision here has
+        // turned on. See `.agents/notes/asr.md`.
         tradeoff: "Nothing to download, and it reports word timings Parakeet "
-                + "does not. No Dutch, and its accuracy on this library's names "
-                + "is unmeasured: Parakeet's numbers here came from six of these "
-                + "meetings and 62 proper nouns, and until Apple's engine has "
-                + "run the same six there is nothing to compare. "
-                + "`tools/measure_engines.sh` is that measurement.",
+                + "does not. Loses about a quarter of the names like Claude, "
+                + "DeepSeek or Kinsight that Parakeet v2 hears, and reads no "
+                + "Dutch.",
         approxBytes: 0)
 
     /// The engine half of an Apple model string, without a locale.

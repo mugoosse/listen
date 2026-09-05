@@ -2103,9 +2103,11 @@ enum CLI {
                 }
             case "--model":
                 i += 1
-                guard i < args.count else { fail("--model needs a value: v2 or v3") }
+                guard i < args.count else {
+                    fail("--model needs a value: v2, v3 or apple")
+                }
                 guard let m = ModelChoice.named(args[i]) else {
-                    fail("unknown model `\(args[i])`. Use v2 or v3.")
+                    fail("unknown model `\(args[i])`. Use v2, v3 or apple.")
                 }
                 chosen = m
             case let other where other.hasPrefix("-"):
@@ -2143,8 +2145,8 @@ enum CLI {
             await transcribeDiarized(url, format: format, choice: choice)
         }
 
-        let asr = ASR()
         do {
+            let asr = try ASREngines.make(for: choice)
             let t0 = Date()
             try await asr.load(choice) { log($0) }
             let loaded = Date()
@@ -2172,8 +2174,25 @@ enum CLI {
             // every run. A cut that found no pause behaves like one of the old
             // fixed-offset seams and costs about one word, and the whole case
             // for cutting at silence is that it is zero on ordinary speech.
-            log(String(format: "chunk %.0fs, %d piece(s), %d hard cut(s)",
-                       ASR.chunkSeconds, transcript.chunks, transcript.hardCuts))
+            if choice.isApple {
+                // The engine, the locale and the words per second of audio,
+                // which are the three numbers `tools/measure_engines.sh` reads
+                // back. Said here rather than only in the script so a single
+                // run answers the same question.
+                log(String(format: "%@, %d segment(s), %.2f words/s of audio",
+                           transcript.model, transcript.segments.count,
+                           Double(transcript.text.split(separator: " ").count)
+                               / max(transcript.duration, 0.001)))
+                let scored = transcript.segments.compactMap(\.confidence)
+                if !scored.isEmpty {
+                    log(String(format: "confidence %.3f mean over %d of %d segment(s)",
+                               scored.reduce(0, +) / Double(scored.count),
+                               scored.count, transcript.segments.count))
+                }
+            } else {
+                log(String(format: "chunk %.0fs, %d piece(s), %d hard cut(s)",
+                           ASR.chunkSeconds, transcript.chunks, transcript.hardCuts))
+            }
 
             // Section 4.4 assigns each word to the overlapping speaker turn, so
             // the absence of word timings is a finding, not a detail. Say it
@@ -2181,8 +2200,20 @@ enum CLI {
             // that decides whether milestone 3 can split a segment where the
             // speaker changes mid-sentence.
             if !transcript.hasWordTimings {
-                log("no word timings: mlx-audio exposes sentence segments only."
-                    + " See CLAUDE.md, word timings.")
+                log(choice.isApple
+                    // Not the same finding as Parakeet's, and saying so matters:
+                    // Apple's engine does report word timings, so an empty
+                    // answer here means some run of some result arrived without
+                    // one and the segment fell back rather than losing words.
+                    // See `AppleMeetingEngine.segment`.
+                    ? "no word timings: at least one result had a run with no"
+                      + " time range, so those segments stayed sentence-level."
+                    : "no word timings: mlx-audio exposes sentence segments only."
+                      + " See CLAUDE.md, word timings.")
+            } else if choice.isApple {
+                let words = transcript.segments.reduce(0) { $0 + $1.words.count }
+                log("word timings: \(words) across \(transcript.segments.count)"
+                    + " segment(s). Section 4.4 step 2 is runnable on this.")
             }
 
             switch format {

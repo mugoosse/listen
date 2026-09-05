@@ -124,14 +124,100 @@ struct ModelChoice {
 
     static let fallback = all[0]
 
-    static func named(_ id: String) -> ModelChoice? { all.first { $0.id == id } }
+    /// Apple's on-device speech, as a model choice.
+    ///
+    /// **Deliberately not in `all`.** That list is the two models Settings and
+    /// setup offer, each with a size and a download button, and every screen
+    /// that walks it is asking "which Parakeet, and is it on disk". Apple's
+    /// engine answers a different question and has no size, so it is reachable
+    /// by name (`--model apple`, `LISTEN_ENGINE=apple`) and nothing more until
+    /// there is a measurement to put in front of somebody.
+    ///
+    /// The repo string is the engine, not a Hugging Face path. A run records
+    /// the locale it actually decoded in, so `Transcript.model` comes back as
+    /// `apple:nl-NL` and `SpokenLanguage.declared` can read the language off it
+    /// rather than inferring one from the words.
+    static let apple = ModelChoice(
+        id: "apple", title: "Apple Speech",
+        blurb: "Built in · nothing to download",
+        // Measured on macOS 26.6: `SpeechTranscriber.supportedLocales` is 30
+        // locales over 10 languages, and Dutch is not one of them. Named rather
+        // than counted, because the decision this informs is whether *your*
+        // language is there, and because the phone-and-Mac case this was
+        // reached for is a library with Dutch calls in it.
+        coverage: "English, Chinese, Spanish, French, German, Italian, "
+                + "Japanese, Korean, Portuguese, Cantonese",
+        repo: appleRepo,
+        answer: "One of the ten languages Apple's engine reads",
+        tradeoff: "Nothing to download, and it reports word timings Parakeet "
+                + "does not. No Dutch, and its accuracy on this library's names "
+                + "is unmeasured: Parakeet's numbers here came from six of these "
+                + "meetings and 62 proper nouns, and until Apple's engine has "
+                + "run the same six there is nothing to compare. "
+                + "`tools/measure_engines.sh` is that measurement.",
+        approxBytes: 0)
+
+    /// The engine half of an Apple model string, without a locale.
+    static let appleRepo = "apple"
+
+    /// Whether this choice is Apple's engine rather than a Parakeet.
+    var isApple: Bool { Self.isApple(repo) }
+
+    static func isApple(_ repo: String) -> Bool {
+        repo == appleRepo || repo.hasPrefix(appleRepo + ":")
+    }
+
+    /// The BCP-47 tag an Apple model string carries, if it carries one.
+    ///
+    /// `apple:nl-NL` yields `nl-NL`; a bare `apple` yields nil, which means the
+    /// engine has not chosen yet rather than that it chose nothing.
+    static func appleLocaleTag(in repo: String) -> String? {
+        guard repo.hasPrefix(appleRepo + ":") else { return nil }
+        let tag = String(repo.dropFirst(appleRepo.count + 1))
+        return tag.isEmpty ? nil : tag
+    }
+
+    static func named(_ id: String) -> ModelChoice? {
+        if id == apple.id { return apple }
+        return all.first { $0.id == id }
+    }
+
+    /// The engine an environment variable insists on, or nil.
+    ///
+    /// `LISTEN_ENGINE=apple` runs a job through `SpeechTranscriber` instead of
+    /// Parakeet, and `v2` / `v3` name the Parakeets. Same family as
+    /// `LISTEN_CHUNK` and `LISTEN_LIBRARY`, and for the same reason: it exists
+    /// so two engines can be run over the same audio in one afternoon, an app
+    /// launched from Finder inherits no shell and can never see it, and nothing
+    /// inside the app can set it by accident.
+    ///
+    /// It does not override a recording that already carries a model
+    /// (`Metadata.asr_model`), which is read first by `Recording.asrModel`.
+    /// Re-transcribing one of those with the other engine is `--model apple`,
+    /// said out loud, because that choice is written back to the library.
+    static var forced: ModelChoice? {
+        let raw = ProcessInfo.processInfo.environment["LISTEN_ENGINE"]?
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        guard let raw, !raw.isEmpty else { return nil }
+        guard let choice = named(raw) else {
+            log("LISTEN_ENGINE=\(raw) names no engine. Use apple, v2 or v3.")
+            return nil
+        }
+        return choice
+    }
 
     /// The model a transcript says produced it.
     ///
     /// `StoredTranscript.model` is the repo string rather than an id, because it
     /// records what actually ran rather than what was asked for. Nil for a
     /// legacy import, whose transcripts name a model this app has never had.
-    static func forRepo(_ repo: String) -> ModelChoice? { all.first { $0.repo == repo } }
+    static func forRepo(_ repo: String) -> ModelChoice? {
+        // Every `apple:<tag>` is the same choice wearing the locale it ran in,
+        // so a transcript made in Dutch still prints as "Apple Speech" rather
+        // than as the raw string.
+        if isApple(repo) { return apple }
+        return all.first { $0.repo == repo }
+    }
 
     /// Where the Hugging Face client keeps its cache, resolved the way the
     /// client resolves it.
@@ -311,7 +397,13 @@ struct ModelChoice {
     /// empty cache. That exactness is what lets the two below treat a short
     /// directory as damage rather than as a rounding difference.
     var isDownloaded: Bool {
-        size(of: cacheDirectory) > Int64(Double(approxBytes) * 0.97)
+        // Nothing stands between Apple's engine and a transcript that a
+        // progress bar could measure: the assets are system managed, shared
+        // with Notes and Voice Memos, and a locale that has never been used is
+        // fetched inside `load` in seconds. Every reader of this property is
+        // asking "is there a multi-gigabyte wait first", and here there is not.
+        if isApple { return true }
+        return size(of: cacheDirectory) > Int64(Double(approxBytes) * 0.97)
     }
 
     /// Weights that are present, and too small to be the model.
@@ -557,8 +649,11 @@ enum Settings {
     /// a button that says what it will cost, and a `choice` that always returns
     /// v2 cannot express "not yet asked".
     static var model: ModelChoice {
-        get { ModelChoice.named(defaults.string(forKey: modelKey) ?? "")
-                ?? ModelChoice.fallback }
+        get {
+            if let forced = ModelChoice.forced { return forced }
+            return ModelChoice.named(defaults.string(forKey: modelKey) ?? "")
+                ?? ModelChoice.fallback
+        }
         set { defaults.set(newValue.id, forKey: modelKey) }
     }
 

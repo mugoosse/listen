@@ -47,6 +47,21 @@ which is what most questions about the pipeline are really about.
 `LISTEN_CHUNK=<seconds>` overrides the ASR chunk length; `0` means decode the
 whole file in one pass. It exists for measurement, not for users.
 
+Two engines, and either can run the same file:
+
+```sh
+Listen.app/Contents/MacOS/Listen transcribe some.wav --model apple
+LISTEN_ENGINE=apple LISTEN_LOCALE=en-GB Listen.app/Contents/MacOS/Listen transcribe some.wav
+tools/measure_engines.sh <recording-id|file> ...   # both, side by side
+```
+
+`--model apple` is `SpeechTranscriber` on macOS 26: nothing to download, word
+timings, ten languages and no Dutch. `LISTEN_ENGINE` is the same choice as an
+environment variable, in the family of `LISTEN_CHUNK`, and `LISTEN_LOCALE` names
+the locale it decodes in. A locale Apple does not have is an error rather than a
+quiet fallback to English; `.agents/notes/asr.md` says why that matters more
+here than anywhere else.
+
 ### The scheme has to exist before the first build
 
 The first `./build.sh` on a fresh clone fails with `does not contain a scheme
@@ -145,6 +160,11 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - v3 is not a better v2, and the difference is the proper nouns
 - A transcript v2 wrote cannot be asked what language it is in
 - The wrong model leaves a thin transcript, and thin is per second of audio
+- Apple's engine is a seam, not a swap, and the choice is a `ModelChoice`
+- SpeechTranscriber reads 10 languages, and Dutch is not one of them
+- en-ZA is what every obvious locale rule picks, Apple's own included
+- Apple's word timings reconstruct the sentence exactly, and that is the check
+- Both engines are deterministic, on one track so far
 - The model chooses itself on the second pass, and never downloads to do it
 - The one-model install is the common one, and it was the silent one
 - Setup asks which languages, not which model

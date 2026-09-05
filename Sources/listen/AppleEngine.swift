@@ -9,8 +9,12 @@ import Speech
 /// accuracy is noticeably below Parakeet on anything technical, and the
 /// available locales are whatever macOS has installed.
 ///
-/// Dictation only. A meeting is transcribed by `ASR`, and it needs sentence
-/// timings to line up with speaker turns, which this does not expose.
+/// Dictation only, and that is now a division of labour rather than a limit.
+/// A meeting goes through `AppleMeetingEngine`, which is the same stack asked a
+/// different question: a file rather than a buffer, and segments with times
+/// rather than one string. The timings this used to be said to lack are there,
+/// on `Result.range` and on each run's `.audioTimeRange`; what is dictation's
+/// own is warming, readiness and the microphone.
 @available(macOS 26.0, *)
 actor AppleEngine {
     private var transcriber: SpeechTranscriber?
@@ -31,66 +35,28 @@ actor AppleEngine {
         await SpeechTranscriber.supportedLocales
     }
 
-    /// Picks a locale, preferring ones already installed so nothing downloads.
-    ///
-    /// Order matters more than it looks: simply taking the first entry whose
-    /// language matches yields en-ZA for an English speaker, because the list is
-    /// not ordered by usefulness.
-    private static func bestLocale() async -> Locale {
-        let supported = await SpeechTranscriber.supportedLocales
-        let installed = await SpeechTranscriber.installedLocales
-        let mine = Locale.current
-        let myLang = mine.language.languageCode?.identifier
-        let myRegion = mine.region?.identifier
-
-        func tag(_ l: Locale) -> String { l.identifier(.bcp47) }
-
-        // 1. Exactly what the user runs.
-        if let exact = supported.first(where: { tag($0) == tag(mine) }) { return exact }
-
-        // 2. Same language and region, e.g. nl-BE.
-        if let lang = myLang, let region = myRegion,
-           let m = supported.first(where: {
-               $0.language.languageCode?.identifier == lang
-                   && $0.region?.identifier == region
-           }) { return m }
-
-        // 3. Same language, favouring an installed variant over a download.
-        if let lang = myLang {
-            let sameLanguage = supported.filter {
-                $0.language.languageCode?.identifier == lang
-            }
-            if let ready = sameLanguage.first(where: { s in
-                installed.contains { tag($0) == tag(s) }
-            }) { return ready }
-            if let any = sameLanguage.first { return any }
-        }
-
-        // 4. English, preferring the common variants over whatever sorts first.
-        for preferred in ["en-US", "en-GB"] {
-            if let m = supported.first(where: { tag($0) == preferred }) { return m }
-        }
-        return supported.first { $0.language.languageCode?.identifier == "en" }
-            ?? Locale(identifier: "en-US")
-    }
-
     func load() async throws {
+        // The picking rules live in `AppleSpeech` because meetings need the
+        // same ones, and an ordering this fiddly (see `AppleSpeech.best`) is
+        // not something two engines can be trusted to keep saying the same way.
+        //
+        // A saved locale this Mac no longer supports falls back here, where a
+        // meeting refuses: the stakes are different. The saved tag was picked
+        // from a list of what this Mac had, so a mismatch means the list
+        // changed under it, and a dictation shortcut that stops working is
+        // worse than one that answers in the wrong English. A meeting is an
+        // hour of somebody's audio and gets the strict rule.
         if let saved = Settings.dictationAppleLocale,
-           let match = await SpeechTranscriber.supportedLocales.first(
-               where: { $0.identifier(.bcp47) == saved }) {
+           let match = await AppleSpeech.supported(saved) {
             locale = match
         } else {
-            locale = await Self.bestLocale()
+            if let saved = Settings.dictationAppleLocale {
+                log("Apple speech no longer offers \(saved); choosing another locale")
+            }
+            locale = await AppleSpeech.best()
         }
         let t = SpeechTranscriber(locale: locale, preset: .transcription)
-
-        // Assets are system managed, but a locale that has never been used may
-        // still need fetching. This is normally instant or a few seconds, not the
-        // multi-gigabyte download Parakeet needs.
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [t]) {
-            try await request.downloadAndInstall()
-        }
-
+        try await AppleSpeech.install(for: t)
         transcriber = t
     }
 

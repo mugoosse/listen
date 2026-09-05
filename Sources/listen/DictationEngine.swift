@@ -106,9 +106,15 @@ extension Settings {
     ///
     /// Not the same question as the Models pane, which chooses *which Parakeet*
     /// and applies to meetings as well. This chooses whether dictation uses
-    /// Parakeet at all, and it is dictation's alone: a meeting needs sentence
-    /// timings to line up with speaker turns, and Apple's engine does not expose
-    /// them.
+    /// Parakeet at all.
+    ///
+    /// It used to be dictation's alone on the grounds that a meeting needs
+    /// sentence timings and Apple's engine did not expose them. That was
+    /// wrong: `SpeechTranscriber.Result` carries `range`, and its runs carry
+    /// `.audioTimeRange`, which is finer than anything Parakeet reaches us
+    /// with. A meeting can now be run through `AppleMeetingEngine`, and what
+    /// keeps this setting dictation's own is that the two jobs have different
+    /// accuracy stakes, not that one of them is impossible.
     enum DictationEngineChoice: String {
         case parakeet
         case apple

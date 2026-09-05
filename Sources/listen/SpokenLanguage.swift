@@ -30,7 +30,40 @@ enum SpokenLanguage {
     /// has one, so its output is English whatever went in. Only a model that
     /// could have chosen otherwise carries the information.
     static func canReport(_ repo: String) -> Bool {
-        ModelChoice.forRepo(repo)?.isMultilingual ?? false
+        // An Apple transcript does not need to be asked: it names the locale it
+        // was decoded in. See `declared`.
+        if declared(repo) != nil { return true }
+        return ModelChoice.forRepo(repo)?.isMultilingual ?? false
+    }
+
+    /// The language an Apple transcript was decoded in, read off its model
+    /// string rather than out of its words.
+    ///
+    /// `SpeechTranscriber` is constructed for one locale and constrained to it,
+    /// so `apple:nl-NL` is a fact about the run in a way that no reading of the
+    /// text can be. This is the strongest form of the answer this file has: the
+    /// multilingual case is an identification with a confidence, the
+    /// English-only case is an inference from density, and this one is what the
+    /// decoder was told.
+    ///
+    /// A bare `apple` yields nil, because a transcript that never recorded its
+    /// locale is one nobody can answer for.
+    static func declared(_ repo: String) -> String? {
+        guard let tag = ModelChoice.appleLocaleTag(in: repo) else { return nil }
+        return Locale(identifier: tag).language.languageCode?.identifier
+    }
+
+    /// The language to record for a transcript this model has just produced.
+    ///
+    /// The one rule, with two callers in `Pipeline`, because a run that stores
+    /// one answer while a later reader computes another is exactly the shape of
+    /// the bug this file exists for. `text` is an autoclosure so the whole
+    /// meeting is only joined into one string when something is actually going
+    /// to read it.
+    static func reading(_ text: @autoclosure () -> String, model repo: String) -> String? {
+        if let declared = declared(repo) { return declared }
+        guard canReport(repo) else { return nil }
+        return identify(text())
     }
 
     /// Whether this model is one this app knows to read English and nothing
@@ -45,6 +78,12 @@ enum SpokenLanguage {
     /// not this bug. Both inferences need a model that is known, and known to
     /// be English-only.
     static func isEnglishOnly(_ repo: String) -> Bool {
+        // Apple's engine is neither multilingual in the v3 sense nor
+        // English-only in the v2 sense: it reads the one language it was given.
+        // Nothing here may treat a thin `apple:nl-NL` transcript as evidence
+        // that the wrong model ran, because the right one did, and the density
+        // heuristic below is calibrated on Parakeet output besides.
+        if declared(repo) != nil { return false }
         guard let choice = ModelChoice.forRepo(repo) else { return false }
         return !choice.isMultilingual
     }
@@ -87,6 +126,7 @@ enum SpokenLanguage {
     static func of(_ recording: Recording) -> String? {
         guard let transcript = recording.storedTranscript else { return nil }
         if let stored = transcript.language { return stored }
+        if let declared = declared(transcript.model) { return declared }
         if canReport(transcript.model) {
             return identify(transcript.segments.map(\.text).joined(separator: " "))
         }

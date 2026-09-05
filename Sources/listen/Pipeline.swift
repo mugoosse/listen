@@ -149,11 +149,6 @@ private final class Tally: @unchecked Sendable {
 /// parallel jobs fight over the same hardware rather than finishing sooner.
 /// `Pipeline` is an actor, and `Queue` below serialises the whole app onto it.
 actor Pipeline {
-    /// Shared with dictation rather than owned, so the 2.5 GB of weights are
-    /// resident once. `Queue.shared` holds one `Pipeline` for the life of the
-    /// process, so this was already the only instance in the app; the change is
-    /// that dictation now loads the same one. See `ASR.shared`.
-    private let asr = ASR.shared
     private let diarizer = Diarizer()
 
     /// What the user's own track is called before anyone names it.
@@ -229,6 +224,12 @@ actor Pipeline {
                               micHasSpeech: micHasSpeech)
 
         let tally = Tally(split: everyoneHasSpeech && micHasSpeech, report: progress)
+
+        // Chosen per job rather than held, because the engine follows the
+        // recording's model and a recording carries its own. Parakeet comes
+        // back as `ASR.shared` either way, so the 2.5 GB of weights are still
+        // resident once and still shared with dictation: see `ASREngines.make`.
+        let asr = try ASREngines.make(for: choice)
         try await asr.load(choice) { tally.say($0) }
 
         var labelled: [LabelledSegment] = []
@@ -478,9 +479,8 @@ actor Pipeline {
         // Identified now, by the run that made these words, so no later reader
         // has to re-run it over a whole meeting. Nil unless the model that ran
         // could have chosen a language: see `StoredTranscript.language`.
-        let spoken = SpokenLanguage.canReport(model)
-            ? SpokenLanguage.identify(cleaned.map(\.text).joined(separator: " "))
-            : nil
+        let spoken = SpokenLanguage.reading(
+            cleaned.map(\.text).joined(separator: " "), model: model)
         if let spoken { log("transcript identified as \(SpokenLanguage.name(of: spoken))") }
 
         let stored = StoredTranscript(
@@ -772,8 +772,9 @@ actor Pipeline {
     /// being known in advance.
     func runFile(_ url: URL, using choice: ModelChoice,
                  progress: (@Sendable (String) -> Void)? = nil) async throws -> StoredTranscript {
+        let asr = try ASREngines.make(for: choice)
         try await asr.load(choice) { progress?($0) }
-        let transcript = try await asr.transcribe(url)
+        let transcript = try await asr.transcribe(url, progress: nil)
         Self.reportCuts(transcript, track: url.lastPathComponent)
 
         progress?("identifying speakers")
@@ -791,10 +792,9 @@ actor Pipeline {
         return StoredTranscript(segments: cleaned, duration: transcript.duration,
                                 model: transcript.model,
                                 wordLevel: transcript.hasWordTimings, cleanup: fired,
-                                language: SpokenLanguage.canReport(transcript.model)
-                                    ? SpokenLanguage.identify(
-                                        cleaned.map(\.text).joined(separator: " "))
-                                    : nil)
+                                language: SpokenLanguage.reading(
+                                    cleaned.map(\.text).joined(separator: " "),
+                                    model: transcript.model))
     }
 
     /// Say how the track was cut, on stderr, every run.

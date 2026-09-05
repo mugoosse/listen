@@ -32,16 +32,28 @@ struct ASRSegment: Codable {
     var text: String
     var words: [ASRWord] = []
 
-    enum CodingKeys: String, CodingKey { case start, end, text, words }
+    /// How sure the engine was, 0 to 1, averaged over the segment.
+    ///
+    /// Nil for Parakeet, which reports nothing of the kind, and that is the
+    /// reason it is Optional rather than defaulted to zero: absent and
+    /// unconfident are opposite readings. Apple's engine attaches it per run
+    /// when `.transcriptionConfidence` is asked for, and it is the first signal
+    /// in this app that could tell a needs-review lens where to look without
+    /// counting misheard-looking words after the fact.
+    var confidence: Double? = nil
+
+    enum CodingKeys: String, CodingKey { case start, end, text, words, confidence }
 
     /// Omit `words` entirely when there are none, matching the Python's
     /// `normalize_local_segments`, which only sets the key when it has content.
+    /// Same for `confidence`, which no Parakeet run has.
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(start, forKey: .start)
         try c.encode(end, forKey: .end)
         try c.encode(text, forKey: .text)
         if !words.isEmpty { try c.encode(words, forKey: .words) }
+        if let confidence { try c.encode(confidence, forKey: .confidence) }
     }
 }
 
@@ -119,7 +131,7 @@ enum ASRError: Error, LocalizedError {
 /// because the pipeline runs one job at a time on purpose: the models are GPU
 /// and ANE bound, and parallel jobs fight over the same hardware rather than
 /// finishing sooner.
-actor ASR {
+actor ASR: ASREngine {
     /// One engine for the whole process.
     ///
     /// The weights are about 2.5 GB resident, and dictation and the meeting
@@ -130,8 +142,9 @@ actor ASR {
     /// a single `Pipeline` for the life of the process, so its engine was
     /// already a de-facto singleton.
     ///
-    /// The CLI still builds its own where it runs one job and exits, because
-    /// there is nothing to share with.
+    /// The CLI reaches the same instance through `ASREngines.make`, which is
+    /// free there rather than useful: a CLI process runs one job and exits, so
+    /// there is nothing to share with either way.
     static let shared = ASR()
 
     private var model: (any STTGenerationModel)?

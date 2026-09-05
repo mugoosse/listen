@@ -799,6 +799,123 @@ dictionary**, which is a cost nothing else in the app would have shown.
 So v2 stays the default, v3 is reached for on evidence, and the asymmetry is
 the design: v3 on English costs 39% of the names, v2 on Dutch costs the meeting.
 
+## Apple's engine is a seam, not a swap, and the choice is a `ModelChoice`
+
+`SpeechTranscriber` on macOS 26 does three things Parakeet cannot, and none of
+them is speed: there is nothing to download, it reports word timings, and it is
+told a language instead of guessing one. It also cannot read Dutch, which this
+library needs, so this is a second engine and not a replacement.
+
+The seam is `ASREngine`, an actor protocol over `load` and `transcribe(url:)`,
+with `ASR` (Parakeet through MLX) and `AppleMeetingEngine` (SpeechTranscriber)
+behind it. `Pipeline` picks one per job through `ASREngines.make(for:)` rather
+than holding `ASR.shared`, because the engine follows the recording's model and
+a recording carries its own. Parakeet still comes back as `ASR.shared`, so the
+2.5 GB of weights are still resident once and still shared with dictation.
+
+The choice is an ordinary `ModelChoice` with `repo: "apple"`, deliberately
+**not** in `ModelChoice.all`: that list is the two Parakeets, each with a size
+and a download button, and every screen that walks it is asking "which one, and
+is it on disk". Apple's engine is reachable by name (`--model apple`,
+`LISTEN_ENGINE=apple`) until there is a measurement worth putting in front of
+somebody.
+
+A run records the locale it decoded in, so `Transcript.model` comes back as
+`apple:en-US`. That is what makes `SpokenLanguage` answerable without a
+heuristic: `declared` reads the language off the model string, `reading` is the
+one rule both `Pipeline` call sites use, and `isEnglishOnly` refuses to treat a
+thin `apple:` transcript as evidence that the wrong model ran, because the right
+one did.
+
+**What was not measured is the number that decides anything**: proper nouns over
+the six English meetings that separated v2 from v3. `tools/measure_engines.sh`
+runs it, and until it has, Apple's accuracy here is a claim from somebody else's
+benchmark.
+
+## SpeechTranscriber reads 10 languages, and Dutch is not one of them
+
+Measured on macOS 26.6 (September 2026), not read off a docs page:
+
+- `SpeechTranscriber.supportedLocales` is **30 locales over 10 languages**:
+  de, en, es, fr, it, ja, ko, pt, yue, zh. No Dutch, no Nordic, no Slavic.
+- `DictationTranscriber.supportedLocales` is **54 locales**, and `nl-NL` and
+  `nl-BE` are both there. Two locales were installed on this Mac against the
+  transcriber's nine.
+
+So the two classes in one framework do not cover the same languages, and the
+one with the better transcription quality is the smaller list. A Dutch meeting
+cannot go through Apple's meeting engine at all; Parakeet v3 remains the only
+thing in this app that reads it. This is why `ModelChoice.apple.coverage` names
+the ten languages rather than counting them: the question it answers is whether
+*your* language is there.
+
+The consequence in code is that a locale which was asked for and cannot be
+honoured is an **error**, never a fallback to English. `AppleMeetingEngine.load`
+throws and names both the missing locale and the list. Falling back would be
+this file's worst failure wearing a new hat: an English decoder handed Dutch
+audio writes fluent, confident English, nothing throws, and the only evidence is
+that a human reads it. Dictation falls back rather than throwing, and the
+comment there says why the stakes differ.
+
+## en-ZA is what every obvious locale rule picks, Apple's own included
+
+`Locale.current` on this Mac is `en-PT`: English, in Portugal. There is no
+en-PT. Three rules were measured against that, and all three answer **en-ZA**:
+
+- first entry whose language matches, because `supportedLocales` is not ordered
+  by usefulness;
+- prefer an installed variant, which separates nothing here: all nine English
+  variants report as installed;
+- `SpeechTranscriber.supportedLocale(equivalentTo: .current)`, Apple's own
+  answer to exactly this question. It is not a better version of ours.
+
+The region has to come from the *language* rather than from the list or from the
+user, and `Locale.Language.maximalIdentifier` is where that lives: `en`
+maximalises to `en-Latn-US`, `pt` to `pt-Latn-BR`, `nl` to `nl-Latn-NL`. That
+step in `AppleSpeech.best` is what turns en-PT into en-US instead of en-ZA, and
+it is step 3, after an exact match and after the user's own region, so a Belgian
+still gets fr-BE.
+
+`AppleSpeech` holds the rule for both engines. It was dictation's alone and got
+copied nowhere: an ordering this fiddly does not survive being written twice.
+
+## Apple's word timings reconstruct the sentence exactly, and that is the check
+
+`SpeechTranscriber.Result.text` is an `AttributedString` whose runs carry
+`.audioTimeRange` when it is asked for, which is the thing `Merge.assign`'s
+word-level branch has been waiting for since the port. Measured over a 37 s
+track: **102 words across 6 segments, every segment timed, times monotonic, and
+the concatenation of the word strings equal to the segment text exactly.**
+
+That last check is the load-bearing one, and it is why `ASRWord.word` keeps the
+run's characters verbatim, spacing included. `Merge.assign` rebuilds a split
+segment's text by concatenating `ASRWord.word` with no separator, so a run that
+arrived without a time range would not merely lose its timing, it would **lose
+its words out of the transcript**. `AppleMeetingEngine.segment` therefore
+attaches words only when every run in the result is timed, and falls back to the
+sentence-level path otherwise. The CLI says which happened on every run.
+
+`.transcriptionConfidence` comes back the same way, averaged per segment into
+`ASRSegment.confidence`, and it is the first signal in this app that could point
+a needs-review lens at a sentence without counting misheard-looking words after
+the fact. 0.851 mean on that track. Nil for Parakeet, and Optional rather than
+zero because absent and unconfident are opposite readings.
+
+## Both engines are deterministic, on one track so far
+
+`transcribe --format json` twice over the same 37 s file, byte for byte
+identical, for v2 and for Apple's engine. Parakeet's determinism was already
+established over a 3643 word track; Apple's was not established at all, and any
+control that compares two runs over re-encoded audio assumes it.
+
+One track is a first data point and not the claim. `tools/measure_engines.sh`
+runs the same check over whatever it is given, which is how it gets to be one.
+
+Speed on that track, for scale rather than as a finding: v2 183x realtime,
+Apple 73x. A 37 s file is mostly startup for the analyzer, so the interesting
+number is the one the script prints over real meetings. Speed was never the
+argument here anyway: Parakeet already does an hour in under a minute.
+
 ## A transcript v2 wrote cannot be asked what language it is in
 
 The obvious way to catch the Dutch-through-v2 failure is to language-identify the

@@ -735,6 +735,11 @@ final class ModelsPane: Pane {
     private var diarizerNote: NSTextField?
     private var languageNote: NSTextField?
     private var languageStack: NSStackView?
+    private var appleNote: NSTextField?
+    private var appleGet: NSButton?
+    /// The languages Apple could read and has not got, so the button knows what
+    /// it is for without asking the framework again on the click.
+    private var appleMissing: [String] = []
 
     /// What this Mac is set up in, plus anything already ticked. Same rule as
     /// setup's, so the two panes show the same list in the same order.
@@ -769,6 +774,23 @@ final class ModelsPane: Pane {
         stack.addArrangedSubview(host)
         languageStack = host
         renderLanguages()
+
+        // What Apple's engine has for these languages, and a button when it is
+        // missing one. Apple is not selectable as a meeting model here, but its
+        // assets are what dictation and the iPhone run on, and until now there
+        // was no way to fetch a language: the Dictation pane offers only the
+        // locales already installed, so a French speaker who had never
+        // dictated in French could not pick it.
+        let appleLine = NSTextField(wrappingLabelWithString: "")
+        appleLine.font = .systemFont(ofSize: 11)
+        appleLine.textColor = .secondaryLabelColor
+        appleLine.preferredMaxLayoutWidth = 460
+        stack.addArrangedSubview(appleLine)
+        appleNote = appleLine
+
+        appleGet = button("Get") { [weak self] in self?.installAppleAssets() }
+        appleGet?.isHidden = true
+        refreshApple()
 
         // The model these languages mean, next to the radios that can override
         // it. Said rather than applied: somebody in Settings has already picked
@@ -885,6 +907,7 @@ final class ModelsPane: Pane {
                 Settings.spokenLanguages = next
                 self?.renderLanguages()
                 self?.refresh()
+                self?.refreshApple()
             }
             box.target = handler
             box.action = #selector(ActionHandler.fire(_:))
@@ -908,6 +931,7 @@ final class ModelsPane: Pane {
             Settings.spokenLanguages = next
             self?.renderLanguages()
             self?.refresh()
+            self?.refreshApple()
         }
         more.target = adder
         more.action = #selector(ActionHandler.fire(_:))
@@ -915,6 +939,62 @@ final class ModelsPane: Pane {
         more.translatesAutoresizingMaskIntoConstraints = false
         more.widthAnchor.constraint(equalToConstant: 220).isActive = true
         host.addArrangedSubview(more)
+    }
+
+    /// Ask the framework what it has, and say so.
+    ///
+    /// Async because every question here is: `installedLocales` and
+    /// `supportedLocales` are both `get async`. The pane draws with an empty
+    /// line and fills it in, which is what `DictationPane.loadLocales` does for
+    /// the same reason.
+    private func refreshApple() {
+        guard ModelChoice.appleIsAvailable else {
+            appleNote?.stringValue = "Apple's engine needs macOS 26, so this Mac "
+                + "transcribes with Parakeet only."
+            appleGet?.isHidden = true
+            return
+        }
+        guard #available(macOS 26.0, *) else { return }
+        let languages = Settings.effectiveLanguages
+        Task { @MainActor in
+            let inventory = await AppleSpeech.inventory(for: languages)
+            let ready = inventory.filter(\.installed).map { Languages.name($0.code) }
+            let missing = inventory.filter { !$0.installed }
+            let unreadable = languages
+                .filter { code in !inventory.contains { $0.code == code } }
+                .map(Languages.name)
+
+            var text = ready.isEmpty
+                ? "Apple's engine has none of these languages yet."
+                : "Apple's engine is installed for \(Languages.list(ready))."
+            if !missing.isEmpty {
+                text += " \(Languages.list(missing.map { Languages.name($0.code) })) "
+                    + "\(missing.count == 1 ? "is" : "are") available and not installed."
+            }
+            if !unreadable.isEmpty {
+                // Named, because this is the sentence that explains why the
+                // iPhone will not read those meetings either.
+                text += " It cannot read \(Languages.list(unreadable)) at all."
+            }
+            self.appleNote?.stringValue = text
+
+            self.appleMissing = missing.map(\.code)
+            self.appleGet?.isHidden = missing.isEmpty
+            self.appleGet?.title = "Get "
+                + Languages.list(missing.map { Languages.name($0.code) })
+        }
+    }
+
+    private func installAppleAssets() {
+        let wanted = appleMissing
+        guard !wanted.isEmpty, #available(macOS 26.0, *) else { return }
+        appleGet?.isEnabled = false
+        appleGet?.title = "Getting…"
+        Task { @MainActor in
+            for code in wanted { _ = await AppleSpeech.install(language: code) }
+            self.appleGet?.isEnabled = true
+            self.refreshApple()
+        }
     }
 
     override func refresh() {

@@ -86,7 +86,7 @@ actor AppleMeetingEngine: ASREngine {
         // about the locale's assets, and every module below asks for the same
         // locale.
         try await AppleSpeech.install(for: Self.transcriber(for: resolved),
-                                      progress: progress)
+                                      locale: resolved, progress: progress)
     }
 
     /// A module per file, not one held across files.

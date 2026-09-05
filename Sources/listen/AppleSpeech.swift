@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 import Speech
 
 /// The parts of Apple's speech stack both engines need, and must agree about.
@@ -99,17 +100,81 @@ enum AppleSpeech {
         return candidates.first
     }
 
+    /// Whether this locale's assets are already on this Mac.
+    ///
+    /// **`installedLocales` is the only thing that can answer this**, and the
+    /// two obvious alternatives both lie. Measured on macOS 26.6 against a Mac
+    /// holding en-US: `AssetInventory.status(forModules:)` returns `supported`
+    /// rather than `installed`, and `assetInstallationRequest(supporting:)`
+    /// hands back a non-nil request anyway. So a caller that reads "there is a
+    /// request, therefore something must be downloaded" says "downloading" on
+    /// every single run, which is what the first version of `install` did.
+    static func isInstalled(_ locale: Locale) async -> Bool {
+        let tag = locale.identifier(.bcp47)
+        return await SpeechTranscriber.installedLocales.contains {
+            $0.identifier(.bcp47) == tag
+        }
+    }
+
+    /// The supported locale for one language, or nil when Apple cannot read it.
+    ///
+    /// The same variant rules `best` uses, so what a pane offers to install and
+    /// what an engine then decodes in cannot come apart.
+    static func locale(for code: String) async -> Locale? {
+        variant(of: code,
+                supported: await SpeechTranscriber.supportedLocales,
+                installed: await SpeechTranscriber.installedLocales)
+    }
+
+    /// Which of these languages Apple reads, and whether each is on disk.
+    static func inventory(for codes: [String]) async -> [(code: String, locale: Locale,
+                                                          installed: Bool)] {
+        let supported = await SpeechTranscriber.supportedLocales
+        let installed = await SpeechTranscriber.installedLocales
+        return codes.compactMap { code in
+            guard let locale = variant(of: code, supported: supported,
+                                       installed: installed) else { return nil }
+            let tag = locale.identifier(.bcp47)
+            return (code, locale, installed.contains { $0.identifier(.bcp47) == tag })
+        }
+    }
+
     /// Install whatever this module's locale needs, if anything.
     ///
     /// Assets are system managed and usually already present, because Notes,
     /// Voice Memos and system dictation use the same ones. A locale that has
     /// never been used still has to be fetched, and that is normally instant or
     /// a few seconds rather than Parakeet's 2.5 GB.
-    static func install(for module: SpeechTranscriber,
+    ///
+    /// `locale` is passed rather than read off the module because the message
+    /// has to be truthful about which of the two this is, and the request alone
+    /// cannot say: see `isInstalled`.
+    static func install(for module: SpeechTranscriber, locale: Locale,
                         progress: (@Sendable (String) -> Void)? = nil) async throws {
+        let present = await isInstalled(locale)
         guard let request = try await AssetInventory.assetInstallationRequest(
             supporting: [module]) else { return }
-        progress?("preparing Apple speech assets")
+        if !present {
+            progress?("downloading Apple speech for "
+                      + (locale.language.languageCode.map { Languages.name($0.identifier) }
+                         ?? locale.identifier(.bcp47)))
+        }
         try await request.downloadAndInstall()
+    }
+
+    /// Fetch the assets for one language, for a pane with a button on it.
+    @discardableResult
+    static func install(language code: String,
+                        progress: (@Sendable (String) -> Void)? = nil) async -> Bool {
+        guard let locale = await locale(for: code) else { return false }
+        do {
+            try await install(for: SpeechTranscriber(
+                locale: locale, transcriptionOptions: [], reportingOptions: [],
+                attributeOptions: []), locale: locale, progress: progress)
+            return await isInstalled(locale)
+        } catch {
+            log("could not install Apple speech for \(Languages.name(code)): \(error)")
+            return false
+        }
     }
 }

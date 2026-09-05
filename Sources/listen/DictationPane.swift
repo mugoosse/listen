@@ -457,14 +457,25 @@ final class DictationPane: Pane, NSTextFieldDelegate {
     private func loadLocales() {
         guard #available(macOS 26.0, *), let localeMenu else { return }
         Task { @MainActor in
-            let installed = await AppleEngine.installedLocales()
+            // **Every locale Apple supports, not only the installed ones.**
+            // This offered `installedLocales` and nothing else, which reads as
+            // a complete list and is not one: a French speaker who had never
+            // dictated in French could not choose French here, and nothing on
+            // the pane said the language existed. Picking one that is missing
+            // fetches it at the next load, which is seconds rather than
+            // Parakeet's 2.5 GB, so the honest thing is to offer it and say
+            // which ones would need that.
+            let installed = Set(await AppleEngine.installedLocales()
+                .map { $0.identifier(.bcp47) })
+            let supported = await AppleEngine.supportedLocales()
             localeMenu.removeAllItems()
             localeMenu.addItem(withTitle: "Automatic")
-            for locale in installed.sorted(by: { $0.identifier < $1.identifier }) {
+            for locale in supported.sorted(by: { $0.identifier < $1.identifier }) {
                 let tag = locale.identifier(.bcp47)
-                localeMenu.addItem(withTitle:
-                    (Locale.current.localizedString(forIdentifier: locale.identifier) ?? tag)
-                    + "  (\(tag))")
+                let name = Locale.current.localizedString(forIdentifier: locale.identifier)
+                    ?? tag
+                localeMenu.addItem(withTitle: name + "  (\(tag))"
+                    + (installed.contains(tag) ? "" : "  · downloads"))
                 localeMenu.lastItem?.representedObject = tag
             }
             let saved = Settings.dictationAppleLocale

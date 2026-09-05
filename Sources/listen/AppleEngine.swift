@@ -56,7 +56,7 @@ actor AppleEngine {
             locale = await AppleSpeech.best()
         }
         let t = SpeechTranscriber(locale: locale, preset: .transcription)
-        try await AppleSpeech.install(for: t)
+        try await AppleSpeech.install(for: t, locale: locale)
         transcriber = t
     }
 

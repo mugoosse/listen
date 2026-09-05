@@ -1020,7 +1020,22 @@ final class ModelsPane: Pane {
         for choice in ModelChoice.all {
             let text: String
             if choice.isDownloaded {
-                text = "\(ModelChoice.humanBytes(choice.bytesUsed)) on disk"
+                // **Say why the number is twice the download.** `bytesUsed` is
+                // the hub blob cache plus mlx-audio's unpacked copy, and both
+                // are real: measured on this Mac, the two `model.safetensors`
+                // are separate inodes with a link count of one each, 2,471,559,904
+                // bytes apiece. So "4,94 GB on disk" under a button that said
+                // "Download (2,47 GB)" is true and reads as a mistake.
+                //
+                // Only claimed when the second copy is actually there. A cache
+                // somebody has cleaned out leaves one, and a label that insists
+                // on two would then be the mistake. See `.agents/notes/asr.md`,
+                // the model is cached twice.
+                let used = choice.bytesUsed
+                text = used > Int64(Double(choice.approxBytes) * 1.5)
+                    ? "\(ModelChoice.humanBytes(used)) on disk · the "
+                        + "\(ModelChoice.humanBytes(choice.approxBytes)) model, kept twice"
+                    : "\(ModelChoice.humanBytes(used)) on disk"
             } else {
                 text = "not downloaded · \(ModelChoice.humanBytes(choice.approxBytes))"
             }

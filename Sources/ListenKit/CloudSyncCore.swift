@@ -767,6 +767,7 @@ public struct CloudSyncCore: Sendable {
             base[audioOn: recording.id] = nil
             base[master: recording.id] = nil
             base[masterMiss: recording.id] = nil
+            base[bank: recording.id] = nil
             base[pinned: recording.id] = false
             return true
         }
@@ -1688,14 +1689,29 @@ public struct CloudSyncCore: Sendable {
                 guard let contents = try? Data(contentsOf: url) else { continue }
                 let name = CloudNaming.recordName(.voiceprint, recording.id, key: key)
                 do {
+                    let digest = sha256Hex(contents)
                     let existing = try await store.fetch(name, in: .voiceprints)
                     if let existing,
                        try CloudRecords.openBlob(existing, key: key).version
-                           == sha256Hex(contents) { continue }
+                           == digest {
+                        // Agreed already. Stamped for the same reason the pull
+                        // stamps it: the base has to be written wherever the
+                        // two sides are known to match, or the next local edit
+                        // reads as "never agreed" and the pull takes the
+                        // remote over it.
+                        base[bank: recording.id] = digest
+                        continue
+                    }
                     var record = try CloudRecords.voiceprint(id: recording.id,
                                                              contents: contents, key: key)
                     record.changeTag = existing?.changeTag
                     _ = try await store.save(record)
+                    // Only after it landed. A stamp written before the save is
+                    // a claim that the container holds bytes it may have
+                    // refused, and the next pull would then believe this
+                    // device was up to date and take the remote over the very
+                    // edit that failed to send.
+                    base[bank: recording.id] = digest
                 } catch {
                     report.note(error, about: "voiceprint \(recording.id)")
                 }
@@ -1806,8 +1822,29 @@ public struct CloudSyncCore: Sendable {
                 contents = stripped.data
                 version = sha256Hex(contents)
             }
-            if let have = try? Data(contentsOf: url), sha256Hex(have) == version { continue }
+            let have = try? Data(contentsOf: url)
+            if let have, sha256Hex(have) == version {
+                // Already the same bytes. Stamp it, because agreement reached
+                // any other way is still agreement and an unstamped one leaves
+                // the next genuine edit looking like the migration case.
+                base[bank: blob.name] = version
+                continue
+            }
+            // **The test every other sidecar gets, and this one did not.**
+            // Local matches what the two sides last agreed: take the remote.
+            // Local has moved since: keep it, and let this device's push carry
+            // it. Nil is the migration case and takes the remote, which is
+            // what this did unconditionally before. Without it a rename lost
+            // to any second Mac still holding the old bank, and the damage was
+            // invisible because `turns.json` is protected and keeps the name:
+            // the transcript said Martijn over a bank that said A.
+            if let have, let agreed = base[bank: blob.name], agreed != sha256Hex(have) {
+                report.conflicts.append("\(blob.name)/embeddings.json: "
+                                        + "edited here and not yet sent")
+                continue
+            }
             try? contents.write(to: url, options: .atomic)
+            base[bank: blob.name] = version
             report.pulledSidecars += 1
         }
 

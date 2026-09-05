@@ -1047,3 +1047,62 @@ Three scoping decisions worth keeping:
 finishes the upload. It buys about thirty seconds, the same instrument
 `Recorder` uses to get the microphone back, and it is there so a pass caught
 mid-handover completes the handover rather than being cut off inside it.
+
+## The voice bank was the one sidecar with no merge base
+
+Reported as "the voice matching is mediocre", which is what this looks like from
+outside. Measured across the real library: 27 of 60 recordings held a voiceprint
+under a label no transcript used, and 10 people were missing from the bank
+entirely.
+
+The asymmetry is the whole diagnosis, and it is visible in one recording:
+
+    2026-09-04-170823-6A44
+      turns.json        speakers: Martijn, Me
+      embeddings.json   keys:     A, Me
+
+One rename wrote both files. `turns.json` is a `librarySidecar` and goes through
+`base[sidecar: id, file:]`, the test that tells "I edited this" from "I am
+behind", so it kept the name. `embeddings.json` is carved out of that list by
+name, and the carve-out took the merge base with it: `pullVoiceprints` compared
+bytes and wrote the remote on any difference, `pushVoiceprints` was the same
+shape in reverse, and `changes(in: .voiceprints, since: nil)` refetches every
+record every pass. Last writer wins, in both directions.
+
+**The carve-out itself is right and must stay.** `DevicePolicy` argues it: "The
+zone is the mechanism, not the policy... Keeping these out of the library record
+is the difference between a phone declining to save a voiceprint and a phone
+never receiving one, and only the second is worth claiming." Folding the bank
+back into `librarySidecars` would inherit the protection and deliver
+voiceprints to every phone, which falsifies the one claim that file says is
+worth making. So the fix is `bank:<id>`, the same shape as `sidecar:` and its
+own key.
+
+**It takes two Macs**, and that bounds it. The phone holds no bank at all:
+`DevicePolicy.phone` omits `embeddings.json` and both functions guard on
+`keepsVoiceprints`. So a single-Mac library cannot reach this, and what makes a
+second Mac dangerous is not its build but simply that it never saw the rename
+and pushes its old bank as readily as any other difference.
+
+Two things about the stamp that are easy to get wrong:
+
+- **Agreement is stamped wherever it is found**, not only where bytes are
+  written. Both the pull's "already the same" branch and the push's "already
+  there" branch write the base. Without that, a bank the two sides happen to
+  agree on has no stamp, and the next genuine local edit reads as the migration
+  case and loses.
+- **The push stamps after the save, never before.** A stamp written first is a
+  claim that the container holds bytes it may have refused, and the next pull
+  would then believe this device was up to date and take the remote over the
+  very edit that failed to send.
+
+`voiceprintMergeSeam` proves all four halves: two Macs stamp what they agree, a
+local rename survives a stale remote and is reported as a conflict, it reaches
+the other Mac on the next pass, and a bank this device has not touched still
+takes the remote. Checked the other way round: with the merge test removed it
+fails at "the pull took the other Mac's stale bank over a rename made here".
+
+**What this does not explain**, and nobody should keep pulling on it: 19 repaired
+banks on the real library reverted with their inodes and mtimes unchanged, which
+no `write(to:options:.atomic)` can produce. That incident stays unattributed.
+This accounts for the standing damage, not for that night.

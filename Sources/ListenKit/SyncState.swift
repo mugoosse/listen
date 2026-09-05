@@ -106,6 +106,21 @@ public struct SyncState: Codable, Sendable {
     /// disjoint from `sent:` and `note:`, because `pushDeletions` walks those
     /// two and treats a stamp whose folder has gone as a deletion to send.
     public static func audioOnKey(_ id: String) -> String { "audioOn:" + id }
+    /// The digest of a recording's voiceprint bank as both sides last agreed
+    /// it, which is `sidecar:` for the one file that cannot use it.
+    ///
+    /// **`embeddings.json` is carved out of `librarySidecars` on purpose**, so
+    /// that it travels in its own zone and a phone never receives one at all;
+    /// `DevicePolicy` argues that at length and it is not negotiable. What was
+    /// never noticed is that the carve-out took the merge base with it: every
+    /// other per-recording file could tell "I edited this" from "I am behind",
+    /// and the bank could not, so both push and pull were last-writer-wins and
+    /// a rename lost to any second Mac still holding the old bank.
+    ///
+    /// Its own prefix, disjoint from `sent:` and `note:`, because
+    /// `pushDeletions` walks those two and reads a stamp with no folder as a
+    /// deletion to send.
+    public static func bankKey(_ id: String) -> String { "bank:" + id }
     /// When this device last asked the container for a master and was told
     /// there is none yet.
     ///
@@ -181,6 +196,14 @@ public struct SyncState: Codable, Sendable {
     public subscript(master id: String) -> String? {
         get { base[SyncState.masterKey(id)] }
         set { base[SyncState.masterKey(id)] = newValue }
+    }
+
+    /// The bank digest both sides last agreed. Nil is the migration case and
+    /// every recording until a pass has sent or received one, which takes the
+    /// remote, exactly as `sidecar:` does.
+    public subscript(bank id: String) -> String? {
+        get { base[SyncState.bankKey(id)] }
+        set { base[SyncState.bankKey(id)] = newValue }
     }
 
     /// When the container last said it has no master for this recording, so a

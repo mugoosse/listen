@@ -1566,6 +1566,7 @@ public enum FakeSync {
         out += try await masterBackoffSeam(root: root)
         out += try await assetlessIngestSeam(root: root)
         out += try await inflightUploadSeam(root: root)
+        out += try await voiceprintMergeSeam(root: root)
 
         return out
     }
@@ -2129,6 +2130,107 @@ public enum FakeSync {
         try check(state.base[sent: "audio:" + id]?.hasPrefix("offered:") == true,
                   "the recovered upload did not stamp an offer")
         ok("and past the grace it asks the container, and offers again if nothing landed")
+
+        return out
+    }
+
+    /// A rename made here survives a second Mac that still holds the old bank.
+    ///
+    /// **The bank was the one per-recording file with no merge base.**
+    /// `embeddings.json` is carved out of `librarySidecars` so that it travels
+    /// in its own zone and a phone never receives one, which `DevicePolicy`
+    /// argues for at length. The carve-out took `base[sidecar:file:]` with it,
+    /// so both push and pull compared bytes and took whichever side acted
+    /// last. A rename wrote `turns.json` and `embeddings.json`; the first is a
+    /// protected sidecar and kept the name, the second lost it to any second
+    /// Mac still holding the old bank. Measured on the real library: 27 of 60
+    /// recordings held a print under a label no transcript used, and the
+    /// visible symptom was not a defect at all, it was voice matching being
+    /// mediocre.
+    private static func voiceprintMergeSeam(root: URL) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+
+        let store = MemoryStore()
+        let key = PairingKey.generate()
+        let oneLib = try scratchLibrary(root.appendingPathComponent("bank-one"))
+        let twoLib = try scratchLibrary(root.appendingPathComponent("bank-two"))
+        let one = CloudSyncCore(library: oneLib, state: EngineState(library: oneLib),
+                                store: store, key: key, policy: .mac,
+                                device: "mac-one", ingests: true, keepAudio: true)
+        let two = CloudSyncCore(library: twoLib, state: EngineState(library: twoLib),
+                                store: store, key: key, policy: .mac,
+                                device: "mac-two", ingests: true, keepAudio: true)
+
+        let id = "2026-09-05-090000-BA11"
+        let metadata = """
+            {"id":"\(id)","title":"Meeting","source":"mac","state":"done",\
+            "duration":60,"recorded_at":"2026-09-05T09:00:00Z"}
+            """
+        let transcript = #"{"segments":[],"duration":60,"model":"parakeet-v3"}"#
+        func bank(_ library: Library, _ json: String) throws {
+            try Data(json.utf8).write(
+                to: library.folder(for: id).appendingPathComponent("embeddings.json"))
+        }
+        let stale = #"{"A":[0.1,0.2],"Me":[0.3,0.4]}"#
+        let renamed = #"{"Martijn":[0.1,0.2],"Me":[0.3,0.4]}"#
+
+        // Both Macs start agreeing, the way two devices do after a first sync.
+        for library in [oneLib, twoLib] {
+            try seed(library, id: id, metadata: metadata, transcript: transcript)
+            try bank(library, stale)
+        }
+        var settle = CloudReport()
+        await one.pushVoiceprints(into: &settle)
+        await two.pullVoiceprints(into: &settle)
+        await two.pushVoiceprints(into: &settle)
+        var settleOne = CloudReport()
+        await one.pullVoiceprints(into: &settleOne)
+        try check(EngineState(library: oneLib).base[bank: id] != nil,
+                  "a settled pass left no agreed digest, so every later edit reads as migration")
+        ok("two Macs agreeing on a bank stamp what they agreed")
+
+        // Somebody renames a speaker here. `turns.json` would keep it either
+        // way; the bank is the half that used to lose it.
+        try bank(oneLib, renamed)
+        var pull = CloudReport()
+        await one.pullVoiceprints(into: &pull)
+        let afterPull = try String(
+            contentsOf: oneLib.folder(for: id).appendingPathComponent("embeddings.json"),
+            encoding: .utf8)
+        try check(afterPull == renamed,
+                  "the pull took the other Mac's stale bank over a rename made here")
+        try check(!pull.conflicts.isEmpty, "the kept edit was not reported as a conflict")
+        ok("a rename made here is not overwritten by a Mac that has not seen it")
+
+        // And it travels, rather than merely surviving locally.
+        var push = CloudReport()
+        await one.pushVoiceprints(into: &push)
+        var arrive = CloudReport()
+        await two.pullVoiceprints(into: &arrive)
+        let onTwo = try String(
+            contentsOf: twoLib.folder(for: id).appendingPathComponent("embeddings.json"),
+            encoding: .utf8)
+        try check(onTwo == renamed, "the rename never reached the other Mac")
+        ok("and it reaches the other Mac on the next pass")
+
+        // The other direction still works: a bank this device has not touched
+        // takes the remote, which is the whole point of syncing them at all.
+        let other = #"{"Franco":[0.5,0.6],"Me":[0.3,0.4]}"#
+        try bank(twoLib, other)
+        var fromTwo = CloudReport()
+        await two.pushVoiceprints(into: &fromTwo)
+        var toOne = CloudReport()
+        await one.pullVoiceprints(into: &toOne)
+        let backOnOne = try String(
+            contentsOf: oneLib.folder(for: id).appendingPathComponent("embeddings.json"),
+            encoding: .utf8)
+        try check(backOnOne == other,
+                  "a bank this device had not edited refused a legitimate update")
+        ok("a bank this device has not touched still takes the other Mac's version")
 
         return out
     }

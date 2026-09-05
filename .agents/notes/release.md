@@ -364,7 +364,7 @@ must not be able to lock somebody out of their own recorder.
 `verify_install_guard.sh` builds a scratch UDZO, launches from the mount, and
 asserts the alert and the decline path against the real thing.
 
-## The notarytool profile went missing between two releases on the same day
+## The notarytool profile went missing between two releases on the same day, three times
 
 0.24.1 built, signed and packaged, and then `release.sh` refused to publish:
 
@@ -405,6 +405,26 @@ old warning said "no notarytool profile stored" whatever went wrong, which over
 a dropped connection is a wrong answer somebody would act on by re-storing a
 credential that was never missing. Both paths now keep what `notarytool` said
 and match on `No Keychain password item` to tell setup from everything else.
+
+**Third occurrence, and the window is now half an hour.** 0.32.1 notarized at
+16:03 and published. 0.32.2, from the same machine and the same session, was
+refused at about 17:30: `xcrun notarytool history --keychain-profile
+listen-notary` answered "No Keychain password item found" and `security
+find-generic-password -s com.apple.gke.notary.tool` found nothing. Storing it
+again fixed it immediately, and the history it then returned still listed the
+0.32.1 submission, so nothing server-side had gone: only the local keychain item.
+
+Two and a half hours was already hard to explain as an expiry. Thirty minutes is
+harder, and it rules out most of what a duration-based theory would need.
+Whatever removes it is not time passing. Worth noting what was running in
+between, because that is now the more promising axis: two releases, a Sparkle
+key read that worked in both, and several Xcode builds from a fresh git
+worktree. The Sparkle key lives in the same keychain and was read normally in
+the failing run, so a wholesale keychain problem is still ruled out.
+
+**The preflight change earned itself back.** The failure came in about a second
+with the `store-credentials` line, rather than after ten minutes of xcodebuild
+and a pair of `REJECTED` lines with the cause fifteen lines above them.
 
 Recovery is the one-time setup in `RELEASING.md` §2, run again, and then
 `./release.sh --publish` from the top. `--resume` is no help: nothing was

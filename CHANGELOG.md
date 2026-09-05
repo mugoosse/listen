@@ -8,6 +8,36 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.32.1 (2026-09-05)
+
+A meeting whose transcription was interrupted no longer says it is still being
+transcribed for ever, on this Mac or on your iPhone.
+
+### A run that was interrupted left the meeting saying "Transcribing"
+
+Listen writes a meeting's transcript and then writes down that the run
+finished. Anything that stops the app between those two steps, a quit, a crash,
+or an update installing itself, leaves a recording that has its transcript and
+still claims to be working on it. The queue could never recover it: what it
+looks for at launch is a recording with audio and no transcript, and this one
+has a transcript.
+
+You would not have seen it here. Every screen on the Mac derives the state from
+the files rather than trusting that field, so a finished meeting looks finished.
+What that could not fix is the copy sent to your other devices, so an iPhone
+showed "Transcribing on your Mac" under a meeting whose full transcript it was
+already displaying, and kept showing it.
+
+- The finished state is written down at launch for any run this Mac started and
+  did not finish, which repairs recordings already stuck this way. Nothing is
+  re-transcribed and no transcript is touched.
+- A run belonging to another Mac is left alone. That one ends when its claim
+  expires, and this must not race it.
+- The iPhone app stops repeating a state while it is holding the transcript
+  that contradicts it. Either change alone would have hidden the other.
+
+Found by installing 0.32.0, which interrupted a transcription to do it.
+
 ## 0.32.0 (2026-09-04)
 
 A recording made on an iPhone now reaches your Mac without anybody keeping an

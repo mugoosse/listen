@@ -79,6 +79,10 @@ final class ModelDownload {
     /// disk: the library returns from a populated cache without touching the
     /// network, which is also what makes this usable as a "verify" button.
     func start(_ choice: ModelChoice) {
+        // Apple's engine has no repo to fetch from and no size to report, so a
+        // download here would be a progress bar over a Hugging Face path that
+        // does not exist. Refused rather than guarded at every call site.
+        guard !choice.isApple else { return }
         guard !status.isBusy else { return }
         lastBytes = 0
         streaming = nil

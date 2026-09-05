@@ -307,40 +307,67 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // an English-only model handed another language writes fluent
             // nonsense and never says so. Only one model is downloaded, so this
             // choice is the whole of what most people will ever have on disk.
-            paragraph("Listen downloads one model, and this decides which. You can "
-                      + "change it later in Settings, and any single meeting can "
-                      + "use the other one.")
-            for choice in ModelChoice.all {
-                let radio = NSButton(radioButtonWithTitle: choice.answer,
-                                     target: self, action: #selector(pickModel(_:)))
-                radio.tag = ModelChoice.all.firstIndex { $0.id == choice.id } ?? 0
-                // Nothing is selected until the user selects it. `modelChosen`
-                // is the presence of the key, not a value that always has one,
-                // which is what lets this express "not yet asked".
-                radio.state = Settings.modelChosen && Settings.model.id == choice.id
-                    ? .on : .off
-                // Off while the bytes are arriving. Switching mid-download
-                // leaves 2.5 GB coming for a model nobody wants any more, and
-                // the download it would have to cancel is the one thing on this
-                // pane that cannot be undone in a second.
-                radio.isEnabled = !ModelDownload.shared.isDownloading
-                body.addArrangedSubview(radio)
-                // The trade-off, not the blurb, and the size after it. The
-                // blurb names the model's coverage, which the radio above has
-                // just said; what is left to tell somebody is what the choice
-                // costs them, in words they will recognise when it goes wrong.
-                let detail = NSTextField(wrappingLabelWithString:
-                    choice.tradeoff + (choice.isDownloaded
-                        ? " Already on disk."
-                        : " \(ModelChoice.humanBytes(choice.approxBytes)) download."))
-                detail.font = .systemFont(ofSize: 11)
-                detail.textColor = .secondaryLabelColor
-                // A wrapping label reports a one-line `fittingSize`, so without
-                // a width to wrap against it lays out one line high and the
-                // card clips it. See `.agents/notes/appkit.md`.
-                detail.preferredMaxLayoutWidth = 420
-                body.addArrangedSubview(detail)
+            paragraph("Listen downloads one model, and the languages you tick "
+                      + "decide which. You can change all of it later in Settings, "
+                      + "and any single meeting can use the other model.")
+
+            // Checkboxes rather than the two radio buttons this replaced.
+            //
+            // Those were "English only" against "English and other languages",
+            // which is the shape of the answer a two-model app needs rather
+            // than the shape of the question. It cannot say *which* other
+            // language, so nothing downstream could use it, and three things
+            // now need to: Apple's engine has to be told a language before it
+            // decodes and cannot guess, the phone has to know whether it can
+            // transcribe at all, and a thin transcript is only evidence of the
+            // wrong model if the reader claims to speak something else. See
+            // `Languages`.
+            for code in languageOptions {
+                let box = NSButton(checkboxWithTitle: Languages.name(code),
+                                   target: self, action: #selector(toggleLanguage(_:)))
+                box.state = shownLanguages.contains(code) ? .on : .off
+                box.identifier = NSUserInterfaceItemIdentifier(code)
+                // Off while the bytes are arriving, for the reason the radios
+                // were: switching mid-download leaves 2.5 GB coming for a model
+                // nobody wants any more, and that download is the one thing on
+                // this pane that cannot be undone in a second.
+                box.isEnabled = !ModelDownload.shared.isDownloading
+                body.addArrangedSubview(box)
             }
+
+            // The rest of them, behind one control rather than as thirty more
+            // checkboxes. What is on the pane is what this Mac is set up in,
+            // which is the answer for most people; the pull-down is for the
+            // language somebody speaks that their Mac has never been told about.
+            let more = NSPopUpButton()
+            more.addItem(withTitle: "Add a language…")
+            for code in Languages.all where !languageOptions.contains(code) {
+                more.addItem(withTitle: Languages.name(code))
+                more.lastItem?.identifier = NSUserInterfaceItemIdentifier(code)
+            }
+            more.target = self
+            more.action = #selector(addLanguage(_:))
+            more.isEnabled = !ModelDownload.shared.isDownloading
+            more.translatesAutoresizingMaskIntoConstraints = false
+            more.widthAnchor.constraint(equalToConstant: 220).isActive = true
+            body.addArrangedSubview(more)
+
+            // What the ticks mean, in the terms the choice costs. The models'
+            // own trade-offs are measured numbers about this library's names,
+            // and a language nothing here reads is named rather than left to be
+            // discovered in a transcript.
+            let detail = NSTextField(wrappingLabelWithString:
+                Languages.consequence(of: shownLanguages)
+                    + (shownChoice.isDownloaded
+                       ? " Already on disk."
+                       : " \(ModelChoice.humanBytes(shownChoice.approxBytes)) download."))
+            detail.font = .systemFont(ofSize: 11)
+            detail.textColor = .secondaryLabelColor
+            // A wrapping label reports a one-line `fittingSize`, so without a
+            // width to wrap against it lays out one line high and the card clips
+            // it. See `.agents/notes/appkit.md`.
+            detail.preferredMaxLayoutWidth = 460
+            body.addArrangedSubview(detail)
 
             // A download with no visible progress is indistinguishable from a
             // button that does nothing, and that is exactly how it was
@@ -527,7 +554,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // from `ModelDownload`, which owns the fetch, refuses to start a
             // second one, and can be watched by Settings at the same time.
             let status = ModelDownload.shared.status
-            let choice = Settings.model
+            let choice = shownChoice
             updateModelProgress(status)
 
             // The button is the consent. It names the model and its size, so
@@ -535,13 +562,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // costs.
             if status.isBusy {
                 primary.title = status.phaseKey == "loading" ? "Loading…" : "Downloading…"
-                primary.isEnabled = false
-            } else if !Settings.modelChosen {
-                // Named after the question above it, which asks about languages
-                // rather than models. "Choose a model" under "Which languages
-                // are your meetings in?" is the disabled button telling
-                // somebody to answer a question the pane is not asking.
-                primary.title = "Pick one to continue"
                 primary.isEnabled = false
             } else if case .failed = status {
                 primary.title = "Try again"
@@ -566,8 +586,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // download, because a download is the longest wait in setup and
             // leaving is a reasonable thing to want; the fetch carries on in
             // the background, where Settings, Models can follow it.
-            secondary.isHidden = Settings.modelChosen && choice.isDownloaded
-                && !status.isBusy
+            secondary.isHidden = choice.isDownloaded && !status.isBusy
             secondary.title = "Later"
 
             // Read here rather than in a callback, because the poll is already
@@ -656,9 +675,73 @@ final class Onboarding: NSObject, NSWindowDelegate {
         render()
     }
 
-    @objc private func pickModel(_ sender: NSButton) {
-        guard sender.tag < ModelChoice.all.count else { return }
-        Settings.model = ModelChoice.all[sender.tag]
+    /// The languages the pane is showing, chosen or merely prefilled.
+    ///
+    /// `Languages.likely` is a starting point and not an answer, which is why
+    /// nothing is written until somebody acts: `Settings.languagesChosen` is the
+    /// presence of the key, the same trick `modelChosen` uses to express "not
+    /// asked yet".
+    private var shownLanguages: [String] {
+        Settings.languagesChosen ? Settings.spokenLanguages : Languages.likely
+    }
+
+    /// Every language with a checkbox: what this Mac is set up in, plus
+    /// anything already ticked, in that order so the list does not reorder
+    /// itself under the pointer as boxes are ticked.
+    private var languageOptions: [String] {
+        var options = Languages.likely
+        for code in shownLanguages where !options.contains(code) { options.append(code) }
+        return options
+    }
+
+    /// The model these languages mean.
+    ///
+    /// A previously chosen model wins, because an install from before this
+    /// question existed already answered it a different way and this pane must
+    /// not silently re-decide it.
+    private var shownChoice: ModelChoice {
+        // `modelChosen` alone, not "either key is set". Languages can be on
+        // disk with no model beside them, which is what a phone's answer synced
+        // to a fresh Mac looks like, and reading that as "already decided"
+        // showed the pane recommending v3 in the sentence while the button
+        // offered to download v2.
+        Settings.modelChosen ? Settings.model : Languages.model(for: shownLanguages)
+    }
+
+    /// Write the shown answer down, at the moment the button is pressed.
+    ///
+    /// The press is the consent: the button names the model and its size, so
+    /// somebody who agrees with the prefill is not made to tick a box to say
+    /// so, and somebody who is about to spend 2.5 GB has read what it costs.
+    private func commitLanguages() {
+        let picked = shownLanguages
+        if !Settings.languagesChosen { Settings.spokenLanguages = picked }
+        if !Settings.modelChosen { Settings.model = Languages.model(for: picked) }
+    }
+
+    @objc private func toggleLanguage(_ sender: NSButton) {
+        guard let code = sender.identifier?.rawValue else { return }
+        var picked = shownLanguages
+        if sender.state == .on {
+            if !picked.contains(code) { picked.append(code) }
+        } else {
+            picked.removeAll { $0 == code }
+        }
+        // Never empty. Unticking the last language would leave the pane with
+        // nothing to derive a model from, and "no languages" is not an answer
+        // anybody means: it is a slip on the way to picking a different one.
+        guard !picked.isEmpty else { render(); return }
+        Settings.spokenLanguages = picked
+        Settings.model = Languages.model(for: picked)
+        render()
+    }
+
+    @objc private func addLanguage(_ sender: NSPopUpButton) {
+        guard let code = sender.selectedItem?.identifier?.rawValue else { return }
+        var picked = shownLanguages
+        if !picked.contains(code) { picked.append(code) }
+        Settings.spokenLanguages = picked
+        Settings.model = Languages.model(for: picked)
         render()
     }
 
@@ -695,7 +778,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
             }
             return
 
-        case .model where Settings.modelChosen:
+        case .model:
+            // The languages are written down here rather than as they are
+            // ticked, so the button that names the download is the thing that
+            // agrees to it. See `commitLanguages`.
+            commitLanguages()
             startModel()
             return
 
@@ -799,6 +886,12 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// running, and this window used to have no such guard at all.
     private func startModel() {
         let choice = Settings.model
+        // Nothing to fetch: Apple's assets are the system's, and its engine
+        // reaches this step only for a language no Parakeet reads.
+        if choice.isApple {
+            advance()
+            return
+        }
         // Loaded once already in this process, so there is nothing left to
         // find out and no reason to spend a second on it.
         if ModelDownload.shared.isVerified(choice) {

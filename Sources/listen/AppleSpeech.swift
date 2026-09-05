@@ -23,10 +23,10 @@ enum AppleSpeech {
         await SpeechTranscriber.supportedLocales.first { $0.identifier(.bcp47) == tag }
     }
 
-    /// Picks a locale for the language this Mac is set to.
+    /// Picks a locale, preferring the languages the user says they speak.
     ///
     /// **Order matters more than it looks, and the obvious orders are all
-    /// wrong.** Measured on this Mac, whose `Locale.current` is `en-PT`:
+    /// wrong.** Measured on a Mac whose `Locale.current` is `en-PT`:
     ///
     /// - Taking the first entry whose language matches yields **en-ZA**, because
     ///   `supportedLocales` is not ordered by usefulness.
@@ -39,52 +39,64 @@ enum AppleSpeech {
     /// So the region has to come from the language rather than from the list or
     /// from the user, and `Locale.Language.maximalIdentifier` is where that
     /// lives: `en` maximalises to `en-Latn-US`, `pt` to `pt-Latn-BR`, `nl` to
-    /// `nl-Latn-NL`. That step is what turns en-PT into en-US instead of en-ZA.
-    static func best() async -> Locale {
+    /// `nl-Latn-NL`.
+    ///
+    /// `preferring` is `Settings.spokenLanguages`, and it comes first because
+    /// somebody who said their meetings are in German means it whatever the Mac
+    /// is set to. The Mac's own language is the fallback, English the last
+    /// resort, and a language Apple cannot read is skipped rather than
+    /// substituted: the caller checked, and this is not the place to decide
+    /// that a Dutch meeting is English.
+    static func best(preferring codes: [String] = []) async -> Locale {
         let supported = await SpeechTranscriber.supportedLocales
         let installed = await SpeechTranscriber.installedLocales
         let mine = Locale.current
         let myLang = mine.language.languageCode?.identifier
-        let myRegion = mine.region?.identifier
 
-        func tag(_ l: Locale) -> String { l.identifier(.bcp47) }
+        var order = codes
+        if let myLang, !order.contains(myLang) { order.append(myLang) }
+        if !order.contains("en") { order.append("en") }
 
-        // 1. Exactly what the user runs.
-        if let exact = supported.first(where: { tag($0) == tag(mine) }) { return exact }
-
-        // 2. Same language and region, e.g. nl-BE.
-        if let lang = myLang, let region = myRegion,
-           let m = supported.first(where: {
-               $0.language.languageCode?.identifier == lang
-                   && $0.region?.identifier == region
-           }) { return m }
-
-        // 3. Same language, in that language's own default region: the en-ZA
-        //    fix. A speaker of English in Portugal means en-US far more than
-        //    they mean whichever variant happens to sort first.
-        if let lang = myLang {
-            let sameLanguage = supported.filter {
-                $0.language.languageCode?.identifier == lang
+        for code in order {
+            // The user's own locale, but only for their own language: an
+            // en-PT Mac says nothing about which Dutch to use.
+            if code == myLang {
+                if let exact = supported.first(where: {
+                    $0.identifier(.bcp47) == mine.identifier(.bcp47)
+                }) { return exact }
+                if let region = mine.region?.identifier,
+                   let m = supported.first(where: {
+                       $0.language.languageCode?.identifier == code
+                           && $0.region?.identifier == region
+                   }) { return m }
             }
-            let home = Locale(identifier: Locale.Language(identifier: lang)
-                .maximalIdentifier).region?.identifier
-            if let home,
-               let m = sameLanguage.first(where: { $0.region?.identifier == home }) {
+            if let m = variant(of: code, supported: supported, installed: installed) {
                 return m
             }
-            // 4. Same language, favouring an installed variant over a download.
-            if let ready = sameLanguage.first(where: { s in
-                installed.contains { tag($0) == tag(s) }
-            }) { return ready }
-            if let any = sameLanguage.first { return any }
         }
+        return Locale(identifier: "en-US")
+    }
 
-        // 5. English, preferring the common variants over whatever sorts first.
-        for preferred in ["en-US", "en-GB"] {
-            if let m = supported.first(where: { tag($0) == preferred }) { return m }
+    /// The variant of one language to use when the user's own region has none.
+    ///
+    /// The language's home region first, which is the en-ZA fix, then an
+    /// installed variant, then whatever there is.
+    private static func variant(of code: String, supported: [Locale],
+                                installed: [Locale]) -> Locale? {
+        let candidates = supported.filter {
+            $0.language.languageCode?.identifier == code
         }
-        return supported.first { $0.language.languageCode?.identifier == "en" }
-            ?? Locale(identifier: "en-US")
+        guard !candidates.isEmpty else { return nil }
+
+        let home = Locale(identifier: Locale.Language(identifier: code)
+            .maximalIdentifier).region?.identifier
+        if let home, let m = candidates.first(where: { $0.region?.identifier == home }) {
+            return m
+        }
+        if let ready = candidates.first(where: { c in
+            installed.contains { $0.identifier(.bcp47) == c.identifier(.bcp47) }
+        }) { return ready }
+        return candidates.first
     }
 
     /// Install whatever this module's locale needs, if anything.

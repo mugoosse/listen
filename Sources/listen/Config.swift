@@ -160,6 +160,12 @@ struct ModelChoice {
                 + "Dutch.",
         approxBytes: 0)
 
+    /// Whether this Mac can run Apple's engine at all.
+    static var appleIsAvailable: Bool {
+        if #available(macOS 26.0, *) { return true }
+        return false
+    }
+
     /// The engine half of an Apple model string, without a locale.
     static let appleRepo = "apple"
 
@@ -661,6 +667,37 @@ enum Settings {
     }
 
     static var modelChosen: Bool { defaults.string(forKey: modelKey) != nil }
+
+    private static let languagesKey = "spokenLanguages"
+
+    /// The languages this person's meetings are in, as ISO 639-1 codes.
+    ///
+    /// The answer setup actually asks for, kept rather than thrown away once it
+    /// has chosen a model. Three things need it afterwards and none of them can
+    /// reconstruct it from the model: Apple's engine has to be told a language
+    /// before it decodes, the phone has to know whether it can transcribe at
+    /// all, and a meeting that comes out thin is only suspicious if it is in a
+    /// language the reader claims to speak.
+    ///
+    /// Empty means nobody has been asked, which is not the same as "English":
+    /// every install before 0.33.0 chose a model without ever being asked this,
+    /// and reading that silence as a declaration would put words in their
+    /// mouth. `Languages.likely` is what the question is prefilled with.
+    static var spokenLanguages: [String] {
+        get { defaults.stringArray(forKey: languagesKey) ?? [] }
+        set { defaults.set(newValue, forKey: languagesKey) }
+    }
+
+    static var languagesChosen: Bool { !spokenLanguages.isEmpty }
+
+    /// The languages to decode in, falling back to what the Mac is set up in.
+    ///
+    /// Never empty, so a caller that needs a language has one. The fallback is
+    /// a guess and is labelled as one wherever it reaches the screen.
+    static var effectiveLanguages: [String] {
+        let stored = spokenLanguages
+        return stored.isEmpty ? Languages.likely : stored
+    }
 
     static var activeRepo: String { model.repo }
 }

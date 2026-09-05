@@ -733,11 +733,77 @@ final class MeetingsPane: Pane {
 final class ModelsPane: Pane {
     private var labels: [String: NSTextField] = [:]
     private var diarizerNote: NSTextField?
+    private var languageNote: NSTextField?
+
+    /// What this Mac is set up in, plus anything already ticked. Same rule as
+    /// setup's, so the two panes show the same list in the same order.
+    private var languageOptions: [String] {
+        var options = Languages.likely
+        for code in Settings.effectiveLanguages where !options.contains(code) {
+            options.append(code)
+        }
+        return options
+    }
     private var getButton: NSButton?
     private var progress: NSProgressIndicator?
     private var progressNote: NSTextField?
 
     override func build() {
+        heading("Languages")
+        note("Which languages your meetings are in. This is what setup asked, "
+             + "and it decides which model is right, which language Apple's "
+             + "engine decodes in, and whether your iPhone can transcribe "
+             + "without waiting for this Mac.")
+
+        for code in languageOptions {
+            let on = Settings.effectiveLanguages.contains(code)
+            stack.addArrangedSubview(checkbox(Languages.name(code), on) { [weak self] ticked in
+                var picked = Settings.effectiveLanguages
+                if ticked {
+                    if !picked.contains(code) { picked.append(code) }
+                } else {
+                    picked.removeAll { $0 == code }
+                }
+                // Never empty, for the reason setup gives: unticking the last
+                // one is a slip on the way to a different answer, not an answer.
+                guard !picked.isEmpty else { self?.refresh(); return }
+                Settings.spokenLanguages = picked
+                self?.refresh()
+            })
+        }
+
+        let more = NSPopUpButton()
+        more.addItem(withTitle: "Add a language…")
+        for code in Languages.all where !languageOptions.contains(code) {
+            more.addItem(withTitle: Languages.name(code))
+            more.lastItem?.identifier = NSUserInterfaceItemIdentifier(code)
+        }
+        let adder = ActionHandler { [weak self] sender in
+            guard let menu = sender as? NSPopUpButton,
+                  let code = menu.selectedItem?.identifier?.rawValue else { return }
+            var picked = Settings.effectiveLanguages
+            if !picked.contains(code) { picked.append(code) }
+            Settings.spokenLanguages = picked
+            self?.refresh()
+        }
+        more.target = adder
+        more.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(more, "handler", adder, .OBJC_ASSOCIATION_RETAIN)
+        more.translatesAutoresizingMaskIntoConstraints = false
+        more.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        stack.addArrangedSubview(more)
+
+        // The model these languages mean, next to the radios that can override
+        // it. Said rather than applied: somebody in Settings has already picked
+        // once, and a pane that silently re-decided the model under them would
+        // be changing a 2.5 GB download from a checkbox.
+        let suggestion = NSTextField(wrappingLabelWithString: "")
+        suggestion.font = .systemFont(ofSize: 11)
+        suggestion.textColor = .secondaryLabelColor
+        suggestion.preferredMaxLayoutWidth = 460
+        stack.addArrangedSubview(suggestion)
+        languageNote = suggestion
+
         heading("Speech model")
         note("Parakeet runs on this Mac. Nothing is uploaded. A meeting that "
              + "looks like it was held in another language is read again "
@@ -793,8 +859,10 @@ final class ModelsPane: Pane {
 
         note("v2 is the default because it is English-only and therefore cannot decode "
              + "your speech as another language. v3 covers 25 European languages but will "
-             + "sometimes misidentify a short clip, and there is no language picker "
-             + "because the underlying library ignores one.")
+             + "sometimes misidentify a short clip. Neither takes the languages "
+             + "above as an instruction: mlx-audio ignores the language it is "
+             + "handed, so for Parakeet they choose the model and nothing more. "
+             + "Apple's engine is the one that is genuinely told.")
 
         separator()
         heading("Speaker recognition")
@@ -806,6 +874,25 @@ final class ModelsPane: Pane {
     }
 
     override func refresh() {
+        let languages = Settings.effectiveLanguages
+        let wanted = Languages.model(for: languages)
+        let unread = Languages.missing(from: Settings.model, languages)
+        if !unread.isEmpty {
+            // The thing this pane exists to say out loud. A model that cannot
+            // read a language the user has just ticked will not error on it, it
+            // will write confident nonsense, which is the failure the whole of
+            // `SpokenLanguage` was built around.
+            languageNote?.stringValue =
+                "\(Settings.model.title) does not read \(Languages.list(unread))."
+                + " \(wanted.title) does."
+        } else if wanted.id != Settings.model.id {
+            languageNote?.stringValue =
+                "\(wanted.title) fits these languages. \(Settings.model.title) is"
+                + " selected below and reads them too."
+        } else {
+            languageNote?.stringValue = "\(Settings.model.title) reads all of these."
+        }
+
         for choice in ModelChoice.all {
             let text: String
             if choice.isDownloaded {

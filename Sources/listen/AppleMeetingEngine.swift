@@ -72,7 +72,11 @@ actor AppleMeetingEngine: ASREngine {
             }
             resolved = match
         } else {
-            resolved = await AppleSpeech.best()
+            // Nobody named a locale, so the languages the user says they speak
+            // decide it. That is the whole reason `Settings.spokenLanguages`
+            // exists: Parakeet is handed audio and guesses, Apple's engine is
+            // told and cannot.
+            resolved = await AppleSpeech.best(preferring: Settings.effectiveLanguages)
         }
         locale = resolved
         progress?("Apple speech, \(resolved.identifier(.bcp47))")

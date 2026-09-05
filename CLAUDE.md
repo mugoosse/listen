@@ -141,6 +141,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - MLX keeps every buffer it ever freed, until it is told a limit
 - A threshold measured on a 47-minute meeting drops the far end of a 9-second call
 - The model download reset to 0% and stayed there, on a reading of 41 KB
+- A run interrupted after its transcript strands `transcribing` for ever
 - v3 is not a better v2, and the difference is the proper nouns
 - A transcript v2 wrote cannot be asked what language it is in
 - The wrong model leaves a thin transcript, and thin is per second of audio

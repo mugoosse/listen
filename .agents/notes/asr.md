@@ -1214,3 +1214,46 @@ backwards", which is true of every quantity it is applied to because within one
 download the bytes on disk only grow. The abandoned-file trap the original note
 records is still closed: `previous` is only ever a file this process watched go
 live, so none of the stale temp files on a real machine can be picked up by it.
+
+## A run interrupted after its transcript strands `transcribing` for ever
+
+Reported from an iPhone: a meeting's row said "Transcribing on Maxime's MacBook"
+under a transcript the phone was already displaying, and the Mac's own window
+showed the same meeting finished, with speakers and percentages.
+
+Measured on the recording, seven minutes after nothing more was written:
+
+    2026-09-05-095520-4F66
+      state:               transcribing
+      transcribe_finished: null
+      transcript.json      11:06:55      turns.json 11:06:55
+      metadata.json        11:07:35      embeddings.json 11:07:36
+
+The mechanism is one step wide. `Pipeline` writes `transcript.json`, and
+`Queue` then calls `markTranscribed`, which writes the finished state. A quit, a
+crash, or 0.32.0 installing itself between those two leaves a recording that has
+its transcript and still says it is being transcribed. `Queue.resume` cannot
+recover it, because its whole rule is "audio and no transcript" and this has a
+transcript. Nothing else ever writes that field. It is stranded for the life of
+the library.
+
+**`effectiveState` hid it on the Mac and could not hide it anywhere else**, and
+that is the part worth keeping. Its own doc already names this exact case: "a
+process killed mid-job leaves `transcribing` behind for ever ... Deriving it here
+means no repair pass is needed." That is true of every screen on the Mac and
+false of `metadata.json`, which is the copy sync publishes. So the derived
+answer was right, the stored answer was wrong, and only the devices that could
+not see the derivation ever said so. The phone was not showing a bug of its own;
+it was the only place the Mac's bug was visible.
+
+`Queue.healStrandedRuns` writes the derived answer down at launch, for runs this
+Mac started (`transcribed_by`) and has plainly abandoned, since at launch nothing
+here is running yet. A run belonging to another Mac is left alone: that one ends
+when its lease expires, and this must not race it.
+
+The phone got the other half. `rowActivity` tested the stored state before
+`hasTranscript`, so it repeated `transcribing` while holding the transcript;
+both it and the recording page now treat a transcript in hand as outranking any
+state a Mac published. Either fix alone would have hidden the other, which is
+the argument for doing both: a device should not contradict evidence it holds,
+and a device should not publish a state it does not itself believe.

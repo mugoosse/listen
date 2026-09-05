@@ -78,10 +78,58 @@ final class Queue {
     /// needing state: a job interrupted by a quit is simply a recording whose
     /// transcript is still missing.
     func resume() {
+        healStrandedRuns()
         for recording in Recording.all() where !recording.hasTranscript {
             enqueue(recording.id)
         }
         if !waiting.isEmpty { trace("queued \(waiting.count) pending recording(s) at launch") }
+    }
+
+    /// Write the finished state for a run this Mac started and never ended.
+    ///
+    /// **"Audio and no transcript" is the whole resume rule, and it has a gap
+    /// exactly one step wide.** A run writes `transcript.json` and then
+    /// `markTranscribed` writes the state; a quit, a crash or an update
+    /// installing between those two leaves a recording that has its transcript
+    /// and still says `transcribing`. `resume` skips it, because it has a
+    /// transcript. Nothing else ever writes that field again. It is stranded
+    /// for the life of the library.
+    ///
+    /// **It was invisible on the Mac and permanent on the phone.**
+    /// `Recording.state` runs `effectiveState`, which reads a stored
+    /// `transcribing` over a transcript that exists as finished, so every
+    /// screen here looked right while `metadata.json` said otherwise and sync
+    /// published that to every other device. An iPhone showed "Transcribing on
+    /// Maxime's MacBook" under a meeting whose full transcript it was already
+    /// displaying. Found that way, on 0.32.0 installing itself mid-run.
+    ///
+    /// Only this device's own runs. `transcribed_by` names who started it, and
+    /// a run belonging to another Mac may still be going: that one is ended by
+    /// its lease expiring, not by this. At launch nothing here is running yet,
+    /// so a row this Mac started is one this Mac has abandoned.
+    private func healStrandedRuns() {
+        var healed = 0
+        for var recording in Recording.all() {
+            guard recording.metadata.state == Metadata.State.transcribing.rawValue,
+                  recording.hasTranscript,
+                  recording.metadata.transcribed_by == CloudSyncHost.deviceID
+            else { continue }
+            // The answer `effectiveState` has been giving on screen all along,
+            // written down so that every other device gets it too. Deriving it
+            // on read was the right call and it is only half of one: it fixed
+            // every screen on this Mac and left `metadata.json` saying the
+            // opposite, which is the copy sync publishes.
+            recording.metadata.state = recording.effectiveState.rawValue
+            if recording.metadata.transcribe_finished == nil {
+                recording.metadata.transcribe_finished = Metadata.iso(Date())
+            }
+            try? recording.save()
+            healed += 1
+        }
+        if healed > 0 {
+            trace("healed \(healed) recording(s) left saying transcribing by an interrupted run")
+            CloudSyncHost.shared.syncSoon()
+        }
     }
 
     /// Take a recording on, if it is this machine's to transcribe.

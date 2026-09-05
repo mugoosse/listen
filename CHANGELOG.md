@@ -8,6 +8,47 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.32.2 (2026-09-05)
+
+A speaker you have named keeps their voiceprint when you have a second Mac.
+
+### A rename lost its voiceprint to your other Mac
+
+Renaming a speaker writes the name into two files: the transcript, and the voice
+bank that lets Listen recognise that person in later meetings. The transcript
+kept the name. The bank did not, if you have a second Mac.
+
+Every per-recording file syncs with a record of what both devices last agreed,
+which is what tells "I edited this" apart from "I am behind". The voice bank was
+the one file without it, because it travels in a zone of its own so that a phone
+never receives a voiceprint at all, and that separation quietly took the
+agreement record with it. Whichever Mac wrote last won, so a second Mac that had
+not seen the rename pushed its old bank back over it.
+
+Nothing about it looked like a defect. The transcript still said the right name,
+so what you saw was Listen failing to recognise somebody it had already been
+taught. Measured on the development library: 27 of 60 recordings held a
+voiceprint under a label no transcript used, and 10 people were missing from the
+bank entirely.
+
+- The bank now carries the same agreement record every other file has. A rename
+  made here is kept and sent; a bank you have not touched still takes the other
+  Mac's version.
+- **This protects renames from now on and does not repair one already lost.**
+  `listen voices --repair` prints what it would fix and `--apply` fixes it, and
+  it is worth running only once every Mac on the library is on this version:
+  before that, the other one can still put the old bank back.
+- A single-Mac library was never affected. Nothing else was writing.
+
+### Also
+
+- A meeting whose transcription was interrupted no longer reports a made-up
+  duration after it is repaired. It says nothing about how long the run took,
+  which is the truth: nobody saw it finish.
+- On iPhone, a long press on the install ID in Settings, Privacy marks that
+  device as the developer's own, so its rows can be kept out of published
+  statistics. It changes nothing about what is sent.
+
 ## 0.32.1 (2026-09-05)
 
 A meeting whose transcription was interrupted no longer says it is still being

@@ -1,61 +1,24 @@
 import Foundation
+import ListenKit
 
-/// The languages Listen can read, and which engine reads which.
+/// Which model a set of languages means.
 ///
-/// **This exists because the model question is really a language question.**
-/// Setup has always asked "which languages are your meetings in" rather than
-/// "which model", because that is the question somebody can answer, but the
-/// answer used to be one of two radio buttons standing in for the two
-/// Parakeets. With a third engine that reads a different set again, and with
-/// Apple's needing to be *told* a language before it decodes rather than
-/// guessing one, the answer has to be an actual list of languages.
+/// The half of `Languages` that knows models exist, which is why it is here and
+/// not in ListenKit: the phone has no models to choose between, and the kit
+/// deliberately depends on nothing.
 ///
-/// Every set here is measured or from a model card, and they disagree in ways
-/// that matter:
+/// The three engines disagree in ways that matter, and all three numbers are
+/// measured over this library rather than taken from a leaderboard:
 ///
 /// - **v2** reads English and nothing else, and is the most accurate on this
 ///   library's names: 94 domain proper nouns over 12.9 hours.
-/// - **v3** reads 25 languages, the only engine here that reads Dutch, and
+/// - **v3** reads 25 languages, is the only engine here that reads Dutch, and
 ///   loses 39% of those names.
 /// - **Apple** reads 10 languages including Japanese, Korean and Chinese, which
 ///   no Parakeet here reads, and loses about a quarter of the names.
 ///
-/// So no engine dominates, the right one depends on who is speaking, and this
-/// is the one place that rule is written.
-enum Languages {
-    /// Parakeet v3's 25, as ISO 639-1 codes in the order its model card lists
-    /// them alphabetically by English name. Irish is absent, so this is not
-    /// simply the EU's official languages.
-    static let parakeet: Set<String> = [
-        "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de",
-        "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru",
-        "sk", "sl", "es", "sv", "uk",
-    ]
-
-    /// Apple's 10, measured from `SpeechTranscriber.supportedLocales` on macOS
-    /// 26.6 rather than read off a page. `DictationTranscriber` has more, and
-    /// is a different and lower-quality model: see `.agents/notes/asr.md`.
-    static let apple: Set<String> = [
-        "de", "en", "es", "fr", "it", "ja", "ko", "pt", "yue", "zh",
-    ]
-
-    /// Every language anything here can read, sorted by name.
-    static var all: [String] {
-        Array(parakeet.union(apple)).sorted { name($0) < name($1) }
-    }
-
-    /// The language's name in the reader's own language.
-    ///
-    /// From the system rather than a table, so it is right in every locale the
-    /// app runs in. Cantonese is the one the system declines to name on some
-    /// installs, and a code shown to a person is not an answer.
-    static func name(_ code: String) -> String {
-        if let name = Locale.current.localizedString(forLanguageCode: code) {
-            return name.prefix(1).uppercased() + name.dropFirst()
-        }
-        return code == "yue" ? "Cantonese" : code.uppercased()
-    }
-
+/// So no engine dominates and the right one depends on who is speaking.
+extension Languages {
     /// Whether this model reads this language.
     static func reads(_ choice: ModelChoice, _ code: String) -> Bool {
         if choice.isApple { return apple.contains(code) }
@@ -129,32 +92,5 @@ enum Languages {
                 + " need the other one, per recording."
         }
         return sentence
-    }
-
-    /// "Dutch", "Dutch and German", "Dutch, German and Polish".
-    static func list(_ names: [String]) -> String {
-        switch names.count {
-        case 0: return ""
-        case 1: return names[0]
-        default: return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
-        }
-    }
-
-    /// The languages this Mac is set up in, as a starting point for the
-    /// question rather than as an answer to it.
-    ///
-    /// `Locale.preferredLanguages` is the list in System Settings, which is the
-    /// closest thing the machine knows to "languages this person uses". English
-    /// is added because a meeting in English is the case that needs no
-    /// declaring and the one every reader here has.
-    static var likely: [String] {
-        var seen: [String] = []
-        for tag in Locale.preferredLanguages {
-            guard let code = Locale(identifier: tag).language.languageCode?.identifier,
-                  all.contains(code), !seen.contains(code) else { continue }
-            seen.append(code)
-        }
-        if !seen.contains("en") { seen.append("en") }
-        return seen
     }
 }

@@ -42,6 +42,46 @@ public struct Recording: Sendable, Identifiable {
     public var hasTranscript: Bool { Recording.exists(transcriptURL) }
     public var hasTurns: Bool { Recording.exists(turnsURL) }
 
+    /// `transcript.local.json`: what the device that recorded this could
+    /// transcribe for itself while it waited for the one that does it properly.
+    ///
+    /// **Deliberately not in any `DevicePolicy` sidecar list, and that is the
+    /// whole design.** A phone with iOS 26 can read its own recording in
+    /// seconds with Apple's engine, which is worth a great deal to somebody on
+    /// a train and is not worth putting into the library: it has no
+    /// diarization behind it, so nobody is named, and Apple's engine loses
+    /// about a quarter of this library's proper nouns against the model the
+    /// Mac runs. Syncing it would mean a worse transcript racing a better one
+    /// through a conflict rule, and the loser of that race is sometimes the
+    /// good one.
+    ///
+    /// So it never leaves the device that wrote it. The Mac transcribes the
+    /// audio exactly as it always has, and when its transcript arrives it wins
+    /// by simply existing: `turns` prefers the real thing, and the local copy
+    /// is deleted.
+    public var provisionalTranscriptURL: URL {
+        folder.appendingPathComponent("transcript.local.json")
+    }
+
+    public var hasProvisionalTranscript: Bool { Recording.exists(provisionalTranscriptURL) }
+
+    public var provisionalTranscript: StoredTranscript? {
+        guard let data = try? Data(contentsOf: provisionalTranscriptURL) else { return nil }
+        return try? JSONDecoder().decode(StoredTranscript.self, from: data)
+    }
+
+    /// Throw away the local copy, once there is a real one.
+    ///
+    /// Called where the real transcript is noticed rather than where it
+    /// arrives, because it arrives through sync, through a fresh install
+    /// pulling the library down, or through the folder simply being there on
+    /// launch, and a rule that has to be remembered in three places is a rule
+    /// that is missing from one of them.
+    public func dropProvisionalTranscript() {
+        guard hasTranscript, hasProvisionalTranscript else { return }
+        try? FileManager.default.removeItem(at: provisionalTranscriptURL)
+    }
+
     /// Whether any audio for this recording is on **this** device.
     ///
     /// False is ordinary here, not an error. The phone deletes its copy once
@@ -85,7 +125,15 @@ public struct Recording: Sendable, Identifiable {
     public var turns: [Turn] {
         guard let data = try? Data(contentsOf: turnsURL),
               let turns = try? JSONDecoder().decode([Turn].self, from: data)
-        else { return [] }
+        else {
+            // The device's own attempt, when nothing better has arrived. Here
+            // rather than at each screen so that everything reading a
+            // transcript sees the same one: the list, search, sharing and Ask
+            // all come through this property, and a fallback bolted onto the
+            // detail view alone would have made a meeting readable and
+            // unfindable at the same time.
+            return provisionalTranscript?.segments ?? []
+        }
         return turns
     }
 

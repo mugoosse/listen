@@ -163,6 +163,8 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - Apple's engine is a seam, not a swap, and the choice is a `ModelChoice`
 - SpeechTranscriber reads 10 languages, and Dutch is not one of them
 - en-ZA is what every obvious locale rule picks, Apple's own included
+- The model question is a language question, and the answer is kept now
+- The phone reads its own recording, and that transcript never syncs
 - Apple's engine loses a quarter of this library's proper nouns
 - Apple's word timings reconstruct the sentence exactly, and that is the check
 - Both engines are deterministic

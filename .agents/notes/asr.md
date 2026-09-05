@@ -830,6 +830,59 @@ one did.
 The number that decides it was measured the day the seam landed, and it is the
 section below.
 
+## The model question is a language question, and the answer is kept now
+
+Setup asked "which languages are your meetings in" from the beginning, and threw
+the answer away: it was two radio buttons standing in for the two Parakeets, so
+it could not say *which* other language and nothing downstream could use it.
+
+Three things need it now and none can reconstruct it from the model.
+
+- **Apple's engine is told a language before it decodes.** Parakeet is handed
+  audio and guesses; `SpeechTranscriber` is constructed for one locale. There is
+  no equivalent of "let it work it out".
+- **The phone has to know whether it can transcribe at all.** Apple reads ten
+  languages, Dutch is not one, and the phone's answer to a Dutch meeting has to
+  be "wait for the Mac" rather than a page of confident English.
+- **A thin transcript is only evidence of the wrong model** if the reader claims
+  to speak something else.
+
+`Settings.spokenLanguages` holds ISO 639-1 codes, `Languages` in ListenKit holds
+what each engine reads, and the ModelChoice half stays in the Mac app. Empty
+means nobody was asked, which is not English: every install before this chose a
+model without ever seeing the question.
+
+The list picks the engine rather than the other way round: v2 first because it
+is the most accurate on names, v3 next because it reads the most languages,
+Apple last and only where it exists. Where no single model covers everything the
+pane names the language that is left over and says whether anything here reads
+it, because "pick a different model and lose something else" and "this app
+cannot read your meetings" are different sentences and only one of them is
+about a preference.
+
+Driven through the uitest copy, which found two things a reading of the diff did
+not: the button offered v2 while the sentence recommended v3 whenever languages
+were set with no model beside them, and "nothing here reads Japanese" was false
+on a Mac that has Apple's engine.
+
+## The phone reads its own recording, and that transcript never syncs
+
+The iPhone runs the same engine now (`listen-ios`, `LocalTranscribe`), writing
+`transcript.local.json` the moment a recording ends. **It is in no
+`DevicePolicy` sidecar list and never leaves the device.** The Mac transcribes
+the audio exactly as it always has and its `transcript.json` replaces the local
+one by simply existing.
+
+That asymmetry is the measurement above rather than caution: Apple's engine
+finds 71 of v2's 94 proper nouns and the phone has no diarizer, so a synced
+phone transcript would put a worse one into a conflict rule against a better
+one. What the phone buys instead is the wait. A meeting recorded on a train used
+to be unreadable until a Mac woke up.
+
+`ListenKit.Recording.turns` is where the fallback lives, so the list, search,
+sharing and Ask all see the same transcript. A fallback in the detail view alone
+would have made a meeting readable and unfindable at the same time.
+
 ## Apple's engine loses a quarter of this library's proper nouns
 
 Same method as v2 against v3, because the point is to be comparable: occurrences

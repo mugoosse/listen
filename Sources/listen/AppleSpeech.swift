@@ -102,13 +102,19 @@ enum AppleSpeech {
 
     /// Whether this locale's assets are already on this Mac.
     ///
-    /// **`installedLocales` is the only thing that can answer this**, and the
-    /// two obvious alternatives both lie. Measured on macOS 26.6 against a Mac
-    /// holding en-US: `AssetInventory.status(forModules:)` returns `supported`
-    /// rather than `installed`, and `assetInstallationRequest(supporting:)`
-    /// hands back a non-nil request anyway. So a caller that reads "there is a
-    /// request, therefore something must be downloaded" says "downloading" on
-    /// every single run, which is what the first version of `install` did.
+    /// **`installedLocales` is the only thing that can answer this.**
+    /// `assetInstallationRequest(supporting:)` hands back a non-nil request for
+    /// a locale that is already installed, measured twice on macOS 26.6, so a
+    /// caller that reads "there is a request, therefore something must be
+    /// downloaded" says "downloading" on every single run. That is what the
+    /// first version of `install` did.
+    ///
+    /// `AssetInventory.status(forModules:)` is not the answer either, though it
+    /// is less clearly wrong: it reported `supported` for an installed en-US on
+    /// one reading and `installed` on a later one, with a French install in
+    /// between and nothing else changed. Whatever moved it, a value that can
+    /// say `supported` about a locale sitting in `installedLocales` is not a
+    /// test this can be built on.
     static func isInstalled(_ locale: Locale) async -> Bool {
         let tag = locale.identifier(.bcp47)
         return await SpeechTranscriber.installedLocales.contains {

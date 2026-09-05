@@ -4,6 +4,34 @@
 
 Who said what, and how a human corrects it. Read this before touching `People`, `TranscriptEditor`, `SpeakerName`, `VoiceBank`, `Enroll`, `Diarizer` or the legacy import.
 
+## The phone splits the voices and never names them
+
+`listen-ios` runs FluidAudio for itself now, at `Diarizer.roomThreshold` (0.75),
+which is the right one and not a default: a phone recording is one microphone
+carrying everybody, which is exactly the far-field case that number was measured
+for.
+
+**Measured against this library's own answer.** A 14-minute two-person room
+recording, seeded into the Simulator with the words already in place and the
+Mac's `turns.json` as the truth: 17 turns, **17 of 17 consistent**, Nick to A
+and Me to B with no crossover. The phone's split of that meeting is the Mac's
+split.
+
+What it deliberately does not do is name anybody. `DevicePolicy` predicted that
+the day the phone diarized, `embeddings.json` would have to sync both ways or
+the bank would forget every room meeting. That reversal did not happen, because
+the two halves come apart: separating voices needs the clusterer, naming them
+needs the bank, and only the second one is biometric. The vectors the phone
+builds live for the length of the call and are dropped with it.
+
+Two passes, and the order is the point: the words are written first and the
+letters land in a second write, because transcription is seconds and clustering
+is minutes on a long recording. `LocalTranscribe.speakersMark` is the resume
+marker in the model string, and it exists because iOS suspends an app within
+seconds of it leaving the screen: without it, a phone locked between the two
+passes would keep a placeholder letter for ever, since the file exists and
+nothing would look at it again.
+
 ## A sentence is edited, and a segment is what gets written
 
 Right-click a sentence in the transcript, choose Edit Sentence, correct it, click

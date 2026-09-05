@@ -133,6 +133,19 @@ public struct DevicePolicy: Sendable, Equatable {
     /// therefore not a small convenience but a reversal of a product decision,
     /// and `CLOUDKIT-PLAN.md` decision 6 is what would have to change first.
     ///
+    /// **The phone does diarize now, and the reversal above did not happen.**
+    /// The prediction assumed the two halves come together: separate the voices
+    /// and you will want to name them, and naming needs the bank. They come
+    /// apart. `listen-ios`'s `LocalDiarize` splits a room recording into A, B
+    /// and C and stops there, which needs no voiceprint from anywhere: the
+    /// vectors its clusterer builds live for the length of the call and are
+    /// dropped with it, nothing is written and nothing is uploaded. The Mac
+    /// still owns every name, and its transcript replaces the phone's.
+    ///
+    /// So this set keeps its shape for a better reason than before. It is not
+    /// that the phone has nothing that reads a voiceprint; it is that a phone
+    /// which separates voices without naming them never needs one.
+    ///
     /// The same decision gives `dictionary.json` below a reader it did not have
     /// when this file was written.
     ///

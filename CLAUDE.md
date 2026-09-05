@@ -165,6 +165,7 @@ How audio becomes a transcript. `ASR`, `Chunking`, `Pipeline`, `Queue`,
 - en-ZA is what every obvious locale rule picks, Apple's own included
 - The model question is a language question, and the answer is kept now
 - The phone reads its own recording, and that transcript never syncs
+- The phone splits the voices and never names them
 - Apple's engine loses a quarter of this library's proper nouns
 - Apple's word timings reconstruct the sentence exactly, and that is the check
 - Both engines are deterministic

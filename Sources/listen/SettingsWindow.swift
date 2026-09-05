@@ -734,6 +734,7 @@ final class ModelsPane: Pane {
     private var labels: [String: NSTextField] = [:]
     private var diarizerNote: NSTextField?
     private var languageNote: NSTextField?
+    private var languageStack: NSStackView?
 
     /// What this Mac is set up in, plus anything already ticked. Same rule as
     /// setup's, so the two panes show the same list in the same order.
@@ -755,43 +756,19 @@ final class ModelsPane: Pane {
              + "engine decodes in, and whether your iPhone can transcribe "
              + "without waiting for this Mac.")
 
-        for code in languageOptions {
-            let on = Settings.effectiveLanguages.contains(code)
-            stack.addArrangedSubview(checkbox(Languages.name(code), on) { [weak self] ticked in
-                var picked = Settings.effectiveLanguages
-                if ticked {
-                    if !picked.contains(code) { picked.append(code) }
-                } else {
-                    picked.removeAll { $0 == code }
-                }
-                // Never empty, for the reason setup gives: unticking the last
-                // one is a slip on the way to a different answer, not an answer.
-                guard !picked.isEmpty else { self?.refresh(); return }
-                Settings.spokenLanguages = picked
-                self?.refresh()
-            })
-        }
-
-        let more = NSPopUpButton()
-        more.addItem(withTitle: "Add a language…")
-        for code in Languages.all where !languageOptions.contains(code) {
-            more.addItem(withTitle: Languages.name(code))
-            more.lastItem?.identifier = NSUserInterfaceItemIdentifier(code)
-        }
-        let adder = ActionHandler { [weak self] sender in
-            guard let menu = sender as? NSPopUpButton,
-                  let code = menu.selectedItem?.identifier?.rawValue else { return }
-            var picked = Settings.effectiveLanguages
-            if !picked.contains(code) { picked.append(code) }
-            Settings.spokenLanguages = picked
-            self?.refresh()
-        }
-        more.target = adder
-        more.action = #selector(ActionHandler.fire(_:))
-        objc_setAssociatedObject(more, "handler", adder, .OBJC_ASSOCIATION_RETAIN)
-        more.translatesAutoresizingMaskIntoConstraints = false
-        more.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        stack.addArrangedSubview(more)
+        // A container of its own, because these rows change after the pane is
+        // built and `build()` runs once. The first version added the checkboxes
+        // straight to `stack` and re-rendered nothing: adding Dutch from the
+        // pull-down wrote the setting and updated the sentence underneath, and
+        // left no row to see it by and no way to untick it.
+        let host = NSStackView()
+        host.orientation = .vertical
+        host.alignment = .leading
+        host.spacing = 8
+        host.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(host)
+        languageStack = host
+        renderLanguages()
 
         // The model these languages mean, next to the radios that can override
         // it. Said rather than applied: somebody in Settings has already picked
@@ -871,6 +848,73 @@ final class ModelsPane: Pane {
         // Follow a download this pane did not start, including the implicit
         // one a recording triggers.
         ModelDownload.shared.onChange = { [weak self] in self?.refresh() }
+    }
+
+    /// Draw the language rows, and draw them again whenever they change.
+    ///
+    /// Rebuilt wholesale rather than patched. The set is small, the order comes
+    /// from `languageOptions` and would have to be recomputed anyway, and the
+    /// pull-down is easier to replace than to reset: an `NSPopUpButton` wears
+    /// the last thing picked as its title, so the control that reads "Add a
+    /// language…" read "French" from the moment it was used.
+    private func renderLanguages() {
+        guard let host = languageStack else { return }
+        for view in host.arrangedSubviews {
+            host.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let picked = Settings.effectiveLanguages
+        for code in languageOptions {
+            let box = NSButton(checkboxWithTitle: Languages.name(code),
+                               target: nil, action: nil)
+            box.state = picked.contains(code) ? .on : .off
+            let handler = ActionHandler { [weak self] sender in
+                let ticked = (sender as? NSButton)?.state == .on
+                var next = Settings.effectiveLanguages
+                if ticked {
+                    if !next.contains(code) { next.append(code) }
+                } else {
+                    next.removeAll { $0 == code }
+                }
+                // Never empty, for the reason setup gives: unticking the last
+                // one is a slip on the way to a different answer, not an
+                // answer. Redrawn rather than left alone, so the box that was
+                // just cleared comes back on.
+                guard !next.isEmpty else { self?.renderLanguages(); return }
+                Settings.spokenLanguages = next
+                self?.renderLanguages()
+                self?.refresh()
+            }
+            box.target = handler
+            box.action = #selector(ActionHandler.fire(_:))
+            objc_setAssociatedObject(box, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+            host.addArrangedSubview(box)
+        }
+
+        // Only what is not already a row above, so the pull-down shrinks as the
+        // list grows and nothing can be added twice.
+        let more = NSPopUpButton()
+        more.addItem(withTitle: "Add a language…")
+        for code in Languages.all where !languageOptions.contains(code) {
+            more.addItem(withTitle: Languages.name(code))
+            more.lastItem?.identifier = NSUserInterfaceItemIdentifier(code)
+        }
+        let adder = ActionHandler { [weak self] sender in
+            guard let menu = sender as? NSPopUpButton,
+                  let code = menu.selectedItem?.identifier?.rawValue else { return }
+            var next = Settings.effectiveLanguages
+            if !next.contains(code) { next.append(code) }
+            Settings.spokenLanguages = next
+            self?.renderLanguages()
+            self?.refresh()
+        }
+        more.target = adder
+        more.action = #selector(ActionHandler.fire(_:))
+        objc_setAssociatedObject(more, "handler", adder, .OBJC_ASSOCIATION_RETAIN)
+        more.translatesAutoresizingMaskIntoConstraints = false
+        more.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        host.addArrangedSubview(more)
     }
 
     override func refresh() {

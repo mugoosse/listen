@@ -8,6 +8,73 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.33.0 (2026-09-06)
+
+Listen asks which languages your meetings are in, and your iPhone reads its own
+recordings instead of waiting for a Mac.
+
+### Which languages, rather than which model
+
+Setup has always asked this, and the answer used to be two radio buttons
+standing in for two models: English only, or English and others. It could not
+say *which* other language, so nothing could use it and nothing kept it.
+
+It is a list of languages now, prefilled from what this Mac is set up in, and
+the answer is kept. Three things need it. Apple's engine has to be told a
+language before it decodes and cannot guess one. Your iPhone has to know whether
+it can read a recording at all. And a transcript that comes out thin is only
+evidence of the wrong model if you speak something else.
+
+Settings, Models asks the same question and says what your answer means. It does
+not switch models for you: v3 reads 25 languages and loses about 4 in 10
+mentions of names like Claude, WhatsApp or ChatGPT, so which side of that you
+want is a decision rather than a setting.
+
+### Your iPhone reads its own recordings
+
+Needs iOS 26. A recording made on the phone used to be unreadable until a Mac
+was awake with Listen running, which can be hours. It is now transcribed on the
+phone the moment it ends, with Apple's on-device speech, and the voices in a
+room are split into A, B and C.
+
+- **Nothing is sent anywhere, and that transcript never leaves the phone.** Your
+  Mac still transcribes the audio properly when it arrives, with the model that
+  hears names better and the voice bank that knows who people are, and its
+  version replaces the phone's. The phone's is there to read on the train.
+- **No voiceprint made on the phone leaves it.** Splitting voices needs no
+  voice bank, and none is sent to the phone or taken from it.
+- Apple's engine reads ten languages, and Dutch is not among them. A recording
+  in a language it cannot read waits for your Mac exactly as before, rather than
+  being read as English.
+
+### A capture that is interrupted is no longer lost
+
+If iOS stopped the app in the middle of a recording, the audio was on disk and
+the app could not see it: a recording was only published when it stopped
+cleanly. Anything a previous run left behind is published at the next launch
+instead, with its length read back from the audio.
+
+The thing that was stopping those captures is fixed too. A catch-up pass could
+pick a recording it was unable to read, decline it, and pick it again
+immediately, for ever. On a locked phone that spent enough of the processor for
+iOS to kill the app, taking the recording with it.
+
+### Also
+
+- Settings, Models says which of Apple's speech languages this Mac has, and
+  fetches one it is missing. Dictation offers every locale Apple supports rather
+  than only the ones already installed, so a language you have never dictated in
+  can be chosen.
+- A model's size on disk now says why it is roughly twice its download: the same
+  file is kept twice, once by the download cache and once by the loader.
+- Playing a recording back on iPhone is no longer almost inaudible. Playback was
+  inheriting the mode the recorder uses to turn off the processing iOS applies
+  to microphone input.
+- `listen transcribe --model apple` reads a meeting with Apple's engine on macOS
+  26. It is not offered in the window and is not the default: measured over 12.9
+  hours of real meetings, it finds 71 of the 94 domain proper nouns Parakeet v2
+  finds.
+
 ## 0.32.2 (2026-09-05)
 
 A speaker you have named keeps their voiceprint when you have a second Mac.

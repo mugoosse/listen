@@ -15,9 +15,8 @@ public struct Voiceprint: Codable, Sendable {
 
     /// Seconds of speech it was built from.
     ///
-    /// Under 15 seconds the embedding is stored but not used as evidence: it is
-    /// too short to be a reliable identity, and a confident wrong suggestion in
-    /// the labelling UI is worse than no suggestion.
+    /// Two floors, because asking and answering are different risks. See
+    /// `minimumSpeechForEvidence` and `minimumSpeechForQuery`.
     public var speech: Double
 
     /// True when the bank named this speaker rather than a person doing it.
@@ -38,9 +37,44 @@ public struct Voiceprint: Codable, Sendable {
         self.embedding = embedding; self.speech = speech; self.auto = auto
     }
 
+    /// How much speech a print needs before the bank will match *against* it.
+    ///
+    /// The expensive direction. Evidence is what every later recording is
+    /// scored against, so one unreliable identity in here is not one wrong
+    /// name, it is a wrong name that recruits the next one: this library has
+    /// already had different-person pairs go from +0.371 to +0.871 off a single
+    /// bad print. Nothing cheap is worth loosening this.
     public static let minimumSpeechForEvidence: Double = 15
 
+    /// How much speech a print needs before the bank will ask *who it is*.
+    ///
+    /// **A third of the evidence floor, deliberately.** One number used to do
+    /// both jobs, and it made the phone useless at the thing a phone is for: a
+    /// nine-second memo is one voice saying one thing, which is the easiest
+    /// identification in the library and the one Listen refused to make. A Mac
+    /// never noticed because a meeting clears fifteen seconds in its first
+    /// minute.
+    ///
+    /// Measured over all 81 named prints in the development library, scoring
+    /// each against a bank built from every other recording. Under five seconds
+    /// the top match was wrong both times it was tried (2.9 s and 4.4 s, both
+    /// held back by `certainThreshold` rather than by any floor). At five
+    /// seconds and above it was right every time, and the three that cleared
+    /// both gates were all correct at +0.81 to +0.86. The two auto-assignments
+    /// that *would* have been wrong came from 329 and 404 seconds of speech, so
+    /// length was never what separated them: `autoAssignable` was.
+    ///
+    /// What makes the cheaper floor affordable is that a wrong answer here is
+    /// visible and undoable. It is stamped `auto`, it never becomes evidence,
+    /// the Mac records it in `auto_named`, and on the phone the speaker chip
+    /// opens `SpeakerNameSheet` on one tap. A wrong entry in the evidence pool
+    /// has none of those properties, which is why that floor does not move.
+    public static let minimumSpeechForQuery: Double = 5
+
     public var isEvidence: Bool { speech >= Self.minimumSpeechForEvidence }
+
+    /// Whether this print is worth asking the bank about.
+    public var canQuery: Bool { speech >= Self.minimumSpeechForQuery }
 }
 
 /// How sure the voice bank is, in the only terms anybody can act on.

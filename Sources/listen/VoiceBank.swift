@@ -62,7 +62,7 @@ enum VoiceBank {
     /// adds is the Mac's idea of where the candidates come from: every other
     /// recording's `embeddings.json`, filtered to what counts as evidence.
     static func suggestions(for speaker: String, in recording: Recording) -> [VoiceMatch] {
-        guard let mine = recording.voiceprints[speaker], mine.isEvidence else { return [] }
+        guard let mine = recording.voiceprints[speaker], mine.canQuery else { return [] }
         var prints: [String: [[Float]]] = [:]
         for other in Recording.all() where other.id != recording.id {
             VoiceBankCore.addEvidence(from: other.voiceprints, to: &prints)

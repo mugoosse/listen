@@ -329,9 +329,9 @@ enum CLI {
             print(head)
 
             guard let p = print_ else { print("      no voiceprint"); continue }
-            guard p.isEvidence else {
-                print("      under \(Int(Voiceprint.minimumSpeechForEvidence))s, "
-                      + "too short to be an identity")
+            guard p.canQuery else {
+                print("      under \(Int(Voiceprint.minimumSpeechForQuery))s, "
+                      + "too short to ask about")
                 continue
             }
             let ranked = VoiceBank.suggestions(for: speaker, in: recording)

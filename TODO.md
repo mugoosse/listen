@@ -3,8 +3,13 @@
 Where the project is, what is left, and what needs a decision. Update this in
 the same commit as the work it describes.
 
-Last updated: audio on every device, and who is transcribing, all six steps in.
-All unreleased; 0.2.0 is the last thing published.
+Last updated: 6 September 2026, the Apple engine seam, the languages question
+and an iPhone that reads its own recordings. See **Before 0.33.0 ships** below,
+which is the live list. 0.32.2 is the last thing published.
+
+Older sections have rotted: several entries under Known defects and Not yet
+verified were closed months ago and say so nowhere. Read `.agents/notes/` first
+for anything about transcription, speakers or capture; those are maintained.
 
 ## Milestones
 
@@ -83,6 +88,62 @@ starts running with no other change.
 `[[String: Any]]` segment dictionaries. Purely additive, cannot break any
 consumer, makes a clean upstream PR. Needs a decision on forking versus waiting
 on upstream.
+
+## Before 0.33.0 ships
+
+Two apps, one release. What went in: an engine seam so a meeting can be read by
+Apple's `SpeechTranscriber` as well as by Parakeet, a languages question that
+keeps its answer, and an iPhone that transcribes and diarizes its own
+recordings. Every measurement behind them is in `.agents/notes/asr.md`,
+`.agents/notes/speakers.md` and `listen-ios/spec/02-capture-and-transfer.md`.
+This is only what is left.
+
+### Blocking
+
+- [ ] **A 60-minute capture on a phone Xcode is not holding.** Every capture
+      test so far has been under the debugger, and the 5 September loss was
+      DTServiceHub's RunningBoard assertion dropping and launchd sending signal
+      9. Launch from the Home screen, lock the phone, leave it an hour. This is
+      the test that decides whether the 26 August case (34 minutes recorded,
+      14:17 kept, no debugger) is a real defect or the same artifact.
+- [ ] **Re-test the three iPhone fixes on the device**: an interrupted capture
+      appears by itself, playback is audible, a two-person memo splits into A
+      and B with a one-word interjection on the right person.
+- [ ] **The Mac verify suite**, which has only been run in part:
+      `verify_language.sh` and `sync --fake` pass. `verify_onboarding.sh` is the
+      one that matters most, because setup's model step was rewritten.
+- [ ] Merge both branches to main, write the `## 0.33.0` changelog section, bump
+      `VERSION`, `./release.sh --publish`, dispatch the homebrew workflow. For
+      the phone, bump the version and build and run
+      `tools/release_testflight.sh`.
+
+### Shipping known, each with a measurement behind it
+
+- **Apple's engine is not selectable in the Mac UI**, only `--model apple` and
+  `LISTEN_ENGINE=apple`. It finds 71 of the 94 domain proper nouns v2 finds over
+  12.9 hours of this library, so it should not be the default, and a control
+  offering it needs a sentence saying that.
+- **The phone's diarizer misses short interjections.** A 45-second memo split
+  into A and B correctly; a 5-minute one where the second person only
+  interjects came back as one speaker, at three thresholds, amplified, and with
+  the speaker count forced to two.
+- **Phone captures are about 13 dB quieter** than the ones this library was
+  built on: peak -19.7 dBFS against -8 to 0. `.measurement` mode is doing
+  exactly what it promises. Whether that costs speaker separation is untested
+  and is the obvious next experiment.
+
+### Decided, not done
+
+- **Voiceprints on the phone.** Now possible: the objection in `DevicePolicy`
+  was that the phone had nothing that reads one, and since it diarizes that is
+  no longer true. The bank is 864 KB across 68 recordings, and `VoiceBank`'s
+  thresholds are already measured and portable. The design that avoids the
+  reversal that comment feared is **down-sync only**: the bank reaches the
+  phone, the phone's own embeddings never leave it, because the Mac re-diarizes
+  the audio anyway. What it costs is biometric material on a second device,
+  which wants a switch and a line in the privacy copy rather than a silent
+  default. Not before the interjection problem is understood: a name on a wrong
+  letter is worse than a letter.
 
 ## Known defects
 

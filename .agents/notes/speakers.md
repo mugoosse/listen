@@ -4,9 +4,9 @@
 
 Who said what, and how a human corrects it. Read this before touching `People`, `TranscriptEditor`, `SpeakerName`, `VoiceBank`, `Enroll`, `Diarizer` or the legacy import.
 
-## The phone splits the voices and never names them
+## The phone splits the voices and names them
 
-`listen-ios` runs FluidAudio for itself now, at `Diarizer.roomThreshold` (0.75),
+`listen-ios` runs FluidAudio for itself, at `Diarizer.roomThreshold` (0.75),
 which is the right one and not a default: a phone recording is one microphone
 carrying everybody, which is exactly the far-field case that number was measured
 for.
@@ -17,13 +17,6 @@ Mac's `turns.json` as the truth: 17 turns, **17 of 17 consistent**, Nick to A
 and Me to B with no crossover. The phone's split of that meeting is the Mac's
 split.
 
-What it deliberately does not do is name anybody. `DevicePolicy` predicted that
-the day the phone diarized, `embeddings.json` would have to sync both ways or
-the bank would forget every room meeting. That reversal did not happen, because
-the two halves come apart: separating voices needs the clusterer, naming them
-needs the bank, and only the second one is biometric. The vectors the phone
-builds live for the length of the call and are dropped with it.
-
 Two passes, and the order is the point: the words are written first and the
 letters land in a second write, because transcription is seconds and clustering
 is minutes on a long recording. `LocalTranscribe.speakersMark` is the resume
@@ -31,6 +24,125 @@ marker in the model string, and it exists because iOS suspends an app within
 seconds of it leaving the screen: without it, a phone locked between the two
 passes would keep a placeholder letter for ever, since the file exists and
 nothing would look at it again.
+
+### It used to stop at letters, and the argument for that expired
+
+`DevicePolicy` predicted that the day the phone diarized, `embeddings.json`
+would have to sync both ways. When the day came the prediction was declined, and
+the reasoning was sound as far as it went: separating voices needs the
+clusterer, naming them needs the bank, only the second is biometric, so the
+vectors could live for the length of the call and be dropped with it.
+
+What that bought was A, B and C on the screen of the person who had just been in
+the room, for the hour until a Mac woke up. The bank was sitting in `z2`, sealed
+with the same key, on a phone already holding every transcript in the library.
+Withholding it was not privacy, it was a feature half-built. It also rested on
+a claim that was measurably false: `embeddings.json` was said to be the largest
+sidecar and is not. Measured on this library, 6 September 2026: **74 banks,
+920 KB, about 12 KB each**, against 2.4 MB of `turns.json` and 1.2 MB of
+`waveform.json` the phone has always taken.
+
+`DevicePolicy.phone` takes it now, behind *Recognise voices on this iPhone*,
+default on. Off is a real off: `PhoneVoiceBank.forgetEverything` drops every
+bank and every `bank:` stamp, and the device unsubscribes from the zone.
+
+### The arithmetic is one file, shared
+
+`VoiceBankCore` in ListenKit holds the thresholds, the cosine, the centroid, the
+ranking and the evidence rule. The Mac's `VoiceBank` keeps everything that
+writes and delegates the rest.
+
+**That is not tidiness. It is the only way the two devices can be relied on to
+give the same answer.** A second copy of `certainThreshold` is how a phone comes
+to name somebody the Mac then quietly unnames an hour later, which reads as the
+Mac undoing good work. `VoiceBankCore.average` is in there for the same reason
+one layer down: both `Diarizer.run` and `LocalDiarize` build a per-speaker vector
+by averaging FluidAudio segments, and a different mean on each side is a person
+who does not quite match themselves.
+
+**Measured end to end, on real voices** by `listen-ios/tools/voices_e2e.sh`. It
+cuts 130 s out of a real room recording, hands it to the phone as something the
+phone recorded, seeds every *other* recording's bank, and runs twice:
+
+```
+bank knows them:    Me   +0.835 over 39 prints, margin +0.449
+                    Nick +0.892 over 4 prints,  margin +0.541
+bank never heard:   A    +0.236, margin +0.014   -> stays a letter
+                    B    +0.354, margin +0.157   -> stays a letter
+```
+
+The second round is the one that matters. A recogniser that cannot decline is a
+name generator, and the declining numbers land exactly in the different-person
+band these thresholds were measured against.
+
+The run also turned up something worth knowing: the phone named a speaker the
+Mac's stored transcript had left as `B`, correctly, at +0.835. The Mac hands out
+letters on a room and names only what the bank is sure of at the time; the phone
+asking again later with a fuller bank is not a disagreement, it is a second look.
+
+### Old room recordings hold a `Me` print that is the whole room
+
+Measured 6 September 2026, every human-named `Me` print scored against the
+centroid of all the others:
+
+    call  (mic track is only you)      n=31  min +0.725  median +0.869
+    room  (one mic carried everybody)  n=8   min +0.382  median +0.785
+
+and inside the rooms it degrades with how much of the room is not you. The two
+worst are a 48-minute workshop with three other speakers (709 s under `Me`, at
++0.382 from the user and +0.756 from the person who talks most) and a 14-minute
+two-hander (744 s under `Me`, +0.685 and +0.751). Those two are what
+`calibrate`'s different-person maximum of +0.942 is made of.
+
+**They are merged prints from a pipeline that no longer runs.** A correctly
+detected room takes the room path, which writes one print per voice and never
+reaches `printUser`. Re-transcribing the 14-minute one with today's build:
+
+    before   Me 744s              +0.685 vs Me, +0.751 vs Nick
+    after    A 404s   Nick +0.882 (then Me   +0.367)
+             B 331s   Me   +0.849 (then Nick +0.328)
+
+so the repair is `listen transcribe <id>` and there is nothing to change in the
+code. A guard added to `printUser` on the same day was reverted once this was
+measured: it sat on a path a room never takes, and the one recording it was
+tested against showed it removing a print that was fine.
+
+`listen voices --repair` cannot see either of them, because `VoiceBank.repairs`
+excludes `Pipeline.userLabel` from its orphan search. A bank key of `Me` with no
+`Me` anywhere in the transcript is exactly the shape it is built to find, and
+the one shape it refuses to look at.
+
+### A person's word, and how it survives the Mac
+
+Everything above is a guess and is stamped `auto`, which is the flag that keeps
+it out of the candidate set for ever after. Tapping a letter opens
+`SpeakerNameSheet`, and that is the one write on the phone that is **not** a
+guess: `PhoneVoiceBank.name` is `VoiceBank.rename` in phone shape, with the same
+three rules (the print moves with the name, `auto` is cleared, a merge keeps
+whichever print has more speech). It refuses on a `transcript.json`, because a
+Mac authored that one.
+
+Then it has to survive the Mac, which is about to run the real pipeline over the
+same audio and replace that bank with its own clusters. Two things stop the name
+being thrown away:
+
+1. **`CloudSyncCore.speaksFor`** keeps the recording the phone's to speak for
+   once a person has named somebody on it, so the bank goes on travelling. It is
+   the same predicate on the push and on the pull's conflict test, deliberately:
+   a device that stops sending its copy and goes on defending it reports the
+   same conflict on every pass for ever.
+2. **`Pipeline.adoptNames`** reads the prior bank before replacing it and
+   carries every human name onto the matching fresh cluster, renaming the
+   transcript, the turns and the bank in one go, because a bank that says Marcia
+   over a transcript that says A is exactly the damage `listen voices --repair`
+   exists to undo.
+
+The threshold there is `certainThreshold` again, and it is a far wider margin
+than where it was measured: both vectors come from the same audio, so a correct
+match scores around +0.95 rather than the +0.84 a good cross-recording match
+manages. Automatic names are deliberately not carried, because this run is a
+better-informed guess over better audio and letting the old one win would freeze
+the first guess in place.
 
 ## A sentence is edited, and a segment is what gets written
 

@@ -267,6 +267,23 @@ public actor CloudKitStore: RecordStore {
         }
     }
 
+    /// Stop being woken by a zone.
+    ///
+    /// The other half of `subscribe`, and it exists because a device can change
+    /// its mind: *Recognise voices on this iPhone* turns off, the phone stops
+    /// keeping voiceprints, and a subscription left behind would go on waking
+    /// it every time a Mac learns a voice it has asked not to hold. Saving is
+    /// idempotent and so is this: deleting a subscription that is not there
+    /// succeeds.
+    public func unsubscribe(from zones: [CloudNaming.Zone]) async {
+        for zone in zones {
+            _ = try? await pacing {
+                try await database.modifySubscriptions(
+                    saving: [], deleting: ["sub-" + zone.rawValue])
+            }
+        }
+    }
+
     // MARK: - Save
 
     public func save(_ record: StoredRecord) async throws -> StoredRecord {

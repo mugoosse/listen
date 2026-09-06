@@ -43,7 +43,8 @@ public enum CloudNaming {
     public enum Zone: String, Sendable, CaseIterable {
         /// Recordings, notes, and the library-level files.
         case library = "z1"
-        /// `embeddings.json`, one per recording. Macs only.
+        /// `embeddings.json`, one per recording. Every Mac reads and writes
+        /// it; a phone with *Recognise voices* on reads it and never writes.
         case voiceprints = "z2"
         /// One record per device.
         case devices = "z3"

@@ -8,6 +8,67 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.34.0 (2026-09-06)
+
+Your iPhone knows who is speaking.
+
+### The voice bank reaches your phone
+
+Listen learns voices on your Mac, and until now that is where they stayed. A
+recording made on your iPhone showed A, B and C until a Mac woke up, claimed the
+audio and named everybody, which could be an hour or a day.
+
+The voices travel now. Your iPhone holds the same bank, sealed with the same key
+through the same private container, so a conversation you record in a kitchen
+has people's names on it within a minute of it ending. Measured on a real
+library: a two-minute room recording, the phone's own separation, names applied
+at +0.89 and +0.84 confidence against voiceprints made on other days in other
+rooms.
+
+It travels both ways. A voice your phone hears first reaches your Macs, so
+somebody you met while your laptop was shut is somebody Listen knows afterwards.
+
+**Nothing is guessed twice.** Every name the phone applies on its own is marked
+as the bank's guess, and a guess is never the evidence for the next one. Where
+two devices have heard the same conversation the Mac's pass wins, because it
+had the separated tracks and the time.
+
+**Say who somebody is, from your phone.** Tap a letter in a transcript your
+iPhone read and name the person. That is the one thing on the phone the bank
+treats as a person's word rather than a guess, and it survives: the Mac carries
+it onto its own transcript of the same conversation instead of writing over it.
+
+**It is a switch, and off means gone.** *Recognise voices on this iPhone*, in
+Settings, on by default. Turning it off deletes the voices from the phone rather
+than hiding them, and stops it being sent any more.
+
+### The iPhone stops looking unfinished
+
+A recording your phone had already read still said "Waiting for your Mac" under
+it, with a clock beside it, which is the same thing the app says about a
+recording nobody can open yet. The transcript was one tap away and half the
+speakers were named. Rows say what is true now: *Read on this iPhone*, or *Read
+here, your Mac is redoing it*, quietly, with the type lined up rather than
+pushed sideways by an icon.
+
+Tap a speaker's name in a transcript to open their page: every recording they
+are in, how long they have spoken, and a way to ask about them.
+
+### Filter by type without searching first
+
+The Library filter sheet had tags and nothing else, and choosing between
+recordings, notes and people meant starting a search you did not want. That
+choice is in the sheet now, with a count beside each.
+
+### Also
+
+- The verify suite no longer asks for your Keychain password on every run. macOS
+  grants access to a binary, so a build signed a minute ago was always a
+  stranger to it; the scripts say so instead of asking.
+- `listen calibrate` on a library that has grown past its measured thresholds
+  now has somewhere to point: `.agents/notes/speakers.md` records what a merged
+  voiceprint from an older pipeline looks like and how to find one.
+
 ## 0.33.0 (2026-09-06)
 
 Listen asks which languages your meetings are in, and your iPhone reads its own

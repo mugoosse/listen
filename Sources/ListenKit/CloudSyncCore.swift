@@ -1510,9 +1510,10 @@ public struct CloudSyncCore: Sendable {
                 report.deletedRemotely += 1
                 drop.append(key)
                 // The voiceprint goes with the recording. Not gated on
-                // `keepsVoiceprints`: the phone never holds one, but a
-                // deletion it originates still has to clean the zone it
-                // cannot see. A miss is a no-op, a failure becomes a debt.
+                // either voiceprint flag: a deletion this device originates
+                // has to clean the zone whether or not it reads that zone,
+                // and a recording nobody holds has no bank to defend. A miss
+                // is a no-op, a failure becomes a debt.
                 do {
                     try await store.delete(CloudNaming.recordName(.voiceprint, id,
                                                                   key: self.key),
@@ -1669,8 +1670,11 @@ public struct CloudSyncCore: Sendable {
     /// Put this device's voiceprints up, for the other Macs.
     ///
     /// A separate zone rather than a filter, because a device subscribes per
-    /// zone: this is what makes "the phone never receives one" true rather than
-    /// "the phone declines to save one".
+    /// zone: this is what makes "a phone with voice recognition off never
+    /// receives one" true rather than "it declines to save one".
+    ///
+    /// Every device holding a bank sends its own up, phone included. Which
+    /// recordings it is still entitled to speak about is `speaksFor`.
     public func pushVoiceprints(into report: inout CloudReport) async {
         guard policy.keepsVoiceprints else { return }
         var base = state.base
@@ -1683,7 +1687,7 @@ public struct CloudSyncCore: Sendable {
         let applied = VoiceprintTombstones.apply(stones.activeNames(), to: library)
         for id in applied.emptied { base.base[SyncState.r6DropKey(id)] = "due" }
 
-        for recording in library.all() {
+        for recording in library.all() where speaksFor(recording) {
             for file in DevicePolicy.voiceprintFiles {
                 let url = recording.folder.appendingPathComponent(file)
                 guard let contents = try? Data(contentsOf: url) else { continue }
@@ -1752,6 +1756,35 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
+    /// Whether this device's voiceprint for one recording is still its own to
+    /// send.
+    ///
+    /// **The one place the phone and a Mac differ about the voice bank**, and
+    /// it is a precedence rule rather than a permission. A Mac owns the
+    /// transcripts it makes and therefore the prints it made alongside them, so
+    /// it always answers yes. A phone answers yes right up until a real
+    /// `transcript.json` exists for that recording, which is the moment a Mac
+    /// has diarized the same audio from the separated tracks. Before then the
+    /// phone's print is not the worse of two, it is the only one; after, it is
+    /// a first pass over a far-field microphone standing next to a better one.
+    ///
+    /// **Except where a person has spoken**, which outranks any machine pass
+    /// including a Mac's. Somebody who names a voice on their phone in the
+    /// minute after a conversation has said something no amount of separated
+    /// tracks can second-guess, so that recording's bank goes on travelling
+    /// from the device it was named on until the Mac has adopted the name into
+    /// its own pass. `Pipeline.write` is where the Mac adopts it, and once it
+    /// has, both devices hold the same bytes and this stops mattering.
+    ///
+    /// Used by the push and by the pull's three-way conflict test, deliberately
+    /// the same predicate: a device that has stopped sending its copy must also
+    /// stop defending it, or the pull reports a conflict on every pass for ever
+    /// and never resolves it.
+    func speaksFor(_ recording: Recording) -> Bool {
+        if policy.ownsVoiceprints || !recording.hasTranscript { return true }
+        return VoiceBankCore.holdsHumanName(recording.voiceprints)
+    }
+
     /// Deletes owed to the voiceprint zone: banks that emptied under a
     /// forget, and voiceprints whose recording went while the record delete
     /// failed. Safe to retry for ever, because deleting a record that is not
@@ -1772,9 +1805,14 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
-    /// Take other Macs' voiceprints down. The voice bank has no database and
-    /// the set of these files **is** the bank, so a Mac without them cannot
-    /// recognise a voice it has already been taught.
+    /// Take the other devices' voiceprints down. The voice bank has no
+    /// database and the set of these files **is** the bank, so a device without
+    /// them cannot recognise a voice it has already been taught.
+    ///
+    /// Run on a phone too, since *Recognise voices on this iPhone*. It is the
+    /// whole of that feature: nothing else about a phone's sync changes, and
+    /// what it buys is a name on a voice within a minute of the conversation
+    /// ending rather than within an hour of a Mac waking up.
     public func pullVoiceprints(into report: inout CloudReport) async {
         guard policy.keepsVoiceprints else { return }
         var base = state.base
@@ -1838,7 +1876,17 @@ public struct CloudSyncCore: Sendable {
             // to any second Mac still holding the old bank, and the damage was
             // invisible because `turns.json` is protected and keeps the name:
             // the transcript said Martijn over a bank that said A.
-            if let have, let agreed = base[bank: blob.name], agreed != sha256Hex(have) {
+            //
+            // **Only where this device is still entitled to send it.** A
+            // recording a phone has stopped speaking for (`speaksFor`) has no
+            // push behind it, so "keep it, this device's push carries it" would
+            // keep it for ever and report the same conflict on every pass. The
+            // remote there is a Mac's pass over the separated tracks, and the
+            // local one is what the phone managed in the minute after the
+            // recording stopped, so taking the remote is both the terminating
+            // answer and the right one.
+            if library.find(blob.name).map(speaksFor) ?? true,
+               let have, let agreed = base[bank: blob.name], agreed != sha256Hex(have) {
                 report.conflicts.append("\(blob.name)/embeddings.json: "
                                         + "edited here and not yet sent")
                 continue
@@ -1852,7 +1900,7 @@ public struct CloudSyncCore: Sendable {
         // records were deleted alongside r1. Absence on this disk proves
         // nothing on a Mac mid first pull, so the recording record is asked
         // for: absent in the container is the evidence that counts.
-        if base.base["migration:r6-orphans-v1"] == nil {
+        if policy.ownsVoiceprints, base.base["migration:r6-orphans-v1"] == nil {
             var swept = true
             for record in changes.changed {
                 guard record.name != tombName,

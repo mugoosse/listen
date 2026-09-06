@@ -5,6 +5,11 @@
 # LISTEN_CLAUDE_CONFIG, and every path is under a temp directory.
 set -u
 
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
+
 BIN="$(cd "$(dirname "$0")" && pwd)/Listen.app/Contents/MacOS/Listen"
 DIR="${TMPDIR:-/tmp}/listen-verify-desktop"
 CFG="$DIR/claude_desktop_config.json"

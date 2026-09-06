@@ -4,6 +4,11 @@
 # first, or this tests the previous build. The shape follows verify_title.sh:
 # a scratch LISTEN_LIBRARY, property assertions, pass/fail counters.
 set -u
+
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
 cd "$(dirname "$0")"
 BIN="$(pwd)/Listen.app/Contents/MacOS/Listen"
 [[ -x "$BIN" ]] || { echo "no built app. ./build.sh && ./make_app.sh first."; exit 1; }

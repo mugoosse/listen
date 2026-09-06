@@ -317,12 +317,24 @@ public enum FakeSync {
                   "the icon survived the payload but not the manifest")
         ok("a Mac without the application cannot strip a source icon it never had")
 
-        // MARK: what the phone must never receive
+        // MARK: what a phone with voice recognition off must never receive
 
+        // **The switch, proved as a switch.** A phone with *Recognise voices*
+        // off syncs under `phoneWithoutVoices`, which has no `embeddings.json`
+        // in it, so `keepsVoiceprints` is false and the pull returns without
+        // asking the container anything. Run against a core that genuinely
+        // tries, rather than against a core that was never asked, because the
+        // second proves nothing about the policy.
+        let quietPhone = CloudSyncCore(
+            library: phoneLib, state: EngineState(library: phoneLib), store: store,
+            key: key, policy: .phoneWithoutVoices, device: "phone-1", ingests: false)
+        var quiet = CloudReport()
+        await quietPhone.pullVoiceprints(into: &quiet)
+        await quietPhone.pushVoiceprints(into: &quiet)
         try check(!FileManager.default.fileExists(
             atPath: phoneLib.folder(for: id).appendingPathComponent("embeddings.json").path),
                   "voiceprints reached a device whose policy excludes them")
-        ok("voiceprints stay off a device that does not keep them")
+        ok("voiceprints stay off a phone that has been told not to keep them")
 
         // MARK: it converges
 
@@ -1553,13 +1565,112 @@ public enum FakeSync {
                   "an expired tombstone survived a merge")
         ok("tombstones expire after 90 days rather than naming people for ever")
 
-        // And the phone still receives none of it, tombstone included.
+        // The phone takes the bank down and adds nothing to it.
+        //
+        // **This assertion is inverted from what it used to be**, and the
+        // inversion is the feature: the phone diarizes its own recordings and
+        // had no way to name the voices it separated, so it showed A, B and C
+        // for the hour before a Mac published a transcript. The half that has
+        // not changed is the direction, and it is asserted below rather than
+        // trusted: a phone that pushed would race the Mac that ingests its
+        // audio with a print made from one far-field microphone.
         var phoneVP = CloudReport()
+        await phone.pull(into: &phoneVP)
         await phone.pullVoiceprints(into: &phoneVP)
-        try check(!FileManager.default.fileExists(
+        try check(FileManager.default.fileExists(
+            atPath: phoneLib.folder(for: vp1).appendingPathComponent("embeddings.json").path),
+                  "the voice bank did not reach the phone")
+        try check(FileManager.default.fileExists(
             atPath: VoiceprintTombstones.url(in: phoneLib).path),
-                  "the tombstone list reached the phone")
-        ok("the voiceprint zone, tombstones included, never reaches the phone")
+                  "the tombstone list did not reach the phone")
+        let phoneBank = try String(decoding: Data(contentsOf: phoneLib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json")), as: UTF8.self)
+        try check(!phoneBank.contains("Anna"),
+                  "a forgotten voice reached the phone")
+        try check(phoneBank.contains("Ben"),
+                  "the phone bank lost a voice that was not forgotten")
+        ok("the voice bank reaches the phone with forgotten people already stripped")
+
+        // **A voice the phone heard first reaches the Macs.** This is the
+        // window that makes phone voiceprints worth syncing at all: a
+        // recording it made is on nobody else's disk and no Mac has read it,
+        // so the bank the phone built in the minute after it stopped is not
+        // the worse of two prints, it is the only one there is.
+        let phoneOnly = "2026-08-14-090000-DDDD"
+        try seed(phoneLib, id: phoneOnly,
+                 metadata: #"{"id":"\#(phoneOnly)","title":"Kitchen","#
+                     + #""source":"iphone","state":"pending"}"#,
+                 transcript: nil)
+        try Data(#"{"A":{"embedding":[0.55],"speech":40}}"#.utf8).write(
+            to: phoneLib.folder(for: phoneOnly).appendingPathComponent("embeddings.json"))
+        var bankUp = CloudReport()
+        await phone.push(into: &bankUp)
+        await phone.pushVoiceprints(into: &bankUp)
+        try check(bankUp.errors.isEmpty,
+                  "the phone could not send its bank: \(bankUp.errors)")
+        var bankDown = CloudReport()
+        await mac3.pull(into: &bankDown)
+        await mac3.pullVoiceprints(into: &bankDown)
+        try check(FileManager.default.fileExists(
+            atPath: mac3Lib.folder(for: phoneOnly)
+                .appendingPathComponent("embeddings.json").path),
+                  "a voice the phone heard first never reached a Mac")
+        ok("a voice the phone heard first reaches the Macs before any Mac has read it")
+
+        // And it stands down the moment a Mac has read that recording, which
+        // is the tie-break: from then on the container holds a pass over
+        // separated tracks and the phone holds a pass over one far-field
+        // microphone. Staged by giving the phone a bank that disagrees with
+        // the container for a recording a Mac has already transcribed, which
+        // is exactly the shape of the race.
+        try Data(#"{"Z":{"embedding":[0.9],"speech":40}}"#.utf8).write(
+            to: phoneLib.folder(for: vp1).appendingPathComponent("embeddings.json"))
+        let beforeWrites = await store.saveCount
+        var phonePush = CloudReport()
+        await phone.pushVoiceprints(into: &phonePush)
+        let phoneWrites = await store.saveCount - beforeWrites
+        try check(phoneWrites == 0,
+                  "the phone sent \(phoneWrites) record(s) for a recording a Mac has read")
+        var phoneAgain = CloudReport()
+        await phone.pullVoiceprints(into: &phoneAgain)
+        try check(phoneAgain.conflicts.isEmpty,
+                  "the phone reported a voiceprint conflict it can never resolve: "
+                  + phoneAgain.conflicts.joined(separator: ", "))
+        try check(!String(decoding: Data(contentsOf: phoneLib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json")), as: UTF8.self).contains("\"Z\""),
+                  "the Mac's bank did not win over the phone's own pass")
+        ok("and stands down for a recording a Mac has transcribed, whose bank wins")
+
+        // **Unless a person has spoken, which outranks every machine pass.**
+        // Somebody naming a voice on their phone has said something no amount
+        // of separated tracks can second-guess, so that bank goes on
+        // travelling until the Mac has adopted the name into its own. The
+        // difference from the case above is one flag: `auto` absent.
+        try Data(#"{"Marcia":{"embedding":[0.9],"speech":40}}"#.utf8).write(
+            to: phoneLib.folder(for: vp1).appendingPathComponent("embeddings.json"))
+        let beforeNamed = await store.saveCount
+        var namedPush = CloudReport()
+        await phone.pushVoiceprints(into: &namedPush)
+        try check(await store.saveCount - beforeNamed == 1,
+                  "a name a person applied on the phone did not reach the container")
+        var macTakes = CloudReport()
+        await mac3.pullVoiceprints(into: &macTakes)
+        try check(try String(decoding: Data(contentsOf: mac3Lib.folder(for: vp1)
+            .appendingPathComponent("embeddings.json")), as: UTF8.self).contains("Marcia"),
+                  "a name applied on the phone never reached a Mac")
+        ok("a name a person applied on the phone outranks a Mac's own pass and travels")
+
+        // And an automatic name does not, which is the line the flag draws.
+        // Restored to the machine-named shape, same bytes but `auto`, and the
+        // phone falls silent about it again.
+        try Data(#"{"Marcia":{"embedding":[0.9],"speech":40,"auto":true}}"#.utf8).write(
+            to: phoneLib.folder(for: vp1).appendingPathComponent("embeddings.json"))
+        let beforeAuto = await store.saveCount
+        var autoPush = CloudReport()
+        await phone.pushVoiceprints(into: &autoPush)
+        try check(await store.saveCount - beforeAuto == 0,
+                  "the phone sent a name its own bank had guessed at")
+        ok("and a name the bank guessed at does not, which is what `auto` is for")
 
         out += try await activitySeam(root: root)
         out += try await phantomMasterSeam(root: root)

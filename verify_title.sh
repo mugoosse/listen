@@ -4,6 +4,11 @@
 # library is never opened for writing.
 set -u
 
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
+
 BIN="$(cd "$(dirname "$0")" && pwd)/Listen.app/Contents/MacOS/Listen"
 SRC="$HOME/Library/Application Support/Listen/recordings"
 export LISTEN_LIBRARY="${TMPDIR:-/tmp}/listen-verify-title"

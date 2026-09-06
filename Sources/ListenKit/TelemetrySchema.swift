@@ -192,6 +192,13 @@ public enum TelemetrySchema {
         case importRecording = "import"
         case iphoneCapture = "iphone_capture"
         case keepAudioToggle = "keep_audio_toggle"
+        /// The phone's voice bank, on or off. A count of switches, never a
+        /// name, a vector or a recording id; see `TELEMETRY.md`.
+        case recogniseVoicesToggle = "recognise_voices_toggle"
+        /// Somebody said who a voice is, on the phone. The fact only: this is
+        /// the event that would most obviously carry a person's name, and it
+        /// carries none.
+        case speakerNamedOnPhone = "speaker_named_on_phone"
     }
 
     public enum Subsystem: String, Sendable {

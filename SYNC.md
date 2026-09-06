@@ -12,9 +12,22 @@ phone recording and when the phone may release its audio.
 
 - Metadata, transcripts, turns, waveforms, notes, contacts and the dictionary
   travel between Macs and iPhone.
-- Voiceprints travel between Macs only. Forgetting a person's voiceprints
-  travels too: the forget is a sealed tombstone in the same zone, applied on
-  every pass, so a stripped voice does not come back from a stale Mac.
+- Voiceprints travel between Macs and, with **Recognise voices on this iPhone**
+  turned on, to and from the iPhone. The phone can then name the speakers in a
+  recording it made without waiting for a Mac, and the voices it hears reach
+  the Macs. Where two devices have a print of the *same* recording, the Mac
+  wins: it diarized the separated tracks with the full pipeline, so the phone's
+  first pass stands down once a real transcript for that recording exists.
+  Turning the switch off deletes the voiceprints from the iPhone and stops the
+  subscription.
+- A name a *person* applies outranks that. Saying who a voice is on the iPhone
+  keeps that recording the iPhone's to speak for, and the Mac that transcribes
+  the audio carries the name onto its own pass rather than replacing it, so the
+  transcript that comes back has the person in it.
+- Forgetting a person's voiceprints travels too: the forget is a sealed
+  tombstone in the same zone, applied on every pass and on every device that
+  holds a bank, so a stripped voice does not come back from a stale Mac or
+  linger on a phone.
 - Mac recordings keep their audio on the Mac that made them.
 - Phone recordings keep their audio until `audioOn` names the Mac that has
   ingested it. The phone can keep another copy when its storage setting is on.

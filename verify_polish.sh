@@ -18,6 +18,11 @@
 # input unchanged, which is correct behaviour and fails most of these, so the
 # script says so and stops rather than reporting a wall of red.
 
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
+
 set -uo pipefail
 cd "$(dirname "$0")"
 

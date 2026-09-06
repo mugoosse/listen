@@ -53,9 +53,11 @@ public struct DevicePolicy: Sendable, Equatable {
     /// recording.
     public let blobs: [String]
 
-    public init(sidecars: [String], blobs: [String], keepsRawBackup: Bool = true) {
+    public init(sidecars: [String], blobs: [String], keepsRawBackup: Bool = true,
+                ownsVoiceprints: Bool = false) {
         self.sidecars = sidecars; self.blobs = blobs
         self.keepsRawBackup = keepsRawBackup
+        self.ownsVoiceprints = ownsVoiceprints
     }
 
     /// Every per-recording file this device keeps for one id, backup included.
@@ -72,9 +74,10 @@ public struct DevicePolicy: Sendable, Equatable {
     /// **The zone is the mechanism, not the policy.** A device subscribes per
     /// zone, so a file placed in the library zone is delivered to every device
     /// that syncs the library, whether or not that device then writes it to
-    /// disk. Keeping these out of the library record is the difference between
-    /// a phone declining to save a voiceprint and a phone never receiving one,
-    /// and only the second is worth claiming.
+    /// disk. Keeping these out of the library record is what makes *Recognise
+    /// voices on this iPhone* a real switch: off, the phone does not subscribe
+    /// and never receives one, rather than receiving one and declining to save
+    /// it. Only the first is worth claiming.
     public static let voiceprintFiles = ["embeddings.json"]
 
     /// The per-recording files that belong in the library zone: everything
@@ -84,10 +87,33 @@ public struct DevicePolicy: Sendable, Equatable {
     }
 
     /// Whether this device keeps voiceprints at all, which decides whether it
-    /// subscribes to that zone.
+    /// subscribes to that zone and takes what is in it.
     public var keepsVoiceprints: Bool {
         sidecars.contains(where: DevicePolicy.voiceprintFiles.contains)
     }
+
+    /// Whether a voiceprint this device made is the last word on a recording.
+    ///
+    /// **Not whether it may publish one. Every device holding a bank publishes
+    /// one.** This is the tie-break for the case where two devices have a
+    /// voiceprint of the same audio, which is not hypothetical and is in fact
+    /// the ordinary case: a phone diarizes what it records in the minute after
+    /// it stops, and then a Mac claims that same audio and diarizes it again
+    /// with the full pipeline.
+    ///
+    /// The two passes are not equal. The phone hears one far-field microphone
+    /// carrying everybody. The Mac has the separated tracks, a clusterer told
+    /// how many voices to expect on the microphone track, and the mains power
+    /// to take its time. So the Mac's print supersedes, and this flag is how a
+    /// device knows whether it is the one that gets superseded.
+    ///
+    /// What it does **not** mean is that the phone's print is thrown away. It
+    /// travels the moment it is made, which is what makes a phone recording's
+    /// voices available to a second Mac before the first Mac has even woken up,
+    /// and it stands down only once a real transcript for that recording exists
+    /// (`CloudSyncCore.speaksFor`). Before that it is not the worse of two
+    /// prints; it is the only one there is.
+    public let ownsVoiceprints: Bool
 
     /// The sidecars in the order they are written on arrival: `metadata.json`
     /// last, always. `Recording.load` returns nil without it and `Library.all`
@@ -106,59 +132,79 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let mac = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json",
                    "waveform.json", DevicePolicy.sourceIcon, "embeddings.json"],
-        blobs: ["contacts.json", "dictionary.json"])
+        blobs: ["contacts.json", "dictionary.json"],
+        ownsVoiceprints: true)
 
     /// Everything a phone keeps.
     ///
     /// `SYNC.md` measured the whole set at 6.5 MB for 41 recordings, so the
     /// phone takes all of it and searches locally.
     ///
-    /// `embeddings.json` is deliberately absent: it is voiceprint material, it
-    /// is the largest sidecar, and the phone has nothing that reads it. Sending
-    /// biometric data to a second device for no reason is exactly the thing
-    /// this product exists not to do.
+    /// **`embeddings.json` is here now, and it was deliberately absent for two
+    /// years.** The line that kept it out said the phone had nothing that reads
+    /// a voiceprint, and predicted, correctly, that the day the phone diarized
+    /// for itself the argument would reverse. Then the phone did diarize and
+    /// the argument did not reverse, because the two halves came apart:
+    /// `listen-ios`'s `LocalDiarize` split a room into A, B and C and stopped,
+    /// which needs no bank from anywhere.
     ///
-    /// **That last clause is a decision rather than a fact, and it has a name.**
-    /// The absence rests entirely on the phone having nothing that reads a
-    /// voiceprint, which stops being true the day the phone diarizes for
-    /// itself: it would need the bank coming down to put names on the voices it
-    /// has separated, and the embeddings it makes would have to go up or the
-    /// bank forgets every meeting held in a room. So this line reverses, and
-    /// the argument that a server refusing is stronger than a client declining
-    /// to ask has nothing left to defend.
+    /// What changed is not the mechanism but what the split is *for*. A, B and
+    /// C is a shape, not a meeting. Somebody looking at their phone twenty
+    /// seconds after a conversation ends wants to see who was in it, and the
+    /// answer already exists: it is sitting in the Macs' banks, sealed, in a
+    /// zone this phone was declining to subscribe to. Withholding it bought a
+    /// property nobody had asked for at the cost of the feature the separation
+    /// was done for.
     ///
-    /// **Decided on 12 August 2026, and the answer is narrow:** the phone
-    /// transcribes for itself and does not diarize, so this set keeps its shape
-    /// and voiceprints stay off the phone. Adding `embeddings.json` here is
-    /// therefore not a small convenience but a reversal of a product decision,
-    /// and `CLOUDKIT-PLAN.md` decision 6 is what would have to change first.
+    /// **Three things make it a smaller change than it sounds.**
     ///
-    /// **The phone does diarize now, and the reversal above did not happen.**
-    /// The prediction assumed the two halves come together: separate the voices
-    /// and you will want to name them, and naming needs the bank. They come
-    /// apart. `listen-ios`'s `LocalDiarize` splits a room recording into A, B
-    /// and C and stops there, which needs no voiceprint from anywhere: the
-    /// vectors its clusterer builds live for the length of the call and are
-    /// dropped with it, nothing is written and nothing is uploaded. The Mac
-    /// still owns every name, and its transcript replaces the phone's.
+    /// 1. **It is not the largest sidecar and never was.** Measured on this
+    ///    library on 6 September 2026: 74 banks, 920 KB in total, about 12 KB
+    ///    each, against 2.4 MB of `turns.json` and 1.2 MB of `waveform.json`
+    ///    that the phone has always taken. A 256-float vector per speaker is
+    ///    cheaper than the waveform drawn behind the play head.
+    /// 2. **It travels the way everything else does.** Sealed with the same
+    ///    key, through the same container, to a device already holding every
+    ///    transcript in the library. A transcript says what was said in a
+    ///    therapy session; a voiceprint says which cluster it was. The
+    ///    biometric material is the more sensitive of the two in kind, and it
+    ///    is not the more sensitive of the two in content, and the phone was
+    ///    already trusted with the content.
+    /// 3. **It travels both ways, and the Mac still has the last word.**
+    ///    `ownsVoiceprints` is false here, which is a precedence rule rather
+    ///    than a ban: what the phone hears goes up at once and reaches the
+    ///    Macs, and stands down for a given recording only when a real
+    ///    transcript for it exists, because at that point a Mac has diarized
+    ///    the same audio with separated tracks. Every name the phone applies is
+    ///    marked `auto`, so nothing it guessed is ever the evidence for the
+    ///    next guess, on any device.
     ///
-    /// So this set keeps its shape for a better reason than before. It is not
-    /// that the phone has nothing that reads a voiceprint; it is that a phone
-    /// which separates voices without naming them never needs one.
-    ///
-    /// The same decision gives `dictionary.json` below a reader it did not have
-    /// when this file was written.
+    /// **It is a person's decision, not a policy constant.** The switch is
+    /// *Recognise voices on this iPhone* in Settings, default on where the
+    /// phone diarizes at all; turning it off drops every bank on the phone and
+    /// stops the subscription. See `AppModel.recogniseVoices`.
     ///
     /// The retired LAN transport never moved `blobs`. CloudKit does, through
     /// the same policy that carries recording sidecars.
     ///
-    /// `dictionary.json` is the one to move first when there is a transport
-    /// that can. It rewrites transcripts, so two devices with different
+    /// `dictionary.json` rewrites transcripts, so two devices with different
     /// dictionaries produce differently corrected transcripts of the same
-    /// audio, and once the phone transcribes for itself that stops being a
-    /// two-Mac problem and becomes the difference between the phone's pass and
-    /// the Mac's looking like a quality gap when it is a vocabulary one.
+    /// audio, which is why it is here: once the phone transcribes for itself
+    /// that stops being a two-Mac problem and becomes the difference between
+    /// the phone's pass and the Mac's looking like a quality gap when it is a
+    /// vocabulary one.
     public static let phone = DevicePolicy(
+        sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
+                   DevicePolicy.sourceIcon, "embeddings.json"],
+        blobs: ["contacts.json", "dictionary.json"])
+
+    /// A phone that has been told not to recognise voices.
+    ///
+    /// The same set minus the bank, which turns `keepsVoiceprints` off and with
+    /// it the subscription, the pull and every read. A policy rather than a
+    /// branch at each call site: the zone is the mechanism, and a device that
+    /// does not subscribe never receives one rather than declining to save it.
+    public static let phoneWithoutVoices = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
                    DevicePolicy.sourceIcon],
         blobs: ["contacts.json", "dictionary.json"])

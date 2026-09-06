@@ -1,74 +1,15 @@
 import Foundation
+import ListenKit
 
-/// How sure the voice bank is, in the only terms anybody can act on.
+/// Cross-recording speaker recognition on the Mac, over the sidecar files.
 ///
-/// **This replaced a percentage, and the percentage was actively misleading.**
-/// The number was a cosine similarity multiplied by a hundred, which reads as a
-/// probability and is not one: on real voices the same person scores 0.64 to
-/// 0.91 against their own centroid and different people top out at 0.37, so a
-/// scale that runs 0 to 100 spends none of itself where the answer lives.
-/// Reported from a real session, a correct and unambiguous match displayed as
-/// "60% match" and was read as a coin flip. Nobody can act on 0.603 against
-/// 0.867; everybody can act on "almost certainly".
-enum VoiceConfidence {
-    case possible
-    case likely
-    case almostCertain
-
-    var label: String {
-        switch self {
-        case .possible:      return "Possibly them"
-        case .likely:        return "Likely them"
-        case .almostCertain: return "Almost certainly them"
-        }
-    }
-}
-
-/// One candidate match for an unnamed voice.
-struct VoiceMatch {
-    var name: String
-    /// Cosine against that person's centroid, not against their best single
-    /// print. See `VoiceBank.suggestions`.
-    var score: Float
-    /// How many recordings that name has a voiceprint in.
-    var recordings: Int
-    /// How far clear of the nearest rival this one is.
-    ///
-    /// Signed against the **best competitor**, not against the next one down,
-    /// which makes it negative for everybody except the leader. That is not a
-    /// nicety: with the gap measured downwards, the last candidate in a list has
-    /// nothing below it, reports a huge margin, and reads as auto-assignable
-    /// while sitting in second place. Measured on a bank holding one voice under
-    /// two names, which is what a mislabel looks like: the runner-up printed
-    /// `margin +0.828  -> would name automatically` underneath the leader it had
-    /// just lost to. `autoAssign` only ever looks at the leader, so nothing
-    /// wrong would have been written, but a diagnostic that says the opposite of
-    /// what the code does is worse than no diagnostic.
-    ///
-    /// **The level alone is not enough to act on and the margin is what makes
-    /// it safe.** A bank holding one bad print can put the same voice near two
-    /// names at once, which is not a hypothetical: this library did exactly
-    /// that for a day, with the user's own voice scoring +0.87 against somebody
-    /// else's name. A high score says "this looks like Marcia"; a high score
-    /// with a wide margin says "and it looks like nobody else".
-    var margin: Float
-
-    var confidence: VoiceConfidence {
-        if score >= VoiceBank.certainThreshold { return .almostCertain }
-        if score >= VoiceBank.strongThreshold { return .likely }
-        return .possible
-    }
-
-    /// Whether this may be applied without asking. Both halves required.
-    var autoAssignable: Bool {
-        score >= VoiceBank.certainThreshold && margin >= VoiceBank.marginThreshold
-    }
-
-    /// What the labelling UI shows under the name.
-    var summary: String { "\(name) · \(confidence.label.lowercased())" }
-}
-
-/// Cross-recording speaker recognition, over the sidecar files.
+/// **The arithmetic moved and this did not.** `VoiceBankCore` in ListenKit now
+/// holds the thresholds, the cosine, the centroid and the ranking, because the
+/// phone reads the same bank through the same CloudKit zone and two copies of
+/// `certainThreshold` is how two devices come to disagree about who is
+/// speaking. What is left here is everything that writes: naming a speaker goes
+/// through `TranscriptEditor` so the transcript, the turns and the bank move
+/// together, and none of that exists on a phone.
 ///
 /// **There is no database.** The set of `embeddings.json` files next to the
 /// recordings *is* the voice bank, which is what makes deleting a recording in
@@ -79,71 +20,14 @@ enum VoiceBank {
 
     // MARK: - Thresholds
 
-    /// Measured with `listen calibrate` on **real recordings**: 14 named
-    /// voiceprints across 5 people, 27 same-person and 57 different-person
-    /// cross-recording pairs.
-    ///
-    ///     same person       min +0.668  median +0.807  max +0.901
-    ///     different people  min -0.091  median +0.136  max +0.371
-    ///
-    /// Clean separation, gap +0.297, so these sit one third and two thirds of
-    /// the way across it.
-    ///
-    /// **These replace numbers measured on synthesised speech, which were
-    /// wrong in a way worth remembering.** That earlier run gave same-person
-    /// pairs of 0.979 to 0.995 and suggested a match threshold of 0.72. Real
-    /// voices score far lower against themselves: the worst genuine same-person
-    /// pair here is **0.668**, so the synthetic threshold would have refused to
-    /// suggest a person the bank had heard four times. One TTS voice reading
-    /// two scripts is nearly identical to itself; a person on two days, on two
-    /// microphones, in two rooms, is not. Synthetic audio measures the model's
-    /// ceiling, not the task.
-    ///
-    /// The different-person side moved too, and the other way: 0.597 synthetic
-    /// against 0.371 real. Both errors pushed the same direction, toward a
-    /// threshold too high to be useful.
-    ///
-    /// Re-run `listen calibrate` as the library grows. Five people is enough to
-    /// separate cleanly and not enough to have met a confusable pair, so the
-    /// different-person maximum is the number most likely to rise.
-    static let matchThreshold: Float = 0.47
-    static let strongThreshold: Float = 0.57
-
-    /// Where a suggestion stops being a suggestion.
-    ///
-    /// Re-measured for **centroid** scoring, which is what `suggestions` now
-    /// does and which separates far better than the pairwise numbers above.
-    /// Leave one print out, score it against the centroid of that person's
-    /// others and against every other person's centroid, over the whole
-    /// library: 20 same-person and 112 different-person comparisons.
-    ///
-    ///     same person       min +0.642  p10 +0.746  median +0.863  max +0.914
-    ///     different people  min -0.166  median +0.110  p99 +0.360  max +0.371
-    ///
-    /// Gap +0.271, and where 0.75 falls in it:
-    ///
-    ///     threshold  true matches auto-assigned  false pairs above it
-    ///        0.65               90%                       0
-    ///        0.75               85%                       0
-    ///        0.80               75%                       0
-    ///
-    /// 0.75 rather than 0.65 because the five points of recall it gives up buy
-    /// **0.379 of clearance** over the worst different-person pair, which is
-    /// more than the whole gap. This number applies a name to an archive nobody
-    /// may read for a month, so the direction to be wrong in is "asked when it
-    /// need not have".
-    static let certainThreshold: Float = 0.75
-
-    /// How far clear of second place an automatic name has to be.
-    ///
-    /// The smallest margin observed on a *correct* top candidate was +0.436, so
-    /// this costs nothing today and is not fitted to the sample. It exists
-    /// because the sample is six people: as a bank grows, two people who
-    /// genuinely sound alike will eventually both clear `certainThreshold`, and
-    /// on that recording nothing should be applied silently. This library has
-    /// already had the pathological version, where one mislabelled cluster put
-    /// the user's own voice at +0.87 against somebody else's name.
-    static let marginThreshold: Float = 0.15
+    /// Measured with `listen calibrate` on real recordings, and documented
+    /// where they are defined. Re-exported rather than re-declared: every call
+    /// site in this app reads `VoiceBank.certainThreshold`, and a second
+    /// literal is the thing worth preventing.
+    static let matchThreshold = VoiceBankCore.matchThreshold
+    static let strongThreshold = VoiceBankCore.strongThreshold
+    static let certainThreshold = VoiceBankCore.certainThreshold
+    static let marginThreshold = VoiceBankCore.marginThreshold
 
     // MARK: - Reading
 
@@ -174,99 +58,35 @@ enum VoiceBank {
 
     /// Rank the named voices in the library against one speaker here.
     ///
-    /// **Scored against each person's centroid, not their best single print.**
-    /// The max was measurably wrong in the direction that matters: a speaker
-    /// whose person had five recordings in the library, only one of them
-    /// labelled, was scored against that one, and it happened to be the least
-    /// representative of the five. It returned +0.603 for a match whose centroid
-    /// score is +0.828, which the interface then reported as "60%". The max is
-    /// also the statistic a single bad print can carry on its own, which is
-    /// exactly what an automatic assignment must not be exposed to.
-    ///
-    /// Each print is normalised before averaging and the mean is normalised
-    /// again, so a person is one direction rather than one recording.
-    /// Deliberately **unweighted** by speech seconds: the point of pooling is to
-    /// average over rooms, microphones and days, and weighting by duration lets
-    /// the single longest meeting decide what somebody sounds like.
+    /// The scoring is `VoiceBankCore.rank`, shared with the phone. What this
+    /// adds is the Mac's idea of where the candidates come from: every other
+    /// recording's `embeddings.json`, filtered to what counts as evidence.
     static func suggestions(for speaker: String, in recording: Recording) -> [VoiceMatch] {
         guard let mine = recording.voiceprints[speaker], mine.isEvidence else { return [] }
-        let me = unit(mine.embedding)
-
         var prints: [String: [[Float]]] = [:]
-        for (name, other) in named(excluding: recording) {
-            // Below 15 seconds an embedding is stored but is not evidence: it
-            // is too short to be an identity, and a confident wrong suggestion
-            // is worse than none.
-            guard other.isEvidence else { continue }
-            prints[name, default: []].append(other.embedding)
+        for other in Recording.all() where other.id != recording.id {
+            VoiceBankCore.addEvidence(from: other.voiceprints, to: &prints)
         }
-
-        // Everybody is scored and ranked before anything is filtered, because
-        // the margin is a fact about the whole field. Dropping the sub-threshold
-        // candidates first would report a runner-up at +0.46 as no runner-up at
-        // all, and hand a wide margin to a match that has somebody sitting right
-        // behind it.
-        let ranked = prints
-            .map { (name: $0.key, score: dot(me, centroid(of: $0.value)), count: $0.value.count) }
-            .sorted { $0.score > $1.score }
-
-        return ranked.enumerated().compactMap { i, entry in
-            guard entry.score >= matchThreshold else { return nil }
-            // The best *other* candidate: second place for the leader, first
-            // place for everybody else. See `VoiceMatch.margin`.
-            let rival = i == 0 ? (ranked.count > 1 ? ranked[1].score : 0) : ranked[0].score
-            return VoiceMatch(name: entry.name, score: entry.score,
-                              recordings: entry.count, margin: entry.score - rival)
-        }
+        return VoiceBankCore.rank(mine.embedding, against: prints)
     }
 
     /// One direction standing for one person.
     static func centroid(of embeddings: [[Float]]) -> [Float] {
-        guard let first = embeddings.first else { return [] }
-        var sum = [Float](repeating: 0, count: first.count)
-        for e in embeddings {
-            let u = unit(e)
-            for i in 0..<min(sum.count, u.count) { sum[i] += u[i] }
-        }
-        return unit(sum)
+        VoiceBankCore.centroid(of: embeddings)
     }
 
     /// A vector scaled to length one, so a dot product is a cosine.
-    static func unit(_ v: [Float]) -> [Float] {
-        let n = v.reduce(0) { $0 + $1 * $1 }.squareRoot()
-        guard n > 0 else { return v }
-        return v.map { $0 / n }
-    }
-
-    private static func dot(_ a: [Float], _ b: [Float]) -> Float {
-        var out: Float = 0
-        for i in 0..<min(a.count, b.count) { out += a[i] * b[i] }
-        return out
-    }
+    static func unit(_ v: [Float]) -> [Float] { VoiceBankCore.unit(v) }
 
     /// Cosine similarity. Both vectors come from the same model, so no
     /// normalisation beyond this is needed.
     static func cosine(_ a: [Float], _ b: [Float]) -> Float {
-        let n = min(a.count, b.count)
-        guard n > 0 else { return 0 }
-        var dot: Float = 0, na: Float = 0, nb: Float = 0
-        for i in 0..<n {
-            dot += a[i] * b[i]
-            na += a[i] * a[i]
-            nb += b[i] * b[i]
-        }
-        guard na > 0, nb > 0 else { return 0 }
-        return dot / (na.squareRoot() * nb.squareRoot())
+        VoiceBankCore.cosine(a, b)
     }
 
     /// True for a label the pipeline invented rather than a person's name.
     static func isPlaceholder(_ label: String) -> Bool {
-        if label == "unknown" { return true }
-        // A, B, ... Z, AA. Spreadsheet columns, which is what `Merge.letter`
-        // produces. "Me" is not a placeholder: the mic track really is the
-        // user, so it is a fact rather than something awaiting a decision.
-        return !label.isEmpty && label.allSatisfy { $0.isUppercase && $0.isLetter }
-            && label.count <= 2 && label != "Me"
+        VoiceBankCore.isPlaceholder(label)
     }
 
     static func currentName(of speaker: String, in recording: Recording) -> String? {

@@ -5,10 +5,15 @@
 # never touched. The stubs are pointed at through the explicit agentPath
 # setting, which wins over detection by design.
 #
-# HEADS UP for whoever is at the keyboard: the ad-hoc copy raises a real
-# Keychain prompt naming Listen on every launch. Deny it; nothing here needs
-# the endpoint key.
+# The ad-hoc copy used to raise a real Keychain prompt naming Listen on every
+# launch, and the note here said to deny it. `LISTEN_NO_KEYCHAIN` below makes
+# the ask unnecessary rather than the answer manual.
 set -u
+
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PROBE="$ROOT/.xcbuild/tools/axprobe"

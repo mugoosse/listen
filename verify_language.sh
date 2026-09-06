@@ -13,6 +13,11 @@
 # asserted to refuse the scratch one before anything else happens.
 #
 # Run ./build.sh && ./make_app.sh first, or it tests the last build.
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
+
 set -uo pipefail
 
 APP="${LISTEN_APP:-./Listen.app/Contents/MacOS/Listen}"

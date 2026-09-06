@@ -1,5 +1,6 @@
 import Foundation
 import FluidAudio
+import ListenKit
 
 /// One stretch of one speaker, as the diarizer sees it.
 struct SpeakerTurn {
@@ -198,9 +199,8 @@ actor Diarizer {
         let result = try await manager.process(url)
 
         var turns: [SpeakerTurn] = []
-        var sums: [String: [Float]] = [:]
-        var counts: [String: Int] = [:]
         var speech: [String: Double] = [:]
+        var perSegment: [(label: String, embedding: [Float])] = []
 
         for segment in result.segments {
             let start = Double(segment.startTimeSeconds)
@@ -208,27 +208,16 @@ actor Diarizer {
             guard end > start else { continue }
             turns.append(SpeakerTurn(start: start, end: end, label: segment.speakerId))
             speech[segment.speakerId, default: 0] += end - start
-
-            // Average the per-segment embeddings into one per speaker. The
-            // diarizer already clustered them, so this is a centroid of things
-            // it decided were the same voice.
-            guard !segment.embedding.isEmpty else { continue }
-            if var running = sums[segment.speakerId] {
-                for i in running.indices where i < segment.embedding.count {
-                    running[i] += segment.embedding[i]
-                }
-                sums[segment.speakerId] = running
-            } else {
-                sums[segment.speakerId] = segment.embedding
-            }
-            counts[segment.speakerId, default: 0] += 1
+            perSegment.append((segment.speakerId, segment.embedding))
         }
 
-        var embeddings: [String: [Float]] = [:]
-        for (label, sum) in sums {
-            let n = Float(max(counts[label] ?? 1, 1))
-            embeddings[label] = sum.map { $0 / n }
-        }
+        // Average the per-segment embeddings into one per speaker. The
+        // diarizer already clustered them, so this is a centroid of things it
+        // decided were the same voice. Shared with the phone's `LocalDiarize`
+        // through `VoiceBankCore.average`, because the two devices now score
+        // their vectors against each other and a different mean on each side
+        // is a person who does not quite match themselves.
+        var embeddings = VoiceBankCore.average(perSegment)
         // The pipeline's own database wins where it exists: it is the library's
         // clustering rather than our arithmetic.
         for (label, vector) in result.speakerDatabase ?? [:] where !vector.isEmpty {

@@ -435,7 +435,32 @@ extension Settings {
 enum AgentKey {
     private static let service = "com.mgo.listen.endpoint"
 
+    /// Whether this process may touch the Keychain at all.
+    ///
+    /// **`LISTEN_NO_KEYCHAIN=1`, and it exists because the verify suite made
+    /// the Mac ask for a password on every run.** macOS grants Keychain access
+    /// to a *binary*, so a build signed a minute ago, or the copy
+    /// `verify_onboarding.sh` makes to launch a second instance, is not the
+    /// application the item was stored for. Every run of the suite therefore
+    /// raised "Listen wants to use confidential information stored in
+    /// com.mgo.listen.endpoint", once per launch, for a key none of those
+    /// tests has any use for.
+    ///
+    /// Same family as `LISTEN_ENDPOINT_KEY` above and `LISTEN_LIBRARY`: an
+    /// environment variable, so a Finder launch inherits none of it and
+    /// nothing inside the app can set it by accident. It makes the Keychain
+    /// answer "nothing stored", which is a state the app already handles on
+    /// every machine where nobody has set up an endpoint.
+    ///
+    /// It refuses writes too. A test that stored a key under this flag would
+    /// leave a credential behind on the developer's login Keychain, which is
+    /// the opposite of what the flag is for.
+    private static var sealed: Bool {
+        ProcessInfo.processInfo.environment["LISTEN_NO_KEYCHAIN"] == "1"
+    }
+
     static func read(for host: String) -> String? {
+        guard !sealed else { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -459,6 +484,7 @@ enum AgentKey {
     /// same number of calls with one branch instead of three.
     @discardableResult
     static func save(_ key: String?, for host: String) -> Bool {
+        guard !sealed else { return false }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

@@ -458,10 +458,26 @@ arrives by itself.
 ### What travels
 
 Transcripts, turns, waveforms, metadata, notes, people, contacts, tags and your
-dictionary, to every device. Voiceprints travel between Macs only, and so does
-forgetting one: `listen forget <name>` writes a sealed tombstone that every
-device applies on every pass, so a stale Mac cannot push a forgotten voice back
-into the bank.
+dictionary, to every device.
+
+Voiceprints travel between Macs and, with **Recognise voices on this iPhone**
+switched on, to and from the iPhone. That is what lets the phone put names on a
+recording it has just made: it separates the voices itself and then asks the
+bank who they are, instead of showing A, B and C until a Mac wakes up. What it
+hears goes back the same way, so a voice first heard in a kitchen reaches your
+Macs.
+
+Where two devices hold a print of the same recording, the Mac's wins. It
+diarized the separated tracks with the full pipeline, while the phone had one
+microphone carrying everybody, so the phone's pass stands down as soon as a real
+transcript for that recording exists. Everything the phone names is marked as
+the bank's guess rather than a person's word, so it never becomes the evidence
+for the next name. Turning the switch off deletes the voiceprints from the phone
+rather than hiding them.
+
+Forgetting one travels too: `listen forget <name>` writes a sealed tombstone
+that every device holding a bank applies on every pass, so a stale Mac cannot
+push a forgotten voice back and a phone cannot keep one.
 
 ### The audio, on every device
 

@@ -89,6 +89,63 @@ starts running with no other change.
 consumer, makes a clean upstream PR. Needs a decision on forking versus waiting
 on upstream.
 
+## Before 0.34.0 ships
+
+Two apps, one release. What went in: **the voice bank reaches the iPhone**. It
+holds the Macs' voiceprints, names the speakers in a recording it made without
+waiting for a Mac, sends what it hears back, and lets a person say who somebody
+is in a way that survives the Mac's own pass over the same audio. The
+measurements are in `.agents/notes/speakers.md` and the sync rules in
+`.agents/notes/cloud-sync.md`. This is only what is left.
+
+**Nothing to deploy to CloudKit.** No record type, no field: `z2` and `r6`
+already existed and the phone joined them. `DEPLOY-SCHEMA.md` is untouched.
+
+### Blocking
+
+- [ ] **A real pair of devices, on the real Apple Account.** Everything so far
+      is the Simulator against a scratch container. The recipe is in
+      `listen-ios/RUNNING.md` under *Watching the voice bank move between two
+      real devices*; `LISTEN_DEBUG=1` prints `voice bank down:` and `voice bank
+      up:` per pass. Two things to watch separately: `embeddings.json` arriving
+      beside recordings the phone never made, and the phone's own bank turning
+      up in a Mac's folder while that recording is still `pending`.
+- [ ] **Name somebody on the phone, then let the Mac transcribe it.** The one
+      path with no end-to-end coverage: `Pipeline.adoptNames` is unit-tested
+      through `VoiceBankCore.adopt` and has never run against a real ingest.
+      What should happen is the transcript comes back with the name on it and
+      `LISTEN_DEBUG=1` logs `adopted 1 name(s) applied on another device`.
+- [ ] **The naming sheet by tapping it.** Verified through the `LISTEN_NAME`
+      launch hook, which proves the sheet and not the route to it. The
+      Simulator's accessibility grant for `osascript` dropped out mid-session;
+      see *Tapping the Simulator* in `listen-ios/RUNNING.md`.
+- [ ] Write the `## 0.34.0` changelog section, bump `VERSION`,
+      `./release.sh --publish`, dispatch the homebrew workflow. For the phone,
+      bump the version and run `tools/release_testflight.sh`.
+
+### Decided, with the argument written down
+
+- **The bank travels both ways, and precedence settles the race.** The first cut
+      made the phone read-only against `z2`; that threw away the window where
+      its bank is the only one that exists. `CloudSyncCore.speaksFor` is the
+      tie-break and is used on both sides of a pass on purpose.
+- **A person's word outranks every machine pass**, including a Mac's, which is
+      the third clause of `speaksFor` and the whole reason naming on the phone
+      is worth anything.
+- **`Recognise voices on this iPhone` is a real switch**: off drops every bank
+      and every `bank:` stamp and unsubscribes from the zone, rather than
+      keeping the material and declining to read it.
+
+### Wanted next, not blocking
+
+- **`listen calibrate` no longer separates cleanly** and the phone now applies
+      the same thresholds, so a wrong one is wrong on two devices. See *Known
+      defects*.
+- **Naming a speaker on the Mac from the phone's suggestion list.** The phone
+      shows `VoiceMatch` suggestions in a sheet; the Mac's `SpeakerPicker` is
+      the older interface for the same question and the two now share the
+      wording but not the shape.
+
 ## Before 0.33.0 ships
 
 Two apps, one release. What went in: an engine seam so a meeting can be read by
@@ -146,6 +203,68 @@ This is only what is left.
   letter is worse than a letter.
 
 ## Known defects
+
+### The voice bank's thresholds were measured on five people and there are 23
+
+`listen calibrate`, 6 September 2026, on the real library: 102 named
+voiceprints across 23 people, 1110 same-person and 4005 different-person
+cross-recording pairs.
+
+    same person       min +0.077  median +0.732  max +0.968
+    different people  min -0.243  median +0.072  max +0.942
+
+The distributions **overlap by +0.866**, and the best separating threshold is
++0.361 against a shipped `matchThreshold` of +0.47. The numbers in
+`VoiceBankCore` come from five people, where the gap was clean at +0.297 and no
+different-person pair passed +0.371. That file says to re-run `calibrate` as the
+library grows, and predicts exactly this: "the different-person maximum is the
+number most likely to rise."
+
+**Two prints are doing most of the damage, and they are findable.** Scoring
+every human-named print against the centroid of that person's *other* prints,
+86 prints, 16 disagree, and 14 of those are people the bank has heard exactly
+once, so there is nothing to compare them against and the nearest stranger sits
+at +0.27 to +0.46, below `matchThreshold`. They are not mislabels. Two are:
+
+    2026-08-07-160656-EBA9   709 s filed as `Me`   +0.382 vs Me,  +0.756 vs Nick
+                             transcript says B, C, Nick. There is no `Me` in it.
+    2026-08-26-140435-53C7   744 s filed as `Me`   +0.685 vs Me,  +0.751 vs Nick
+                             transcript says Me and Nick, so a merge is as
+                             likely as a mislabel.
+
+**They are merged prints, not mislabels, and they are historical.** Both are
+from a pipeline that no longer runs. Re-transcribing 53C7 with today's build
+splits the single 744-second `Me` into two clean clusters:
+
+    before   Me 744s              +0.685 vs Me, +0.751 vs Nick
+    after    A 404s   Nick +0.882 (then Me   +0.367)
+             B 331s   Me   +0.849 (then Nick +0.328)
+
+A correctly detected room takes the room path, which writes one print per voice
+and no `Me` at all: `printUser` is never reached. Confirmed a second time on a
+37-second two-person room, whose bank came back `A` and `B` with the same speech
+seconds as the named prints beside it. **So there is nothing to fix in the code**
+and a guard added here on 6 September was reverted for that reason: it sat on a
+path a room never takes.
+
+The repair is `listen transcribe <id>` on the two of them. Nothing human is
+lost: every speaker in both is `by voice`, so no correction is thrown away, and
+`autoAssign` renames them from the bank on the way out.
+
+**`listen voices --repair` cannot see either**, and that is a real blind spot:
+`VoiceBank.repairs` excludes `Pipeline.userLabel` from its orphan search, so a
+bank key of `Me` with no `Me` in the transcript is invisible to it. Worth
+fixing, carefully, because that exclusion exists for a reason.
+
+Then, and only then, re-derive the thresholds, remembering that `autoAssign`
+scores against a *centroid* with a margin gate while `calibrate` reports
+pairwise numbers, so the figures above are the pessimistic view of what the
+gates actually see.
+
+It matters more than it did: the iPhone applies the same thresholds through the
+shared `VoiceBankCore`. `listen-ios/tools/voices_e2e.sh` prints the separation it
+gets on real voices per run, which is the cheapest way to watch this move.
+
 
 - **One word corrupted per ASR chunk seam.** Measured: none whole-file, one at
   120 s chunks, two at 60 s. At the shipped 600 s that is about six per hour.

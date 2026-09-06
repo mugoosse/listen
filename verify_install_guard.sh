@@ -7,6 +7,11 @@
 # Needs the display awake and Accessibility permission for this terminal.
 set -u
 
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PROBE="$ROOT/.xcbuild/tools/axprobe"
 DIR="${TMPDIR:-/tmp}/listen-verify-installguard"

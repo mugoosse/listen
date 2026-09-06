@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// Re-derives voiceprints for recordings that have names but no embeddings.
 ///

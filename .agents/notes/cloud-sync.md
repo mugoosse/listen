@@ -116,6 +116,49 @@ stating plainly because the obvious implementation is the expensive one:
     field         permanent, deployed, never removable
     zone          created per account at runtime, deletable
 
+## `z2` is two-way now, and the tie-break is a predicate rather than a permission
+
+The phone joined the voiceprint zone. `DevicePolicy.phone` takes
+`embeddings.json`, so it holds a bank, and the first cut of that made the phone
+**read-only** against `z2` under a flag called `publishesVoiceprints`. The
+reasoning was that every phone recording is claimed by a Mac and diarized there
+with the full pipeline, so a phone push would race a better print with a worse
+one.
+
+That is true of the same recording and false of everything else, and the flag
+threw away the window in which the phone's bank is the only one that exists:
+every minute between a kitchen conversation ending and a Mac waking up. So the
+flag is `ownsVoiceprints` now, both devices push, and the tie-break is
+`CloudSyncCore.speaksFor`:
+
+    a Mac speaks for every recording
+    a phone speaks for one until a real transcript.json exists
+    ...and again, for ever, once a person has named somebody on it
+
+**The same predicate on both sides of the pass, and that is the part worth
+guarding.** It gates the push *and* the pull's three-way conflict test. A device
+that stops sending its copy and goes on defending it against the pull reports
+the same conflict on every pass for ever and never resolves it, which is a
+quieter failure than an overwrite and a longer-lived one.
+
+The third clause is what makes naming a voice on a phone worth anything. A
+person's word outranks any machine pass including a Mac's, so that bank keeps
+travelling until `Pipeline.adoptNames` has carried the name onto the Mac's own
+clusters; after that both devices hold the same bytes and the clause stops
+mattering, because the push finds the digests equal and writes nothing.
+
+Costs the permanent schema **nothing**: no record type, no field, no change to
+what is append-only for ever. `z2` and `r6` already existed and the phone simply
+joined them, which is the blob-first discipline in `CLOUDKIT-PLAN.md` §2.4
+paying out for the second time.
+
+Asserted rather than argued, in `FakeSync`: a print the phone made first reaches
+a Mac; the phone sends nothing for a recording a Mac has read and takes that
+Mac's bank without a conflict; a name a person applied travels and one the bank
+guessed at does not; and a phone under `phoneWithoutVoices` receives nothing
+even from a core that tries. That last one replaced an assertion that proved
+nothing, because it checked a core that was never asked.
+
 ## The suite was not hermetic, and it passed once per scratch directory
 
 `EngineState` lives beside the library, keyed on the library path, so removing

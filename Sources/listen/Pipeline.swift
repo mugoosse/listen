@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// The stored transcript: segments with speakers, plus what produced them.
 struct StoredTranscript: Codable {
@@ -741,6 +742,22 @@ actor Pipeline {
     /// the recording corrects the bank in the same gesture: a re-run rewrites
     /// `embeddings.json` whole, so the mixed print is replaced by one per
     /// person rather than left behind.
+    ///
+    /// **A correctly detected room never reaches here at all**, which is worth
+    /// saying because the library still holds prints that look as though it
+    /// did. Measured 6 September 2026: `Me` prints from rooms score far worse
+    /// against the user's own centroid than prints from calls do,
+    ///
+    ///     call  (mic track is only you)      n=31  min +0.725  median +0.869
+    ///     room  (one mic carried everybody)  n=8   min +0.382  median +0.785
+    ///
+    /// with the worst, a 48-minute workshop with three other speakers, holding
+    /// 709 seconds under `Me` that sit at +0.382 from the user and +0.756 from
+    /// the person who does most of the talking in it. Those are **historical**:
+    /// re-transcribing that recording today takes the room path, which writes
+    /// one print per voice and no `Me`. Verified on a 37-second two-person
+    /// room, whose bank came back `A` and `B` with the same speech seconds and
+    /// no user print. So the repair is a re-run, not a code change here.
     private func printUser(_ recording: Recording, from clustered: DiarizationOutput?,
                            into embeddings: inout [String: [Float]],
                            speech: inout [String: Double], tally: Tally) async {
@@ -817,6 +834,13 @@ actor Pipeline {
     private func write(_ transcript: StoredTranscript, turns: [Turn],
                        embeddings: [String: [Float]], speech: [String: Double],
                        to recording: Recording) throws {
+        var transcript = transcript
+        var turns = turns
+        var embeddings = embeddings
+        var speech = speech
+        adoptNames(in: recording, transcript: &transcript, turns: &turns,
+                   embeddings: &embeddings, speech: &speech)
+
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
 
@@ -846,6 +870,71 @@ actor Pipeline {
             withSpeech[label]?.speech = seconds
         }
         try enc.encode(withSpeech).write(to: recording.embeddingsURL, options: .atomic)
+    }
+
+    /// Carry a name a person applied elsewhere onto this run's own clusters.
+    ///
+    /// **This is where a name typed on a phone survives, and the reason it has
+    /// to be here is that this function is where it would otherwise die.** The
+    /// phone diarizes a recording it made within a minute, somebody taps a
+    /// letter and says who it is, and that lands in the recording's
+    /// `embeddings.json`, which syncs. Then a Mac claims the audio, runs the
+    /// real pipeline, and overwrites that file with its own clusters. Without
+    /// this, the human name is gone and the transcript that comes back says
+    /// `A` at the person who was named an hour earlier.
+    ///
+    /// So the prior bank is read before it is replaced, and every name in it a
+    /// *person* applied is matched against this run's clusters by cosine. It is
+    /// the same comparison `VoiceBank.suggestions` makes and the same
+    /// threshold, with one difference that makes it far safer: both vectors
+    /// come from the same audio, so a correct match scores around +0.95 rather
+    /// than the +0.84 a good cross-recording match manages, and a wrong one has
+    /// nowhere to hide.
+    ///
+    /// Renames all four things at once, before any of them is written, because
+    /// a bank that says Marcia over a transcript that says A is exactly the
+    /// damage `listen voices --repair` exists to undo.
+    ///
+    /// Automatic names are deliberately not carried: `auto` means the bank
+    /// guessed, this run is a better-informed guess over better audio, and
+    /// letting the old one win would freeze the first guess in place for ever.
+    private func adoptNames(in recording: Recording,
+                            transcript: inout StoredTranscript, turns: inout [Turn],
+                            embeddings: inout [String: [Float]],
+                            speech: inout [String: Double]) {
+        let applied = VoiceBankCore.humanNames(recording.voiceprints)
+        guard !applied.isEmpty, !embeddings.isEmpty else { return }
+        let moves = VoiceBankCore.adopt(applied, onto: embeddings)
+        guard !moves.isEmpty else {
+            // Said out loud, because this is how a name somebody typed goes
+            // missing. It is not necessarily wrong: a run that clustered
+            // differently can genuinely have no single voice to put the name
+            // on. It is just never the outcome anybody wanted.
+            log("no cluster in \(recording.id) matches the \(applied.count) name(s) "
+                + "applied to it on another device")
+            return
+        }
+        // The event unconditionally, the names behind `LISTEN_DEBUG`: a GUI
+        // launch sends stderr to the unified log, where a person's name would
+        // sit in plain text for any diagnostic report to sweep up.
+        log("adopted \(moves.count) name(s) applied on another device "
+            + "in \(recording.id)")
+        for (cluster, name) in moves.sorted(by: { $0.key < $1.key }) {
+            trace("  \(cluster) is \(name)")
+        }
+
+        for i in transcript.segments.indices {
+            if let to = moves[transcript.segments[i].speaker] {
+                transcript.segments[i].speaker = to
+            }
+        }
+        for i in turns.indices {
+            if let to = moves[turns[i].speaker] { turns[i].speaker = to }
+        }
+        embeddings = Dictionary(uniqueKeysWithValues:
+            embeddings.map { (moves[$0.key] ?? $0.key, $0.value) })
+        speech = Dictionary(uniqueKeysWithValues:
+            speech.map { (moves[$0.key] ?? $0.key, $0.value) })
     }
 
     /// Run the user's dictionary over every segment, and report what fired.
@@ -1014,35 +1103,6 @@ actor Pipeline {
         }
         return peak < threshold
     }
-}
-
-/// One speaker's voiceprint from one recording.
-struct Voiceprint: Codable {
-    var embedding: [Float]
-    /// Seconds of speech it was built from.
-    ///
-    /// Under 15 seconds the embedding is stored but not used as evidence: it is
-    /// too short to be a reliable identity, and a confident wrong suggestion in
-    /// the labelling UI is worse than no suggestion.
-    var speech: Double
-
-    /// True when the bank named this speaker rather than a person doing it.
-    ///
-    /// `Optional`, and that is load-bearing for the reason recorded against
-    /// `Metadata.calendar_event_id`: Swift's synthesized decoder throws
-    /// `keyNotFound` on a missing key even where the property has a default, so
-    /// a non-optional `Bool = false` would make every `embeddings.json` written
-    /// before this field fail to decode, and `Recording.voiceprints` swallows
-    /// that with `try?` and returns `[:]`. The whole voice bank would have
-    /// emptied itself with nothing anywhere reporting it.
-    ///
-    /// Read by `VoiceBank.named`, which is what keeps an automatic name from
-    /// becoming the evidence for the next one.
-    var auto: Bool?
-
-    static let minimumSpeechForEvidence: Double = 15
-
-    var isEvidence: Bool { speech >= Self.minimumSpeechForEvidence }
 }
 
 enum PipelineError: Error, LocalizedError {

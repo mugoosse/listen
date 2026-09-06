@@ -10,6 +10,11 @@
 # into a pill, which is a window behaviour. It asserts the predicate underneath
 # instead, which is what actually regresses; the lift itself is a manual check.
 set -u
+
+# macOS grants Keychain access to a binary, and every run of this suite
+# launches one signed a minute ago, so the app was asking for a password
+# per launch to read an endpoint key none of these tests uses.
+export LISTEN_NO_KEYCHAIN=1
 cd "$(dirname "$0")"
 
 BIN="$(pwd)/Listen.app/Contents/MacOS/Listen"

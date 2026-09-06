@@ -1441,6 +1441,25 @@ in `argv` is in the shell history and in `ps` output while it runs.
 `LISTEN_LIBRARY`: an environment variable, so a Finder launch inherits none of
 it.
 
+`LISTEN_NO_KEYCHAIN=1` is the other half of that family and it is for the verify
+suite. **macOS grants Keychain access to a binary, not to an application**, so a
+build signed a minute ago, or the ad-hoc copy `verify_ask_*.sh` launches, is not
+the program the item was stored for. Every run raised *"Listen wants to use
+confidential information stored in com.mgo.listen.endpoint"*, once per launch,
+for a key none of those tests uses. The scripts used to carry a note telling
+whoever was at the keyboard to click Deny; they export this instead.
+
+It makes the Keychain answer "nothing stored", which is a state the app already
+handles on every machine where nobody has set up an endpoint, and it **refuses
+writes too**: a test storing a key under the flag would leave a credential on
+the developer's login Keychain, which is the opposite of the point.
+
+One thing it does not fix, and which is worth knowing: `AgentChat.migrateProviders`
+consults the Keychain on any defaults domain that has no providers list, because
+a stored key is the only evidence OpenRouter was ever configured. That is one
+prompt on a genuinely fresh install, which is defensible, and it is also why
+every scratch-domain run paid one before this flag existed.
+
 And the note above about cost needs one amendment. `Outcome.costUSD` is never
 drawn because everybody on the CLI backends pays a flat monthly price, so a
 figure reads as a meter on a plan that has none. **A metered API key genuinely

@@ -8,6 +8,49 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.35.0 (2026-09-06)
+
+Short recordings get names too.
+
+### A voice memo is named, instead of waiting for nobody
+
+A nine-second memo showed `A` and stayed that way for ever. Listen would not put
+a name to a voice it had heard for under fifteen seconds, on either device, so a
+quick note to yourself was the one recording it never recognised anybody in, and
+no amount of waiting for a Mac helped: your Mac applied the same rule.
+
+The rule was one number doing two jobs. Being sure enough to *remember* a voice
+and being sure enough to *ask who it is* are different questions, and the
+expensive one had been answering both. Now they are separate. What goes into the
+voice bank as a reference still needs fifteen seconds and has not moved a
+millimetre, because a shaky identity in there quietly recruits the next one.
+Asking who somebody is needs five.
+
+Measured before changing it, over every named voiceprint in a real 23-person
+library. Under five seconds the closest match was wrong both times it came up.
+At five seconds and above it was right every time, and everything confident
+enough to be applied without asking was correct. The two names in that library
+that *were* applied wrongly came from recordings of five and seven minutes, so
+length was never what separated a right answer from a wrong one.
+
+A wrong name here is cheap and visible in a way a wrong reference is not: it is
+marked as the bank's guess, it never becomes evidence, and it is one tap from
+being corrected on your phone or one `listen label` on your Mac.
+
+### The repair could not see two ways a voiceprint goes wrong
+
+`listen voices --repair` puts a voiceprint back under the name its transcript
+uses. It could not see a print filed under *your own* name, which is where the
+worst mislabel in this library was hiding: five and a half minutes of somebody
+else's voice, filed as you, teaching the bank that you sound like them.
+
+It also could not see a swap. The search looked for a name with no voiceprint
+and a voiceprint with no name, so it needed something missing to aim at. Two
+prints simply the wrong way round leave nothing missing, and the bank is
+confidently wrong with no gap to point at it. It now also asks the other
+question, whether a voiceprint sounds like the person it is filed under, and
+refuses to touch one that already does.
+
 ## 0.34.0 (2026-09-06)
 
 Your iPhone knows who is speaking.

@@ -17,7 +17,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    # **macos-26, not macos-15, and the reason is a real failure.** The
+    # macos-15 image carries exactly one Xcode, 26.3, and 26.3 cannot build
+    # ListenKit: it dies with `unable to open dependencies file
+    # (ListenKit-primary.d)`, which is the compiler failing to write its own
+    # bookkeeping rather than anything in the source. It appeared the moment
+    # 0.34.0 added Voices.swift, taking ListenKit from 60 files to 61, and it
+    # is deterministic: the same commit was re-run and failed identically.
+    # `-primary` appears nowhere in a green run's log, so that name is
+    # synthesized by the frontend on the way down.
+    #
+    # macos-26 carries Xcode 26.6, which is the toolchain every release has
+    # actually been cut with on the developer machine, and which builds this
+    # module without complaint. CI checking a compiler nothing ships with was
+    # the whole problem: 0.21.0 went out over three red runs for the mirror
+    # image of this, a failure that existed only on the runner.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:

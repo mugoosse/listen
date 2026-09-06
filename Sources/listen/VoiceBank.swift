@@ -213,12 +213,22 @@ enum VoiceBank {
             guard !bank.isEmpty else { continue }
             let speakers = Set(recording.speakers)
 
+            // **`Me` is an orphan like any other key, and excluding it hid the
+            // one mislabel this function exists to find.** The exclusion was
+            // there because `printUser` writes a `Me` print from the microphone
+            // track whether or not the transcript ends up with a `Me` in it, so
+            // the shape looked routine. Measured over this library it is not:
+            // 2 recordings of 76 have a `Me` print and no `Me` speaker, one is
+            // the known Nick mislabel, and the other has nothing unbanked so it
+            // proposes no repair either way. What the exclusion cost was the
+            // whole shape it was written to catch, a voiceprint sitting under a
+            // name the transcript does not use.
+            //
+            // A namespaced key belongs to a track rather than a person
+            // (`Merge.namespaced`), and a cluster the merge dropped is not a
+            // name anybody lost.
             let orphans = bank.keys.filter {
-                !speakers.contains($0) && $0 != Pipeline.userLabel
-                    // A namespaced key belongs to a track rather than a person
-                    // (`Merge.namespaced`), and a cluster the merge dropped is
-                    // not a name anybody lost.
-                    && !$0.contains(":")
+                !speakers.contains($0) && !$0.contains(":")
             }
             let unbanked = speakers.filter {
                 !isPlaceholder($0) && $0 != Pipeline.userLabel && bank[$0] == nil
@@ -253,9 +263,108 @@ enum VoiceBank {
                     score = cosine(print.embedding, centroid(of: elsewhere))
                     guard let s = score, s >= matchThreshold else { continue }
                 }
+                // Everything else may be proposed on shape alone, because a key
+                // no transcript uses is already an anomaly. `Me` may not: it is
+                // the one label this pipeline writes without a transcript
+                // asking it to, so moving one has to be corroborated by the
+                // voice rather than by counting.
+                if key == Pipeline.userLabel, score == nil { continue }
                 out.append(Repair(recordingID: recording.id,
                                   title: recording.displayTitle,
                                   name: name, key: key, similarity: score, why: why))
+            }
+        }
+        out.append(contentsOf: misfiled(in: library))
+        return out
+    }
+
+    /// Prints filed under a name whose voice they are not.
+    ///
+    /// **A different shape from the orphan search above, and the reason it
+    /// exists is that the orphan search cannot see a swap.** That one pairs a
+    /// key no transcript uses with a name no key holds, so it needs a gap to
+    /// aim at. When two prints in one recording are simply the wrong way round
+    /// there is no gap: every name is spoken for, and the bank is confidently,
+    /// silently wrong. Measured on `2026-08-26-140435-53C7`, where the print
+    /// filed as `Me` scored +0.880 against Nick and +0.364 against the user,
+    /// while the one filed `B` scored +0.849 against the user. Both are over
+    /// five minutes of speech, so this is not a short-print artefact.
+    ///
+    /// Four things keep it from deciding anything on a guess:
+    ///
+    /// 1. **Both gates**, as everywhere else: `certainThreshold` on the level
+    ///    and `marginThreshold` clear of the runner-up.
+    /// 2. **A print that already matches its own label is left alone**, even if
+    ///    something else scores higher. Being filed correctly is not a defect.
+    /// 3. **The whole recording is dropped unless the moves form a
+    ///    permutation.** Two keys wanting one name, or a name taken by a print
+    ///    that is staying put, is exactly the ambiguity a person should settle.
+    /// 4. **Ordered so each target is free when its turn comes**, because
+    ///    `apply` refuses to overwrite a name that still holds a print. A pure
+    ///    two-cycle has no free start and is left for a person, deliberately:
+    ///    the one-at-a-time write has nowhere to park the first print.
+    private static func misfiled(in library: [Recording]) -> [Repair] {
+        var out: [Repair] = []
+        for recording in library {
+            let bank = recording.voiceprints
+            guard bank.count > 1 else { continue }
+            let names = Set(recording.speakers.filter { !isPlaceholder($0) })
+            guard names.count > 1 else { continue }
+
+            // Centroids on the same terms the bank matches on: evidence only,
+            // and never this recording's own prints.
+            var prints: [String: [[Float]]] = [:]
+            for other in library where other.id != recording.id {
+                VoiceBankCore.addEvidence(from: other.voiceprints, to: &prints)
+            }
+            let cents = prints.filter { names.contains($0.key) }
+                .mapValues { centroid(of: $0) }
+            guard cents.count > 1 else { continue }
+
+            var moves: [(key: String, name: String, score: Float)] = []
+            var settled = false
+            for (key, print) in bank {
+                let ranked = cents
+                    .map { (name: $0.key, score: cosine(print.embedding, $0.value)) }
+                    .sorted { $0.score > $1.score }
+                guard let best = ranked.first, ranked.count > 1 else { continue }
+                let rival = ranked[1].score
+                guard best.score >= certainThreshold,
+                      best.score - rival >= marginThreshold else { continue }
+                if best.name == key { continue }
+                // Filed correctly enough is filed correctly.
+                if let own = ranked.first(where: { $0.name == key })?.score,
+                   own >= matchThreshold { continue }
+                moves.append((key, best.name, best.score))
+            }
+            guard !moves.isEmpty else { continue }
+            guard Set(moves.map(\.name)).count == moves.count else { continue }
+            let leaving = Set(moves.map(\.key))
+            guard moves.allSatisfy({ bank[$0.name] == nil || leaving.contains($0.name) })
+            else { continue }
+
+            // Vacate before filling. A move whose target holds no print may go
+            // at once; one whose target is occupied waits for that print to
+            // leave.
+            var free = Set(moves.map(\.name).filter { bank[$0] == nil })
+            var pending = moves
+            var ordered: [(key: String, name: String, score: Float)] = []
+            while !pending.isEmpty {
+                guard let i = pending.firstIndex(where: { free.contains($0.name) })
+                else { settled = true; break }
+                let move = pending.remove(at: i)
+                free.insert(move.key)
+                ordered.append(move)
+            }
+            // A cycle with no free start. Left whole rather than half applied.
+            if settled { continue }
+
+            for move in ordered {
+                out.append(Repair(
+                    recordingID: recording.id, title: recording.displayTitle,
+                    name: move.name, key: move.key, similarity: move.score,
+                    why: "this voice is \(SpeakerName.display(move.name))'s, "
+                        + "and it is filed as \(SpeakerName.display(move.key))"))
             }
         }
         return out

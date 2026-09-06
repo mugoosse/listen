@@ -247,14 +247,46 @@ seconds as the named prints beside it. **So there is nothing to fix in the code*
 and a guard added here on 6 September was reverted for that reason: it sat on a
 path a room never takes.
 
-The repair is `listen transcribe <id>` on the two of them. Nothing human is
-lost: every speaker in both is `by voice`, so no correction is thrown away, and
-`autoAssign` renames them from the bank on the way out.
+### Update, 6 September 2026: the re-transcribe happened and left the keys wrong
 
-**`listen voices --repair` cannot see either**, and that is a real blind spot:
-`VoiceBank.repairs` excludes `Pipeline.userLabel` from its orphan search, so a
-bank key of `Me` with no `Me` in the transcript is invisible to it. Worth
-fixing, carefully, because that exclusion exists for a reason.
+53C7 has since been re-transcribed and split exactly as predicted above, but the
+two clean clusters were filed under the wrong names. Re-measured over all 81
+named prints:
+
+    2026-08-07-160656-EBA9   Me 329s  +0.410 vs Me,  +0.889 vs Nick
+                             transcript B, C, Nick. `Me` is Nick's cluster.
+    2026-08-26-140435-53C7   Me 404s  +0.364 vs Me,  +0.880 vs Nick
+                             B  331s  +0.309 vs Nick, +0.849 vs Me
+                             transcript Nick and Me, so the two are swapped.
+
+So the transcripts are right and the bank keys are wrong, which is a smaller
+problem than the merge was and a different shape from it. **Re-transcribing
+again is not the repair** and would only re-roll the same dice; the trap in
+`listen-ios`'s handover about re-transcribing two recordings in sequence still
+stands.
+
+Both are now findable by `listen voices --repair`, which grew two things:
+
+1. **`Me` is an orphan like any other key.** The exclusion was there because
+   `printUser` writes a `Me` print whether or not a `Me` ends up in the
+   transcript, so the shape looked routine. Measured: 2 recordings of 76 have
+   that shape, one is EBA9 and the other proposes no repair anyway, so the
+   exclusion was costing the whole class it was written to catch and buying
+   nothing. A `Me` key now only ever moves on a score, never on shape alone.
+2. **`VoiceBank.misfiled`, for the swap the orphan search structurally cannot
+   see.** The orphan search pairs a key no transcript uses with a name no key
+   holds, so it needs a gap to aim at; a swap has no gap. Gated on both
+   thresholds, skips a print that already matches its own label, drops the
+   recording unless the moves form a permutation, and orders them so each
+   target is free when its turn comes.
+
+EBA9 is repaired. The remaining three are previewed and **not yet applied**:
+
+    2026-09-01-150027-C0DE   A  -> Charlie  0.776
+    2026-08-26-140435-53C7   Me -> Nick     0.893   (then B -> Me, 0.846)
+    2026-08-18-170206-0912   A  -> Eduard   0.830
+
+    listen voices --repair --apply
 
 Then, and only then, re-derive the thresholds, remembering that `autoAssign`
 scores against a *centroid* with a margin gate while `calibrate` reports

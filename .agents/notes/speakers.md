@@ -1610,3 +1610,52 @@ worth stating plainly. Franco has no print anywhere to file. Martijn's cluster
 in that recording produced no embedding at all, so there is nothing to move
 there either. The repair puts him back in the bank for every *future* recording,
 which is the part that was silently broken.
+
+## `Me` was excluded from the orphan search, and a swap has no orphan at all
+
+Two blind spots in `VoiceBank.repairs`, found by scoring every named print in the
+real library against the centroid of that person's other prints. Both hid real
+mislabels, and they hid them in different ways.
+
+**The first was one clause.** `orphans` filtered out `Pipeline.userLabel`, so a
+bank key of `Me` with no `Me` in the transcript was invisible. The exclusion was
+defensible on its face: `printUser` writes a `Me` print from the microphone track
+whether or not the transcript ends up with a `Me` speaker, so the shape looks
+routine rather than broken. Measured, it is not routine. Two recordings of 76
+have a `Me` print and no `Me` speaker; one is a real mislabel, 329 seconds of
+Nick's voice filed as the user, and the other has nothing unbanked so it proposes
+no repair either way. The exclusion was buying nothing and costing the whole
+class it was written to catch. What replaced it is narrower and does the job the
+exclusion was reaching for: a `Me` key may be proposed like any other, but never
+on shape alone, only ever corroborated by a score against that person's voice
+elsewhere.
+
+**The second is structural and needed a second search.** The orphan pass pairs a
+key no transcript uses with a name no key holds, so it needs a *gap* to aim at.
+When two prints in one recording are simply the wrong way round there is no gap:
+every name is spoken for, every key is filed under something, and the bank is
+confidently wrong with nothing missing to point at it. `2026-08-26-140435-53C7`
+is the case, after a re-transcribe split a merged 744-second print into two
+clean clusters and named them backwards:
+
+    bank['Me']  404s   Nick +0.880   Me   +0.364     transcript says Nick
+    bank['B']   331s   Me   +0.849   Nick +0.309     transcript says Me
+
+`VoiceBank.misfiled` finds that shape by asking a different question: not "which
+name has no print" but "does this print sound like the person it is filed under".
+Four gates keep it from guessing. Both thresholds, as everywhere else. A print
+that already scores above `matchThreshold` against its own label is left alone,
+because being filed correctly is not a defect and something else scoring higher
+is not evidence against it. The whole recording is dropped unless the moves form
+a permutation, since two keys wanting one name is exactly the ambiguity a person
+should settle. And the moves are ordered so each target is free when its turn
+comes, because `apply` refuses to overwrite a name that still holds a print; a
+pure two-cycle has no free start and is left alone deliberately, as the
+one-at-a-time write has nowhere to park the first print.
+
+Measured on the real library: 4 repairs, and the two large `Me` prints that are
+filed *correctly* (+0.879 and +0.872 against the user) are untouched, which is
+the assertion that matters most. The two it found beyond the known mislabel were
+a placeholder holding Charlie's voice at +0.776 and one holding Eduard's at
++0.830, both in recordings where that person is named in the transcript and had
+no print at all.

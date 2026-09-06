@@ -218,6 +218,7 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - Three words are not a person, and one of them withheld a title for ever
 - The bank knew everybody except its owner
 - A renamed speaker can leave their voice behind, and nothing said so
+- `Me` was excluded from the orphan search, and a swap has no orphan at all
 
 ### `.agents/notes/calendar.md` (15k)
 

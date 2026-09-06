@@ -273,7 +273,11 @@ enum CLI {
             exit(0)
         }
 
-        print("\(found.count) voiceprint(s) filed under a label no transcript uses:")
+        // Two shapes reach this list now and only one of them is a label no
+        // transcript uses: a swap is filed under a name the transcript very
+        // much does use, just not for that voice. The `why` on each row says
+        // which, so the heading only has to be true of both.
+        print("\(found.count) voiceprint(s) filed under the wrong name:")
         print("")
         for r in found {
             let score = r.similarity.map { String(format: "  (%.3f against their voice "

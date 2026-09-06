@@ -26,11 +26,76 @@ export LISTEN_LIBRARY="${TMPDIR:-/tmp}/listen-verify-search"
 # the speaker who said it, and the count has to be the number of times.
 # Re-derive it with the probe at the foot of this file if the fixtures change.
 TERM_BODY=iphone
-TERM_BODY_COUNT=8
-TERM_BODY_TITLE="Call with Joris Goossens"
+# **Every fixture below is derived from the library, and none of them is written
+# down here.** They used to be, and all of them rotted: the recording carrying
+# the word was renamed when a speaker was, `tail -8` walked past it as the
+# library grew, the word that was in a title and no transcript turned up in two
+# transcripts, and a second recording appeared with the same title so selecting
+# the row by it picked the wrong one. Seven of sixteen checks failed for none of
+# the reasons this script exists to catch.
+#
+# So the library is asked, once, for all of it: which recording owns the word
+# and how often, which title word appears in no transcript, and exactly which
+# recordings to copy so that neither answer is ambiguous.
+derived=$(python3 - "$SRC" "$TERM_BODY" <<'DERIVE'
+import json, pathlib, re, sys
+
+root, needle = pathlib.Path(sys.argv[1]), sys.argv[2].lower()
+rows = {}
+for d in sorted(root.iterdir()):
+    turns, meta = d / "turns.json", d / "metadata.json"
+    if not (turns.exists() and meta.exists()):
+        continue
+    try:
+        text = " ".join(t["text"] for t in json.loads(turns.read_text())).lower()
+        title = json.loads(meta.read_text()).get("title") or ""
+    except Exception:
+        continue
+    rows[d.name] = (title, text)
+
+# The recording that owns the word, over the whole library rather than over the
+# window: the window moves every time a recording is made.
+body = max(rows, key=lambda k: rows[k][1].count(needle), default="")
+if not body or rows[body][1].count(needle) == 0:
+    sys.exit("no recording carries " + needle)
+body_title = rows[body][0]
+
+# The window, plus that recording, minus anything else wearing its title. The
+# row is selected by title further down, and two rows with one title is how
+# that picks the wrong page.
+window = sorted(rows)[-8:]
+copy = [k for k in dict.fromkeys(window + [body])
+        if k == body or rows[k][0] != body_title]
+
+# A word that is in one of these titles and in none of these transcripts. Five
+# letters and up, because the search matches substrings and a short word finds
+# itself inside longer ones.
+bodies = " ".join(rows[k][1] for k in copy)
+titled = ""
+for k in copy:
+    for word in re.findall(r"[A-Za-z]{5,}", rows[k][0]):
+        if word.lower() not in bodies:
+            titled = word.lower()
+            break
+    if titled:
+        break
+if not titled:
+    sys.exit("no title word is absent from every transcript here")
+
+print("\t".join([body, str(rows[body][1].count(needle)), body_title]))
+print(titled)
+print(" ".join(copy))
+DERIVE
+) || exit 1
+TERM_BODY_ID=$(printf '%s' "$derived" | sed -n 1p | cut -f1)
+TERM_BODY_COUNT=$(printf '%s' "$derived" | sed -n 1p | cut -f2)
+TERM_BODY_TITLE=$(printf '%s' "$derived" | sed -n 1p | cut -f3)
 # In a title and in no transcript, which is the row that must **not** grow a
 # third line: repeating the title underneath itself is noise.
-TERM_TITLE=marcia
+TERM_TITLE=$(printf '%s' "$derived" | sed -n 2p)
+COPY_IDS=$(printf '%s' "$derived" | sed -n 3p)
+echo "fixtures: $TERM_BODY x$TERM_BODY_COUNT in \"$TERM_BODY_TITLE\", title-only word \"$TERM_TITLE\""
+
 # Written into the fixtures below, so they cannot be true by accident.
 TERM_NOTE=frobnicate
 TERM_CHAT=widgetsmith
@@ -56,7 +121,7 @@ rm -rf "$LISTEN_LIBRARY"
 mkdir -p "$LISTEN_LIBRARY/recordings" "$LISTEN_LIBRARY/notes" "$LISTEN_LIBRARY/chats"
 
 copied=0
-for id in $(ls -1 "$SRC" | tail -8); do
+for id in $COPY_IDS; do
     [ -f "$SRC/$id/turns.json" ] || continue
     mkdir -p "$LISTEN_LIBRARY/recordings/$id"
     for f in metadata.json transcript.json turns.json embeddings.json; do
@@ -171,7 +236,7 @@ echo
 echo "2. a title match does not repeat itself underneath"
 search "$TERM_TITLE"
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -qi "marcia"
+echo "$dump" | grep -qi "$TERM_TITLE"
 check $? "the row is in the list"
 ! echo "$dump" | grep -qE "$EXCERPT"
 check $? "and it grew no excerpt line"

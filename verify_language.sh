@@ -36,6 +36,32 @@ DUTCH="2026-08-29-152716-4C81 2026-08-30-161942-BA65 2026-09-03-192321-4513
        2026-07-25-144837-2315 2026-08-14-102549-4A8E"
 ENGLISH="2026-08-17-041112-0ADB 2026-08-08-075147-8274 2026-07-14-201352-B346"
 
+# **A missing fixture is a failure, not a smaller test.**
+#
+# Every loop below skips a recording that is not there, so a deleted fixture
+# used to make this run quieter rather than redder: with all five Dutch calls
+# gone it would assert nothing whatsoever about Dutch and still print
+# "0 failed". A suite that gets weaker as the library changes, without saying
+# so, is the shape of a pass that means nothing.
+#
+# These ids are written down rather than derived on purpose, and it is the one
+# place in this repo where that is right: which recordings are Dutch calls and
+# which are English memos somebody stopped to think in is hand-labelled ground
+# truth, and no metric can pick a replacement without assuming the answer this
+# script exists to check. So they are named, and their absence is loud.
+missing=""
+for id in $DUTCH $ENGLISH; do
+    [ -d "$REAL/$id" ] || missing="$missing $id"
+done
+if [ -n "$missing" ]; then
+    echo "fixtures missing from the library:$missing" >&2
+    echo "" >&2
+    echo "These are hand-labelled: Dutch calls, and English memos with long" >&2
+    echo "thinking pauses. Pick replacements by hand, listen to them, and edit" >&2
+    echo "the lists above. Do not let this script run with fewer." >&2
+    exit 1
+fi
+
 echo "== building a scratch library out of symlinks =="
 mkdir -p "$SCRATCH/recordings"
 have_dutch=0

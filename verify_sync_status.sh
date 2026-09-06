@@ -38,7 +38,7 @@ frames = b"".join(struct.pack("<h", int(3000 * math.sin(i * 440 * 2 * math.pi / 
 out.writeframes(frames); out.close()
 WAV
 cat > "$LISTEN_LIBRARY/recordings/$ID/metadata.json" <<JSON
-{"id":"$ID","title":"Untitled","source":"mac","state":"pending",
+{"id":"$ID","title":"Sync control $ID","source":"mac","state":"pending",
  "duration":10,"recorded_at":"2026-08-29T10:00:00Z"}
 JSON
 
@@ -74,7 +74,14 @@ esac
 # The recording's own row, not "New Recording": that phrase is in the menu
 # bar, which is in the app's AX tree whatever window is up, so it proves
 # nothing about the window this script is reading.
-echo "$dump" | grep -q "Untitled"
+#
+# **A title of its own, because the placeholder is not what the row shows.**
+# This fixture said `Untitled` and grepped for it, and the sidebar draws
+# `New recording` for exactly that value: the control failed while the row was
+# on screen the whole time, which made the three assertions under it vacuous
+# rather than passing. A title nothing else can produce cannot be mistaken for
+# a display rule.
+echo "$dump" | grep -q "Sync control"
 check $? "the recording's row is on screen (positive control)"
 ! echo "$dump" | grep -qi "syncing transcript"
 check $? "nothing on screen says 'Syncing transcript' with sync off"

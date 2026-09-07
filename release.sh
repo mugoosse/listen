@@ -137,6 +137,24 @@ if [ "$PUBLISH" -eq 1 ]; then
         exit 1
     fi
 
+    # **Clean is not the same as being on main, and the difference shipped.**
+    # 0.35.0 was cut, tagged and published from a website branch: the release
+    # was checked against main hours earlier, another session moved the shared
+    # worktree in between, and this script had no opinion because the tree it
+    # found was perfectly clean. The tag then pointed at two commits of
+    # unreleased website copy and was not reachable from main at all.
+    #
+    # A check outside the script cannot cover this. The branch can change
+    # between looking and publishing, so the only place the question can be
+    # asked usefully is here, in the seconds before the tag is written.
+    branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" != "main" ]; then
+        echo "error: on branch '$branch'. A release is cut from main," >&2
+        echo "       or the tag carries work nobody meant to ship and is" >&2
+        echo "       reachable from no branch anybody reads." >&2
+        exit 1
+    fi
+
     # Without a public key in the bundle, Sparkle has nothing to verify an
     # update against and refuses every one of them. Publishing that way ships
     # an update channel that silently never works, and the only fix afterwards

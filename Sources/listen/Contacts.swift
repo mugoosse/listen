@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// One person, and every address they answer to.
 ///
@@ -6,57 +7,7 @@ import Foundation
 /// `People` uses. That is deliberate and it is the whole point: a contact is
 /// not a fourth kind of identity, it is a second way of arriving at the one
 /// Listen already has.
-struct Contact: Codable {
-    /// As written on disk in `turns.json`, so `People.find` locates them.
-    var name: String
-    /// Lowercased, unique. **Many per person, on purpose.** The same human is
-    /// `ryan@example.org` on one invitation and `ryan.mitchell@example.com` on the
-    /// next, and a book that could only hold one of them would ask the same
-    /// question again every time the other one turned up.
-    var emails: [String]
-
-    /// What you know about them that no file can tell you.
-    ///
-    /// **Optional rather than defaulted, and that is not a style choice.**
-    /// Swift's synthesized decoder throws on a missing key even when the
-    /// property has a default, so a non-optional `notes` would have made every
-    /// `contacts.json` written before today fail to decode, and `load` returns
-    /// an empty book on a decode error. The whole address book would have
-    /// silently emptied itself. Same trap, same fix, as `StoredTranscript`.
-    var notes: String? = nil
-
-    var note: String { notes ?? "" }
-
-    /// The name split for a form with two fields, and recomposed losslessly.
-    ///
-    /// First and last are not stored. `name` is the transcript label and the
-    /// only key this book has, so a second copy of it in two fields would be a
-    /// second answer to what somebody is called. The split is on the first
-    /// space, so "Anna van der Berg" is Anna and the rest.
-    var firstName: String { Contact.split(name).first }
-    var lastName: String { Contact.split(name).last }
-
-    static func split(_ full: String) -> (first: String, last: String) {
-        let trimmed = full.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let space = trimmed.firstIndex(of: " ") else { return (trimmed, "") }
-        return (String(trimmed[trimmed.startIndex..<space]),
-                String(trimmed[trimmed.index(after: space)...])
-                    .trimmingCharacters(in: .whitespaces))
-    }
-
-    static func join(first: String, last: String) -> String {
-        [first, last]
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-
-    /// For the disc that stands in for a photo.
-    var initials: String {
-        let parts = [firstName, lastName].compactMap(\.first).map(String.init)
-        return parts.isEmpty ? "?" : parts.joined().uppercased()
-    }
-}
+typealias Contact = PersonProfile
 
 /// Which address belongs to whom.
 ///
@@ -81,41 +32,23 @@ enum ContactBook {
     /// Beside `dictionary.json`, and for the same reasons: it is a preference
     /// about the whole library rather than about any one recording, and it is
     /// small enough to rewrite whole.
-    static let file = Library.root.appendingPathComponent("contacts.json")
-
-    private struct Document: Codable {
-        var version: Int
-        var contacts: [Contact]
-    }
+    static let file = PersonDirectory.file(root: Library.root)
 
     /// Read from disk on every call, as `CustomDictionary` does. A few
     /// kilobytes is nothing, and a cache here would need invalidating from the
     /// sheet, from a hand edit, and from the CLI in another process.
     static func load() -> [Contact] {
-        guard let data = try? Data(contentsOf: file),
-              let doc = try? JSONDecoder().decode(Document.self, from: data)
-        else { return [] }
-        return doc.contacts
+        PersonDirectory.load(root: Library.root)
     }
 
     static func save(_ contacts: [Contact]) {
-        try? FileManager.default.createDirectory(
-            at: Library.root, withIntermediateDirectories: true)
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? enc.encode(Document(
-            version: 1,
-            contacts: contacts.sorted { $0.name.localizedCaseInsensitiveCompare($1.name)
-                == .orderedAscending })) else { return }
-        // Atomic: a crash mid-write must not leave neither the old list nor the
-        // new one.
-        try? data.write(to: file, options: .atomic)
+        try? PersonDirectory.save(contacts, root: Library.root)
     }
 
     // MARK: - Reading
 
     static func normalize(_ email: String) -> String {
-        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        PersonDirectory.normalize(email)
     }
 
     /// Who this address belongs to, if anybody has said.
@@ -163,6 +96,10 @@ enum ContactBook {
         updated.emails = Array(Set(contact.emails.map(normalize).filter { !$0.isEmpty }))
             .sorted()
         updated.notes = contact.note.isEmpty ? nil : contact.note
+        if updated.created == nil,
+           let existing = contacts.first(where: { $0.name == name }) {
+            updated.created = existing.created
+        }
         // An address belongs to one person, the rule `link` already holds, so
         // taking one here takes it off whoever had it.
         for i in contacts.indices where contacts[i].name != name {
@@ -173,7 +110,7 @@ enum ContactBook {
         } else {
             contacts.append(updated)
         }
-        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty }
+        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty && $0.created == nil }
         save(contacts)
     }
 
@@ -204,7 +141,7 @@ enum ContactBook {
         }
         // A person left with no addresses is nothing but a name `People`
         // already knows, so it is dropped rather than kept as an empty row.
-        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty }
+        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty && $0.created == nil }
         save(contacts)
         log("contacts: \(address) is \(person)")
     }
@@ -215,10 +152,16 @@ enum ContactBook {
         var contacts = load()
         let before = contacts.reduce(0) { $0 + $1.emails.count }
         for i in contacts.indices { contacts[i].emails.removeAll { $0 == address } }
-        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty }
+        contacts.removeAll { $0.emails.isEmpty && $0.note.isEmpty && $0.created == nil }
         guard contacts.reduce(0, { $0 + $1.emails.count }) != before else { return false }
         save(contacts)
         return true
+    }
+
+    /// Delete the profile itself, including the marker that keeps a manually
+    /// added name alive when it has no email or contact note.
+    static func remove(_ name: String) {
+        try? PersonDirectory.remove(name: name, root: Library.root)
     }
 
     /// Follow a person being renamed across the library.
@@ -233,13 +176,15 @@ enum ContactBook {
         guard !to.isEmpty, to != old else { return }
         var contacts = load()
         guard let i = contacts.firstIndex(where: { $0.name == old }) else { return }
-        let moving = contacts.remove(at: i).emails
+        var moving = contacts.remove(at: i)
+        moving.name = to
         if let j = contacts.firstIndex(where: { $0.name == to }) {
             // The two were the same person all along, which is what renaming
             // one into an existing name means everywhere else in this app.
-            contacts[j].emails = Array(Set(contacts[j].emails + moving)).sorted()
+            contacts[j].emails = Array(Set(contacts[j].emails + moving.emails)).sorted()
+            contacts[j].created = contacts[j].created ?? moving.created
         } else {
-            contacts.append(Contact(name: to, emails: moving))
+            contacts.append(moving)
         }
         save(contacts)
     }

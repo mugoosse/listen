@@ -500,7 +500,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
     private func renderRecordings(_ person: Person) {
         guard !person.recordings.isEmpty else {
-            let none = NSTextField(labelWithString: "In no recordings yet.")
+            let none = NSTextField(labelWithString: "No recordings yet.")
             none.font = .systemFont(ofSize: 13)
             none.textColor = .tertiaryLabelColor
             add(none)
@@ -637,6 +637,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
     @objc private func saveEdits() {
         guard let person else { return }
+        let created = ContactBook.contact(person.label)?.created
         let typed = Contact.join(first: first.stringValue, last: last.stringValue)
         let addresses = emails.stringValue
             .split(whereSeparator: { $0 == "," || $0 == " " })
@@ -678,7 +679,8 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         }
         ContactBook.set(Contact(name: person.isYou ? SpeakerName.display(SpeakerName.you)
                                                    : label,
-                                emails: addresses, notes: text.isEmpty ? nil : text))
+                                emails: addresses, notes: text.isEmpty ? nil : text,
+                                created: created))
 
         // Leave edit mode here rather than trusting the reload to do it.
         // Setting `editing` is not what closes the editor: `render` is, and the

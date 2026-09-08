@@ -1818,7 +1818,10 @@ final class DetailView: NSView {
                 || $0.display.caseInsensitiveCompare(value) == .orderedSame }
         }
 
-        for person in people { remember(person.label, person.lastSeen) }
+        for person in people {
+            remember(person.label, person.lastSeen)
+            remember(person.label, ContactBook.contact(person.label)?.createdAt)
+        }
 
         let byID = Dictionary(people.map {
             (MemoryPreferences.personID($0.label, root: Library.root), $0.label)
@@ -1856,14 +1859,34 @@ final class DetailView: NSView {
             }
             return left.date > right.date
         }
-        let displayedPeople = recent.prefix(3)
-        guard !displayedPeople.isEmpty else { return }
-
         let title = NSTextField(labelWithString: "RECENT PEOPLE")
         title.font = .systemFont(ofSize: 10, weight: .semibold)
         title.textColor = .tertiaryLabelColor
-        recentPeople.addArrangedSubview(title)
-        recentPeople.setCustomSpacing(5, after: title)
+
+        let addPerson = HoverButton(.ink)
+        addPerson.title = "Add Person"
+        addPerson.image = NSImage(systemSymbolName: "person.badge.plus",
+                                  accessibilityDescription: nil)
+        addPerson.imagePosition = .imageLeading
+        addPerson.font = .systemFont(ofSize: 11, weight: .semibold)
+        addPerson.rest = .secondaryLabelColor
+        addPerson.bright = .labelColor
+        addPerson.target = self
+        addPerson.action = #selector(addPersonFromHome)
+        addPerson.toolTip = "Add somebody before your first recording together"
+        addPerson.setAccessibilityLabel("Add Person")
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let heading = NSStackView(views: [title, spacer, addPerson])
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.spacing = 8
+        recentPeople.addArrangedSubview(heading)
+        heading.widthAnchor.constraint(equalTo: recentPeople.widthAnchor).isActive = true
+        recentPeople.setCustomSpacing(5, after: heading)
+
+        let displayedPeople = recent.prefix(3)
 
         for (person, date) in displayedPeople {
             let cell = PersonCell()
@@ -1892,6 +1915,10 @@ final class DetailView: NSView {
     @objc private func openRecentPerson(_ sender: HoverRow) {
         guard let label = sender.identifier?.rawValue else { return }
         LibraryWindow.shared.showPerson(label)
+    }
+
+    @objc private func addPersonFromHome() {
+        LibraryWindow.shared.addPerson()
     }
 
     private static func greetingText() -> String {

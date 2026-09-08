@@ -42,6 +42,9 @@ final class SidebarViewController: NSViewController {
         case recording(Recording)
         case note(Note)
         case person(Person)
+        /// A name searched for inside the People lens that does not exist yet.
+        /// It opens the same Add Person sheet as the landing page.
+        case addPerson(String)
         /// How many conversations mention what was typed, and the way over to
         /// them.
         ///
@@ -509,6 +512,11 @@ final class SidebarViewController: NSViewController {
             // the lens it sets is People either way.
             rows.append(.header(people.count == 1 ? "Person" : "People"))
             rows.append(contentsOf: people.map { Row.person($0) })
+        }
+        let proposedPerson = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kind == .people, people.isEmpty, !proposedPerson.isEmpty {
+            rows.append(.header("People"))
+            rows.append(.addPerson(proposedPerson))
         }
 
         guard !sectionsByKind else {
@@ -1372,6 +1380,11 @@ final class SidebarViewController: NSViewController {
         LibraryWindow.shared.enterChats(searching: query)
     }
 
+    @objc private func addPersonRowClicked(_ sender: NSButton) {
+        guard let name = sender.identifier?.rawValue else { return }
+        LibraryWindow.shared.addPerson(suggestedName: name)
+    }
+
     private func rowMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
@@ -1391,6 +1404,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         // link it is, and a card behind that would be two highlights for one
         // target.
         if case .chats = rows[row] { return nil }
+        if case .addPerson = rows[row] { return nil }
         return HoverRowView()
     }
 
@@ -1432,6 +1446,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         guard rows.indices.contains(row) else { return 52 }
         if case .header = rows[row] { return 30 }
         if case .chats = rows[row] { return ChatsRow.height }
+        if case .addPerson = rows[row] { return AddPersonRow.height }
         let base: CGFloat = match(at: row)?.excerpt == nil ? 52 : 86
         guard case .recording(let recording) = rows[row],
               RecordingCell.drawsBar(RecordingCell.activity(for: recording))
@@ -1445,7 +1460,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch rows[row] {
         case .recording(let recording): return rowMatches[recording.id]
         case .note(let note): return rowMatches[note.slug]
-        case .header, .chats, .person: return nil
+        case .header, .chats, .person, .addPerson: return nil
         }
     }
 
@@ -1453,7 +1468,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch rows[row] {
         // A heading is a lens, and the handoff row is a way out of this list.
         // Neither is a document, so neither is a selection.
-        case .header, .chats: return false
+        case .header, .chats, .addPerson: return false
         case .recording, .note, .person: return true
         }
     }
@@ -1496,6 +1511,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
                                action: #selector(chatsRowClicked))
             row.identifier = NSUserInterfaceItemIdentifier("chats-handoff")
             return row
+
+        case .addPerson(let name):
+            return AddPersonRow(name: name, target: self,
+                                action: #selector(addPersonRowClicked(_:)))
 
         case .note(let note):
             // `NoteCell`, the same class the Notes collection drew, rather than
@@ -1555,7 +1574,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             onSelectNote?(note)
         // Neither is selectable, so neither can arrive here; both are listed
         // rather than defaulted so a fifth kind of row has to say what it does.
-        case .header, .chats:
+        case .header, .chats, .addPerson:
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
@@ -2220,6 +2239,59 @@ extension NSView {
 /// conversations mention "business"" is 34 characters and does not fit beside
 /// an icon in 280 points, and it is in the search field a few rows above, on
 /// screen the whole time.
+/// The no-result action in a People search. It looks like a quiet list action,
+/// not a person result: the person does not exist until the sheet is saved.
+@MainActor
+final class AddPersonRow: NSView {
+    static let height: CGFloat = 38
+
+    private let icon = NSImageView()
+    private let button = HoverButton(.ink)
+
+    init(name: String, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        icon.image = NSImage(systemSymbolName: "person.badge.plus",
+                             accessibilityDescription: nil)
+        icon.contentTintColor = Brand.accent
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+
+        let title = "Add \u{201c}\(name)\u{201d}"
+        button.title = title
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.rest = Brand.accent
+        button.bright = Brand.accent.blended(withFraction: 0.35, of: .white) ?? Brand.accent
+        button.target = target
+        button.action = action
+        button.identifier = NSUserInterfaceItemIdentifier(name)
+        button.toolTip = title
+        button.setAccessibilityLabel(title)
+        button.cell?.lineBreakMode = .byTruncatingTail
+
+        for view in [icon, button] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: RecordingCell.textInset),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            button.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                             constant: -RecordingCell.textInset),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 @MainActor
 final class ChatsRow: NSView {
     /// Tall enough to be a target and short enough not to read as a result.

@@ -101,8 +101,8 @@ enum People {
     /// the CLI cannot come to different answers about who exists.
     static func roster(in library: [Recording] = Recording.all()) -> [Person] {
         var everyone = all(in: library)
-        let known = Set(everyone.map(\.label))
-        for contact in ContactBook.load() where !known.contains(contact.name) {
+        let known = Set(everyone.map { $0.label.lowercased() })
+        for contact in ContactBook.load() where !known.contains(contact.name.lowercased()) {
             everyone.append(Person(label: contact.name, recordings: [], seconds: 0))
         }
         return everyone.sorted {
@@ -128,15 +128,27 @@ enum People {
     /// `listen people Emily` finds you when that is what you renamed `Me` to.
     static func findByDisplayName(_ name: String,
                                   in library: [Recording] = Recording.all()) -> Person? {
-        if let exact = find(name, in: library) { return exact }
-        if SpeakerName.display(SpeakerName.you).localizedCaseInsensitiveCompare(name)
-            == .orderedSame {
-            return find(SpeakerName.you, in: library)
-        }
-        guard let label = all(in: library).first(where: {
+        roster(in: library).first {
             $0.label.localizedCaseInsensitiveCompare(name) == .orderedSame
-        })?.label else { return nil }
-        return find(label, in: library)
+                || $0.display.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }
+    }
+
+    /// Create a person before there is a recording to discover them from.
+    /// This writes only the encrypted library directory and its stable identity
+    /// preference. No summary is created and no provider is contacted.
+    static func create(_ name: String, email: String = "",
+                       in library: [Recording] = Recording.all()) throws -> Person {
+        let proposed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let problem = check(proposed) { throw problem }
+        let existing = roster(in: library).first {
+            $0.label.caseInsensitiveCompare(proposed) == .orderedSame
+                || $0.display.caseInsensitiveCompare(proposed) == .orderedSame
+        }
+        let label = existing?.label ?? proposed
+        _ = try PersonDirectory.add(name: label, email: email, root: Library.root)
+        _ = MemoryPreferences.personID(label, root: Library.root)
+        return existing ?? Person(label: label, recordings: [], seconds: 0)
     }
 
     // MARK: - Renaming everywhere
@@ -299,7 +311,7 @@ enum People {
         }
         // The card goes with the name. It was filed under a string nobody has
         // any more, and `set` drops an entry with neither an address nor a note.
-        ContactBook.set(Contact(name: label, emails: [], notes: nil))
+        ContactBook.remove(label)
         return changed
     }
 
@@ -406,7 +418,7 @@ enum People {
         if !joined.isEmpty {
             let merged = ContactBook.contact(name)
             ContactBook.set(Contact(name: name, emails: merged?.emails ?? [],
-                                    notes: joined))
+                                    notes: joined, created: merged?.created))
         }
         return changed
     }

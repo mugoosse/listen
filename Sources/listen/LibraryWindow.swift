@@ -92,6 +92,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once each and kept, so returning to a section finds it where it
     /// was left rather than scrolled back to the top with its fields cleared.
     private var panes: [SettingsTab: Pane] = [:]
+    /// Retained for the life of its sheet. The window owns the creation flow;
+    /// every doorway into it therefore produces the same person and lands on the
+    /// same page.
+    private var addPersonController: AddPersonController?
     /// Whether the sidebar was collapsed before settings forced it open.
     private var sidebarWasCollapsed = false
 
@@ -1110,6 +1114,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             ?? People.roster().first(where: { SpeakerName.matches($0.label, label) })
         else { NSSound.beep(); return }
         sidebar.reveal(person: person)
+    }
+
+    /// Add somebody before a recording has introduced them, then open the page
+    /// where notes, recordings and an optional summary can accumulate.
+    func addPerson(suggestedName: String = "") {
+        if window == nil { build() }
+        enter(.library)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        let controller = AddPersonController(suggestedName: suggestedName) { [weak self] person in
+            guard let self else { return }
+            self.addPersonController = nil
+            self.sidebar.reload()
+            self.showPerson(person.label)
+        }
+        addPersonController = controller
+        controller.present(on: window)
     }
 
     private func showPane(_ tab: SettingsTab) {

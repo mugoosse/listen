@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// One note artifact, about one or more recordings.
 ///
@@ -61,6 +62,9 @@ struct Note {
     /// `Notes.setTags`.
     var tags: [String] = []
     var body: String
+    var aboutPersonID: String? = nil
+    var excludedFromAI = false
+    var hasAIChoice = false
 
     /// The whole file as it sits on disk, frontmatter included.
     var fileText: String { Notes.encode(self) }
@@ -334,7 +338,7 @@ enum Notes {
     static func create(title: String, body: String, source: Source,
                        prompt: String? = nil, recordings: [String],
                        chat: String? = nil, tags: [String] = [],
-                       requiringSources: Bool = true) throws -> Note {
+                       requiringSources: Bool = true, aboutPersonID: String? = nil, excludedFromAI: Bool = false) throws -> Note {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw Failure.emptyTitle }
@@ -348,7 +352,7 @@ enum Notes {
                         prompt: prompt?.isEmpty == true ? nil : prompt,
                         recordings: recordings,
                         chat: chat?.isEmpty == true ? nil : chat,
-                        tags: tags, body: body)
+                        tags: tags, body: body, aboutPersonID: aboutPersonID, excludedFromAI: excludedFromAI)
         try save(note)
         return note
     }
@@ -453,6 +457,13 @@ enum Notes {
                 "could not delete `\(note.slug)`: \(error.localizedDescription)")
         }
         return note
+    }
+
+    static func excludeFromAI(_ excluded: Bool, note: Note) throws {
+        guard var latest = find(note.slug) else { throw Failure.noSuchNote(note.slug) }
+        latest.excludedFromAI = excluded; latest.hasAIChoice = true; latest.updated = Metadata.iso(Date())
+        try save(latest)
+        NotificationCenter.default.post(name: PeopleMemory.changed, object: nil)
     }
 
     /// Every id must name a recording that exists **at the moment it is
@@ -640,6 +651,8 @@ enum Notes {
         // "unchanged" rather than "none".
         out += "tags: [\(note.tags.map(quoted).joined(separator: ", "))]\n"
         out += "recordings: [\(note.recordings.map(quoted).joined(separator: ", "))]\n"
+        if let person = note.aboutPersonID { out += "about_person: \(quoted(person))\n" }
+        if note.excludedFromAI || note.hasAIChoice { out += "exclude_from_ai: \(note.excludedFromAI)\n" }
         out += "---\n\n"
         return out + note.body + "\n"
     }
@@ -701,7 +714,8 @@ enum Notes {
                     // it: somebody typing `#Kinsight` and `kinsight ` into
                     // Finder gets one tag rather than two that look the same.
                     tags: Tags.tidy(listed["tags"] ?? sequence(fields["tags"] ?? "")),
-                    body: body)
+                    body: body, aboutPersonID: fields["about_person"],
+                    excludedFromAI: fields["exclude_from_ai"]?.trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")).lowercased() == "true", hasAIChoice: fields["exclude_from_ai"] != nil)
     }
 
     /// `["a", "b"]`, or a bare `a`, into `["a", "b"]`.

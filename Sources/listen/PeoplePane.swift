@@ -74,6 +74,10 @@ final class HoverRow: NSView {
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         NSApp.sendAction(action, to: target, from: self)
     }
+
+    override func accessibilityPerformPress() -> Bool {
+        NSApp.sendAction(action, to: target, from: self)
+    }
 }
 
 /// One roster row: who, and how much of the library they are in.
@@ -123,11 +127,11 @@ final class PersonCell: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ person: Person) {
+    func configure(_ person: Person, detail override: String? = nil) {
         disc.show(person)
         name.stringValue = person.display
         badge.isHidden = !person.isYou
-        detail.stringValue = person.summary
+        detail.stringValue = override ?? person.summary
     }
 }
 
@@ -200,6 +204,7 @@ final class InitialsDisc: NSView {
 final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegate,
                         NSMenuDelegate {
     private var person: Person?
+    var currentPersonLabel: String? { person?.label }
     private var editing = false
 
     private let disc = InitialsDisc(size: 46)
@@ -210,6 +215,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     private let emails = NSTextField(string: "")
     private let notes = NSTextView()
     private let empty = NSTextField(labelWithString: "Select somebody.")
+    private let personContext = PersonContextView()
 
     private var scroll: NSScrollView!
     private var content: NSStackView!
@@ -283,7 +289,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 6
-        content.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 28, right: 24)
+        content.edgeInsets = NSEdgeInsets(top: 18, left: 24, bottom: 28, right: 24)
         content.translatesAutoresizingMaskIntoConstraints = false
 
         scroll = NSScrollView()
@@ -318,6 +324,17 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
     // MARK: - Showing
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard let window = view.window, let windowContent = window.contentView else { return }
+        // At narrow widths AppKit collapses the sidebar. The person header then
+        // occupies the toolbar's left edge, so move it below those controls.
+        let atWindowEdge = view.convert(.zero, to: windowContent).x < 1
+        let toolbarHeight = max(0, windowContent.bounds.height - window.contentLayoutRect.maxY)
+        let top: CGFloat = atWindowEdge ? toolbarHeight + 14 : 14
+        if head.edgeInsets.top != top { head.edgeInsets.top = top }
+    }
+
     func show(_ person: Person?) {
         loadViewIfNeeded()
         if person?.label != self.person?.label { editing = false }
@@ -326,6 +343,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     }
 
     private func render() {
+        content.edgeInsets.bottom = Settings.askEnabled ? 116 : 28
         for sub in head.arrangedSubviews { sub.removeFromSuperview() }
         for sub in content.arrangedSubviews { sub.removeFromSuperview() }
         guard let person else {
@@ -382,17 +400,18 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
             return
         }
 
-        add(rule(), spacingAfter: 14)
-        add(section("Recordings"), spacingAfter: 10)
-
-        // Everything above is fixed; only the list scrolls.
+        // The growing context shares the scroll with the recordings. Only the
+        // identity and the user's own contact fields stay above it.
         into = content
+        personContext.show(person.label)
+        add(personContext, width: true, spacingAfter: 22)
+        add(rule(), width: true, spacingAfter: 14)
+        add(section("Recordings"), spacingAfter: 10)
         renderRecordings(person)
     }
 
     /// What is known, and nothing where nothing is known.
     private func renderDetails(_ person: Person, _ contact: Contact?) {
-        var said = false
         if let contact, !contact.emails.isEmpty {
             add(section("Email"))
             for address in contact.emails {
@@ -403,22 +422,13 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
                 add(label)
             }
             into.setCustomSpacing(14, after: into.arrangedSubviews.last!)
-            said = true
         }
         if let note = contact?.note, !note.isEmpty {
             add(section("Notes"))
             let label = NSTextField(wrappingLabelWithString: note)
             label.font = .systemFont(ofSize: 13)
             add(label, width: true, spacingAfter: 14)
-            said = true
         }
-        guard !said else { return }
-        let nothing = NSTextField(labelWithString: person.isYou
-            ? "Nothing written down about you yet."
-            : "No email or notes yet.")
-        nothing.font = .systemFont(ofSize: 13)
-        nothing.textColor = .tertiaryLabelColor
-        add(nothing, spacingAfter: 14)
     }
 
     /// The same fields, open for typing.
@@ -830,7 +840,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
         if width {
             let fill = view.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                                    constant: -48)
-            fill.priority = .defaultLow
+            fill.priority = view === personContext ? .defaultHigh : .defaultLow
             NSLayoutConstraint.activate([
                 fill,
                 view.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor,

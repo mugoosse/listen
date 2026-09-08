@@ -612,6 +612,17 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 
+### `.agents/notes/person-context.md`
+
+Person summaries, facts, relationships, background extraction and local semantic
+search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor`,
+`SemanticIndex`, `ContextService`, `PersonContextView`, `PeopleContextPane` or `ContextCLI`.
+
+- The model proposes; Listen owns identity and evidence
+- The source check is also the read gate
+- Background generation is a separate consent from local search
+- Text embeddings are not voiceprints
+
 ### `.agents/notes/telemetry.md` (16k)
 
 What the apps send, and what reading it back for the first time proved wrong.
@@ -693,6 +704,9 @@ One script stands in for one, over the app built in the working directory:
                         # hand or by an older build, the shared vocabulary in
                         # both directions, no inheritance, and `listen mcp
                         # --tools` refusing a tool by name
+python3 tools/verify_context.py  # synthetic person memory, validation, retries,
+                        # source invalidation, local semantic search, CLI/MCP
+                        # pagination and one writer across processes
 ./verify_desktop_connect.sh  # `listen mcp connect-desktop` over scratch
                         # configs: merge, backup, idempotence, refusals
 ./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying

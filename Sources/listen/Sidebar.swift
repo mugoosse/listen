@@ -398,6 +398,8 @@ final class SidebarViewController: NSViewController {
             }
         }
 
+        scheduleContextSearch(filter)
+
         let kind = filter.kind
         // A query still being typed sections the list even before it matches
         // anything, so the headings do not appear and disappear under the
@@ -530,6 +532,7 @@ final class SidebarViewController: NSViewController {
                 rows.append(.header("Recordings"))
                 rows.append(contentsOf: recordings)
             }
+            appendContextRows(filter, library: library, notes: everyNote)
             appendChatsRow(for: filter)
             finishReload(keepID: keepID)
             return
@@ -546,6 +549,74 @@ final class SidebarViewController: NSViewController {
         }
 
         finishReload(keepID: keepID)
+    }
+
+    private var contextSearchKey = ""
+    private var contextSearchTask: Task<Void, Never>?
+    private var contextMatches: [ContextSearchResult.Match] = []
+
+    private func scheduleContextSearch(_ filter: RecordingFilter) {
+        let query = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = filter.after.map { Metadata.iso($0) } ?? ""
+        let before = filter.before.map { Metadata.iso($0) } ?? ""
+        let key = [query, filter.tags.joined(separator: "|"), filter.kind?.rawValue ?? "",
+                   String(filter.needsSpeakers), after, before,
+                   SemanticIndex.freshnessKey()].joined(separator: "\n")
+        guard key != contextSearchKey else { return }
+        contextSearchKey = key; contextSearchTask?.cancel(); contextMatches = []
+        guard query.count >= 3, !filter.needsSpeakers else { return }
+        contextSearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let found = try? await Task.detached(priority: .userInitiated) {
+                try SemanticIndex.search(query, limit: 30, tags: filter.tags,
+                                         after: filter.after, before: filter.before)
+            }.value
+            guard !Task.isCancelled, self?.contextSearchKey == key else { return }
+            self?.contextMatches = found?.matches ?? []
+            self?.reload()
+        }
+    }
+
+    /// Exact matches keep their existing sections. Meaning-based matches and
+    /// extracted person context follow them, with excerpts and real navigation.
+    private func appendContextRows(_ filter: RecordingFilter, library: [Recording], notes: [Note]) {
+        guard !filter.query.isEmpty, !filter.needsSpeakers, !contextMatches.isEmpty else { return }
+        var used: Set<String> = Set(rows.compactMap { row in
+            switch row {
+            case .recording(let r): return "rec:" + r.id
+            case .note(let n): return "note:" + n.slug
+            case .person(let p): return "person:" + p.label
+            default: return nil
+            }
+        })
+        let roster = People.roster(in: library)
+        var extra: [Row] = []
+        for match in contextMatches {
+            if match.kind != "passage", filter.kind == nil || filter.kind == .people {
+                for label in match.people {
+                    if let person = roster.first(where: { $0.label == label }),
+                       used.insert("person:" + label).inserted { extra.append(.person(person)) }
+                }
+            }
+            for evidence in match.evidence {
+                guard !used.contains(evidence.source) else { continue }
+                let excerpt = NSAttributedString(string: String(match.text.prefix(240)), attributes: [
+                    .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
+                ])
+                if evidence.source.hasPrefix("rec:"), filter.kind == nil || filter.kind == .recordings,
+                   let recording = library.first(where: { "rec:" + $0.id == evidence.source }) {
+                    used.insert(evidence.source); extra.append(.recording(recording))
+                    rowMatches[recording.id] = RowMatch(excerpt: excerpt, count: 1, titleRanges: [])
+                } else if evidence.source.hasPrefix("note:"), filter.kind == nil || filter.kind == .notes,
+                          let note = notes.first(where: { "note:" + $0.slug == evidence.source }) {
+                    used.insert(evidence.source); extra.append(.note(note))
+                    rowMatches[note.slug] = RowMatch(excerpt: excerpt, count: 1, titleRanges: [])
+                }
+            }
+            if extra.count >= 6 { break }
+        }
+        if !extra.isEmpty { rows.append(.header("Related context")); rows.append(contentsOf: extra.prefix(6)) }
     }
 
     /// The row at the foot of a search saying how many conversations mention it.

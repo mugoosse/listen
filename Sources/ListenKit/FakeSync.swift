@@ -138,6 +138,8 @@ public enum FakeSync {
         let phone = CloudSyncCore(library: phoneLib, state: EngineState(library: phoneLib),
                                   store: store, key: key, policy: .phone,
                                   device: "phone-1", ingests: false)
+        try await memoryContext(mac: mac, phone: phone, macLib: macLib, phoneLib: phoneLib, store: store, key: key)
+        ok("encrypted memory assets, phone reading ownership and concurrent corrections round-trip")
 
         // MARK: the audio master
 
@@ -2829,4 +2831,72 @@ public enum FakeSync {
         return out
     }
 
+    private static func memoryContext(mac: CloudSyncCore, phone: CloudSyncCore,
+        macLib: Library, phoneLib: Library, store: MemoryStore, key: PairingKey) async throws {
+        func check(_ value: Bool, _ message: String) throws {
+            if !value { throw Failure(description: "Memory sync: " + message) }
+        }
+        let snapshot = ContextSnapshot(cards: [], proofs: [:], overrides: [:], generatedAt: "2026-09-08T10:00:00Z")
+        let data = try JSONEncoder().encode(snapshot)
+        let source = macLib.root.appendingPathComponent(ContextSnapshot.filename)
+        try data.write(to: source)
+        var pushed = CloudReport(); await mac.push(into: &pushed)
+        try check(pushed.errors.isEmpty, "Mac projection push failed")
+        let name = CloudNaming.recordName(.blob, ContextSnapshot.filename, key: key)
+        guard let record = try await store.fetch(name, in: .library) else { throw Failure(description: "No memory record") }
+        try check(record.payload.range(of: Data("generatedAt".utf8)) == nil, "projection metadata was plaintext")
+        try check(record.assets["context.json"] != nil, "projection was placed in a size-limited payload field")
+        try check(try CloudRecords.openBlob(record, key: key).contents == data, "encrypted asset could not be opened")
+        let big = Data(repeating: 65, count: 2_000_000)
+        let largeRecord = try CloudRecords.blob(name: ContextSnapshot.filename, contents: big, key: key)
+        try check(largeRecord.payload.count < 4096 && largeRecord.assets["context.json"]!.count > big.count,
+            "large projection does not use a small sealed header and encrypted asset")
+        try check(try CloudRecords.openBlob(largeRecord, key: key).contents == big, "large encrypted projection did not round-trip")
+        var missing = record; missing.assets = [:]
+        do { _ = try CloudRecords.openBlob(missing, key: key); throw Failure(description: "Missing asset accepted") }
+        catch is ContextDatabase.Failure {}
+        var pulled = CloudReport(); await phone.pull(into: &pulled)
+        try check(pulled.errors.isEmpty, "phone projection pull failed")
+        let destination = phoneLib.root.appendingPathComponent(ContextSnapshot.filename)
+        try check(try Data(contentsOf: destination) == data, "phone did not receive the owner projection")
+        try Data("stale phone projection".utf8).write(to: destination)
+        var phonePush = CloudReport(); await phone.push(into: &phonePush)
+        let unchanged = try await store.fetch(name, in: .library)!
+        try check(try CloudRecords.openBlob(unchanged, key: key).contents == data, "phone overwrote a generated Mac projection")
+        try data.write(to: destination)
+        var correction = ContextOverride(id: "test-claim", updated: "")
+        correction.replacement = "A correction from the phone"; correction.mark(["replacement"], at: "2026-09-08T10:01:00Z")
+        var pin = ContextOverride(id: "test-claim", updated: "")
+        pin.pinned = true; pin.mark(["pinned"], at: "2026-09-08T10:02:00Z")
+        try ContextSync.edit(correction, root: phoneLib.root); try ContextSync.edit(pin, root: macLib.root)
+        var p1 = CloudReport(); await phone.push(into: &p1)
+        var p2 = CloudReport(); await mac.push(into: &p2)
+        var p3 = CloudReport(); await phone.pull(into: &p3)
+        try check(p1.errors.isEmpty && p2.errors.isEmpty && p3.errors.isEmpty, "correction exchange failed")
+        let received = try ContextSync.edits(root: phoneLib.root)["test-claim"]
+        try check(received?.pinned == true && received?.replacement == correction.replacement,
+            "concurrent Mac pin replaced the phone's correction")
+        let model = MemoryPreferences.Model(provider: "claude", model: "sonnet", name: "Sonnet · Claude Code", executor: "test-mac")
+        try MemoryPreferences.advertise(model, root: macLib.root)
+        var choicesPush = CloudReport(); await mac.push(into: &choicesPush)
+        var choicesPull = CloudReport(); await phone.pull(into: &choicesPull)
+        try check(choicesPush.errors.isEmpty && choicesPull.errors.isEmpty, "model choice exchange failed")
+        try check(try MemoryPreferences.model(root: phoneLib.root) == model, "phone lost the selected Mac/provider/model")
+        let request = try MemoryPreferences.request(person: "test-person", name: "Test person", sources: ["rec:test"], model: model, root: phoneLib.root)
+        var requestPush = CloudReport(); await phone.push(into: &requestPush)
+        var requestPull = CloudReport(); await mac.pull(into: &requestPull)
+        try check(requestPush.errors.isEmpty && requestPull.errors.isEmpty, "phone request exchange failed")
+        try check(try MemoryPreferences.requests(root: macLib.root).contains { $0.id == request.id && $0.model == model && $0.sources == ["rec:test"] }, "Mac did not receive the phone's exact requested scope")
+        let preferenceName = CloudNaming.recordName(.blob, MemoryPreferences.filename, key: key)
+        let preferenceRecord = try await store.fetch(preferenceName, in: .library)!
+        try check(preferenceRecord.assets["context.json"] != nil && preferenceRecord.payload.range(of: Data("Test person".utf8)) == nil, "person choices were not transported as an encrypted owner asset")
+        try MemoryPreferences.cancel(request.id, root: phoneLib.root)
+        try MemoryPreferences.finish(request, state: "complete", root: macLib.root)
+        var finishPush = CloudReport(); await mac.push(into: &finishPush)
+        var cancelPush = CloudReport(); await phone.push(into: &cancelPush)
+        var cancelPull = CloudReport(); await mac.pull(into: &cancelPull)
+        try check(finishPush.errors.isEmpty && cancelPush.errors.isEmpty && cancelPull.errors.isEmpty, "cancellation exchange failed")
+        try check(try MemoryPreferences.requests(root: macLib.root).first { $0.id == request.id }?.state == "cancelled", "a late completion overwrote phone cancellation")
+
+    }
 }

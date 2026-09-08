@@ -29,6 +29,8 @@ public struct Metadata: Codable, Sendable, Equatable {
     public var app_bundle_id: String?
     public var app_name: String?
     public var calendar_event_id: String?
+    /// A user-authored shortlist for speaker review, never an automatic label.
+    public var suggested_people: [String]?
 
     /// Which of the app's titlers wrote `title`, absent when a person did.
     ///
@@ -98,6 +100,7 @@ public struct Metadata: Codable, Sendable, Equatable {
         app_bundle_id = try? c.decodeIfPresent(String.self, forKey: .app_bundle_id)
         app_name = try? c.decodeIfPresent(String.self, forKey: .app_name)
         calendar_event_id = try? c.decodeIfPresent(String.self, forKey: .calendar_event_id)
+        suggested_people = try? c.decodeIfPresent([String].self, forKey: .suggested_people)
         title_source = try? c.decodeIfPresent(String.self, forKey: .title_source)
         transcribed_by = try? c.decodeIfPresent(String.self, forKey: .transcribed_by)
         transcribed_on = try? c.decodeIfPresent(String.self, forKey: .transcribed_on)

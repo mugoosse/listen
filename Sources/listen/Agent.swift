@@ -1,3 +1,4 @@
+import ListenKit
 import Foundation
 
 /// Asking questions about the library, through an agent CLI the user already
@@ -1089,6 +1090,7 @@ final class AgentRun {
         var largestRequestBytes: Int? = nil
         /// nil on success. Present means the answer is not to be trusted.
         var failure: String?
+        var resolvedModel: String? = nil
     }
 
     struct Question {
@@ -1125,6 +1127,13 @@ final class AgentRun {
         /// easier to read and to pipe. Claude only: Codex has no equivalent, so
         /// setting it there does nothing rather than failing.
         var streaming = false
+        /// Background extraction supplies its complete evidence and needs no
+        /// library tools. The restriction follows the question on every backend.
+        var instruction: String? = nil
+        var toolNames: [String]? = nil
+
+        var allowedTools: [String] { toolNames ?? AgentRun.tools(allowWrites: allowWrites) }
+        var systemInstruction: String { instruction ?? AgentRun.brief(allowWrites: allowWrites) }
     }
 
     // MARK: Where it runs
@@ -1198,7 +1207,7 @@ final class AgentRun {
     static func tools(allowWrites: Bool) -> [String] {
         let read = ["list_recordings", "get_recording", "get_transcript",
                     "search_transcripts", "list_people", "list_tags",
-                    "list_notes", "read_note"]
+                    "list_notes", "read_note", "get_person_context", "get_project_context", "list_context_entities", "search_context"]
         let write = ["write_note", "edit_note", "add_tags", "remove_tags"]
         return read + (allowWrites ? write : [])
     }
@@ -1223,6 +1232,7 @@ final class AgentRun {
     /// Takes the allowlist rather than reading it, because the argv it writes
     /// is what actually restricts the server: see `tools(allowWrites:)`.
     static func mcpConfigJSON(tools: [String]) -> String {
+        if tools.isEmpty { return "{\"mcpServers\":{}}" }
         let object: [String: Any] = ["mcpServers": [
             "listen": ["command": AppInfo.executable.path,
                        "args": ["mcp", "--tools", tools.joined(separator: ",")]],
@@ -1257,7 +1267,19 @@ final class AgentRun {
         Narrow before you read. Transcripts are the only expensive thing here \
         and every other tool exists so you can decide which ones you need:
 
-        - `list_recordings` first. It takes `query`, `person`, `after` and \
+        - For people, projects and relationships, start with `search_context` \
+        and `get_person_context` or `get_project_context`. Pass the question and a \
+        token_budget (usually 1500); use as_of for effective-date questions. \
+        list_context_entities resolves stable IDs and reviewed aliases. They return preprocessed facts, summaries and \
+        relationships with dated evidence, plus local semantic matches. Respect \
+        coverage and pending sources: missing memory is not evidence of absence. \
+        Cite the original source markers returned with each claim. Generated \
+        memory is fallible; read the cited passage when precision matters. \
+        Preserve negation, plans, conflicting sources and unknown effective dates. \
+        A newer recording alone does not end an older claim. Keep original and \
+        change evidence distinct. A user correction is an explicit annotation, \
+        never a quotation from its original recording.
+        - For recording discovery, use `list_recordings`. It takes `query`, `person`, `after` and \
         `before`, combined with AND, and returns titles and ids. `person` here \
         means was in the room.
         - `search_transcripts` when you already know the phrase. `person` there \
@@ -1310,7 +1332,7 @@ final class AgentRun {
     // MARK: Building the command
 
     static func arguments(for question: Question) -> [String] {
-        let allowed = tools(allowWrites: question.allowWrites)
+        let allowed = question.allowedTools
         switch question.backend {
         case .claude:
             var args = [
@@ -1330,13 +1352,13 @@ final class AgentRun {
                 // No Bash, no Read, no WebFetch. The MCP surface is the whole
                 // world, which is what makes the TCC story true.
                 "--tools", "",
-                "--allowedTools", claudeToolNames(allowWrites: question.allowWrites)
+                "--allowedTools", allowed.map { "mcp__listen__\($0)" }
                     .joined(separator: ","),
                 // No settings.json from any scope, so no hooks and no plugins.
                 // Measured: five SessionStart hooks fired without this.
                 "--setting-sources", "",
                 "--disable-slash-commands",
-                "--append-system-prompt", brief(allowWrites: question.allowWrites),
+                "--append-system-prompt", question.systemInstruction,
             ]
             if question.streaming { args.append("--include-partial-messages") }
             if let model = question.model { args += ["--model", model] }
@@ -1388,12 +1410,22 @@ final class AgentRun {
             if let library = ProcessInfo.processInfo.environment["LISTEN_LIBRARY"] {
                 args += ["-c", "mcp_servers.listen.env.LISTEN_LIBRARY=\"\(library)\""]
             }
+            if allowed.isEmpty {
+                var isolated: [String] = []
+                var i = 0
+                while i < args.count {
+                    if args[i] == "-c", i + 1 < args.count, args[i + 1].hasPrefix("mcp_servers.") {
+                        i += 2
+                    } else { isolated.append(args[i]); i += 1 }
+                }
+                args = isolated
+            }
             if let model = question.model { args += ["--model", model] }
             // Codex has no --append-system-prompt, so the brief rides in front
             // of the question. On a resumed thread it is already in the
             // history, so it is sent once.
             args.append(question.resume == nil
-                        ? brief(allowWrites: question.allowWrites) + "\n\n---\n\n" + question.text
+                        ? question.systemInstruction + "\n\n---\n\n" + question.text
                         : question.text)
             return args
 
@@ -1414,6 +1446,7 @@ final class AgentRun {
     private let onEvent: (Event) -> Void
     private let queue: DispatchQueue
     private var buffer = Data()
+    private let streamReadLock = NSLock()
     private var stderrText = ""
     /// Codex item ids already counted.
     ///
@@ -1441,6 +1474,8 @@ final class AgentRun {
     private var reportedOffline = false
     private var connection: Reachability.Watcher?
     private var watchdog: DispatchSourceTimer?
+    private var privacyWatch: DispatchSourceTimer?
+    private let noteExclusions = MemoryPreferences.excludedNotes(root: Library.root)
     /// A probe is in flight, so ticks in the meantime do not start a second one.
     private var probing = false
 
@@ -1520,26 +1555,34 @@ final class AgentRun {
         process.standardInput = FileHandle.nullDevice
 
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let self else { return }
+            self.streamReadLock.lock(); defer { self.streamReadLock.unlock() }
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            self?.consume(data)
+            self.consume(data)
         }
         err.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let self else { return }
+            self.streamReadLock.lock(); defer { self.streamReadLock.unlock() }
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            self?.stderrText += text
+            self.stderrText += text
         }
         process.terminationHandler = { [weak self] process in
             // Drain whatever the handler has not seen yet. A short answer can
             // arrive and the process exit before readability fires again.
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            self?.consume(out.fileHandleForReading.readDataToEndOfFile())
+            guard let self else { return }
+            // A readability callback may already have consumed the final bytes.
+            // Wait for its parse before publishing completion, even on a fast CLI.
+            self.streamReadLock.lock(); defer { self.streamReadLock.unlock() }
+            self.consume(out.fileHandleForReading.readDataToEndOfFile())
             if let rest = String(data: err.fileHandleForReading.readDataToEndOfFile(),
                                  encoding: .utf8) {
-                self?.stderrText += rest
+                self.stderrText += rest
             }
-            self?.complete(status: process.terminationStatus)
+            self.complete(status: process.terminationStatus)
         }
 
         whileRunning = self
@@ -1571,6 +1614,14 @@ final class AgentRun {
     /// throughout. That one only shows up as an unusual silence, so a silence is
     /// what starts the second detector asking.
     private func watchNetwork() {
+        let privacy = DispatchSource.makeTimerSource(queue: probes)
+        privacy.schedule(deadline: .now() + 1, repeating: 1)
+        privacy.setEventHandler { [weak self] in
+            guard let self, MemoryPreferences.excludedNotes(root: Library.root) != self.noteExclusions else { return }
+            self.cancel()
+        }
+        parsing.sync { privacyWatch = privacy }
+        privacy.resume()
         let watcher = Reachability.watch { [weak self] online in
             self?.networkIs(online ? nil : "No internet connection. Waiting for it to come back.")
         }
@@ -1594,6 +1645,7 @@ final class AgentRun {
             connection = nil
             watchdog?.cancel()
             watchdog = nil
+            privacyWatch?.cancel(); privacyWatch = nil
         }
     }
 
@@ -1704,6 +1756,7 @@ final class AgentRun {
     private func readClaude(_ json: [String: Any]) {
         switch json["type"] as? String {
         case "system":
+            if let model = json["model"] as? String { outcome.resolvedModel = model }
             if json["subtype"] as? String == "init",
                let session = json["session_id"] as? String {
                 outcome.session = session
@@ -1724,6 +1777,7 @@ final class AgentRun {
         case "assistant":
             guard let message = json["message"] as? [String: Any],
                   let blocks = message["content"] as? [[String: Any]] else { return }
+            if let model = message["model"] as? String { outcome.resolvedModel = model }
             for block in blocks {
                 switch block["type"] as? String {
                 case "text":
@@ -1747,8 +1801,16 @@ final class AgentRun {
                 emit(.toolResult(name: "", ok: ok))
             }
         case "result":
+            if let usage = json["usage"] as? [String: Any] {
+                outcome.promptTokens = (usage["input_tokens"] as? Int).map {
+                    $0 + (usage["cache_creation_input_tokens"] as? Int ?? 0) + (usage["cache_read_input_tokens"] as? Int ?? 0)
+                }
+                outcome.completionTokens = usage["output_tokens"] as? Int
+            }
             outcome.costUSD = json["total_cost_usd"] as? Double
             outcome.durationMS = json["duration_ms"] as? Int
+            if !question.streaming, (json["is_error"] as? Bool) != true,
+               let text = json["result"] as? String, !text.isEmpty { emit(.text(text)) }
             if (json["is_error"] as? Bool) == true {
                 outcome.failure = json["result"] as? String
                     ?? json["subtype"] as? String ?? "the agent reported an error."
@@ -1760,6 +1822,11 @@ final class AgentRun {
 
     private func readCodex(_ json: [String: Any]) {
         switch json["type"] as? String {
+        case "turn.completed":
+            if let usage = json["usage"] as? [String: Any] {
+                outcome.promptTokens = usage["input_tokens"] as? Int
+                outcome.completionTokens = usage["output_tokens"] as? Int
+            }
         case "thread.started":
             if let id = json["thread_id"] as? String {
                 outcome.session = id

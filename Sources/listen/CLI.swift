@@ -15,7 +15,7 @@ enum CLI {
         "record", "list", "show", "transcribe", "export", "label", "title", "calibrate", "mcp",
         "import", "enroll", "sources", "dictionary", "people", "rename", "merge", "unname", "me", "edit",
         "calendar", "contacts", "notes", "tags", "ask", "sync", "backup", "activity", "forget",
-        "audio", "changelog", "telemetry",
+        "audio", "changelog", "telemetry", "context",
         "help", "--help", "-h", "--version", "-v",
     ]
 
@@ -100,6 +100,8 @@ enum CLI {
         let rest = Array(args.dropFirst(2))
 
         switch command {
+        case "context":
+            exit(await ContextCLI.run(rest))
         case "transcribe":
             await transcribe(rest)
         case "dictate":
@@ -1693,6 +1695,8 @@ enum CLI {
                                  window's Delete Sentence, for the sentence the
                                  model heard twice
       people [<name>]            who is in the library, or where one person is
+      context <command>          person facts, relationships and local semantic search
+                                (run context help for update and search options)
       rename <name> <new name>   rename one person in every recording
       merge <name> <into>        two rows in the roster, one human
       unname <name>              take a name off, leaving speakers to name again

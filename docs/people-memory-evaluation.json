@@ -1,0 +1,469 @@
+{
+  "model": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+  "smallIndexMS": 2631.27524999436,
+  "rows": [
+    {
+      "query": "finding new staff",
+      "expected": "rec:sample-0",
+      "rank": 2,
+      "results": [
+        "rec:sample-3",
+        "rec:sample-0",
+        "rec:sample-2"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 348.5838749911636
+    },
+    {
+      "query": "quem est\u00e1 a recrutar programadores?",
+      "expected": "rec:sample-0",
+      "rank": 1,
+      "results": [
+        "rec:sample-0",
+        "rec:sample-2",
+        "rec:sample-3"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 12.706083012744784
+    },
+    {
+      "query": "wie zoekt een softwareontwikkelaar?",
+      "expected": "rec:sample-0",
+      "rank": 1,
+      "results": [
+        "rec:sample-0",
+        "rec:sample-3"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 10.028833989053965
+    },
+    {
+      "query": "how should I follow up with Alice?",
+      "expected": "rec:sample-1",
+      "rank": 1,
+      "results": [
+        "rec:sample-1",
+        "rec:sample-6",
+        "rec:sample-9"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 6.350624957121909
+    },
+    {
+      "query": "como prefere a Alice receber mensagens?",
+      "expected": "rec:sample-1",
+      "rank": 1,
+      "results": [
+        "rec:sample-1",
+        "rec:sample-6",
+        "rec:sample-2"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 6.354416953399777
+    },
+    {
+      "query": "why was the launch delayed?",
+      "expected": "rec:sample-2",
+      "rank": 1,
+      "results": [
+        "rec:sample-2",
+        "rec:sample-9"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 6.030375021509826
+    },
+    {
+      "query": "waarom is de lancering uitgesteld?",
+      "expected": "rec:sample-2",
+      "rank": 2,
+      "results": [
+        "rec:sample-7",
+        "rec:sample-2",
+        "rec:sample-6"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 9.776083985343575
+    },
+    {
+      "query": "where does Ben work?",
+      "expected": "rec:sample-3",
+      "rank": 1,
+      "results": [
+        "rec:sample-3"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 9.691708022728562
+    },
+    {
+      "query": "o que impede novas contrata\u00e7\u00f5es?",
+      "expected": "rec:sample-4",
+      "rank": null,
+      "results": [
+        "rec:sample-2",
+        "rec:sample-7",
+        "rec:sample-6"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 8.716708049178123
+    },
+    {
+      "query": "when is the sales meeting?",
+      "expected": "rec:sample-6",
+      "rank": 1,
+      "results": [
+        "rec:sample-6",
+        "rec:sample-9",
+        "rec:sample-3"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.799915990792215
+    },
+    {
+      "query": "unpaid customer invoice",
+      "expected": "rec:sample-7",
+      "rank": 1,
+      "results": [
+        "rec:sample-7"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.591458058916032
+    },
+    {
+      "query": "who took over the project?",
+      "expected": "rec:sample-9",
+      "rank": 3,
+      "results": [
+        "rec:sample-0",
+        "rec:sample-3",
+        "rec:sample-9"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.621667020022869
+    },
+    {
+      "query": "Atlas handover para Priya",
+      "expected": "rec:sample-9",
+      "rank": 1,
+      "results": [
+        "rec:sample-9",
+        "rec:sample-0",
+        "rec:sample-2"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.563082988373935
+    },
+    {
+      "query": "Northstar ontwerper job",
+      "expected": "rec:sample-3",
+      "rank": 1,
+      "results": [
+        "rec:sample-3"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.878333002328873
+    },
+    {
+      "query": "factuur do cliente unpaid",
+      "expected": "rec:sample-7",
+      "rank": 1,
+      "results": [
+        "rec:sample-7"
+      ],
+      "mode": "hybrid",
+      "elapsedMS": 5.646875011734664
+    }
+  ],
+  "top1": 0.7333333333333333,
+  "recallAt3": 0.9333333333333333,
+  "warmMedianMS": 6.190499989315867,
+  "largeIndexMS": 7388.591750059277,
+  "largeSources": 1010,
+  "largeEntries": 10010,
+  "largeQueryMS": [
+    741.495875059627,
+    255.38925000000745,
+    205.4920829832554,
+    210.97208291757852,
+    210.81695798784494,
+    202.5258750654757,
+    207.83995802048594,
+    206.82512503117323
+  ],
+  "largeWarmMedianMS": 207.83995802048594,
+  "date": "2026-09-08",
+  "hardware": "Apple M4 Max",
+  "method": "15 synthetic English, Portuguese, Dutch and mixed-language queries against 10 passages. Scale test repeats those passages over 1000 more recordings; it measures the retrieval path, not relevance on 10010 unique passages. Warm MCP queries reuse the loaded local model and decoded index. No provider calls.",
+  "providerSmokeTests": [
+    {
+      "provider": "Claude Code",
+      "resolvedModels": [
+        "claude-opus-5"
+      ],
+      "requests": 4,
+      "promptTokens": 21600,
+      "completionTokens": 2842,
+      "reportedAPIEquivalentUSD": 0.25240049999999997,
+      "processedSources": 2,
+      "failed": 0,
+      "pending": 0,
+      "brief": [
+        {
+          "claims": [
+            "e93deb17f478da3fb6b654d2044139d3d9588deb26d7238ef7cd553c53ffc3ba",
+            "4c0f485989a03654705e402421b9c915269d9edb1e881bdf2b5b40f496bf7544",
+            "0c59e13efdac864120d83dd2cd60325a11065b4abcc769397ec5b888b3345cdb"
+          ],
+          "text": "Dana June worked as a designer at Northstar and stopped in that role on 2026-02-12."
+        },
+        {
+          "claims": [
+            "3021b3eebabd92757fb4c6f80e4dd871afe51f3a580df631f6bf70cac43666bc",
+            "2211571d051dea18a14a06b69d112ba100bd3168023a76a36e8a2beaab1c5575"
+          ],
+          "text": "They worked on Atlas up to 2026-02-12 and handed it to Priya on that same date."
+        },
+        {
+          "claims": [
+            "b261823da968422431707dc606d76ec6c204e0896f97e75a69de241f3ca71ff4"
+          ],
+          "text": "As reported on 2026-03-03, they said they might advise Borealis the following month, but this was not confirmed."
+        }
+      ]
+    },
+    {
+      "provider": "Codex",
+      "resolvedModels": [],
+      "requests": 4,
+      "promptTokens": 85619,
+      "completionTokens": 1795,
+      "reportedAPIEquivalentUSD": null,
+      "processedSources": 2,
+      "failed": 0,
+      "pending": 0,
+      "brief": [
+        {
+          "claims": [
+            "0c59e13efdac864120d83dd2cd60325a11065b4abcc769397ec5b888b3345cdb",
+            "c279cb0020b48604c8675bc0ac5eaccace9bfd40a3327375646b3aaf35b9e0fa",
+            "4c0f485989a03654705e402421b9c915269d9edb1e881bdf2b5b40f496bf7544"
+          ],
+          "text": "Dana June stopped working as a designer at Northstar on 2026-02-12."
+        },
+        {
+          "claims": [
+            "da9c6a34a18a02ae7318c256d3edcd1dc8ef347176c3c432f7df25240210ffb1",
+            "2211571d051dea18a14a06b69d112ba100bd3168023a76a36e8a2beaab1c5575"
+          ],
+          "text": "She previously led Atlas and handed it to Priya on 2026-02-12."
+        },
+        {
+          "claims": [
+            "e5460373b425a266878059884bd6212eeed94fff146630b8097e1eb1f739d5a6"
+          ],
+          "text": "On 2026-03-03, she said she might advise Borealis the following month, but this was not confirmed."
+        }
+      ]
+    }
+  ],
+  "crossDeviceRetrievalBenchmark": {
+    "model": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "fixture": "/var/folders/4q/pt6f0f1n6sl6nbj5y1lxgj680000gn/T/listen-search-benchmark-f_6dhsls",
+    "smallIndexMS": 2546.800458105281,
+    "rows": [
+      {
+        "query": "finding new staff",
+        "expected": "rec:sample-0",
+        "rank": 2,
+        "results": [
+          "rec:sample-3",
+          "rec:sample-0",
+          "rec:sample-2"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 380.77262497972697
+      },
+      {
+        "query": "quem est\u00e1 a recrutar programadores?",
+        "expected": "rec:sample-0",
+        "rank": 1,
+        "results": [
+          "rec:sample-0",
+          "rec:sample-2",
+          "rec:sample-3"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 49.55854208674282
+      },
+      {
+        "query": "wie zoekt een softwareontwikkelaar?",
+        "expected": "rec:sample-0",
+        "rank": 1,
+        "results": [
+          "rec:sample-0",
+          "rec:sample-3"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 13.817500090226531
+      },
+      {
+        "query": "how should I follow up with Alice?",
+        "expected": "rec:sample-1",
+        "rank": 1,
+        "results": [
+          "rec:sample-1",
+          "rec:sample-6",
+          "rec:sample-9"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 16.110708005726337
+      },
+      {
+        "query": "como prefere a Alice receber mensagens?",
+        "expected": "rec:sample-1",
+        "rank": 1,
+        "results": [
+          "rec:sample-1",
+          "rec:sample-6",
+          "rec:sample-2"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 13.630874920636415
+      },
+      {
+        "query": "why was the launch delayed?",
+        "expected": "rec:sample-2",
+        "rank": 1,
+        "results": [
+          "rec:sample-2",
+          "rec:sample-9"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 16.01541694253683
+      },
+      {
+        "query": "waarom is de lancering uitgesteld?",
+        "expected": "rec:sample-2",
+        "rank": 2,
+        "results": [
+          "rec:sample-7",
+          "rec:sample-2",
+          "rec:sample-6"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 13.103708974085748
+      },
+      {
+        "query": "where does Ben work?",
+        "expected": "rec:sample-3",
+        "rank": 1,
+        "results": [
+          "rec:sample-3"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 10.81554195843637
+      },
+      {
+        "query": "o que impede novas contrata\u00e7\u00f5es?",
+        "expected": "rec:sample-4",
+        "rank": null,
+        "results": [
+          "rec:sample-2",
+          "rec:sample-7",
+          "rec:sample-6"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 12.405999936163425
+      },
+      {
+        "query": "when is the sales meeting?",
+        "expected": "rec:sample-6",
+        "rank": 1,
+        "results": [
+          "rec:sample-6",
+          "rec:sample-9",
+          "rec:sample-3"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 11.504790978506207
+      },
+      {
+        "query": "unpaid customer invoice",
+        "expected": "rec:sample-7",
+        "rank": 1,
+        "results": [
+          "rec:sample-7"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 14.913000050000846
+      },
+      {
+        "query": "who took over the project?",
+        "expected": "rec:sample-9",
+        "rank": 3,
+        "results": [
+          "rec:sample-0",
+          "rec:sample-3",
+          "rec:sample-9"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 15.186124946922064
+      },
+      {
+        "query": "Atlas handover para Priya",
+        "expected": "rec:sample-9",
+        "rank": 1,
+        "results": [
+          "rec:sample-9",
+          "rec:sample-0",
+          "rec:sample-2"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 45.50670902244747
+      },
+      {
+        "query": "Northstar ontwerper job",
+        "expected": "rec:sample-3",
+        "rank": 1,
+        "results": [
+          "rec:sample-3"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 13.058040989562869
+      },
+      {
+        "query": "factuur do cliente unpaid",
+        "expected": "rec:sample-7",
+        "rank": 1,
+        "results": [
+          "rec:sample-7"
+        ],
+        "mode": "hybrid",
+        "elapsedMS": 14.686750015243888
+      }
+    ],
+    "top1": 0.7333333333333333,
+    "recallAt3": 0.9333333333333333,
+    "warmMedianMS": 14.25212505273521,
+    "largeIndexMS": 7316.673291963525,
+    "largeSources": 1010,
+    "largeEntries": 10010,
+    "largeQueryMS": [
+      767.5335840322077,
+      288.5671249823645,
+      205.26754099410027,
+      217.81062497757375,
+      212.45483297389,
+      207.69283291883767,
+      210.96187504008412,
+      207.8287920448929
+    ],
+    "largeWarmMedianMS": 210.96187504008412
+  },
+  "sharedCardSearchVerification": {
+    "runtime": "Apple sentence embedding on the Mac test host; same ListenKit implementation compiled for iOS",
+    "query": "preferred way of communicating",
+    "expected": "Prefers short written follow-ups.",
+    "result": "semantic match without shared keywords; unrelated cat detail excluded",
+    "automatedTest": "tools/verify_memory_core.swift"
+  }
+}

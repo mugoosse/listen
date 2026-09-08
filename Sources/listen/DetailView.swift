@@ -243,6 +243,11 @@ final class DetailView: NSView {
     /// card carries the rest: its title while a conversation is open, and
     /// History on the starters line while one is not.
     private let recentChats = LinkLine()
+    /// People touched most recently across recordings, notes, conversations and
+    /// generated context. These rows make the person pages visible from the
+    /// first screen instead of requiring somebody to discover the People lens.
+    private let recentPeople = NSStackView()
+    private let homeActivity = NSStackView()
     /// The agent notes about this meeting that are not the user's own, on one
     /// line above the note being read.
     ///
@@ -637,7 +642,7 @@ final class DetailView: NSView {
         for v in [titleLabel, subtitleLabel, languageNotice, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, chatList, noteTagChips, greeting,
-                  recentChats, empty, emptyIcon, transcribing, live, findBar] {
+                  homeActivity, empty, emptyIcon, transcribing, live, findBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -969,9 +974,9 @@ final class DetailView: NSView {
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             greeting.centerXAnchor.constraint(equalTo: centerXAnchor),
             greeting.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
-            recentChats.topAnchor.constraint(equalTo: empty.bottomAnchor, constant: 22),
-            recentChats.centerXAnchor.constraint(equalTo: centerXAnchor),
-            recentChats.widthAnchor.constraint(equalToConstant: 420),
+            homeActivity.topAnchor.constraint(equalTo: empty.bottomAnchor, constant: 22),
+            homeActivity.centerXAnchor.constraint(equalTo: centerXAnchor),
+            homeActivity.widthAnchor.constraint(equalToConstant: 420),
             empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
             emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
             // Above the greeting, which is what it now introduces. Anchored to
@@ -1112,6 +1117,17 @@ final class DetailView: NSView {
             .cursor: NSCursor.pointingHand,
         ]
         recentChats.isHidden = true
+
+        recentPeople.orientation = .vertical
+        recentPeople.alignment = .leading
+        recentPeople.spacing = 2
+
+        homeActivity.orientation = .vertical
+        homeActivity.alignment = .centerX
+        homeActivity.spacing = 18
+        homeActivity.addArrangedSubview(recentPeople)
+        homeActivity.addArrangedSubview(recentChats)
+        recentPeople.widthAnchor.constraint(equalTo: homeActivity.widthAnchor).isActive = true
 
         greeting.font = .systemFont(ofSize: 26, weight: .semibold)
         greeting.textColor = .labelColor
@@ -1781,6 +1797,103 @@ final class DetailView: NSView {
         recentChats.invalidateIntrinsicContentSize()
     }
 
+    /// The landing page is ordered by activity rather than by how often somebody
+    /// has spoken. A new note or conversation should bring a person back just as
+    /// surely as a new recording, and a newly generated summary is activity too.
+    private func showRecentPeople() {
+        for view in recentPeople.arrangedSubviews { view.removeFromSuperview() }
+
+        let people = People.roster().filter { !$0.isYou }
+        var touched: [String: Date] = [:]
+        func remember(_ label: String, _ date: Date?) {
+            guard let date, touched[label] == nil || date > touched[label]! else { return }
+            touched[label] = date
+        }
+        func parsed(_ value: String?) -> Date? {
+            guard let value else { return nil }
+            return ISO8601DateFormatter().date(from: value)
+        }
+        func matching(_ value: String) -> Person? {
+            people.first { $0.label == value
+                || $0.display.caseInsensitiveCompare(value) == .orderedSame }
+        }
+
+        for person in people { remember(person.label, person.lastSeen) }
+
+        let byID = Dictionary(people.map {
+            (MemoryPreferences.personID($0.label, root: Library.root), $0.label)
+        }, uniquingKeysWith: { first, _ in first })
+        for note in Notes.all() {
+            guard let about = note.aboutPersonID else { continue }
+            let id = MemoryPreferences.canonicalID(about, root: Library.root)
+            if let label = byID[id] { remember(label, parsed(note.updated) ?? parsed(note.created)) }
+        }
+        for chat in Chat.all() {
+            if let name = chat.person, let person = matching(name) {
+                remember(person.label, parsed(chat.updated) ?? parsed(chat.created))
+            }
+        }
+        if let memory = try? PeopleMemory.load() {
+            for (label, summary) in memory.summaries {
+                guard let person = matching(label) else { continue }
+                remember(person.label, parsed(summary.updated))
+            }
+            for receipt in memory.receipts.values {
+                for label in receipt.source.people {
+                    if let person = matching(label) { remember(person.label, parsed(receipt.processedAt)) }
+                }
+            }
+        }
+
+        var recent: [(person: Person, date: Date)] = []
+        for person in people {
+            if let date = touched[person.label] { recent.append((person, date)) }
+        }
+        recent.sort { left, right in
+            if left.date == right.date {
+                return left.person.display.localizedCaseInsensitiveCompare(right.person.display)
+                    == .orderedAscending
+            }
+            return left.date > right.date
+        }
+        let displayedPeople = recent.prefix(3)
+        guard !displayedPeople.isEmpty else { return }
+
+        let title = NSTextField(labelWithString: "RECENT PEOPLE")
+        title.font = .systemFont(ofSize: 10, weight: .semibold)
+        title.textColor = .tertiaryLabelColor
+        recentPeople.addArrangedSubview(title)
+        recentPeople.setCustomSpacing(5, after: title)
+
+        for (person, date) in displayedPeople {
+            let cell = PersonCell()
+            cell.configure(person, detail: recentActivity(date) + " · " + person.summary)
+            let row = HoverRow(content: cell, target: self,
+                               action: #selector(openRecentPerson(_:)), inset: 0, height: 44)
+            row.identifier = NSUserInterfaceItemIdentifier(person.label)
+            row.toolTip = "Open \(person.display)"
+            row.setAccessibilityElement(true)
+            row.setAccessibilityRole(.button)
+            row.setAccessibilityLabel("Open \(person.display)")
+            recentPeople.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: recentPeople.widthAnchor).isActive = true
+        }
+    }
+
+    private func recentActivity(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "Today" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = Calendar.current.component(.year, from: date)
+            == Calendar.current.component(.year, from: Date()) ? "d MMM" : "d MMM yyyy"
+        return formatter.string(from: date)
+    }
+
+    @objc private func openRecentPerson(_ sender: HoverRow) {
+        guard let label = sender.identifier?.rawValue else { return }
+        LibraryWindow.shared.showPerson(label)
+    }
+
     private static func greetingText() -> String {
         guard let name = Settings.userName, !name.isEmpty else {
             return "What's cooking?"
@@ -2292,6 +2405,7 @@ final class DetailView: NSView {
         emptyIcon.isHidden = true
         greeting.isHidden = true
         recentChats.isHidden = true
+        homeActivity.isHidden = true
         // As `updateEmpty` does. Without it the preview draws over whatever
         // transcript the chosen recording already has, which is not a state the
         // app can be in and would have somebody chasing a bug that is only in
@@ -2338,6 +2452,7 @@ final class DetailView: NSView {
         // left them drawn over its page.
         greeting.isHidden = true
         recentChats.isHidden = true
+        homeActivity.isHidden = true
 
         // While capture is running, the whole pane below the header is the
         // recording screen and the mode picker collapses.
@@ -2551,7 +2666,9 @@ final class DetailView: NSView {
             empty.isHidden = false
             greeting.stringValue = Self.greetingText()
             greeting.isHidden = false
+            showRecentPeople()
             showRecentChats()
+            homeActivity.isHidden = false
             let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
             // The character welcomes a new library. In a library that already
             // has recordings, it would only turn a simple selection prompt into
@@ -2567,10 +2684,10 @@ final class DetailView: NSView {
             // `Settings.askEnabled`), so the second half offers the one other
             // thing this screen can do instead: start the next recording.
             empty.stringValue = libraryIsEmpty
-                ? "No recordings yet. Press New Recording to capture your first meeting or voice memo."
+                ? "No recordings yet. Press Record to capture your first meeting or voice memo."
                 : Settings.askEnabled
                     ? "Select something from the list, or ask about your library below."
-                    : "Select something from the list, or press New Recording to start your next meeting or voice memo."
+                    : "Select something from the list, or press Record to start your next meeting or voice memo."
             return
         }
 

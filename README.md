@@ -61,6 +61,21 @@ roots that remains clear at 16 points.
   The model is yours to pick: Claude Code or Codex if you already have them, or
   any OpenAI-compatible endpoint, which includes one running on this Mac under
   Ollama or LM Studio and therefore nothing leaving it.
+- **Remembers people and projects with sources.** Person pages show a concise
+  brief, details, relationships and history, each linked to the original words.
+  Correct, pin or hide a detail without changing the recording. Explicit dated
+  changes preserve earlier states; a newer recording alone never ends a role.
+  Enable **Automatic briefs** in **Settings → AI → People & Memory**, choose a
+  background provider/model independently of Ask, and set a daily request budget.
+  Generation uses your existing Claude Code, Codex or compatible endpoint.
+  An encrypted reading projection and corrections sync through your existing
+  owner iCloud library to other Macs and iPhone; processing stays on Mac.
+- **Searches by meaning as well as words.** Apple's on-device sentence models
+  provide search without a download. Optional multilingual search uses a pinned
+  multilingual-e5-small model locally through MLX (about 500 MB), including
+  English, Portuguese and Dutch in a shared search space. Keyword search remains
+  available if a model is unavailable. UI, Ask, CLI and MCP retrieve compact
+  person/project context before expanding original passages when needed.
 - **Reaches your other Macs through iCloud**, off until you turn it on.
   Transcripts, notes, people, tags and your dictionary travel between devices,
   sealed before they leave with a key Apple never holds. A lossless copy of the

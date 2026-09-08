@@ -144,6 +144,9 @@ public struct Note: Codable, Sendable, Identifiable {
         if !tags.isEmpty {
             canonical += "\n" + tags.sorted().joined(separator: ",")
         }
+        for key in ["about_person", "exclude_from_ai"] {
+            if let value = extra[key] { canonical += "\n" + key + ":" + value }
+        }
         return sha256Hex(Data(canonical.utf8))
     }
 
@@ -350,4 +353,16 @@ public struct Note: Codable, Sendable, Identifiable {
 public struct NoteConflict: Error, Sendable {
     public let theirs: Note
     public init(theirs: Note) { self.theirs = theirs }
+}
+
+public extension Note {
+    /// A stable about link is distinct from the author and any recorded speaker.
+    var aboutPersonID: String? {
+        get { extra["about_person"].map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) } }
+        set { extra["about_person"] = newValue.map { "\"" + $0 + "\"" } }
+    }
+    var excludedFromAI: Bool {
+        get { extra["exclude_from_ai"]?.trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")).lowercased() == "true" }
+        set { extra["exclude_from_ai"] = String(newValue) }
+    }
 }

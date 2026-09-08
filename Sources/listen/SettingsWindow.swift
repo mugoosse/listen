@@ -14,7 +14,7 @@ enum SettingsTab: CaseIterable {
     case meetings, audio
     case models, dictionary
     case dictation
-    case agent
+    case agent, peopleContext
     case devices
     case developers, updates
 
@@ -36,6 +36,7 @@ enum SettingsTab: CaseIterable {
         // and OpenRouter are not agents, they are models Listen drives itself.
         // The settings sidebar was the last place using the word.
         case .agent:       return "Ask"
+        case .peopleContext: return "People & Memory"
         // "Sync", not "Devices". The list of devices is one thing on this pane
         // and no longer the point of it: what somebody comes here to find out
         // is whether their library is in step, and only then which machines are
@@ -63,6 +64,7 @@ enum SettingsTab: CaseIterable {
         case .dictionary:  return "character.book.closed"
         case .dictation:   return "mic.badge.plus"
         case .agent:       return "bubble.left.and.text.bubble.right"
+        case .peopleContext: return "person.text.rectangle"
         // An icon about being in step rather than about handing something to a
         // phone, which is what the arrow meant when this was pairing.
         case .devices:     return "arrow.triangle.2.circlepath"
@@ -85,6 +87,7 @@ enum SettingsTab: CaseIterable {
         case .dictionary:  pane = DictionaryPane()
         case .dictation:   pane = DictationPane()
         case .agent:       pane = AgentPane()
+        case .peopleContext: pane = PeopleContextPane()
         case .devices:     pane = DevicesPane()
         case .developers:  pane = DevelopersPane()
         case .updates:     pane = UpdatesPane()
@@ -111,7 +114,7 @@ enum SettingsGroup: CaseIterable {
         case .recording:     return "Recording"
         case .transcription: return "Transcription"
         case .dictation:     return "Dictation"
-        case .ask:           return "Ask"
+        case .ask:           return "AI"
         case .advanced:      return "Advanced"
         }
     }
@@ -149,7 +152,7 @@ enum SettingsGroup: CaseIterable {
         //
         // It sits after Transcription and Dictation because that is the order
         // things happen in: record it, transcribe it, then ask about it.
-        case .ask:           return [.agent]
+        case .ask:           return [.agent, .peopleContext]
         case .advanced:      return [.developers]
         }
     }

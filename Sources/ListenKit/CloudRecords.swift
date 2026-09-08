@@ -258,6 +258,7 @@ public enum CloudRecords {
         public var name: String
         public var version: String
         public var contents: Data
+        public var contentsAsset: String?
 
         public init(name: String, contents: Data) {
             self.name = name; self.contents = contents
@@ -267,14 +268,30 @@ public enum CloudRecords {
 
     public static func blob(name: String, contents: Data,
                             key: PairingKey) throws -> StoredRecord {
-        StoredRecord(
+        var blob = FileBlob(name: name, contents: contents)
+        var assets: [String: Data] = [:]
+        if [ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename].contains(name) {
+            // Compact headers stay below CloudKit's record field size limit;
+            // the complete owner projection travels as an encrypted asset.
+            blob.contentsAsset = "context.json"; blob.contents = Data()
+            assets["context.json"] = try key.seal(contents)
+        }
+        return StoredRecord(
             name: CloudNaming.recordName(.blob, name, key: key),
             type: .blob,
-            payload: try key.seal(try JSONEncoder().encode(FileBlob(name: name,
-                                                                    contents: contents))))
+            payload: try key.seal(try JSONEncoder().encode(blob)), assets: assets)
     }
 
     public static func openBlob(_ record: StoredRecord, key: PairingKey) throws -> FileBlob {
+        var blob = try blobHeader(record, key: key)
+        if let asset = blob.contentsAsset {
+            guard let bytes = record.assets[asset] else { throw ContextDatabase.Failure(message: "The synced memory asset is missing. Sync will retry.") }
+            blob.contents = try key.open(bytes)
+            guard sha256Hex(blob.contents) == blob.version else { throw ContextDatabase.Failure(message: "The synced memory did not match its digest.") }
+        }
+        return blob
+    }
+    public static func blobHeader(_ record: StoredRecord, key: PairingKey) throws -> FileBlob {
         try JSONDecoder().decode(FileBlob.self, from: try key.open(record.payload))
     }
 

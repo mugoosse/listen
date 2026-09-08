@@ -52,12 +52,14 @@ public struct DevicePolicy: Sendable, Equatable {
     /// Library-level files, one copy for the whole library rather than one per
     /// recording.
     public let blobs: [String]
+    public let publishesContext: Bool
 
     public init(sidecars: [String], blobs: [String], keepsRawBackup: Bool = true,
-                ownsVoiceprints: Bool = false) {
+                ownsVoiceprints: Bool = false, publishesContext: Bool = false) {
         self.sidecars = sidecars; self.blobs = blobs
         self.keepsRawBackup = keepsRawBackup
         self.ownsVoiceprints = ownsVoiceprints
+        self.publishesContext = publishesContext
     }
 
     /// Every per-recording file this device keeps for one id, backup included.
@@ -132,8 +134,8 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let mac = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json",
                    "waveform.json", DevicePolicy.sourceIcon, "embeddings.json"],
-        blobs: ["contacts.json", "dictionary.json"],
-        ownsVoiceprints: true)
+        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename],
+        ownsVoiceprints: true, publishesContext: true)
 
     /// Everything a phone keeps.
     ///
@@ -196,7 +198,7 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let phone = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
                    DevicePolicy.sourceIcon, "embeddings.json"],
-        blobs: ["contacts.json", "dictionary.json"])
+        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
 
     /// A phone that has been told not to recognise voices.
     ///
@@ -207,7 +209,7 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let phoneWithoutVoices = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
                    DevicePolicy.sourceIcon],
-        blobs: ["contacts.json", "dictionary.json"])
+        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
 
     /// Things at the library root that are deliberately in no set, recorded
     /// here because the next person to enumerate that directory will wonder.

@@ -347,7 +347,7 @@ public struct CloudSyncCore: Sendable {
                                 : CloudSyncCore.claimed(at: now)
                         }
                     case .note: try pullNote(record, base: &base, into: &report)
-                    case .blob: try pullBlob(record, into: &report)
+                    case .blob: try await pullBlob(record, into: &report)
                     default: break
                     }
                 } catch {
@@ -738,9 +738,26 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
-    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport) throws {
+    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport) async throws {
+        let header = try CloudRecords.blobHeader(record, key: key)
+        guard policy.blobs.contains(header.name) else { return }
+        var record = record
+        if let asset = header.contentsAsset, record.assets[asset] == nil {
+            guard let complete = try await store.fetch(record.name, in: .library) else {
+                throw ContextDatabase.Failure(message: "The synced memory is not available yet.")
+            }
+            record = complete
+        }
         let blob = try CloudRecords.openBlob(record, key: key)
-        guard policy.blobs.contains(blob.name) else { return }
+        if blob.name == MemoryPreferences.filename {
+            _ = try MemoryPreferences.receive(blob.contents, root: library.root)
+            report.pulledSidecars += 1; return
+        }
+        if blob.name == ContextSync.editsFilename {
+            _ = try ContextSync.receive(blob.contents, root: library.root)
+            report.pulledSidecars += 1; return
+        }
+        if blob.name == ContextSnapshot.filename { _ = try ContextSnapshot.decode(blob.contents) }
         let url = library.root.appendingPathComponent(blob.name)
         if let have = try? Data(contentsOf: url), sha256Hex(have) == blob.version { return }
         try blob.contents.write(to: url, options: .atomic)
@@ -1385,11 +1402,18 @@ public struct CloudSyncCore: Sendable {
         }
 
         for name in policy.blobs {
+            if name == ContextSnapshot.filename && !policy.publishesContext { continue }
             let url = library.root.appendingPathComponent(name)
-            guard let contents = try? Data(contentsOf: url) else { continue }
+            guard var contents = try? Data(contentsOf: url) else { continue }
             let recordName = CloudNaming.recordName(.blob, name, key: key)
             do {
                 let existing = try await store.fetch(recordName, in: .library)
+                if name == MemoryPreferences.filename, let existing {
+                    contents = try MemoryPreferences.receive(CloudRecords.openBlob(existing, key: key).contents, root: library.root)
+                }
+                if name == ContextSync.editsFilename, let existing {
+                    contents = try ContextSync.receive(CloudRecords.openBlob(existing, key: key).contents, root: library.root)
+                }
                 if let existing,
                    try CloudRecords.openBlob(existing, key: key).version == sha256Hex(contents) {
                     continue

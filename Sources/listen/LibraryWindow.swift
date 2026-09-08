@@ -893,8 +893,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             //
             // Settings *does* swap the pane, in `showPane`, so coming back from
             // there has something to restore.
-            if was != .chat { detailHost.show(detail) }
+            if was != .chat {
+                if sidebar.selectedNote != nil { detailHost.show(notePane) }
+                else if sidebar.selectedPerson != nil { detailHost.show(personPane) }
+                else { detailHost.show(detail) }
+            }
             reload()
+            if was == .settings { askBar.refreshModelSelection() }
             // **`isViewLoaded` first, and asking without it was a bug in the
             // shipped app.** `settingsNav.view` *loads* the view controller,
             // `SettingsNavViewController` selects its first row as it comes up,
@@ -1146,7 +1151,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // finished appears without anyone clicking away and back.
         if let id = sidebar.selectedRecording?.id, let fresh = Recording.find(id) {
             detail.show(fresh)
-        } else if sidebar.selectedRecording == nil {
+        } else if sidebar.selectedRecording == nil,
+                  sidebar.selectedPerson == nil, sidebar.selectedNote == nil {
             detail.show(nil)
         }
         // After the pane has been re-shown, because what it is showing is half
@@ -1745,7 +1751,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if Capture.shared.isRecording {
             NSApp.sendAction(#selector(App.stopRecordingFromUI), to: nil, from: self)
         } else {
-            NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
+            // A recording started while reading somebody's page remembers that
+            // intent as a suggestion. It does not name a speaker: the ordinary
+            // picker still asks, with this person placed first.
+            let person = detailHost.current === personPane ? personPane.currentPersonLabel : nil
+            if let app = NSApp.delegate as? App {
+                app.startRecordingFromPersonPage(suggesting: person)
+            } else {
+                NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
+            }
         }
     }
 
@@ -3094,6 +3108,12 @@ extension LibraryWindow: NSMenuDelegate {
     /// window could create and only the CLI and an agent could delete was a
     /// verb the user did not have.
     private func appendNoteActions(to menu: NSMenu, for note: Note) {
+        let privacy = Action("Exclude from AI", "sparkles") { [weak self] in
+            do { try Notes.excludeFromAI(!note.excludedFromAI, note: note); self?.reload(); ContextService.shared.sourcesChanged() }
+            catch { let alert = NSAlert(); alert.messageText = error.localizedDescription; alert.runModal() }
+        }
+        privacy.state = note.excludedFromAI ? .on : .off
+        menu.addItem(privacy); menu.addItem(.separator())
         // The working-out it was promoted out of, when the library still has it.
         // The same destination the question on the page links to, offered here
         // as well because the right-hand menu is where a Mac user looks for the

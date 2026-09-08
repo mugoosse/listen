@@ -1,3 +1,4 @@
+import ListenKit
 import Foundation
 import Security
 
@@ -697,11 +698,15 @@ extension AgentRun.Question {
     /// a fourth backend one day is a case here and nothing at any call site.
     func session(on queue: DispatchQueue = .main,
                  onEvent: @escaping (AgentRun.Event) -> Void) -> AgentSession {
+        var question = self
+        if !MemoryPreferences.excludedNotes(root: Library.root).isEmpty {
+            question.resume = nil; question.history = []
+        }
         switch backend {
         case .claude, .codex:
-            return AgentRun(self, on: queue, onEvent: onEvent)
+            return AgentRun(question, on: queue, onEvent: onEvent)
         case .endpoint:
-            return AgentChat(self, on: queue, onEvent: onEvent)
+            return AgentChat(question, on: queue, onEvent: onEvent)
         }
     }
 }
@@ -734,6 +739,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     /// Every piece of state below is read and written here and nowhere else.
     /// Delegate callbacks hop onto it, and so does `cancel`.
     private let work = DispatchQueue(label: "listen.agent.chat")
+    private let noteExclusions = MemoryPreferences.excludedNotes(root: Library.root)
 
     /// Held by itself while a run is in flight, for the reason recorded on
     /// `AgentRun.whileRunning`: the caller is allowed to stop mentioning this
@@ -903,7 +909,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     private func buildMessages() -> [[String: Any]] {
         var out: [[String: Any]] = [[
             "role": "system",
-            "content": AgentRun.brief(allowWrites: question.allowWrites),
+            "content": question.systemInstruction,
         ]]
         for turn in question.history {
             guard turn.failure == nil else { continue }
@@ -931,7 +937,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     /// other kind: a 7B model that invents a tool name also invents one that
     /// exists, and `delete_note` was reachable from a question with writes off.
     private var allowedTools: Set<String> {
-        Set(AgentRun.tools(allowWrites: question.allowWrites))
+        Set(question.allowedTools)
     }
 
     /// The POST body for the next round.
@@ -1008,6 +1014,9 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     }
 
     private func sendRound() {
+        guard MemoryPreferences.excludedNotes(root: Library.root) == noteExclusions else {
+            complete(failure: "Note privacy choices changed. Ask again to use the current sources."); return
+        }
         buffer = Data()
         answer = ""
         pending = [:]
@@ -1123,6 +1132,7 @@ final class AgentChat: NSObject, AgentSession, URLSessionDataDelegate {
     }
 
     private func readChunk(_ json: [String: Any]) {
+        if let model = json["model"] as? String, !model.isEmpty { outcome.resolvedModel = model }
         if let usage = json["usage"] as? [String: Any] { record(usage) }
         guard let choice = (json["choices"] as? [[String: Any]])?.first else { return }
         // A non-streamed answer arrives here too, under `message` rather than

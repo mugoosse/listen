@@ -201,8 +201,7 @@ final class AskView: NSView {
     private let field = ComposerField()
     private let sendButton = SendButton()
     private let modelButton = HoverButton()
-    private lazy var composer = ComposerWell(field: field, model: modelButton,
-                                             send: sendButton)
+    private lazy var composer = ComposerWell(field: field, model: modelButton, send: sendButton)
     private let status = NSTextField(labelWithString: "")
     /// The composer well's height and the status line's, so `showNotice` can
     /// collapse both when the setup card replaces them.
@@ -821,80 +820,11 @@ final class AskView: NSView {
 
     // MARK: - Choosing the agent and the model
 
-    /// One menu for both choices, because to a reader they are one choice.
-    ///
-    /// The backend is a section heading and the models are its rows, so picking
-    /// "GPT-5.6-Sol" also switches to Codex. Two separate controls would be
-    /// truer to how the preferences are stored and worse to use: nobody thinks
-    /// "Codex, and within Codex, Sol".
     @objc private func chooseModel() {
-        // **Opening the menu is the moment freshness matters**, and it is not
-        // covered by `updateStatus`, which is event-driven: an app left idle
-        // for a week and then clicked straight into this menu would build it
-        // from a week-old cache. This lands for the next open rather than this
-        // one, which is the same trade made there, and it is why the check is
-        // in both places rather than only the tidier one.
-        AgentCLI.refreshStaleProviders { [weak self] in self?.updateModelButton() }
-
-        let menu = NSMenu()
-        for status in AgentCLI.cached ?? [] {
-            guard status.usable else { continue }
-            let header = NSMenuItem(title: status.name, action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-
-            let chosen = AgentCLI.cachedChosen()?.key == status.key
-            let current = Settings.agentModel(status.key)
-            add(to: menu, status.key, model: nil,
-                title: "Default", on: chosen && current == nil)
-
-            // **A short list is shown whole; a long one becomes recents.**
-            // Ollama with what you have pulled, and Claude's three aliases, are
-            // menus already. A provider offering hundreds is a catalogue, and a
-            // menu that shows the first twelve of one is twelve rows nobody
-            // chose plus no way to reach the rest.
-            let offered: [AgentModel]
-            if status.models.count <= Settings.modelsShownInFull {
-                offered = status.models
-            } else {
-                var recent = Settings.recentModels(status.key)
-                // Whatever is in use belongs in the menu whether or not it has
-                // been used since this list existed, or switching away from it
-                // would be a one-way door.
-                if let current, !recent.contains(current) { recent.insert(current, at: 0) }
-                offered = recent.compactMap { id in
-                    status.models.first { $0.id == id }
-                        // A model that is no longer offered, or was typed by
-                        // hand, still shows: it is what the user picked, and
-                        // dropping it silently would look like the setting had
-                        // been lost.
-                        ?? (id == current ? AgentModel(id: id, name: id) : nil)
-                }
-            }
-            for model in offered {
-                add(to: menu, status.key, model: model.id,
-                    title: model.name, on: chosen && current == model.id)
-            }
-
-            if status.models.count > Settings.modelsShownInFull {
-                let browse = NSMenuItem(title: "Choose a model…",
-                                        action: #selector(browseModels(_:)), keyEquivalent: "")
-                browse.target = self
-                browse.indentationLevel = 1
-                browse.representedObject = status.key
-                menu.addItem(browse)
-            }
-            if status.key != (AgentCLI.cached ?? []).last(where: { $0.usable })?.key {
-                menu.addItem(.separator())
-            }
+        AgentModelMenu.present(from: modelButton) { [weak self] in
+            self?.updateStatus()
+            NotificationCenter.default.post(name: PeopleMemory.changed, object: nil)
         }
-        if menu.items.isEmpty {
-            let empty = NSMenuItem(title: "No agent is set up", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        }
-        menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: modelButton.bounds.height + 4), in: modelButton)
     }
 
     /// How many of a provider's models the composer's menu will show.
@@ -909,44 +839,8 @@ final class AskView: NSView {
     static let modelChevron = NSImage(systemSymbolName: "chevron.down",
                                       accessibilityDescription: "")
 
-    private func add(to menu: NSMenu, _ key: String, model: String?,
-                     title: String, on: Bool) {
-        let item = NSMenuItem(title: title, action: #selector(pickModel(_:)), keyEquivalent: "")
-        item.target = self
-        item.state = on ? .on : .off
-        // Indented under the backend heading, which is what makes the heading
-        // read as a heading rather than as a disabled row.
-        item.indentationLevel = 1
-        item.representedObject = [key, model as Any] as [Any]
-        menu.addItem(item)
-    }
-
-    @objc private func pickModel(_ sender: NSMenuItem) {
-        guard let pair = sender.representedObject as? [Any],
-              let key = pair.first as? String else { return }
-        use(key, model: pair.count > 1 ? pair[1] as? String : nil)
-    }
-
-    /// The whole catalogue, searchable, for the providers that have one.
-    @objc private func browseModels(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String,
-              let status = (AgentCLI.cached ?? []).first(where: { $0.key == key }) else { return }
-        ModelPicker.present(models: status.models, current: Settings.agentModel(key),
-                            over: window) { [weak self] id in
-            self?.use(key, model: id)
-        }
-    }
-
-    /// Switch to a backend and a model, and remember that the model was used.
-    private func use(_ key: String, model: String?) {
-        Settings.agentChoice = key
-        Settings.setAgentModel(key, model)
-        // Recorded on the choice rather than on a successful answer: a model
-        // that turned out not to support tools is still one that was reached
-        // for, and hiding it would make the failure awkward to retry.
-        Settings.noteModelUsed(key, model)
-        updateStatus()
-    }
+    /// Settings can change the shared model while this composer stays mounted.
+    func refreshModelSelection() { updateModelButton() }
 
     /// What the composer's chooser says right now.
     private func updateModelButton() {
@@ -1326,7 +1220,7 @@ final class AskView: NSView {
         // when the context does: `show(person:)` ends in `redraw`.
         var offered: [(String, String)]
         if let person {
-            offered = Self.personStarters(for: person)
+            offered = Array(Self.personStarters(for: person).prefix(3))
         } else if let recording {
             offered = Self.starters
             // Appended rather than folded into the array, because whether it is
@@ -1829,12 +1723,17 @@ final class AskView: NSView {
     /// Run one question. Split out because a failed resume runs it again.
     private func start(_ text: String, status: AgentStatus, path: URL,
                        resuming: String?) {
+        ContextService.shared.foregroundAsk(true)
         let backend = status.backend
         // Everything before this question, which an endpoint needs and a CLI
         // does not: a CLI is handed `resume` and remembers its own thread,
         // while an endpoint is stateless and is handed the messages every time.
         // The turn just appended by `ask` is dropped, because it is `text`.
-        let history = Array(chat.turns.dropLast())
+        // A previously allowed note may have entered provider-owned history.
+        // Start fresh while any note is excluded; never replay that old context.
+        let protectedNotes = Notes.all().contains(where: \.excludedFromAI)
+        let resuming = protectedNotes ? nil : resuming
+        let history = protectedNotes ? [] : Array(chat.turns.dropLast())
 
         // **Does the model know anything about this conversation yet?**
         //
@@ -1864,8 +1763,9 @@ final class AskView: NSView {
             // Named, not filtered, for the reason above. The instruction points
             // at the person's own material first, which is the retrieval ladder
             // the brief already describes, rather than fencing the library off.
-            scoped = "About the person \(person). Start from the recordings they "
-                + "speak in and the notes about those, then widen if you need to: \(text)"
+            scoped = "About the person \(person). Start with get_person_context "
+                + "and search_context for their facts, summary and relationships, "
+                + "then read cited sources or widen if needed: \(text)"
         }
         let question = AgentRun.Question(
             text: scoped, backend: backend, path: path, resume: resuming,
@@ -2019,6 +1919,7 @@ final class AskView: NSView {
     }
 
     private func finish(_ outcome: AgentRun.Outcome, _ answer: AnswerTurn) {
+        ContextService.shared.foregroundAsk(false)
         run = nil
         answering = nil
         answer.finish(outcome)
@@ -2090,6 +1991,7 @@ final class AskView: NSView {
     }
 
     func stop() {
+        if run != nil { ContextService.shared.foregroundAsk(false) }
         run?.cancel()
         run = nil
         answering = nil
@@ -2426,7 +2328,7 @@ final class ComposerWell: NSView {
         backdrop.frame = bounds
         content.frame = bounds
         let b = content.bounds
-        let sendSize = Self.send
+        let sendSize = sendButton.isHidden ? 0 : Self.send
         sendButton.frame = NSRect(x: b.width - sendSize - (Self.height - sendSize) / 2,
                                   y: (b.height - sendSize) / 2,
                                   width: sendSize, height: sendSize)
@@ -2437,9 +2339,10 @@ final class ComposerWell: NSView {
                              width: modelWidth, height: ceil(modelSize.height))
         let fieldSize = field.intrinsicContentSize
         let fieldRight = model.isHidden ? sendButton.frame.minX : model.frame.minX
-        field.frame = NSRect(x: Self.inset,
+        let fieldLeft = Self.inset
+        field.frame = NSRect(x: fieldLeft,
                              y: round((b.height - fieldSize.height) / 2),
-                             width: max(0, fieldRight - Self.gap - Self.inset),
+                             width: max(0, fieldRight - Self.gap - fieldLeft),
                              height: ceil(fieldSize.height))
     }
 

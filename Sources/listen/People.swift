@@ -237,6 +237,8 @@ enum People {
                        in library: [Recording] = Recording.all()) -> [String] {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard check(trimmed) == nil, trimmed != label else { return [] }
+        do { try ContextStore.relabelPerson(label, to: trimmed, merging: false) }
+        catch { NSLog("Person rename could not preserve memory: %@", error.localizedDescription); return [] }
         // The print moves with the name, so the name is back in a bank and
         // its old tombstone, if any, must stop applying.
         unforgetVoiceprints(trimmed)
@@ -264,6 +266,8 @@ enum People {
         guard !from.isEmpty, !to.isEmpty, from != to else { return [] }
         guard from != SpeakerName.you else { return [] }
         guard !VoiceBank.isPlaceholder(to) else { return [] }
+        do { try ContextStore.relabelPerson(from, to: to, merging: true) }
+        catch { NSLog("Person merge could not preserve memory: %@", error.localizedDescription); return [] }
         // Same rule as `rename`: a bank gains this name, so the name must
         // not stay forgotten.
         unforgetVoiceprints(to)

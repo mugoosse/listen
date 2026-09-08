@@ -33,6 +33,13 @@ struct Metadata: Codable {
     /// folder and the files in it are the truth.
     var calendar_people: [CalendarPerson]?
 
+    /// People offered first when this recording's unnamed speakers are reviewed.
+    ///
+    /// Set only when recording starts from a person's page. This is a hint, not
+    /// an identity decision: the transcript stays unnamed until somebody picks
+    /// the person in the ordinary speaker picker.
+    var suggested_people: [String]?
+
     /// Speakers the voice bank named without being asked.
     ///
     /// The record of what happened, and the reason it is safe for it to happen

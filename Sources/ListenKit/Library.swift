@@ -5,8 +5,8 @@ import Foundation
 /// The same type on both, because the layout is the same on both. On the Mac
 /// it points at `~/Library/Application Support/Listen` (or wherever
 /// `LISTEN_LIBRARY` says); on the phone it points inside the app container.
-/// There is no database on either, which is what makes a folder appearing out
-/// of nowhere a complete and valid way to add a recording.
+/// Recording folders are the source of truth on both devices. The Mac keeps
+/// a derived memory database, rebuilt from those files as they arrive or change.
 public struct Library: Sendable {
     public let root: URL
 

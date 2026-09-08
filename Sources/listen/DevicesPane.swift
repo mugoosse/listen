@@ -70,13 +70,12 @@ final class DevicesPane: Pane {
         // that would have prevented this whole guard being needed. Ticking it
         // here consents to *this* library, because the setter stamps the path.
         toggle.state = Settings.cloudSyncApplies ? .on : .off
-        // A forced value gets a disabled control and a sentence naming who
-        // decided, rather than a checkbox that snaps back.
+        // A forced value gets a disabled control and a sentence explaining
+        // why it cannot be changed, rather than a checkbox that snaps back.
         if Settings.isForced("cloudSync") {
             toggle.isEnabled = false
             stack.addArrangedSubview(toggle)
-            note("iCloud sync is set by your organisation's device profile "
-                 + "and cannot be changed here.")
+            note("This setting is controlled by a configuration profile on this Mac.")
         } else {
             stack.addArrangedSubview(toggle)
         }

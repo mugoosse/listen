@@ -1,3 +1,4 @@
+import ListenKit
 import Foundation
 
 /// `listen mcp`: an MCP server over stdio, where notes and tags are the only
@@ -317,9 +318,58 @@ enum MCP {
             ],
             [
                 "name": "list_people",
-                "description": "Everyone in the voice bank, with how many recordings "
-                    + "they appear in.",
+                "description": "Named people and saved contacts, including people without voiceprints. "
+                    + "Returns their recording count and whether preprocessed person context is available. "
+                    + "Use get_person_context for facts, summary, relationships and source quotes.",
                 "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+            ],
+            [
+                "name": "get_person_context",
+                "description": "Read a person's preprocessed summary, facts and relationships with exact "
+                    + "source quotes, dates and citation markers. Start here for person questions. "
+                    + "No LLM request or transcript download. Historical facts are marked; changed or "
+                    + "deleted sources are excluded. Pending/failed counts describe incomplete coverage. "
+                    + "Memory is generated and fallible; use original evidence for precise answers.",
+                "inputSchema": ["type": "object", "properties": [
+                    "person": ["type": "string"],
+                    "question": ["type": "string", "description": "Optional question to prioritize relevant details."],
+                    "token_budget": ["type": "integer", "description": "Estimated output tokens, default 1500, range 256 to 16000."],
+                    "as_of": ["type": "string", "description": "Effective date YYYY-MM-DD, distinct from recording date. Unknown effective dates remain explicitly unknown."],
+                    "limit": ["type": "integer", "description": "Maximum candidate details to consider, default 100. The token budget can return fewer. Each detail includes a short original quote; read its source for surrounding words."],
+                    "offset": ["type": "integer", "description": "Candidate offset, default 0. Advance by limit for another candidate window. Use a focused question or larger token_budget when omitted is nonzero."],
+                ],
+                                "required": ["person"]],
+            ],
+            [
+                "name": "get_project_context",
+                "description": "Compact preprocessed project brief, related people, sourced facts and temporal status. No model request or transcript download. Resolve aliases with list_context_entities.",
+                "inputSchema": ["type": "object", "properties": [
+                    "project": ["type": "string"],
+                    "question": ["type": "string"],
+                    "token_budget": ["type": "integer"],
+                    "as_of": ["type": "string"],
+                ], "required": ["project"]],
+            ],
+            [
+                "name": "list_context_entities",
+                "description": "Stable person and project IDs and explicitly reviewed aliases for compact memory retrieval.",
+                "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+            ],
+            [
+                "name": "search_context",
+                "description": "Search people, projects, facts, relationships and source passages by meaning "
+                    + "and keywords. Text embeddings are generated locally on this Mac. Returns compact "
+                    + "ranked matches with evidence and citation markers, not whole transcripts. "
+                    + "person means context ABOUT a person (including mentions), not only words they spoke. "
+                    + "Unsupported query languages use keyword search. Ranking scores are not truth confidence.",
+                "inputSchema": ["type": "object", "properties": [
+                    "query": ["type": "string"], "person": ["type": "string"],
+                    "kinds": ["type": "array", "items": ["type": "string", "enum": ["fact", "relationship", "passage"]]],
+                    "tags": ["type": "array", "items": ["type": "string"]],
+                    "after": ["type": "string"], "before": ["type": "string"],
+                    "as_of": ["type": "string", "description": "Optional effective date YYYY-MM-DD. Searches memory valid on that day, including historical claims, without raw passages."],
+                    "limit": ["type": "integer", "description": "Default 12, max 50."],
+                ], "required": ["query"]],
             ],
             [
                 "name": "list_tags",
@@ -631,6 +681,37 @@ enum MCP {
     /// the caller's job to be off the main thread, which `AgentChat` is.
     private static func perform(_ name: String, _ args: [String: Any]) throws -> String {
         switch name {
+        case "list_context_entities":
+            return try ContextCLI.json(ContextRetrieval.listedEntities())
+        case "get_project_context":
+            guard let project = args["project"] as? String else { throw MCPError.badArguments("get_project_context needs a project") }
+            return try ContextCLI.json(ContextRetrieval.packet(project, kind: "project",
+                question: args["question"] as? String ?? "", tokenBudget: args["token_budget"] as? Int ?? 1500,
+                asOf: args["as_of"] as? String))
+        case "get_person_context":
+            guard let person = args["person"] as? String, !person.isEmpty else {
+                throw MCPError.badArguments("get_person_context needs a person")
+            }
+            let offset = max(0, args["offset"] as? Int ?? 0)
+            return try ContextCLI.json(ContextRetrieval.packet(person, kind: "person",
+                question: args["question"] as? String ?? "", tokenBudget: args["token_budget"] as? Int ?? 1500,
+                asOf: args["as_of"] as? String, offset: offset, limit: clamp(args["limit"], default: 100, min: 1, max: 100)))
+
+        case "search_context":
+            guard let query = args["query"] as? String else {
+                throw MCPError.badArguments("search_context needs a query")
+            }
+            let kinds = try strings(args["kinds"], field: "kinds")
+            guard Set(kinds).isSubset(of: ["fact", "relationship", "passage"]) else {
+                throw MCPError.badArguments("kinds must be fact, relationship or passage")
+            }
+            let person = args["person"] as? String
+            return try ContextCLI.json(SemanticIndex.search(query, person: person,
+                limit: clamp(args["limit"], default: 12, min: 1, max: 50), kinds: kinds,
+                tags: strings(args["tags"], field: "tags"),
+                after: dayBound(args["after"], endOfDay: false, field: "after"),
+                before: dayBound(args["before"], endOfDay: true, field: "before"), asOf: args["as_of"] as? String))
+
         case "list_recordings":
             let limit = clamp(args["limit"], default: 20, min: 1, max: 200)
             let offset = max(0, args["offset"] as? Int ?? 0)
@@ -665,15 +746,18 @@ enum MCP {
             // ladder where an agent decides what to read, and "the user has
             // written a note on this one" is the cheapest thing it can be told
             // before it asks for 5,000 tokens of transcript.
-            out["notes"] = Notes.list(about: recording).map(\.slug)
+            out["notes"] = Notes.list(about: recording).filter { !$0.excludedFromAI }.map(\.slug)
             return json(out)
 
         case "list_tags":
             // Both counts on every row, always, including the zeroes. A key
             // that appears only sometimes reads as a tag of a different kind,
             // and there is only one kind.
-            return json(["tags": Tags.all().map {
-                ["name": $0.name, "recordings": $0.count, "notes": $0.noteCount]
+            let visibleNotes = Notes.all().filter { !$0.excludedFromAI }
+            return json(["tags": Tags.all().compactMap { tag -> [String: Any]? in
+                let count = visibleNotes.filter { $0.tags.contains(tag.name) }.count
+                guard tag.count > 0 || count > 0 else { return nil }
+                return ["name": tag.name, "recordings": tag.count, "notes": count]
             }])
 
         case "add_tags":
@@ -747,19 +831,15 @@ enum MCP {
             return json(["matches": hits, "truncated": hits.count >= limit])
 
         case "list_people":
-            var counts: [String: Int] = [:]
-            var seconds: [String: Double] = [:]
-            for recording in Recording.all() {
-                for (name, print) in recording.voiceprints where !VoiceBank.isPlaceholder(name) {
-                    counts[name, default: 0] += 1
-                    seconds[name, default: 0] += print.speech
-                }
-            }
-            let people = counts.keys.sorted().map { label -> [String: Any] in
+            let context = (try? PeopleMemory.load()) ?? MemoryDocument()
+            let known = Set(PeopleMemory.validReceipts(context).flatMap { $0.claims.map(\.person) })
+            let people = People.roster().map { person -> [String: Any] in
+                let label = person.label
                 var row: [String: Any] = [
                     "name": SpeakerName.display(label),
-                    "recordings": counts[label] ?? 0,
-                    "speech_seconds": Int(seconds[label] ?? 0),
+                    "recordings": person.recordings.count,
+                    "speech_seconds": Int(person.seconds),
+                    "has_context": known.contains(label),
                 ]
                 // The disk label only when it differs, which is the user's own
                 // track and nothing else. Printing `label: "Edgar"` beside
@@ -783,13 +863,13 @@ enum MCP {
             // Optional, unlike everywhere else: a note can be about four
             // meetings, so "every note" is a question worth being able to ask.
             guard args["recording_id"] != nil else {
-                return json(["notes": Notes.all().filter { $0.carries(filed) }.map(brief)])
+                return json(["notes": Notes.all().filter { !$0.excludedFromAI && $0.carries(filed) }.map(brief)])
             }
             let recording = try find(args)
             return json([
                 "recording_id": recording.id,
                 "notes": Notes.list(about: recording)
-                    .filter { $0.carries(filed) }.map(brief),
+                    .filter { !$0.excludedFromAI && $0.carries(filed) }.map(brief),
             ])
 
         case "read_note":
@@ -871,6 +951,12 @@ enum MCP {
             "updated": note.updated,
             "recordings": note.recordings,
         ]
+        if let about = note.aboutPersonID {
+            let id = MemoryPreferences.canonicalID(about, root: Library.root)
+            out["about_person_id"] = id
+            out["about_person"] = People.roster().first { MemoryPreferences.personID($0.label, root: Library.root) == id }?.display
+            out["attribution"] = "Written by the library owner about this person; first-person statements refer to the owner."
+        }
         if let prompt = note.prompt, !prompt.isEmpty { out["prompt"] = prompt }
         // Only when there are any, which is `brief(_ recording:)`'s rule for
         // the same key.
@@ -930,7 +1016,7 @@ enum MCP {
         // The recording, when given, only narrows a shared title. It is not
         // part of the note's identity any more: the slug is unique library-wide.
         let about = (args["recording_id"] as? String).flatMap(Recording.find)
-        guard let note = Notes.find(name, about: about) else {
+        guard let note = Notes.find(name, about: about), !note.excludedFromAI else {
             throw MCPError.notFound("no note `\(name)`")
         }
         return note

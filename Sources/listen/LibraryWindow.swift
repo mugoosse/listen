@@ -520,6 +520,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         w.titleVisibility = .hidden
         w.styleMask.insert(.fullSizeContentView)
         w.titlebarAppearsTransparent = true
+        // A content-view-controller window can inherit the split controller's
+        // current fitting ceiling. That left the library capped at 1,136
+        // points even though the main split item has no maximum thickness.
+        // The panes are fluid; their minimum thicknesses still protect the
+        // usable layout, while the window itself should fill a large display.
+        w.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                  height: CGFloat.greatestFiniteMagnitude)
         w.setContentSize(NSSize(width: 1040, height: 680))
         w.center()
         // Frame first, then the divider. Restoring the frame resizes the

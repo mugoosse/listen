@@ -8,6 +8,50 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.37.0 (2026-09-09)
+
+Speaker labels are now a way to review a conversation, not just a way to rename
+somebody, and long transcripts no longer build every paragraph before showing
+the first one.
+
+### Review one speaker while keeping the conversation in view
+
+Click a speaker label and Listen opens a persistent Speakers panel beside the
+transcript. It shows everybody in the recording, how much they spoke, and
+whether they have been identified. From there you can identify or change the
+selected person, play only their clips, or show only their transcript turns.
+
+The same actions are in the label's right-click menu, including for an
+unidentified speaker. The old “Who is this?” dead end is gone. Showing one
+speaker hides the other transcript turns and the main play button continues
+through that speaker's clips; “Show all transcript” restores the conversation
+and its previous reading position. Escape backs out one step at a time.
+
+Ask is temporarily hidden while speaker review is open. The speaker panel uses
+the full height instead of competing with a question box that belongs to a
+different task, and it comes back as soon as review closes. Speaker colour dots
+also have more room around them.
+
+### Long transcripts open with the rows you can see
+
+The transcript is now a variable-height, virtualized list. AppKit creates the
+paragraphs near the viewport as you reach them instead of constructing the
+entire meeting before drawing the first frame. On a scratch copy of a 469-turn,
+1 hour 16 minute recording, 17 rows were materialized initially and warm first
+render fell from 879 to 1,182 ms before this change to 109 to 193 ms after it.
+One cold launch measured 384 ms.
+
+Speaker totals are cached until their transcript file changes. A person page
+loads recordings 24 at a time, and a long saved Ask conversation initially
+draws its latest 40 messages with an explicit way to load earlier history.
+
+### Known limitations
+
+- The opening-time measurements are from one Apple silicon Mac and one long
+  transcript. Absolute times vary with the machine, window size and text.
+- Speaker-only playback skips other speakers and silence but still uses the
+  recording's full waveform and clock.
+
 ## 0.36.0 (2026-09-09)
 
 Listen remembers the people in your meetings, and a deleted recording stays

@@ -1130,6 +1130,8 @@ enum CLI {
         case "add":    dictionaryAdd(rest)
         case "remove": dictionaryRemove(rest)
         case "test":   dictionaryTest(rest)
+        case "backfill": dictionaryBackfill(rest)
+        case "suggestions", "suggest": dictionarySuggestions(rest)
         case "import": dictionaryImport(rest)
         case "export": dictionaryExport(rest)
         default:
@@ -1183,9 +1185,141 @@ enum CLI {
         let fired = totals.values.reduce(0, +)
         print("")
         log(fired == 0
-            ? "no transcript has been rewritten by these rules yet. Only recordings "
-              + "transcribed since you added them are counted."
-            : "\(fired) replacement(s) across the library.")
+            ? "no transcript has been rewritten by these rules yet. `listen dictionary "
+              + "backfill` shows what they would change in the transcripts you already have."
+            : "\(fired) replacement(s) across the library. `listen dictionary backfill` "
+              + "shows what is left to change in older transcripts.")
+        exit(0)
+    }
+
+    /// `listen dictionary backfill`: the list applied to transcripts that exist.
+    ///
+    /// A dry run unless `--apply` is given, for the reason `calendar backfill` is
+    /// one: this rewrites recordings nobody has read in weeks, and the lines it
+    /// prints are the only review anybody gets. Deliberately not something that
+    /// happens when a rule is added, or at launch.
+    ///
+    /// Takes a recording id to do one, which is how a rule is tried against a
+    /// meeting somebody is looking at before it is let loose on the library.
+    private static func dictionaryBackfill(_ args: [String]) -> Never {
+        var apply = false
+        var only: String?
+        for arg in args {
+            switch arg {
+            case "--apply": apply = true
+            default:
+                guard !arg.hasPrefix("-") else {
+                    fail("unknown option `\(arg)`. Try `listen help`.")
+                }
+                only = arg
+            }
+        }
+
+        let entries = CustomDictionary.load()
+        guard !entries.isEmpty else { fail("the dictionary is empty.") }
+
+        let library: [Recording]
+        if let only {
+            guard let one = Recording.find(only) else { fail("no recording `\(only)`.") }
+            library = [one]
+        } else {
+            library = Recording.all()
+        }
+
+        let plans = DictionaryBackfill.preview(entries, in: library)
+        for plan in plans.sorted(by: { $0.recording.id < $1.recording.id }) {
+            print("\(plan.recording.id)  \(plan.recording.displayTitle)")
+            for change in plan.changes {
+                print("    " + DictionaryBackfill.excerpt(change))
+            }
+        }
+
+        print("")
+        guard !plans.isEmpty else {
+            log("\(library.count) recording(s) read, nothing to change.")
+            exit(0)
+        }
+        log("would change " + DictionaryBackfill.summary(plans)
+            + ", of \(library.count) read.")
+
+        guard apply else {
+            log("nothing was written. `--apply` does it.")
+            exit(0)
+        }
+
+        var written = 0, refused = 0
+        for plan in plans {
+            if DictionaryBackfill.apply(plan) { written += 1 } else { refused += 1 }
+        }
+        log("applied to \(written) recording(s).")
+        // A refusal here is a transcript that moved between the preview and the
+        // write, which is rare and is not something to swallow: the compare-and
+        // -swap did its job and the user needs to know it did.
+        if refused > 0 {
+            log("\(refused) recording(s) were refused because their transcript changed "
+                + "while this ran. Run it again to see what is left.")
+        }
+        exit(0)
+    }
+
+    /// `listen dictionary suggestions`: words the dictionary should know.
+    ///
+    /// Two sources, one list: sentences somebody corrected by hand, and a scan
+    /// for words that repeat, are not English and sound like somebody on the
+    /// roster. Nothing here adds a rule on its own, which is the whole point.
+    private static func dictionarySuggestions(_ args: [String]) -> Never {
+        var scan = false
+        var add: String?
+        var dismiss: String?
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            switch arg {
+            case "--scan": scan = true
+            case "--add", "--dismiss":
+                guard i + 1 < args.count else { fail("`\(arg)` needs the misheard text.") }
+                i += 1
+                if arg == "--add" { add = args[i] } else { dismiss = args[i] }
+            default: fail("unknown option `\(arg)`. Try `listen help`.")
+            }
+            i += 1
+        }
+
+        if scan {
+            let found = DictionarySuggestions.absorbScan()
+            log("scanned the library, \(found) new suggestion(s).")
+        }
+
+        let pending = DictionarySuggestions.pending()
+        if let wanted = add ?? dismiss {
+            guard let match = pending.first(where: {
+                $0.heard.caseInsensitiveCompare(wanted) == .orderedSame
+            }) else { fail("no suggestion for `\(wanted)`.") }
+            if add != nil {
+                guard DictionarySuggestions.accept(match) else {
+                    fail("`\(match.heard)` is already in the dictionary.")
+                }
+                log("added correction. `listen dictionary backfill` applies it to "
+                    + "transcripts you already have.")
+            } else {
+                DictionarySuggestions.dismiss(match)
+                log("dismissed. It will not be offered again.")
+            }
+            exit(0)
+        }
+
+        guard !pending.isEmpty else {
+            log("nothing suggested. Corrections you make to a sentence in the window are "
+                + "collected here; `--scan` also reads the library for names.")
+            exit(0)
+        }
+        for one in pending {
+            print("  \(one.heard) -> \(one.meant)   seen \(one.seen), "
+                  + "\(one.source == .edit ? "you corrected it" : "sounds like the roster")")
+            if !one.example.isEmpty { print("      \(one.example)") }
+        }
+        print("")
+        log("`--add <text>` adds one, `--dismiss <text>` stops it being offered.")
         exit(0)
     }
 
@@ -1238,8 +1372,8 @@ enum CLI {
         if kind == .term, caseSensitive {
             log("--case-sensitive applies to corrections only, and is ignored here.")
         }
-        log("it applies to recordings transcribed from now on, not to transcripts you "
-            + "already have.")
+        log("it applies to recordings transcribed from now on. `listen dictionary "
+            + "backfill` shows what it would change in the transcripts you already have.")
         exit(0)
     }
 
@@ -1794,6 +1928,9 @@ enum CLI {
       add <text> <replacement>   an exact replacement
       remove <text>              drop the entry matching that text
       test <sentence>            what the dictionary would do to a line
+      backfill [--apply] [<id>]  apply the list to transcripts you already have
+      suggestions [--scan]       words it should know, from your own corrections
+      suggestions --add <text>   add one of them, --dismiss <text> refuses it
       import <path>              merge a file in, keeping what is here
       export [<path>]            write the list out, stdout by default
 

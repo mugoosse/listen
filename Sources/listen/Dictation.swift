@@ -21,7 +21,14 @@ final class Dictation {
     /// than an early `recording` because the two answer different questions:
     /// the microphone is not live yet, and nothing may claim it is.
     enum Phase { case idle, starting, recording, transcribing }
-    private(set) var phase: Phase = .idle
+    /// Escape is swallowed only while a dictation is up, and the tap only
+    /// watches character keys while it has to swallow one. Hung off `phase`
+    /// rather than set beside each of the ten assignments to it, because the
+    /// one that got missed would leave the tap holding every keystroke on the
+    /// Mac for the rest of the session. See `DictationHotkey.wantsKeyDown`.
+    private(set) var phase: Phase = .idle {
+        didSet { hotkey.catchEscape = phase == .starting || phase == .recording }
+    }
 
     /// The chord came again, or Escape did, while the device was still opening.
     /// The open cannot be called off, so it is allowed to finish and then hands

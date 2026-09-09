@@ -1226,6 +1226,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// too and which carries the reasoning.
     @discardableResult
     func writeShot(to path: String) -> Bool {
+        // A sheet is its own window, so drawing the library's content view
+        // gives a picture of the page *behind* the thing being previewed. The
+        // sheet wins when there is one, which is the only way a sheet can be
+        // photographed at all on a locked Mac.
+        if let sheet = window?.attachedSheet, let view = sheet.contentView {
+            return view.writeShot(to: path)
+        }
         guard let view = window?.contentView else { return false }
         return view.writeShot(to: path)
     }

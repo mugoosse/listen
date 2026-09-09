@@ -282,9 +282,9 @@ class Pane: NSViewController {
     /// Tear the pane down and build it again.
     ///
     /// For a pane whose *shape* changes rather than its values, which `refresh`
-    /// cannot express: the dictionary's two halves have different columns and a
-    /// different explanation underneath, so switching between them is a rebuild
-    /// and not a reload.
+    /// cannot express: a section that appears and disappears, or a table whose
+    /// columns are not the ones it was built with, is a rebuild and not a
+    /// reload.
     func rebuild() {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         build()

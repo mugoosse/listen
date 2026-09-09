@@ -517,7 +517,7 @@ enum CustomDictionary {
     /// `words` is a 1934 word list with no plurals or verb forms, so "codes" and
     /// "dogs" are missing from it. Stripping common endings covers that without
     /// shipping a second dictionary.
-    private static func isRealWord(_ w: String) -> Bool {
+    static func isRealWord(_ w: String) -> Bool {
         let word = w.lowercased()
         if lexicon.contains(word) { return true }
         for (suffix, stem) in [("s", ""), ("es", ""), ("ed", ""), ("ed", "e"),
@@ -671,6 +671,15 @@ enum CustomDictionary {
                     advance = candidate.span       // already right, leave it alone
                     break
                 }
+                // A span that already contains the term is already right, and
+                // replacing it deletes whatever else the span covered.
+                // Measured on a real library: "you Kinsight to work for them"
+                // matched "Kinsight to" as a gap-closed span and rewrote it as
+                // "Kinsight", eating the "to". The shorter candidate that
+                // follows matches the word itself and takes the line above.
+                guard !span.contains(where: {
+                    $0.word.caseInsensitiveCompare(candidate.entry.text) == .orderedSame
+                }) else { continue }
                 guard accepts(phrase: phrase, as: candidate.entry.text,
                               words: candidate.span,
                               joined: candidate.closesGaps && candidate.span > 1
@@ -689,6 +698,30 @@ enum CustomDictionary {
         return Applied(text: out.isEmpty ? text : out + text[cursor...], fired: fired)
     }
 
+    /// Levenshtein distance, iterative and over two rows.
+    ///
+    /// Called on a gap-closed span, which is at most three short words against
+    /// one term, and by `DictionarySuggestions.scan` on one word against one
+    /// name. The quadratic cost is nothing at those sizes and the alternative
+    /// would be a dependency.
+    static func distance(_ a: String, _ b: String) -> Int {
+        let x = Array(a), y = Array(b)
+        guard !x.isEmpty else { return y.count }
+        guard !y.isEmpty else { return x.count }
+        var previous = Array(0...y.count)
+        var current = [Int](repeating: 0, count: y.count + 1)
+        for i in 1...x.count {
+            current[0] = i
+            for j in 1...y.count {
+                current[j] = x[i - 1] == y[j - 1]
+                    ? previous[j - 1]
+                    : min(previous[j - 1], previous[j], current[j - 1]) + 1
+            }
+            swap(&previous, &current)
+        }
+        return previous[y.count]
+    }
+
     /// A term can only match by sound if it is long enough to be distinctive.
     static func eligible(_ term: String) -> Bool {
         let words = term.split(separator: " ")
@@ -699,6 +732,71 @@ enum CustomDictionary {
         // a single "Code" would collide with half the language.
         return words.count > 1 ? letters >= 8 : letters >= minimumSoundsLike
     }
+
+    /// An English word that sounds the same as `term`, if there is one.
+    ///
+    /// The one thing somebody adding a word cannot find out by reading their own
+    /// rule, and the reason "Beehiiv" sat in a dictionary doing nothing: the
+    /// sounds-like net refuses to swap a real word for a term, so a term whose
+    /// sound collides with an English word never fires on the very mishearing it
+    /// was added for. "beehive" is a word, so "bee hive" and "beehive" are both
+    /// left alone, for ever, silently.
+    ///
+    /// The alternative to saying so in the sheet is finding out a week later, in
+    /// an archive, by noticing the word is still wrong.
+    ///
+    /// One word only. A phrase is allowed to be made of real words, because
+    /// every word has to match in sequence and that is a far stronger signal:
+    /// see `accepts(phrase:as:words:joined:)`.
+    ///
+    /// **Sharing a key is not enough, and the first version said so out loud.**
+    /// Soundex is lossy, so "knagged" codes the same as "Kinsight" and the sheet
+    /// told somebody adding Kinsight that ordinary English would shield it,
+    /// which is false: the term fires on "kinside" and "kin site" perfectly
+    /// well. A collision worth warning about is one somebody might actually
+    /// type, so the word also has to be within the same half-the-length edit
+    /// bound the gap-closing guard uses. "beehive" is 2 from "Beehiiv" and
+    /// stays; "knagged" is 6 from "Kinsight" and goes.
+    static func englishSoundalike(for term: String) -> String? {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(" "), eligible(trimmed), !isRealWord(trimmed),
+              let words = soundalikes[phoneticKey(trimmed)],
+              let word = words.min(by: {
+                  distance($0, trimmed.lowercased()) < distance($1, trimmed.lowercased())
+              }),
+              distance(word, trimmed.lowercased()) <= max(1, trimmed.count / 2)
+        else { return nil }
+        return word
+    }
+
+    /// The lexicon indexed by sound, built once and only if somebody asks.
+    ///
+    /// About 235,000 words, so it is a real cost and it is paid on a background
+    /// queue by the one caller that wants it. `lexicon` itself is already loaded
+    /// lazily for the same reason.
+    ///
+    /// Every word that codes alike, so the caller can pick the one closest to
+    /// the term.
+    ///
+    /// Two wrong versions came first, and both failed the same way. Keeping the
+    /// *shortest* word per key never showed "beehive" for "Beehiiv", because the
+    /// code is lossy enough that "b1" is shared by hundreds of words and the
+    /// shortest of them is three letters long. Capping the bucket at the twelve
+    /// shortest failed for exactly the same reason. The word that explains a
+    /// term is the one spelled like it, and length has nothing to do with it.
+    ///
+    /// So the buckets are whole. That is about 235,000 words in arrays beside
+    /// the set they came from, built lazily and only when somebody opens the
+    /// sheet, which is the one place in the app that asks.
+    private static let soundalikes: [String: [String]] = {
+        var out: [String: [String]] = [:]
+        for word in lexicon where word.count >= minimumSoundsLike {
+            let key = phoneticKey(word)
+            guard !key.isEmpty else { continue }
+            out[key, default: []].append(word)
+        }
+        return out
+    }()
 
     /// `joined` is the span with its gaps closed up, and is set only for a
     /// one-word term that took several spoken words. nil when the term matched
@@ -716,6 +814,45 @@ enum CustomDictionary {
         // guard on the thing it would be making: "in sight" is "insight", and
         // must not become somebody's product name.
         if let joined, isRealWord(joined) { return false }
+        // And the real-word guard is not enough on its own, because the thing
+        // being made is usually not a word at all. Soundex is deliberately
+        // lossy: it keeps the first letter and codes the rest into groups, so
+        // "knows the" and "know I said" both code exactly as "Kinsight" does
+        // and neither "knowsthe" nor "knowisaid" is in the lexicon to be
+        // refused. Measured over 75 real transcripts against a one-term
+        // dictionary: 3 of 20 rewrites were this, and two of them destroyed a
+        // sentence.
+        //
+        // So a gap-closed span also has to *look* like the term, not only sound
+        // like it, and half the term's length is where the two groups actually
+        // separate. Edit distance to "Kinsight", measured on the spans this
+        // library produced:
+        //
+        //     kinsite   3     the case the feature was built for
+        //     kinside   3     the same, one word
+        //     cansite   5     already refused, and should stay refused
+        //     knowsthe  6     "knows the"
+        //     knowisaid 7     "know I said"
+        //
+        // So 4 for an eight-letter term: everything real is at 3, everything
+        // wrong starts at 5. Spelling is a second opinion here rather than the
+        // main one: it only ever applies to spans joined across a boundary the
+        // speaker did put in, and single words are untouched, so "Gusens" still
+        // becomes "Goossens".
+        // A one-letter word in a gap-closed span is a pronoun or an article,
+        // never a syllable of somebody's product name. "know I got" codes as
+        // "Kinsight" and sits exactly on the distance bound below; "fly in
+        // public" and "kin site", which the feature exists for, have no
+        // one-letter word in them.
+        if joined != nil, phrase.split(separator: " ").contains(where: { $0.count == 1 }) {
+            return false
+        }
+        // The joined form when the span was closed up, the word itself when it
+        // was not, because comparing "kim site" to "Kinsight" charges an edit
+        // for the space the speaker put in and loses a real mishearing at 5.
+        // Judged on the joined form it is 4, inside the bound, and stays.
+        if distance((joined ?? phrase).lowercased(), term.lowercased())
+            > max(1, term.count / 2) { return false }
         // A wild length difference means the codes collided rather than the
         // speaker being misheard.
         return Double(phrase.count) >= Double(term.count) * 0.6

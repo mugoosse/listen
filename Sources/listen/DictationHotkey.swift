@@ -30,7 +30,33 @@ final class DictationHotkey {
 
     /// Set while Settings is capturing a replacement chord, so the chord being
     /// recorded does not also toggle dictation.
-    var recorder: ((CGEventFlags, Int?) -> Void)?
+    var recorder: ((CGEventFlags, Int?) -> Void)? { didSet { refreshMask() } }
+
+    /// Whether Escape has to be catchable, which is only while a dictation is
+    /// up. Driven by `Dictation.phase`, and it decides whether this tap watches
+    /// character keys at all. See `wantsKeyDown`.
+    var catchEscape = false { didSet { refreshMask() } }
+
+    /// Whether anything needs `keyDown` right now.
+    ///
+    /// **The tap should hold the smallest mask that does its job, and for most
+    /// people that mask has no character keys in it at all.** A modifier-only
+    /// chord is decided entirely in `handleFlags`; `keyDown` is needed only for
+    /// a shortcut that includes a character key, for the moment Settings is
+    /// capturing a new chord, and for Escape while a dictation is running.
+    ///
+    /// It was unconditional, so Listen held a session-wide tap that could
+    /// swallow every keystroke on the Mac, permanently, in order to answer a
+    /// question three transient states ask. That is worth narrowing on its own,
+    /// and it is also the suspect for press-and-hold: holding "e" for the
+    /// accent panel is exactly the kind of key-repeat behaviour a head-insert
+    /// tap that can delete events sits in front of.
+    private var wantsKeyDown: Bool {
+        DictationShortcut.usesCharacterKey || recorder != nil || catchEscape
+    }
+
+    /// What the live tap was built with, so a rebuild happens only on a change.
+    private var installedKeyDown = false
 
     /// Arm the tap, if Accessibility has been granted and it is not already up.
     @discardableResult
@@ -91,8 +117,10 @@ final class DictationHotkey {
     /// never the fn half. The tap sits lower down and reports fn as
     /// `.maskSecondaryFn`.
     private func install() -> Bool {
-        let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
-            | CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let keyDown = wantsKeyDown
+        var mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+        if keyDown { mask |= CGEventMask(1 << CGEventType.keyDown.rawValue) }
+        installedKeyDown = keyDown
         let me = Unmanaged.passUnretained(self).toOpaque()
 
         guard let created = CGEvent.tapCreate(
@@ -141,8 +169,40 @@ final class DictationHotkey {
         let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
         CGEvent.tapEnable(tap: created, enable: true)
-        log("dictation hotkey armed (CGEventTap)")
+        // Which mask, not just that it armed. Whether Listen is sitting in
+        // front of every keystroke on the Mac is the kind of thing that should
+        // be readable from a log rather than inferred from behaviour.
+        log("dictation hotkey armed (CGEventTap, "
+            + (keyDown ? "modifiers and keys" : "modifiers only") + ")")
         return true
+    }
+
+    /// Rebuild the tap when what it needs to watch has changed.
+    ///
+    /// A tap's mask is fixed at creation, so this is a teardown and a rebuild,
+    /// which is cheap and happens at most twice per dictation. The latch is
+    /// carried across it by hand: `uninstall` clears it, and a chord that is
+    /// still physically held when the mask widens must not read as a fresh
+    /// press and toggle straight back off.
+    private func refreshMask() {
+        guard tap != nil, installedKeyDown != wantsKeyDown else { return }
+        // **Never on this stack.** The chord fires inside the tap's own
+        // callback: `handleFlags` calls `onToggle`, which starts a dictation,
+        // which moves `phase` and lands back here. Tearing the tap down there
+        // means calling `CFMachPortInvalidate` on the port whose callback is
+        // still running and is about to return an event through it. Deferred
+        // into the common modes, so it also runs while a menu is open, which is
+        // the state `Capture`'s levels had to be fixed for.
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.tap != nil,
+                      self.installedKeyDown != self.wantsKeyDown else { return }
+                let latched = self.comboLatched
+                self.uninstall()
+                _ = self.installIfPermitted()
+                self.comboLatched = latched
+            }
+        }
     }
 
     private func reenable() {

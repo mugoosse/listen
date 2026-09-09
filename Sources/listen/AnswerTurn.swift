@@ -794,6 +794,19 @@ private final class HeaderRow: NSStackView {
             owner: self)
         addTrackingArea(area)
         hoverArea = area
+        scrollHover.sync()
+    }
+
+    /// The conversation scrolls under the pointer, and an exit is not sent when
+    /// it does. See `ScrollHover`.
+    private lazy var scrollHover = ScrollHover(self) { [weak self] on in
+        guard let self else { return }
+        onHover?(on && isEnabled)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scrollHover.follow()
     }
 
     override func mouseEntered(with event: NSEvent) {

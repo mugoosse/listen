@@ -401,6 +401,7 @@ this app, so read them before building any new window, menu or popover.
 - `intrinsicContentSize` is four points narrower than the text
 - A typed chevron is not aligned with the text beside it
 - A tool tip is a tracking area, so clearing them all takes it with it
+- Scrolling moves the rows and not the pointer, and only the arrivals are reported
 - An attributed title's colour wins over `contentTintColor`
 - An attributed string brings its own truncation, which is none
 - `glyphIndex(for:in:)` answers with the nearest glyph, however far away

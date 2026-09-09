@@ -152,6 +152,20 @@ class HoverButton: NSButton {
             owner: self)
         addTrackingArea(area)
         hoverArea = area
+        scrollHover.sync()
+    }
+
+    /// The page or the list this button is in. Half of these buttons scroll:
+    /// the card's Add Person, the two chips under an answer, and the sidebar's
+    /// Chats and Add Person rows all move under a still pointer, and `mouseExited`
+    /// does not follow them. See `ScrollHover`.
+    private lazy var scrollHover = ScrollHover(self) { [weak self] on in
+        self?.hovering = on
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scrollHover.follow()
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = true }
@@ -236,5 +250,82 @@ class ChipButton: HoverButton {
         let glyph = image.map { ceil($0.size.width) + Self.glyphGap } ?? 0
         return NSSize(width: ceil(attributedTitle.size().width) + glyph + Self.padding * 2,
                       height: Self.height)
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+extension NSView {
+    /// Whether the pointer is over this view **now**, asked rather than
+    /// remembered from the last enter or exit.
+    ///
+    /// `visibleRect` and not `bounds`: a row scrolled half under a header is
+    /// still inside its own bounds, and the pointer up there is over the header.
+    /// The window number is what separates the pointer being at these
+    /// coordinates from the pointer being on this view, since a popover, a menu
+    /// or another app's window in front of it has the pointer and this view only
+    /// has the geometry. It is asked last, because it is a question for the
+    /// window server and sixty rows must not ask it sixty times a second.
+    @MainActor
+    var pointerIsOver: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+        guard visibleRect.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        else { return false }
+        return NSWindow.windowNumber(at: NSEvent.mouseLocation,
+                                     belowWindowWithWindowNumber: 0) == window.windowNumber
+    }
+}
+
+/// Keeps a hover honest while the list the view is in scrolls.
+///
+/// **Scrolling moves the views and leaves the pointer where it is, and AppKit
+/// weighs a tracking area against the pointer only when the pointer moves.** A
+/// row sliding under a still pointer is sent `mouseEntered`; the one sliding out
+/// from under it is sent nothing at all, and taking its tracking area away to
+/// rebuild it is not an exit either. Measured on 0.35.0: one flick of the wheel
+/// down a person's 64 meetings left ten rows lit at once, and they stayed lit.
+///
+/// So the state cannot be accumulated from the events alone. This subscribes to
+/// the enclosing clip view and recomputes from `pointerIsOver` on every scroll.
+/// `mouseEntered` and `mouseExited` are kept everywhere it is used, because they
+/// are the cheap answer for the ordinary case of a pointer moving over a list
+/// that is standing still. `.agents/notes/appkit.md` has the measurement.
+///
+/// `TableHover` is the same fix for `NSTableView`, written first and by hand: it
+/// listens for `.scrollWheel` because it owns every row at once, which a view
+/// that only knows about itself cannot do.
+@MainActor
+final class ScrollHover: NSObject {
+    private weak var view: NSView?
+    private let apply: (Bool) -> Void
+
+    init(_ view: NSView, apply: @escaping (Bool) -> Void) {
+        self.view = view
+        self.apply = apply
+    }
+
+    /// Follow whichever list the view is in now. Called from
+    /// `viewDidMoveToWindow`, because a view is built before it is put anywhere
+    /// and a view that moves takes its subscription with it.
+    func follow() {
+        NotificationCenter.default.removeObserver(
+            self, name: NSView.boundsDidChangeNotification, object: nil)
+        if let clip = view?.enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(scrolled),
+                name: NSView.boundsDidChangeNotification, object: clip)
+        }
+        sync()
+    }
+
+    /// Ask the pointer where it is, and tell the view.
+    func sync() { apply(view?.pointerIsOver ?? false) }
+
+    @objc private func scrolled() { sync() }
+
+    deinit {
+        NotificationCenter.default.removeObserver(
+            self, name: NSView.boundsDidChangeNotification, object: nil)
     }
 }

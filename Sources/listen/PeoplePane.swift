@@ -19,7 +19,12 @@ import AppKit
 final class HoverRow: NSView {
     private weak var target: AnyObject?
     private let action: Selector
-    private var hovering = false { didSet { restyle() } }
+    /// Guarded on the value rather than on the assignment: `syncHover` below
+    /// answers on every scroll notification, and most of those answers are the
+    /// same as the last one for every row but the one under the pointer.
+    private var hovering = false {
+        didSet { guard hovering != oldValue else { return }; restyle(); traceHover() }
+    }
     private var pressed = false { didSet { restyle() } }
 
     init(content: NSView, target: AnyObject?, action: Selector,
@@ -56,13 +61,59 @@ final class HoverRow: NSView {
         restyle()
     }
 
+    /// Ours, kept and removed by name rather than clearing the lot.
+    /// **`trackingAreas` is not only what this class put there**: a tool tip is
+    /// a tracking area AppKit's own manager installs, and every list that uses
+    /// this sets one on its rows, so removing everything on each layout pass
+    /// took "Open this recording" off with it. Same trap, same fix, as
+    /// `HoverButton`.
+    private var hoverArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self))
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+        // Taking a tracking area away is not an exit, so the pointer is asked
+        // again here rather than left where the last event put it.
+        scrollHover.sync()
+    }
+
+    /// The list this row is in, whichever list that is. `ScrollHover` says why
+    /// a row cannot take the enter and the exit at face value, and this row is
+    /// where that was measured.
+    private lazy var scrollHover = ScrollHover(self) { [weak self] on in
+        self?.hovering = on
+    }
+
+    /// Subscribed here rather than by the code that builds the row: a row is
+    /// made before it is put anywhere, and half a dozen call sites would each
+    /// have to remember.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scrollHover.follow()
+    }
+
+    /// A hidden view is not sent `mouseExited` either, so without this a row
+    /// comes back lit under a pointer that is somewhere else entirely.
+    override func viewDidHide() {
+        super.viewDidHide()
+        hovering = false
+    }
+
+    /// **A highlight that never arrives and one that never leaves are the same
+    /// screenshot**, and the second one is what shipped. This is the state
+    /// itself, which is the half a screenshot cannot show: `LISTEN_DEBUG=1`,
+    /// scroll the list, and every row should say `out` after the one it says
+    /// `in` for.
+    private func traceHover() {
+        guard DEBUG else { return }
+        let what = identifier?.rawValue ?? accessibilityLabel() ?? "row"
+        trace("hover \(what) \(hovering ? "in" : "out")")
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = true }

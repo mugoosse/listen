@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 
 /// The Dictionary settings pane: the user's own vocabulary, and what it did.
 ///

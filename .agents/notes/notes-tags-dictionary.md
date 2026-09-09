@@ -54,6 +54,40 @@ a real 709-segment transcript: the synthesized decoder fails, the hand-written
 `init(from:)` with `decodeIfPresent` reads it. The custom init lives in an
 extension so the memberwise init survives.
 
+### The corrections half is shared with the phone, and the terms half cannot be
+
+`CustomDictionary` is split across two files, and the split is physical rather
+than tidy-minded. `ListenKit/CustomDictionary.swift` holds the entries, the file
+format and the exact replacements; `listen/CustomDictionary.swift` is an
+extension of the same type holding everything that matches by sound. The iOS
+project compiles ListenKit's sources straight into its app target, so moving a
+file there is the whole of "sharing" it.
+
+The reason for the line falling there is `/usr/share/dict/words`. The
+sounds-like pass leans on it to refuse rewriting a real English word, and iOS
+has no such file. Ported whole, the phone would have done one of two things,
+both silent: `terms(in:entries:)` returns early on an empty lexicon, so nothing
+would happen at all, and if that guard were removed instead, `isRealWord` would
+answer false for everything and every guard would be off at once. Neither is a
+state to leave reachable, so the phone cannot reach it: the code is not in its
+target.
+
+`LocalTranscribe.corrected(_:)` is the phone's call, per segment, matching
+`Pipeline.run`. It counts nothing, deliberately. On the Mac every rewrite leaves
+a number in `StoredTranscript.dictionary` because that transcript is the
+archive; the phone's `transcript.local.json` is provisional and the Mac's
+`transcript.json` replaces it by existing, so a counter there is a number nobody
+can act on. The same rules are counted on the Mac's pass over the same audio.
+
+Both devices read one `dictionary.json`, which `DevicePolicy` already syncs into
+the library root that `Library.phone()` returns. That is the point of the whole
+arrangement: a device with a different vocabulary produces a differently
+corrected transcript of the same audio, and the difference reads as a quality
+gap when it is a vocabulary one.
+
+If the word list is ever bundled for iOS, the shared file is where the two
+halves meet again. 235,976 words, 2.5 MB, 754 KB gzipped, measured on `web2`.
+
 ### Two dictionaries, not one shared file
 
 Speak's is at `~/Library/Application Support/speak/dictionary.json` and Listen's

@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 import Carbon.HIToolbox
 
 /// Push-to-talk dictation: press the chord, talk, press it again, and the words

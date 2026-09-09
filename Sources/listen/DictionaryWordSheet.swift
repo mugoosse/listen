@@ -1,4 +1,5 @@
 import AppKit
+import ListenKit
 
 /// One word the dictionary knows, however many rules that takes.
 ///

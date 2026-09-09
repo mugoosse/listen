@@ -265,6 +265,7 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 
 - The dictionary rewrites the library, and only the library
 - Adding a field to `StoredTranscript` needs `init(from:)` by hand
+- The corrections half is shared with the phone, and the terms half cannot be
 - Two dictionaries, not one shared file
 - A silent "gh" is a consonant, so a term could not match its own name
 - A one-word term could only ever match one spoken word

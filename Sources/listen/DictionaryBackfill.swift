@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// The dictionary applied to transcripts that already exist.
 ///

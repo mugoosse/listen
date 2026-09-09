@@ -67,6 +67,12 @@ public struct SyncState: Codable, Sendable {
         "sidecar:" + id + "/" + file
     }
     public static func sentKey(_ id: String) -> String { "sent:" + id }
+    /// A tombstone this device has already taken out of the container, so a
+    /// deletion costs one round of deletes rather than one per pass for the
+    /// ninety days the entry lives. Its own prefix for the reason every other
+    /// prefix here has one, and cleared when the entry stops being active, so
+    /// a restore followed by a second deletion is not a no-op.
+    public static func tombDoneKey(_ key: String) -> String { "tombdone:" + key }
     /// A voiceprint record this device owes the container a delete for,
     /// because the recording's bank emptied or its file went with the folder.
     /// Its own prefix, disjoint from `sent:`, so the deletion scan in
@@ -172,6 +178,35 @@ public struct SyncState: Codable, Sendable {
     public mutating func forgetSidecars(_ id: String) {
         let prefix = SyncState.sidecarKey(id, "")
         for key in base.keys where key.hasPrefix(prefix) { base[key] = nil }
+    }
+
+    /// Forget everything this device knew about one recording.
+    ///
+    /// **Every prefix, in one place, because the ones that were missed were
+    /// invisible.** Deletion used to clear eight keys by hand at one call site
+    /// and nothing at the other, so a real library carried 57 `audioOn:`,
+    /// `sidecar:` and `bank:` entries for recordings it had not had for weeks.
+    /// They cost nothing directly, which is why nobody noticed; what they cost
+    /// is that no reader can tell a stale key from a live one.
+    ///
+    /// The `r5drop:` and `r6drop:` debts are deliberately **not** here. They
+    /// are what this device still owes the container for a recording that has
+    /// gone, so clearing them alongside the recording is exactly backwards.
+    public mutating func forgetRecording(_ id: String) {
+        self[sent: id] = nil
+        forgetSidecars(id)
+        self[owed: id] = false
+        self[audioOn: id] = nil
+        self[master: id] = nil
+        self[masterMiss: id] = nil
+        self[bank: id] = nil
+        self[pinned: id] = false
+    }
+
+    /// The same for one note, which is one key and is spelled out so a caller
+    /// never has to know that.
+    public mutating func forgetNote(_ slug: String) {
+        self[note: slug] = nil
     }
 
     /// What this device last put in the container for a recording, as a stamp

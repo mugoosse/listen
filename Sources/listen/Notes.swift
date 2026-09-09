@@ -447,14 +447,17 @@ enum Notes {
     }
 
     /// Delete a note, and say which one went.
+    /// Delete a note, and say which one went.
+    ///
+    /// Through `Library.delete`, so the deletion is a tombstone that reaches
+    /// every device and the file waits a fortnight in `Trash` rather than
+    /// going straight off the disk. Every route in: the window's menu, the CLI,
+    /// and the MCP server's `delete_note`.
     @discardableResult
     static func delete(_ name: String) throws -> Note {
         guard let note = find(name) else { throw Failure.noSuchNote(name) }
-        do {
-            try FileManager.default.removeItem(at: url(for: note.slug))
-        } catch {
-            throw Failure.cannotWrite(
-                "could not delete `\(note.slug)`: \(error.localizedDescription)")
+        guard ListenKit.Library.mac().delete(note: note.slug) else {
+            throw Failure.cannotWrite("could not delete `\(note.slug)`")
         }
         return note
     }

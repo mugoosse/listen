@@ -134,7 +134,7 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let mac = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json",
                    "waveform.json", DevicePolicy.sourceIcon, "embeddings.json"],
-        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename],
+        blobs: ["contacts.json", "dictionary.json", Deletions.filename, ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename],
         ownsVoiceprints: true, publishesContext: true)
 
     /// Everything a phone keeps.
@@ -198,7 +198,7 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let phone = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
                    DevicePolicy.sourceIcon, "embeddings.json"],
-        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
+        blobs: ["contacts.json", "dictionary.json", Deletions.filename, ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
 
     /// A phone that has been told not to recognise voices.
     ///
@@ -209,7 +209,7 @@ public struct DevicePolicy: Sendable, Equatable {
     public static let phoneWithoutVoices = DevicePolicy(
         sidecars: ["metadata.json", "transcript.json", "turns.json", "waveform.json",
                    DevicePolicy.sourceIcon],
-        blobs: ["contacts.json", "dictionary.json", ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
+        blobs: ["contacts.json", "dictionary.json", Deletions.filename, ContextSnapshot.filename, ContextSync.editsFilename, MemoryPreferences.filename])
 
     /// Things at the library root that are deliberately in no set, recorded
     /// here because the next person to enumerate that directory will wonder.
@@ -231,6 +231,11 @@ public struct DevicePolicy: Sendable, Equatable {
     /// - `.forgotten-voices.json` replicates through its own z2 record with a
     ///   per-entry merge, never as a file: a byte-level file sync would let
     ///   the newer list win whole and drop the other device's forgets.
+    ///   `.deletions.json` is the same argument reaching the opposite shelf:
+    ///   it is *in* `blobs` above, because `Deletions.receive` gives the r3
+    ///   path the same per-entry merge on both sides, so the file rides an
+    ///   existing record type instead of needing a zone. Both lists are
+    ///   merged and neither is ever copied whole.
     /// - `activity.jsonl` is this device's own audit trail. A log another
     ///   device can rewrite is not an audit log.
     public static let neverSynced = [Trash.directory, "dictations.jsonl", "chats", "agent",

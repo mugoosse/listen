@@ -31,8 +31,15 @@ phone recording and when the phone may release its audio.
 - Mac recordings keep their audio on the Mac that made them.
 - Phone recordings keep their audio until `audioOn` names the Mac that has
   ingested it. The phone can keep another copy when its storage setting is on.
-- Deletions propagate through CloudKit. Device-specific change tokens, merge
-  bases and identity stay outside the library.
+- Deleting a recording or a note is a sealed tombstone rather than an absence,
+  so it survives a device that wakes up with work of its own and pushes before
+  it has heard about the deletion. Every device applies the list before it
+  sends anything, and a deletion beats an edit that had not been sent yet: the
+  edited copy goes to that device's trash and the pass says so. Every device
+  keeps a deleted recording for 14 days, including the one it was deleted on,
+  and `listen sync trash --restore <id>` puts it back everywhere.
+- Device-specific change tokens, merge bases and identity stay outside the
+  library.
 
 CloudKit is incremental. A device pulls changes first, then pushes local work.
 It also polls while Listen is open, and silent pushes ask it to run sooner.
@@ -50,13 +57,17 @@ Useful checks from the signed Mac app:
 ```sh
 Listen.app/Contents/MacOS/Listen sync status
 Listen.app/Contents/MacOS/Listen sync inspect
+Listen.app/Contents/MacOS/Listen sync deletions
+Listen.app/Contents/MacOS/Listen sync trash
 Listen.app/Contents/MacOS/Listen sync --fake
 ```
 
 `status` reports the CloudKit environment and account. `inspect` reports the
-container's opaque record shapes without decrypting library content. `--fake`
-runs the complete sync logic against `MemoryStore`, with no CloudKit account or
-network access.
+container's opaque record shapes without decrypting library content.
+`deletions` lists what this library has been told to delete and therefore what
+it will refuse to accept back; `trash --restore <id-or-slug>` puts one back on
+every device. `--fake` runs the complete sync logic against `MemoryStore`, with
+no CloudKit account or network access.
 
 ## Source builds need their own container
 

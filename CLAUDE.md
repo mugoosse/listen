@@ -504,6 +504,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - Nothing bounded a CloudKit call, and the default for an asset is seven days
 - A long-lived upload must not be startable twice
 - The voice bank was the one sidecar with no merge base
+- A deletion is data, or a Mac that wakes up undoes it
 
 ### `.agents/notes/agent.md` (172k)
 

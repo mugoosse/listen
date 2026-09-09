@@ -748,8 +748,24 @@ struct Recording {
         return source.rank >= current.rank
     }
 
+    /// Delete this recording, here and on every device.
+    ///
+    /// **A staged recording is a different act and stays a plain remove.**
+    /// Nothing in `staging/` has ever been published, so there is nobody to
+    /// tell and nothing to put back: a tombstone for one would be an entry
+    /// naming an id no other device has ever heard of, replicated for ninety
+    /// days. That is `Capture`'s discard, the settings pane's clear, and
+    /// `sweepStaging`.
+    ///
+    /// Everything in `recordings/` goes through `Library.delete`, which writes
+    /// the tombstone that carries the deletion and keeps the folder in `Trash`
+    /// for a fortnight. See `Deletions` for why an absence is no longer enough.
     func delete() throws {
-        try FileManager.default.removeItem(at: folder)
+        guard folder.deletingLastPathComponent() == Library.recordings else {
+            try FileManager.default.removeItem(at: folder)
+            return
+        }
+        ListenKit.Library.mac().delete(recording: id)
     }
 }
 

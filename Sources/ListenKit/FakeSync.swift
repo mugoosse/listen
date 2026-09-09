@@ -1070,7 +1070,8 @@ public enum FakeSync {
         // A deleted recording takes its audio with it. Nothing lists the
         // master zone, so a master left behind is tens of megabytes nobody
         // would ever see again.
-        try FileManager.default.removeItem(at: sharedFolder)
+        try check(macLib.delete(recording: sharedID),
+                  "the shared recording was not there to delete")
         var retract = CloudReport()
         await mac.push(into: &retract)
         try check(try await store.fetch(sharedMaster, in: .masters) == nil,
@@ -1306,7 +1307,13 @@ public enum FakeSync {
         try check(phoneLib.find(doomedID) != nil,
                   "the recording to delete never reached the other device")
 
-        try FileManager.default.removeItem(at: macLib.folder(for: doomedID))
+        // Through `Library.delete`, which is what every route a person can
+        // reach now calls: it writes the tombstone and moves the folder to the
+        // trash. A bare `removeItem` here used to be the whole test, and it
+        // passed for a reason that has since been taken out; see the seam below
+        // that asserts an absence on its own sends nothing.
+        try check(macLib.delete(recording: doomedID),
+                  "the recording to delete was not there to delete")
         var outgoing = CloudReport()
         await mac.push(into: &outgoing)
         try check(outgoing.deletedRemotely == 1,
@@ -1374,9 +1381,17 @@ public enum FakeSync {
         let after = (try? await store.changes(in: .library, since: nil))?.changed.count ?? 0
         try check(after == before,
                   "a library that lost everything deleted \(before - after) records")
-        try check(!vanished.errors.isEmpty,
-                  "it deleted nothing and also said nothing")
-        ok("a library that has lost everything does not empty the container")
+        // **And it no longer needs to be talked out of it.** This used to
+        // assert the opposite of the line below: a heuristic counted what was
+        // missing, refused the push, and reported an error saying so. It was a
+        // guess standing in for a fact nobody had written down. Now a deletion
+        // is a tombstone, an absence is not a deletion, and a library whose
+        // every file has gone publishes nothing and has nothing to say about
+        // it. Keeping the assertion, inverted, because it is the same claim.
+        try check(vanished.errors.isEmpty,
+                  "a vanished library still reports an error it no longer needs")
+        ok("a library that has lost everything does not empty the container, "
+           + "and needs no heuristic to decline")
 
         // A deletion obeyed is still a deletion recoverable.
         let victim = "2026-08-13-111111-C0FE"
@@ -1389,7 +1404,7 @@ public enum FakeSync {
         await phone.pull(into: &getVictim)
         try check(phoneLib.find(victim) != nil, "the recording never reached the phone")
 
-        try FileManager.default.removeItem(at: macLib.folder(for: victim))
+        try check(macLib.delete(recording: victim), "the victim was not there")
         var send = CloudReport()
         await mac.push(into: &send)
         var receive = CloudReport()
@@ -1409,6 +1424,9 @@ public enum FakeSync {
         out += try await noteTrashSeam(mac: mac, phone: phone, macLib: macLib,
                                        phoneLib: phoneLib, store: store,
                                        key: key, id: id)
+        out += try await deletionTombstoneSeams(mac: mac, phone: phone,
+                                                macLib: macLib, phoneLib: phoneLib,
+                                                store: store, key: key, root: root)
 
         // The case a real container will not stage on demand, and the one that
         // silently resurrects deleted meetings.
@@ -1533,7 +1551,7 @@ public enum FakeSync {
         var vp3Send = CloudReport()
         await mac.push(into: &vp3Send)
         await mac.pushVoiceprints(into: &vp3Send)
-        try FileManager.default.removeItem(at: macLib.folder(for: vp3))
+        try check(macLib.delete(recording: vp3), "the recording was not there to delete")
         var vp3Delete = CloudReport()
         await mac.push(into: &vp3Delete)
         try check(try await store.fetch(
@@ -2717,6 +2735,265 @@ public enum FakeSync {
         try check(landedFiledBlock.tags == ["alpha", "beta gamma"],
                   "a hand-written tag list was lost crossing: \(landedFiledBlock.tags)")
         ok("a YAML block sequence of tags survives a whole sync")
+        return out
+    }
+
+
+    /// Everything about a deletion being data rather than an absence.
+    ///
+    /// **The seam these replace passed while the bug was live**, which is the
+    /// reason to be exact about what each one drives. The old suite deleted a
+    /// record from the store and checked the receiving device, so it proved a
+    /// device obeys a deletion; then it removed a folder and checked the
+    /// container, so it proved a device reports one. Neither asked what happens
+    /// when a *third* device is holding work of its own at that moment, and
+    /// that is the case that resurrected five recordings on a real library on 7
+    /// September 2026.
+    ///
+    /// Its own function for the size limit `noteTagSeams` records.
+    private static func deletionTombstoneSeams(
+        mac: CloudSyncCore, phone: CloudSyncCore,
+        macLib: Library, phoneLib: Library,
+        store: MemoryStore, key: PairingKey, root: URL
+    ) async throws -> [String] {
+        var out: [String] = []
+        func ok(_ what: String) { out.append("  ok: \(what)") }
+        func check(_ condition: Bool, _ what: String) throws {
+            guard condition else { throw Failure(description: what) }
+        }
+        func recordExists(_ id: String) async -> Bool {
+            let name = CloudNaming.recordName(.recording, id, key: key)
+            return ((try? await store.fetch(name, in: .library)) ?? nil) != nil
+        }
+        func transcript(_ text: String) -> String {
+            #"{"segments":[{"text":"\#(text)"}],"duration":5,"model":"parakeet-v3"}"#
+        }
+
+        // A third Mac, because every case here needs a device that is neither
+        // the one deleting nor a phone: one that holds the recording, has work
+        // of its own, and chooses when to pull.
+        let otherLib = try scratchLibrary(root.appendingPathComponent("mac-tombstones"))
+        let other = CloudSyncCore(library: otherLib, state: EngineState(library: otherLib),
+                                  store: store, key: key, policy: .mac,
+                                  device: "mac-tombstones", ingests: false,
+                                  keepAudio: true)
+
+        // MARK: a device pushing before it pulls cannot resurrect
+
+        // The 7 September shape exactly. The other Mac has the recording, has
+        // edited it since, has **not** seen the deletion, and pushes first.
+        let staleID = "2026-08-14-090000-51A1"
+        try seed(macLib, id: staleID,
+                 metadata: #"{"id":"\#(staleID)","title":"Pushed by a stale Mac","source":"mac","state":"done"}"#,
+                 transcript: transcript("As recorded."))
+        var seedStale = CloudReport()
+        await mac.push(into: &seedStale)
+        var getStale = CloudReport()
+        await other.pull(into: &getStale)
+        try check(otherLib.find(staleID) != nil, "the other Mac never got the recording")
+
+        // Work of its own, unsent: a corrected transcript, which is what a
+        // speaker label rewrite leaves behind.
+        try Data(transcript("As corrected here.").utf8)
+            .write(to: otherLib.folder(for: staleID).appendingPathComponent("transcript.json"))
+
+        try check(macLib.delete(recording: staleID), "the recording was not there to delete")
+        var sendStale = CloudReport()
+        await mac.push(into: &sendStale)
+        try check(sendStale.deletedRemotely == 1, "the deletion did not reach the container")
+        var gone = await recordExists(staleID)
+        try check(!gone, "the record survived the deletion")
+
+        // And now the pass that used to undo all of it, in the order that used
+        // to undo it: push, with no pull first.
+        var stalePush = CloudReport()
+        await other.push(into: &stalePush)
+        gone = await recordExists(staleID)
+        try check(!gone, "a Mac pushing before it pulled resurrected a deleted recording")
+        try check(otherLib.find(staleID) == nil,
+                  "the stale Mac kept a recording the container says is deleted")
+        try check(Trash.find(staleID, in: otherLib) != nil,
+                  "it obeyed the deletion without keeping a copy")
+        try check(stalePush.deletedLocally == 1, "it did not report what it removed")
+        try check(stalePush.conflicts.contains { $0.contains(staleID) },
+                  "an edit that lost to a deletion was not reported")
+        ok("a device pushing before it pulls cannot resurrect a deleted recording, "
+           + "and says what it lost")
+
+        // MARK: the tombstone travels, and refuses the recording back
+
+        // The guard above reads this device's own memory. This reads the list,
+        // which is the half that works on a device that has never held the
+        // recording and the half a bare `store.delete` cannot test.
+        let tombID = "2026-08-14-091500-51A2"
+        try seed(macLib, id: tombID,
+                 metadata: #"{"id":"\#(tombID)","title":"Refused back","source":"mac","state":"done"}"#,
+                 transcript: transcript("Once."))
+        var seedTomb = CloudReport()
+        await mac.push(into: &seedTomb)
+        try check(macLib.delete(recording: tombID), "nothing to delete")
+        var sendTomb = CloudReport()
+        await mac.push(into: &sendTomb)
+
+        var getTomb = CloudReport()
+        await other.pull(into: &getTomb)
+        try check(Deletions.load(otherLib).isDeleted(Deletions.recording, tombID),
+                  "the deletion list did not reach the other Mac")
+
+        // Put the folder back underneath it, which is what a restore from a
+        // backup, a Finder copy or an older build's sync all look like from
+        // here. The next push must decline to publish it.
+        try seed(otherLib, id: tombID,
+                 metadata: #"{"id":"\#(tombID)","title":"Refused back","source":"mac","state":"done"}"#,
+                 transcript: transcript("Once."))
+        try check(otherLib.find(tombID) != nil, "the folder was not put back")
+        var refuse = CloudReport()
+        await other.push(into: &refuse)
+        gone = await recordExists(tombID)
+        try check(!gone, "a tombstoned recording was published back into the container")
+        try check(otherLib.find(tombID) == nil,
+                  "a tombstoned recording stayed in the library")
+        ok("the deletion list travels, and a device holding the files again "
+           + "still refuses to publish them")
+
+        // MARK: an absence on its own is not a deletion
+
+        // The rule the old heuristic existed to soften, now stated directly. A
+        // folder that has gone with no tombstone behind it says nothing about
+        // what anybody wanted, so the container keeps its copy.
+        let ghostID = "2026-08-14-093000-51A3"
+        try seed(macLib, id: ghostID,
+                 metadata: #"{"id":"\#(ghostID)","title":"Missing, not deleted","source":"mac","state":"done"}"#,
+                 transcript: transcript("Still in iCloud."))
+        var seedGhost = CloudReport()
+        await mac.push(into: &seedGhost)
+        try FileManager.default.removeItem(at: macLib.folder(for: ghostID))
+        var ghostPush = CloudReport()
+        await mac.push(into: &ghostPush)
+        try check(await recordExists(ghostID),
+                  "a folder that merely went missing deleted the record everywhere")
+        try check(ghostPush.deletedRemotely == 0,
+                  "an absence reported itself as a deletion")
+        ok("a folder that has gone with no tombstone behind it deletes nothing")
+
+        // MARK: a restore is an undelete, everywhere
+
+        let backID = "2026-08-14-094500-51A4"
+        try seed(macLib, id: backID,
+                 metadata: #"{"id":"\#(backID)","title":"Put back","source":"mac","state":"done"}"#,
+                 transcript: transcript("Wanted after all."))
+        var seedBack = CloudReport()
+        await mac.push(into: &seedBack)
+        var getBack = CloudReport()
+        await phone.pull(into: &getBack)
+        try check(phoneLib.find(backID) != nil, "the phone never got it")
+
+        try check(macLib.delete(recording: backID), "nothing to delete")
+        var sendBack = CloudReport()
+        await mac.push(into: &sendBack)
+        var phoneLoses = CloudReport()
+        await phone.pull(into: &phoneLoses)
+        try check(phoneLib.find(backID) == nil, "the phone kept a deleted recording")
+
+        try check(macLib.restore(recording: backID),
+                  "the restore found nothing in the trash to put back")
+        try check(macLib.find(backID) != nil, "the restore did not put the files back")
+        var republish = CloudReport()
+        await mac.push(into: &republish)
+        try check(await recordExists(backID), "a restored recording was not published again")
+        var phoneRegains = CloudReport()
+        await phone.pull(into: &phoneRegains)
+        try check(phoneLib.find(backID) != nil, "a restored recording did not reach the phone")
+
+        // And it stays. A restore that is undone by the next pass is not a
+        // restore, and the tombstone it outranks is still in both lists.
+        var settleMac = CloudReport()
+        await mac.push(into: &settleMac)
+        var settlePhone = CloudReport()
+        await phone.pull(into: &settlePhone)
+        await phone.push(into: &settlePhone)
+        try check(macLib.find(backID) != nil, "the restoring Mac trashed it again")
+        try check(phoneLib.find(backID) != nil, "the phone trashed a restored recording")
+        try check(await recordExists(backID), "the record was deleted again after a restore")
+        ok("a restore puts a recording back on every device, and the next pass "
+           + "leaves it there")
+
+        // MARK: a deleted memo cannot be ingested back
+
+        // The phone re-offers a recording whose transfer has gone and whose
+        // marker has aged out, which is exactly what a Mac deleting the
+        // recording leaves behind: the transfer is deleted by whoever ingests
+        // it, so from the phone's side "taken" and "deleted" look the same.
+        // Without the guard in `ingest` the pipe puts the meeting back on the
+        // Mac that deleted it, every fifteen minutes, for ever.
+        let memoID = "2026-08-14-100000-51A5"
+        try seed(phoneLib, id: memoID,
+                 metadata: #"{"id":"\#(memoID)","title":"Memo","source":"iphone","state":"pending"}"#,
+                 transcript: nil, audio: Data(repeating: 7, count: 2048))
+        guard let memo = phoneLib.find(memoID) else {
+            throw Failure(description: "the memo did not load")
+        }
+        var offer = CloudReport()
+        await phone.upload(memo, into: &offer)
+        var takeIt = CloudReport()
+        await mac.ingest(preferred: nil, into: &takeIt)
+        // The landing, not the count: earlier seams leave transfers in the pipe
+        // and this pass claims those too, so `claimed` answers for the whole
+        // zone rather than for this memo.
+        try check(macLib.find(memoID) != nil,
+                  "the memo did not land on the Mac: \(takeIt.errors)")
+
+        try check(macLib.delete(recording: memoID), "nothing to delete")
+        var sendMemo = CloudReport()
+        await mac.push(into: &sendMemo)
+
+        // The re-offer, driven by moving the phone's clock past `offerRecheck`
+        // rather than by waiting fifteen minutes.
+        var reoffer = CloudReport()
+        await phone.upload(memo, into: &reoffer, now: Date().addingTimeInterval(3600))
+        let transferName = CloudNaming.recordName(.audioTransfer, memoID, key: key)
+        try check(((try? await store.fetch(transferName, in: .transfer)) ?? nil) != nil,
+                  "the phone did not re-offer, so this proves nothing")
+        var refuseIngest = CloudReport()
+        await mac.ingest(preferred: nil, into: &refuseIngest)
+        try check(macLib.find(memoID) == nil,
+                  "a deleted memo was ingested back onto the Mac")
+        try check(((try? await store.fetch(transferName, in: .transfer)) ?? nil) == nil,
+                  "the transfer was left in the pipe to be offered again for ever")
+        ok("a deleted memo is refused at ingest, and its transfer is emptied")
+
+        // MARK: notes, both halves
+
+        let noteSlug = "deleted-and-restored"
+        try macLib.writeNote(Note(slug: noteSlug, title: "Deleted and restored",
+                                  created: "", updated: "", source: "you",
+                                  recordings: [], body: "Worth keeping after all."),
+                             expecting: nil)
+        var sendNote = CloudReport()
+        await mac.push(into: &sendNote)
+        var getNote = CloudReport()
+        await other.pull(into: &getNote)
+        try check(otherLib.note(noteSlug) != nil, "the note never crossed")
+
+        try check(macLib.delete(note: noteSlug), "nothing to delete")
+        var dropNote = CloudReport()
+        await mac.push(into: &dropNote)
+        var otherLoses = CloudReport()
+        await other.pull(into: &otherLoses)
+        try check(otherLib.note(noteSlug) == nil, "a deleted note survived")
+        try check(Trash.find(noteSlug + ".md", in: otherLib) != nil,
+                  "a note deleted elsewhere was not recoverable")
+        try check(Trash.find(noteSlug + ".md", in: macLib) != nil,
+                  "the deleting device did not keep its own copy")
+
+        try check(macLib.restore(note: noteSlug), "the note restore found nothing")
+        var republishNote = CloudReport()
+        await mac.push(into: &republishNote)
+        var otherRegains = CloudReport()
+        await other.pull(into: &otherRegains)
+        try check(otherLib.note(noteSlug) != nil, "a restored note did not travel")
+        ok("a note is deleted and restored everywhere, and both devices keep a copy")
+
         return out
     }
 

@@ -26,8 +26,9 @@ enum SyncCLI {
         case "--fake":   await fake(&rest)
         case "cloud":    await cloud(&rest)
         case "inspect":  await inspect(&rest)
-        case "trash":    trash()
+        case "trash":    trash(&rest)
         case "refetch":  refetch()
+        case "deletions": deletions()
         case "key":      key(&rest)
         case "enable":   await enable(&rest)
         default:         help()
@@ -244,7 +245,62 @@ enum SyncCLI {
         done()
     }
 
-    private static func trash() -> Never {
+    /// Put one deleted thing back, on every device.
+    ///
+    /// **Moving the folder back by hand is no longer enough**, which is why the
+    /// listing below stopped saying so. A deletion is a tombstone now, and a
+    /// device that finds the files back with the tombstone still active trashes
+    /// them again on its next pass, correctly: it is obeying the last thing
+    /// anybody said. This writes the restore entry that outranks it.
+    private static func restore(_ name: String) -> Never {
+        // Both, in turn, rather than deciding from the shape of the name.
+        // `Library.restore` validates the id or the slug itself and refuses
+        // what is not one, so asking it twice is the whole of the dispatch and
+        // there is no second copy of those rules to get wrong.
+        let library = SyncCLI.library
+        if library.restore(recording: name) {
+            print("put back recordings/\(name)")
+            print("It returns to your other devices on their next pass.")
+            done()
+        }
+        if library.restore(note: name) {
+            print("put back notes/\(name).md")
+            print("It returns to your other devices on their next pass.")
+            done()
+        }
+        // Two ways to be here and they want different answers: nothing of that
+        // name in the trash, or something already back in place.
+        if Trash.find(name, in: library) == nil,
+           Trash.find(name + ".md", in: library) == nil {
+            die("nothing called `\(name)` has been deleted in the last fortnight.")
+        }
+        die("`\(name)` is already back in the library.")
+    }
+
+    /// What this library has been told to delete, and by extension what it will
+    /// refuse to accept back. The list every device converges on.
+    private static func deletions() -> Never {
+        let library = SyncCLI.library
+        let list = Deletions.load(library)
+        guard !list.entries.isEmpty else {
+            print("nothing has been deleted in the last 90 days.")
+            done()
+        }
+        let active = list.active()
+        for entry in list.entries.sorted(by: { $0.at > $1.at }) {
+            let state = active.contains(entry.key)
+                ? "deleted" : (entry.removed == true ? "put back" : "expired")
+            print("  \(entry.at)  \(state.padding(toLength: 8, withPad: " ", startingAt: 0))"
+                  + "  \(entry.kind) \(entry.id)")
+        }
+        print("\n\(active.count) active, of \(list.entries.count) in the last 90 days.")
+        print("Entries expire after 90 days, which is when a device that has been "
+              + "off that long\ncould bring one back.")
+        done()
+    }
+
+    private static func trash(_ args: inout [String]) -> Never {
+        if let name = option("--restore", &args) { restore(name) }
         let library = SyncCLI.library
         let root = Trash.root(in: library)
         let days = (try? FileManager.default.contentsOfDirectory(
@@ -260,7 +316,7 @@ enum SyncCLI {
             print("  \(day.lastPathComponent): \(items.count) item(s)")
             for item in items.prefix(20) { print("    \(item.lastPathComponent)") }
         }
-        print("\nPut one back by moving it into recordings/ or notes/.")
+        print("\nPut one back with: listen sync trash --restore <id-or-slug>")
         done()
     }
 
@@ -571,7 +627,10 @@ enum SyncCLI {
           cloud --library D               one pass against the real container
           inspect [--forget ID]           what is in the container, by zone
           inspect --recording ID          one recording's row, across the zones
-          trash                           deletions received in the last fortnight
+          trash [--restore ID]            what was deleted in the last fortnight,
+                                          and how to put one back everywhere
+          deletions                       what this library has been told to
+                                          delete, and what it will refuse back
           refetch                         ask the container for everything next
                                           pass, for anything lost here that
                                           iCloud still holds

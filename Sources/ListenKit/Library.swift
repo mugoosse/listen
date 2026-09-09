@@ -108,6 +108,83 @@ public struct Library: Sendable {
     /// (`find`, `note`, `writeNote`, `deleteNote`) check it themselves.
     public func folder(for id: String) -> URL { recordings.appendingPathComponent(id) }
 
+    // MARK: - Deleting
+
+    /// Delete a recording everywhere, and keep it here for a fortnight.
+    ///
+    /// **The tombstone is written before the files move**, because the order is
+    /// what makes a crash safe in the direction that matters: a list naming a
+    /// recording still on disk is repaired by the next pass, which trashes it,
+    /// while files moved with nothing recorded about why is the old behaviour
+    /// and is exactly what the other devices undo. See `Deletions`.
+    ///
+    /// Returns false for an id this library does not have, so a caller can say
+    /// so rather than reporting a deletion that did not happen.
+    @discardableResult
+    public func delete(recording id: String, now: Date = Date()) -> Bool {
+        guard Metadata.isValidID(id) else { return false }
+        var list = Deletions.load(self)
+        list.delete(Deletions.recording, id, now: now)
+        list.save(self)
+        return Trash.accept(folder(for: id), in: self, now: now)
+    }
+
+    /// The same for a note. `deleteNote` above is deliberately still there and
+    /// still means something else: it removes the file and says nothing about
+    /// intent, which is what a local repair wants.
+    @discardableResult
+    public func delete(note slug: String, now: Date = Date()) -> Bool {
+        guard Note.isValidSlug(slug) else { return false }
+        var list = Deletions.load(self)
+        list.delete(Deletions.note, slug, now: now)
+        list.save(self)
+        return Trash.accept(notes.appendingPathComponent(slug + ".md"),
+                            in: self, now: now)
+    }
+
+    /// Put back something deleted within the last fortnight, everywhere.
+    ///
+    /// **Two halves, and one of them is not obvious.** Moving the files back is
+    /// the half a person can do in the Finder; without the second the next pass
+    /// reads the active tombstone and trashes them again, which is why the
+    /// trash listing no longer tells anybody to move a folder by hand. The
+    /// restore entry outranks the deletion by stamp, so it travels to the other
+    /// devices as an instruction rather than as this device's copy of something
+    /// they have all agreed is gone.
+    @discardableResult
+    public func restore(recording id: String, now: Date = Date()) -> Bool {
+        guard Metadata.isValidID(id),
+              let held = Trash.find(id, in: self) else { return false }
+        let destination = folder(for: id)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return false }
+        do {
+            try FileManager.default.createDirectory(at: recordings,
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: held, to: destination)
+        } catch { return false }
+        var list = Deletions.load(self)
+        list.restore(Deletions.recording, id, now: now)
+        list.save(self)
+        return true
+    }
+
+    @discardableResult
+    public func restore(note slug: String, now: Date = Date()) -> Bool {
+        guard Note.isValidSlug(slug),
+              let held = Trash.find(slug + ".md", in: self) else { return false }
+        let destination = notes.appendingPathComponent(slug + ".md")
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return false }
+        do {
+            try FileManager.default.createDirectory(at: notes,
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: held, to: destination)
+        } catch { return false }
+        var list = Deletions.load(self)
+        list.restore(Deletions.note, slug, now: now)
+        list.save(self)
+        return true
+    }
+
     // MARK: - Notes
 
     public func deleteNote(_ slug: String) {

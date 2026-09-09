@@ -3310,7 +3310,8 @@ extension LibraryWindow: NSMenuDelegate {
             Notes.isYours(note)
                 ? "your notes on \(sources.first?.title ?? "this recording")"
                 : note.title)
-        var lost = "The note file is deleted from disk. This cannot be undone."
+        var lost = "The note is removed from every device. You can put it back "
+            + "within 14 days with `listen sync trash --restore \(note.slug)`."
         if !sources.isEmpty {
             lost += Notes.isYours(note)
                 ? "\n\nThe recording, its audio and its transcript are kept."
@@ -3323,6 +3324,7 @@ extension LibraryWindow: NSMenuDelegate {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? Notes.delete(note.slug)
+        CloudSyncHost.shared.syncSoon()
         // The page goes before the row does. `reload` puts a selection back by
         // slug and finds nothing to put it on, which leaves `selectedNote`
         // holding a note that is no longer on disk and the pane still showing
@@ -3599,8 +3601,14 @@ extension LibraryWindow: NSMenuDelegate {
         // a call can in principle be had again, and a thought somebody had
         // while it was happening cannot. Notes an agent wrote are derived from
         // the transcript, so they are not worth a sentence here.
-        var lost = "The audio and the transcript are deleted from disk. "
-            + "This cannot be undone."
+        // The recovery is named because it exists now: a deletion goes to
+        // `.trash` on every device for a fortnight, including this one, and
+        // `listen sync trash --restore` is the way back. Saying "cannot be
+        // undone" when it can is the worse error of the two, because it is the
+        // sentence that stops somebody asking.
+        var lost = "The audio and the transcript are removed from every device. "
+            + "You can put it back within 14 days with "
+            + "`listen sync trash --restore \(recording.id)`."
         if let yours = Notes.yours(for: recording), !yours.body.isEmpty {
             // Kept rather than deleted, and said so rather than left to be
             // discovered. Notes live in the library and not in the recording
@@ -3618,6 +3626,11 @@ extension LibraryWindow: NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? recording.delete()
         ActivityLog.append("recording_deleted", ["recording_id": recording.id])
+        // Now, rather than on the next two-minute poll. The phone has always
+        // done this; the Mac left a window in which another device could still
+        // be handed the recording it had just deleted, and that window is what
+        // the 7 September resurrection happened inside.
+        CloudSyncHost.shared.syncSoon()
         reload()
     }
 }

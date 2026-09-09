@@ -63,6 +63,33 @@ public enum Trash {
         }
     }
 
+    /// The newest copy of one deleted thing, by the name it had.
+    ///
+    /// Newest first, because `accept` numbers a same-day collision `name.2` and
+    /// keeps every copy: the one somebody means by "put it back" is the last
+    /// one to go in, not whichever the filesystem lists first. Day directories
+    /// are named `yyyy-MM-dd`, so sorting them as strings is sorting them by
+    /// date, which is the reason `accept` names them that way rather than
+    /// trusting file dates a restore or a copy would rewrite.
+    public static func find(_ name: String, in library: Library) -> URL? {
+        let manager = FileManager.default
+        let days = (try? manager.contentsOfDirectory(
+            at: root(in: library), includingPropertiesForKeys: nil)) ?? []
+        for day in days.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+            let entries = (try? manager.contentsOfDirectory(
+                at: day, includingPropertiesForKeys: nil)) ?? []
+            // `name`, `name.2`, `name.3`: the highest suffix went in last.
+            let matching = entries
+                .filter { $0.lastPathComponent == name
+                          || $0.lastPathComponent.hasPrefix(name + ".") }
+                .sorted { $0.lastPathComponent.count == $1.lastPathComponent.count
+                    ? $0.lastPathComponent > $1.lastPathComponent
+                    : $0.lastPathComponent.count > $1.lastPathComponent.count }
+            if let newest = matching.first { return newest }
+        }
+        return nil
+    }
+
     /// Drop what has been in here longer than a fortnight.
     public static func purge(in library: Library, now: Date = Date()) {
         let manager = FileManager.default

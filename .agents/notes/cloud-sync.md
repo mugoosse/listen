@@ -1149,3 +1149,64 @@ fails at "the pull took the other Mac's stale bank over a rename made here".
 banks on the real library reverted with their inodes and mtimes unchanged, which
 no `write(to:options:.atomic)` can produce. That incident stays unattributed.
 This accounts for the standing damage, not for that night.
+
+## A deletion is data, or a Mac that wakes up undoes it
+
+Deleting a recording was an absence: `Recording.delete` removed the folder, and
+`pushDeletions` inferred a deletion on some later pass from "this device has a
+`sent:` stamp and no folder". Two things were wrong with that, and only one of
+them had been noticed.
+
+The noticed one is that an absence has other causes. A disk that fails to
+mount, a library restored underneath a running app, a folder moved in the
+Finder and a state directory that outlived its tree all present as "everything
+is gone", and one of them emptied the container on 13 August 2026: seventy-three
+recordings and fourteen notes, from iCloud and both Macs, recovered from a
+backup. The fix was a heuristic that refused to send a deletion when too much
+was missing at once, which worked and was still a guess standing in for a fact
+nobody had written down.
+
+The unnoticed one is the ordering of a pass. Every device pulls before it
+pushes, but a device that has been asleep pushes work of its own, and the
+recording loop had no branch for "gone from the container": it fetched, found
+nothing, and saved. The note loop had had that branch for months, and its
+comment claimed recordings were safe from the same bug "by their stamps, which
+match without a fetch". That sentence is false for any recording that changed
+locally, which is what puts it in `mine` and gets it fetched in the first place.
+
+**Measured on the real library, 7 September 2026.** Five recordings were deleted
+on this Mac between 11:55:45 and 11:56:09. `mb-flame` launched at 11:56:42,
+holding a freshly arrived `master.flac` for three of them, and pushed before its
+pull had applied anything. At 12:01:09 this Mac's sync state stamped
+`masterMiss:2026-09-06-151436-3D7D`, which is a recording that was back on disk
+without its audio, asking iCloud for a master. The same three were deleted again
+at 12:03:47. Both Macs' `activity.jsonl` record all of it, and neither app
+reported anything wrong; the two memos that stayed deleted were the ones
+`mb-flame` had nothing left to push about.
+
+So a deletion is now an entry in `.deletions.json`: a kind, an id and a stamp,
+written by the code path a person's click reaches, replicated as one sealed r3
+blob, merged per entry by latest stamp exactly as `VoiceprintTombstones` is.
+The two files are deliberately near-identical, because they are the same race.
+Three properties follow, and each one is a seam in `listen sync --fake`:
+
+- **A tombstone is applied before a device pushes**, not only after it pulls, so
+  `library.all()` has the deleted thing out of it before any loop walks it. One
+  call covers `push`, `pushMasters`, `pushVoiceprints` and the phone's `upload`.
+- **An absence with no tombstone deletes nothing.** The 13 August heuristic is
+  gone rather than improved: a library that has lost every file now publishes
+  nothing because it has nothing to publish, not because it was talked out of it.
+- **Delete beats an unsent edit**, and the pass names it. `Deletions.unsentEdit`
+  reads the per-file sidecar bases rather than `sent:`, because a pull
+  deliberately leaves no `sent:` stamp and comparing against it would report a
+  conflict for every deletion on every device, which is noise.
+
+The guard in the recording push loop stayed anyway, keyed on `everSeen`. It is
+what obeys a deletion made by a build that predates any of this.
+
+**Ordering, in two places, for one case each.** The pull sorts blobs ahead of
+records, because a restore arriving in the same batch as the recording it
+restores has to be read first: otherwise the record is skipped as deleted, the
+change token moves past it, and the feed never mentions it again. The push
+publishes the deletion list before the recordings loop, for the mirror image of
+the same window.

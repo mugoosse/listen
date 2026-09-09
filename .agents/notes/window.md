@@ -914,6 +914,41 @@ deliberately so: playback volume has to stay true to the recording, but a
 scrubber drawn at true amplitude is a flat line for anyone who recorded
 quietly.
 
+## The player fell back to the master and the waveform did not
+
+Reported as "why am I not seeing the waveform on the recording that was made on
+my phone". The player card was there, the clock said `27:15 / 43:42` and the
+audio played, so nothing about the screen said the picture was missing rather
+than empty.
+
+A recording this Mac only ever *received* has no `mic.wav`, no `system.wav` and
+no `mix.m4a`. It has `master.flac` and the sidecars, which is the ordinary
+shape of a phone memo once the Mac has taken the audio, and of anything synced
+from the other Mac. Three pieces of code answer "where is the audio" and only
+two of them knew that: `Recording.hasAudio` counts the master, so the card was
+shown instead of the "the audio for this meeting is on ..." note, and
+`DetailView.playbackURL` falls back to it, so play worked. `waveformSources`
+was the mixdown or the two tracks and nothing else, so it returned `[]`,
+`Waveform.make` bailed at its `guard !sources.isEmpty`, `load` returned nil and
+the view kept `peaks = []` and drew nothing.
+
+Two recordings in the library were in that state, both with no `waveform.json`
+next to the audio that would have made one. The fix is the same fallback in the
+same order the other two use, and the rule it records is that **a new place
+audio can live has to be added to all three**.
+
+Reading it needed a second change. `make` summed `buffer.floatChannelData?[0]`,
+which was the whole file for as long as every source was mono: `mic.wav`,
+`system.wav` and `Mixdown`'s output all are. A `.tracks` master is not. It is
+the microphone left and the room right, so channel zero of one is the user
+talking to nobody, with the far end of the meeting absent from the picture. The
+loop averages the channels per frame, which leaves every existing cache
+byte-for-byte identical (they are all mono) and so needs no `version` bump.
+
+Verified on the recording it was reported from, symlinked into a scratch
+library: 1400 buckets, all non-zero, mean 0.133, duration 2622.41 s against the
+2622.40 in `metadata.json`.
+
 ## Turns overlap, so the first one spanning the playhead is the wrong one
 
 Reported as "I clicked a line, it played the right audio and highlighted the line

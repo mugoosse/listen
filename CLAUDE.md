@@ -327,6 +327,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A toolbar item will not draw an image you hand it, and accessibility says it did
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
+- The player fell back to the master and the waveform did not
 - Turns overlap, so the first one spanning the playhead is the wrong one
 - Sentence highlighting is search, not arithmetic
 - The sentence field wraps, and still opened one line high

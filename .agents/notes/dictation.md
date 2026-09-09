@@ -117,10 +117,15 @@ nothing in Listen's own text fields, and it is not a setting:
 `ApplePressAndHoldEnabled` is unset globally, unset for Listen, and only two
 terminal apps on the machine turn it off for themselves. The remaining suspect
 was the only thing Listen does to key events at all, and a tap that can delete
-events is exactly the wrong thing to sit in front of a key-repeat gesture. It
-has not been proven from a keyboard yet, and this is worth writing down as a
-suspicion rather than a fix: what *is* certain is that the tap had no business
-holding character keys for a chord that never uses them.
+events is exactly the wrong thing to sit in front of a key-repeat gesture.
+
+**Confirmed from the keyboard, 2026-09-09.** With the narrowed mask installed,
+holding "e" in the dictionary sheet raises the accent panel, and the chord and
+Escape-to-cancel both still work. So the tap was the cause, and it was costing
+press-and-hold everywhere in Listen for the whole time it was armed. The two
+states that widen the mask are exercised by that second half: starting a
+dictation widens it, which means the deferred rebuild ran, and Escape then
+reached `handleKeyDown` through the wider tap.
 
 ### The rebuild cannot happen on the tap's own stack
 

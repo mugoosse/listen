@@ -138,7 +138,7 @@ final class DetailView: NSView {
     /// above for the one state that has something to show rather than something
     /// to explain.
     private let transcribing = TranscribingView()
-    private let emptyIcon = BrandIcon.view(size: 64, accessibilityLabel: "Listen mascot")
+    private let emptyIcon = BrandIcon.view(size: 52, accessibilityLabel: "Listen mascot")
 
     /// The recording as it happens: a page to write on and both tracks moving.
     ///
@@ -230,24 +230,19 @@ final class DetailView: NSView {
     /// note about a single meeting can be tagged by hand, because such a note
     /// is read in this pane and never gets a page of its own in the sidebar.
     private let noteTagChips = TagChips()
-    /// The greeting over an empty pane, with the mascot beside it.
+    /// The greeting at the top of the library home page.
     ///
     /// The empty state used to be one grey sentence of instruction. This screen
     /// is where somebody arrives and where they can now work from, so it opens
     /// with their name rather than with a direction.
     private let greeting = NSTextField(labelWithString: "")
-    /// The conversations about the library, listed on the screen you land on.
-    ///
-    /// This is what replaced the history control on this screen. The library
-    /// screen lists its own here, a recording page has a Chats tab, and the
-    /// card carries the rest: its title while a conversation is open, and
-    /// History on the starters line while one is not.
-    private let recentChats = LinkLine()
-    /// People touched most recently across recordings, notes, conversations and
-    /// generated context. These rows make the person pages visible from the
-    /// first screen instead of requiring somebody to discover the People lens.
-    private let recentPeople = NSStackView()
+    /// The landing page is a document rather than a centred empty state. It can
+    /// hold one section on a new library or four on an established one, and the
+    /// shortest version still starts at the top instead of drifting to the
+    /// middle of a tall window.
+    private let homeScroll = NSScrollView()
     private let homeActivity = NSStackView()
+    private let homeColumn = NSStackView()
     /// The agent notes about this meeting that are not the user's own, on one
     /// line above the note being read.
     ///
@@ -302,6 +297,11 @@ final class DetailView: NSView {
         guard abs(drawerCover - points) > 0.5 else { return }
         drawerCover = points
         tailHeight?.constant = RecordButton.clearance + points
+        // The home page scrolls as well. The composer is an overlay, so its
+        // height belongs at the end of this document just as it does at the end
+        // of the transcript. Without this, the last recent row can be visible
+        // behind the composer and impossible to click.
+        homeActivity.edgeInsets.bottom = 32 + points
         // The note reaches the floor now, so the drawer covers it exactly as it
         // covers the transcript. A constraint rather than a content inset, for
         // the reason this file records twice over: an inset is a scroll offset
@@ -641,8 +641,8 @@ final class DetailView: NSView {
 
         for v in [titleLabel, subtitleLabel, languageNotice, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
-                  chatLinks, chatList, noteTagChips, greeting,
-                  homeActivity, empty, emptyIcon, transcribing, live, findBar] {
+                  chatLinks, chatList, noteTagChips, homeScroll,
+                  transcribing, live, findBar] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -970,19 +970,15 @@ final class DetailView: NSView {
             // scroller needs is `transcriptInsets.right`. It used to be this
             // constant, which the rows below then had to know about as well.
             stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            empty.centerXAnchor.constraint(equalTo: centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: centerYAnchor),
-            greeting.centerXAnchor.constraint(equalTo: centerXAnchor),
-            greeting.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -14),
-            homeActivity.topAnchor.constraint(equalTo: empty.bottomAnchor, constant: 22),
-            homeActivity.centerXAnchor.constraint(equalTo: centerXAnchor),
-            homeActivity.widthAnchor.constraint(equalToConstant: 420),
-            empty.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-            emptyIcon.centerXAnchor.constraint(equalTo: empty.centerXAnchor),
-            // Above the greeting, which is what it now introduces. Anchored to
-            // `empty` it sat on top of the words: that constraint predates
-            // there being anything between the mascot and the sentence.
-            emptyIcon.bottomAnchor.constraint(equalTo: greeting.topAnchor, constant: -16),
+
+            // The library home is a top-aligned document. Full width gives the
+            // scroller its ordinary edge while `homeColumn` below keeps the
+            // reading measure narrow and anchored to the left.
+            homeScroll.topAnchor.constraint(equalTo: topAnchor),
+            homeScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            homeScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            homeScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            homeActivity.widthAnchor.constraint(equalTo: homeScroll.widthAnchor),
 
             // Wider than the 320 the sentence is capped at, because it is a
             // picture of the recording rather than a paragraph: the wider it is
@@ -1098,41 +1094,42 @@ final class DetailView: NSView {
             .cursor: NSCursor.pointingHand,
         ]
 
-        // Every setting `noteInfo` carries, for the reason recorded there: an
-        // `NSTextView` left at its defaults draws an opaque background and
-        // paints a link system blue whatever the string asks for.
-        recentChats.isEditable = false
-        recentChats.isSelectable = true
-        recentChats.drawsBackground = false
-        recentChats.delegate = self
-        recentChats.textContainerInset = .zero
-        recentChats.textContainer?.lineFragmentPadding = 0
-        recentChats.textContainer?.widthTracksTextView = true
-        recentChats.isVerticallyResizable = true
-        recentChats.isHorizontallyResizable = false
-        recentChats.setContentHuggingPriority(.required, for: .vertical)
-        recentChats.alignment = .center
-        recentChats.linkTextAttributes = [
-            .foregroundColor: Brand.accent,
-            .cursor: NSCursor.pointingHand,
-        ]
-        recentChats.isHidden = true
-
-        recentPeople.orientation = .vertical
-        recentPeople.alignment = .leading
-        recentPeople.spacing = 2
+        homeScroll.contentView = TopAlignedClipView()
+        homeScroll.documentView = homeActivity
+        homeScroll.hasVerticalScroller = true
+        homeScroll.drawsBackground = false
+        homeScroll.automaticallyAdjustsContentInsets = false
+        homeScroll.isHidden = true
 
         homeActivity.orientation = .vertical
-        homeActivity.alignment = .centerX
-        homeActivity.spacing = 18
-        homeActivity.addArrangedSubview(recentPeople)
-        homeActivity.addArrangedSubview(recentChats)
-        recentPeople.widthAnchor.constraint(equalTo: homeActivity.widthAnchor).isActive = true
+        homeActivity.alignment = .leading
+        homeActivity.spacing = 0
+        homeActivity.edgeInsets = NSEdgeInsets(top: 64, left: 40,
+                                               bottom: 32, right: 40)
+        homeActivity.translatesAutoresizingMaskIntoConstraints = false
+
+        homeColumn.orientation = .vertical
+        homeColumn.alignment = .leading
+        homeColumn.spacing = 0
+        homeColumn.translatesAutoresizingMaskIntoConstraints = false
+        homeActivity.addArrangedSubview(homeColumn)
+        let homeWidth = homeColumn.widthAnchor.constraint(
+            equalTo: homeActivity.widthAnchor, constant: -80)
+        homeWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            homeColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 620),
+            homeWidth,
+        ])
 
         greeting.font = .systemFont(ofSize: 26, weight: .semibold)
         greeting.textColor = .labelColor
-        greeting.alignment = .center
+        greeting.alignment = .left
+        greeting.lineBreakMode = .byTruncatingTail
         greeting.isHidden = true
+
+        empty.alignment = .left
+        empty.preferredMaxLayoutWidth = 500
+        emptyIcon.setContentHuggingPriority(.required, for: .horizontal)
 
         notesPlaceholder.font = .systemFont(ofSize: 13)
         notesPlaceholder.textColor = .tertiaryLabelColor
@@ -1737,72 +1734,266 @@ final class DetailView: NSView {
                            forSegment: 2)
     }
 
-    /// Everything else written about this recording, on one line.
-    ///
-    /// **The note area is yours and the switcher is gone.** A pop-up that
-    /// silently swapped your own note for an agent's made the one editable
-    /// document on the page indistinguishable from the read-only ones beside
-    /// it, and it hid conversations entirely because they are not notes.
-    ///
-    /// So: the agent notes, named and reachable, in a line that collapses to
-    /// nothing when there are none.
-    ///
-    /// **The conversations were here too, and that grouping was the mistake.**
-    /// They were put together on the argument that both are somebody else's
-    /// reading of this meeting, which is true and was not enough: a note opens
-    /// in the box directly under this line and a conversation opens a card over
-    /// the whole page, so the difference between two links that look identical
-    /// was something you found out by pressing one. The conversations have a
-    /// tab now, where a list can say when each one was had and how long it is.
-    /// See `chatList`.
     /// "What's cooking, Maxime?", or without the name when there is none.
     ///
     /// The name is the one in Settings, which is also what the microphone track
     /// is displayed as. Nobody is asked for it twice, and a library where it was
     /// never set gets the question without a name rather than a placeholder
     /// standing in for one.
-    /// The library's own conversations, newest first, as links.
     ///
-    /// Five, because this is a landing screen and not an archive: older ones are
-    /// reached through the meeting they were about, which is what the back links
-    /// on a page are for.
-    private func showRecentChats() {
-        let chats = Chat.all()
-            .filter { $0.sources.isEmpty && $0.person == nil }
-            .prefix(5)
-        guard !chats.isEmpty else {
-            recentChats.isHidden = true
-            return
-        }
-        recentChats.isHidden = false
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        style.paragraphSpacing = 4
-        let line = NSMutableAttributedString()
-        for (index, chat) in chats.enumerated() {
-            guard let id = chat.id else { continue }
-            if index > 0 {
-                line.append(NSAttributedString(string: "\n", attributes: [
-                    .font: NSFont.systemFont(ofSize: 12), .paragraphStyle: style,
-                ]))
+    /// Rebuild the library home from the newest things of each kind.
+    ///
+    /// This deliberately is not one mixed activity feed. A first-time user can
+    /// learn the four nouns in the app by scanning four familiar lists, while a
+    /// returning user can go straight to the kind of thing they remember.
+    private func showHome() {
+        for view in homeColumn.arrangedSubviews { view.removeFromSuperview() }
+
+        let recordings = Recording.all()
+        let people = recentPeopleByActivity()
+        let notes = Notes.all()
+            .filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted {
+                (activityDate($0.updated) ?? activityDate($0.created) ?? .distantPast)
+                    > (activityDate($1.updated) ?? activityDate($1.created) ?? .distantPast)
             }
-            line.append(NSAttributedString(string: chat.displayTitle, attributes: [
-                .font: NSFont.systemFont(ofSize: 12),
-                .foregroundColor: Brand.accent,
-                .paragraphStyle: style,
-                .link: ChatLink.scheme + id,
-            ]))
+        // Ask off means nothing Ask-shaped is left in the interface. Old
+        // conversations remain on disk and return when the feature is enabled.
+        let chats = Settings.askEnabled ? Chat.all() : []
+        let hasAnything = !recordings.isEmpty || !people.isEmpty
+            || !notes.isEmpty || !chats.isEmpty
+
+        greeting.stringValue = hasAnything ? Self.greetingText()
+            : Self.firstRunGreetingText()
+        // These fields were born as the old centred empty state. Set both the
+        // control and its cell here so rebuilding the home can never inherit
+        // that paragraph alignment when the supporting copy wraps.
+        greeting.alignment = .left
+        greeting.cell?.alignment = .left
+        greeting.isHidden = false
+        empty.stringValue = recordings.isEmpty
+            ? "Record a meeting or voice memo. Listen keeps it on this Mac, then turns it into a private, searchable transcript."
+            : Settings.askEnabled
+                ? "Pick up where you left off. Your newest recordings, people, notes and conversations are together below."
+                : "Pick up where you left off. Your newest recordings, people and notes are together below."
+        empty.alignment = .left
+        empty.cell?.alignment = .left
+        empty.isHidden = false
+        emptyIcon.isHidden = false
+
+        let titles = NSStackView(views: [greeting, empty])
+        titles.orientation = .vertical
+        titles.alignment = .leading
+        titles.spacing = 7
+        titles.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titles.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        empty.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        empty.widthAnchor.constraint(equalTo: titles.widthAnchor).isActive = true
+
+        let header = NSStackView(views: [titles, emptyIcon])
+        header.orientation = .horizontal
+        header.alignment = .top
+        header.distribution = .fill
+        header.spacing = 20
+        homeColumn.addArrangedSubview(header)
+        NSLayoutConstraint.activate([
+            header.widthAnchor.constraint(equalTo: homeColumn.widthAnchor),
+            emptyIcon.widthAnchor.constraint(equalToConstant: 52),
+            emptyIcon.heightAnchor.constraint(equalToConstant: 52),
+        ])
+        homeColumn.setCustomSpacing(recordings.isEmpty ? 16 : 30, after: header)
+
+        if recordings.isEmpty {
+            let record = NSButton(title: "Start recording", target: self,
+                                  action: #selector(recordFromHome))
+            record.bezelStyle = .rounded
+            record.controlSize = .large
+            record.font = .systemFont(ofSize: 13, weight: .semibold)
+            record.setAccessibilityLabel("Start recording")
+            homeColumn.addArrangedSubview(record)
+            homeColumn.setCustomSpacing(30, after: record)
+        } else {
+            let rows = recordings.prefix(4).map { recording in
+                homeRow(title: recording.displayTitle,
+                        detail: [recording.when, recording.lengthText]
+                            .filter { !$0.isEmpty }.joined(separator: " · "),
+                        identifier: recording.id,
+                        action: #selector(openRecentRecording(_:)),
+                        toolTip: "Open this recording")
+            }
+            addHomeSection("Recordings",
+                           actions: [homeSectionAction("Show All",
+                                                       action: #selector(showAllRecordings))],
+                           rows: rows)
         }
-        recentChats.textStorage?.setAttributedString(line)
-        recentChats.invalidateIntrinsicContentSize()
+
+        let addPerson = HoverButton(.ink)
+        addPerson.title = "Add Person"
+        addPerson.image = NSImage(systemSymbolName: "person.badge.plus",
+                                  accessibilityDescription: nil)
+        addPerson.imagePosition = .imageLeading
+        addPerson.font = .systemFont(ofSize: 11, weight: .semibold)
+        addPerson.rest = .secondaryLabelColor
+        addPerson.bright = .labelColor
+        addPerson.target = self
+        addPerson.action = #selector(addPersonFromHome)
+        addPerson.toolTip = "Add somebody before your first recording together"
+        addPerson.setAccessibilityLabel("Add Person")
+        let peopleRows: [NSView] = people.prefix(4).map { person, date in
+            homeRow(title: person.display,
+                    detail: recentActivity(date) + " · " + person.summary,
+                    identifier: person.label,
+                    action: #selector(openRecentPerson(_:)),
+                    toolTip: "Open \(person.display)")
+        }
+        addHomeSection("People",
+                       actions: [addPerson,
+                                 homeSectionAction("Show All",
+                                                   action: #selector(showAllPeople))],
+                       rows: peopleRows,
+                       empty: "People appear here when you name a speaker or add somebody yourself.")
+
+        if !notes.isEmpty {
+            let rows = notes.prefix(4).map { note in
+                var detail = [recentActivity(activityDate(note.updated)
+                    ?? activityDate(note.created) ?? .distantPast),
+                    Notes.isYours(note) ? "Your note" : "Generated note"]
+                if !note.recordings.isEmpty {
+                    detail.append(note.recordings.count == 1
+                        ? "1 recording" : "\(note.recordings.count) recordings")
+                }
+                return homeRow(title: note.title, detail: detail.joined(separator: " · "),
+                               identifier: note.slug,
+                               action: #selector(openRecentNote(_:)),
+                               toolTip: "Open this note")
+            }
+            addHomeSection("Notes",
+                           actions: [homeSectionAction("Show All",
+                                                       action: #selector(showAllNotes))],
+                           rows: rows)
+        }
+
+        if !chats.isEmpty {
+            let rows = chats.prefix(4).compactMap { chat -> NSView? in
+                guard let id = chat.id else { return nil }
+                var detail = [recentActivity(activityDate(chat.updated)
+                    ?? activityDate(chat.created) ?? .distantPast)]
+                if let person = chat.person {
+                    detail.append("About \(SpeakerName.display(person))")
+                } else if chat.sources.count == 1,
+                          let recording = Recording.find(chat.sources[0]) {
+                    detail.append(recording.displayTitle)
+                } else if !chat.sources.isEmpty {
+                    detail.append(chat.sources.count == 1
+                        ? "1 recording" : "\(chat.sources.count) recordings")
+                } else {
+                    detail.append("Library")
+                }
+                return homeRow(title: chat.displayTitle,
+                               detail: detail.joined(separator: " · "),
+                               identifier: id,
+                               action: #selector(openRecentChat(_:)),
+                               toolTip: "Open this conversation")
+            }
+            addHomeSection("Conversations",
+                           actions: [homeSectionAction("Show All",
+                                                       action: #selector(showAllConversations))],
+                           rows: rows)
+        }
+
+        homeScroll.contentView.scroll(to: .zero)
+        homeScroll.reflectScrolledClipView(homeScroll.contentView)
+    }
+
+    /// One section vocabulary for every entity type: a plain heading and the
+    /// same rows the person page uses for its recording list. No cards inside a
+    /// card, no different interaction to learn for each noun.
+    private func addHomeSection(_ title: String, actions: [NSView] = [],
+                                rows: [NSView], empty emptyText: String? = nil) {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .labelColor
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let headingViews: [NSView] = [label, spacer] + actions
+        let heading = NSStackView(views: headingViews)
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.spacing = 8
+
+        let section = NSStackView()
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 2
+        section.addArrangedSubview(heading)
+        heading.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        section.setCustomSpacing(7, after: heading)
+        for row in rows {
+            section.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        }
+        if rows.isEmpty, let emptyText {
+            let none = NSTextField(wrappingLabelWithString: emptyText)
+            none.font = .systemFont(ofSize: 12)
+            none.textColor = .tertiaryLabelColor
+            section.addArrangedSubview(none)
+            none.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        }
+        homeColumn.addArrangedSubview(section)
+        section.widthAnchor.constraint(equalTo: homeColumn.widthAnchor).isActive = true
+        homeColumn.setCustomSpacing(26, after: section)
+    }
+
+    /// A quiet text action belongs to the heading rather than to every row. It
+    /// uses the same hover treatment as Add Person, so all four sections teach
+    /// one way to move from a recent sample to the complete collection.
+    private func homeSectionAction(_ title: String, action: Selector) -> HoverButton {
+        let button = HoverButton(.ink)
+        button.title = title
+        button.font = .systemFont(ofSize: 11, weight: .semibold)
+        button.rest = .secondaryLabelColor
+        button.bright = .labelColor
+        button.target = self
+        button.action = action
+        button.toolTip = title
+        button.setAccessibilityLabel(title)
+        return button
+    }
+
+    private func homeRow(title text: String, detail detailText: String,
+                         identifier: String, action: Selector,
+                         toolTip: String) -> HoverRow {
+        let title = NSTextField(labelWithString: text)
+        title.font = .systemFont(ofSize: 13)
+        title.lineBreakMode = .byTruncatingTail
+        title.textColor = .labelColor
+        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let detail = NSTextField(labelWithString: detailText)
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .tertiaryLabelColor
+        detail.lineBreakMode = .byTruncatingTail
+        detail.setContentHuggingPriority(.required, for: .horizontal)
+
+        let content = NSStackView(views: [title, detail])
+        content.orientation = .horizontal
+        content.distribution = .fill
+        content.spacing = 8
+
+        let row = HoverRow(content: content, target: self, action: action)
+        row.identifier = NSUserInterfaceItemIdentifier(identifier)
+        row.toolTip = toolTip
+        row.setAccessibilityElement(true)
+        row.setAccessibilityRole(.button)
+        row.setAccessibilityLabel(toolTip)
+        return row
     }
 
     /// The landing page is ordered by activity rather than by how often somebody
     /// has spoken. A new note or conversation should bring a person back just as
     /// surely as a new recording, and a newly generated summary is activity too.
-    private func showRecentPeople() {
-        for view in recentPeople.arrangedSubviews { view.removeFromSuperview() }
-
+    private func recentPeopleByActivity() -> [(person: Person, date: Date)] {
         let people = People.roster().filter { !$0.isYou }
         var touched: [String: Date] = [:]
         func remember(_ label: String, _ date: Date?) {
@@ -1859,48 +2050,12 @@ final class DetailView: NSView {
             }
             return left.date > right.date
         }
-        let title = NSTextField(labelWithString: "RECENT PEOPLE")
-        title.font = .systemFont(ofSize: 10, weight: .semibold)
-        title.textColor = .tertiaryLabelColor
+        return recent
+    }
 
-        let addPerson = HoverButton(.ink)
-        addPerson.title = "Add Person"
-        addPerson.image = NSImage(systemSymbolName: "person.badge.plus",
-                                  accessibilityDescription: nil)
-        addPerson.imagePosition = .imageLeading
-        addPerson.font = .systemFont(ofSize: 11, weight: .semibold)
-        addPerson.rest = .secondaryLabelColor
-        addPerson.bright = .labelColor
-        addPerson.target = self
-        addPerson.action = #selector(addPersonFromHome)
-        addPerson.toolTip = "Add somebody before your first recording together"
-        addPerson.setAccessibilityLabel("Add Person")
-
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let heading = NSStackView(views: [title, spacer, addPerson])
-        heading.orientation = .horizontal
-        heading.alignment = .centerY
-        heading.spacing = 8
-        recentPeople.addArrangedSubview(heading)
-        heading.widthAnchor.constraint(equalTo: recentPeople.widthAnchor).isActive = true
-        recentPeople.setCustomSpacing(5, after: heading)
-
-        let displayedPeople = recent.prefix(3)
-
-        for (person, date) in displayedPeople {
-            let cell = PersonCell()
-            cell.configure(person, detail: recentActivity(date) + " · " + person.summary)
-            let row = HoverRow(content: cell, target: self,
-                               action: #selector(openRecentPerson(_:)), inset: 0, height: 44)
-            row.identifier = NSUserInterfaceItemIdentifier(person.label)
-            row.toolTip = "Open \(person.display)"
-            row.setAccessibilityElement(true)
-            row.setAccessibilityRole(.button)
-            row.setAccessibilityLabel("Open \(person.display)")
-            recentPeople.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: recentPeople.widthAnchor).isActive = true
-        }
+    private func activityDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return ISO8601DateFormatter().date(from: value)
     }
 
     private func recentActivity(_ date: Date) -> String {
@@ -1917,8 +2072,43 @@ final class DetailView: NSView {
         LibraryWindow.shared.showPerson(label)
     }
 
+    @objc private func openRecentRecording(_ sender: HoverRow) {
+        guard let id = sender.identifier?.rawValue else { return }
+        LibraryWindow.shared.open(recording: id, note: nil)
+    }
+
+    @objc private func openRecentNote(_ sender: HoverRow) {
+        guard let slug = sender.identifier?.rawValue else { return }
+        LibraryWindow.shared.open(note: slug)
+    }
+
+    @objc private func openRecentChat(_ sender: HoverRow) {
+        guard let id = sender.identifier?.rawValue, let chat = Chat.load(id: id) else { return }
+        onOpenChat?(chat)
+    }
+
+    @objc private func recordFromHome() {
+        LibraryWindow.shared.newRecording()
+    }
+
     @objc private func addPersonFromHome() {
         LibraryWindow.shared.addPerson()
+    }
+
+    @objc private func showAllRecordings() {
+        LibraryWindow.shared.showAll(.recordings)
+    }
+
+    @objc private func showAllPeople() {
+        LibraryWindow.shared.showAll(.people)
+    }
+
+    @objc private func showAllNotes() {
+        LibraryWindow.shared.showAll(.notes)
+    }
+
+    @objc private func showAllConversations() {
+        LibraryWindow.shared.openChats()
     }
 
     private static func greetingText() -> String {
@@ -1926,6 +2116,13 @@ final class DetailView: NSView {
             return "What's cooking?"
         }
         return "What's cooking, \(name)?"
+    }
+
+    private static func firstRunGreetingText() -> String {
+        guard let name = Settings.userName, !name.isEmpty else {
+            return "Ready when you are."
+        }
+        return "Ready when you are, \(name)."
     }
 
     private func showRelated() {
@@ -2431,8 +2628,7 @@ final class DetailView: NSView {
         empty.isHidden = true
         emptyIcon.isHidden = true
         greeting.isHidden = true
-        recentChats.isHidden = true
-        homeActivity.isHidden = true
+        homeScroll.isHidden = true
         // As `updateEmpty` does. Without it the preview draws over whatever
         // transcript the chosen recording already has, which is not a state the
         // app can be in and would have somebody chasing a bug that is only in
@@ -2472,14 +2668,10 @@ final class DetailView: NSView {
     /// the same time as the sentence it replaces.
     private func updateEmpty() {
         guard let recording else { return }
-        // The greeting and the library's conversations belong to the screen with
-        // nothing open. They are siblings of the empty label rather than
-        // children of anything that hides it, which is the trap this file
-        // already records against `updatePlaceholder`, so arriving at a meeting
-        // left them drawn over its page.
-        greeting.isHidden = true
-        recentChats.isHidden = true
-        homeActivity.isHidden = true
+        // The library home is a sibling of the meeting page, so arriving at a
+        // meeting must take the whole document away rather than hiding its
+        // labels one by one.
+        homeScroll.isHidden = true
 
         // While capture is running, the whole pane below the header is the
         // recording screen and the mode picker collapses.
@@ -2690,31 +2882,7 @@ final class DetailView: NSView {
         guard let recording else {
             readingOrigin = .zero
             setChromeHidden(true)
-            empty.isHidden = false
-            greeting.stringValue = Self.greetingText()
-            greeting.isHidden = false
-            showRecentPeople()
-            showRecentChats()
-            homeActivity.isHidden = false
-            let libraryIsEmpty = Recording.all().isEmpty && Capture.shared.current == nil
-            // The character welcomes a new library. In a library that already
-            // has recordings, it would only turn a simple selection prompt into
-            // decoration and make the detail pane feel less calm.
-            // The mascot now belongs to the greeting rather than to an empty
-            // library, so it is here whenever the pane is.
-            emptyIcon.isHidden = false
-            // Selecting is no longer the only thing you can do here. With Ask
-            // on, the composer under this sentence asks about the whole
-            // library, so an instruction to go and pick something first is
-            // untrue as well as unhelpful: this screen is a place you can
-            // work from. With Ask off there is no composer to point at (see
-            // `Settings.askEnabled`), so the second half offers the one other
-            // thing this screen can do instead: start the next recording.
-            empty.stringValue = libraryIsEmpty
-                ? "No recordings yet. Press Record to capture your first meeting or voice memo."
-                : Settings.askEnabled
-                    ? "Select something from the list, or ask about your library below."
-                    : "Select something from the list, or press Record to start your next meeting or voice memo."
+            showHome()
             return
         }
 
@@ -2920,6 +3088,7 @@ final class DetailView: NSView {
     var onShowingChanged: (() -> Void)?
 
     private func setChromeHidden(_ hidden: Bool) {
+        homeScroll.isHidden = !hidden
         titleLabel.isHidden = hidden
         subtitleLabel.isHidden = hidden
         playerCard.isHidden = hidden

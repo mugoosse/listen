@@ -1163,6 +1163,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.reveal(person: person)
     }
 
+    /// Move from a recent sample on the home page to the complete collection
+    /// in the one library list. "All" clears an old search or lens first; a
+    /// stale tag filter would otherwise make the destination smaller than the
+    /// action promises.
+    func showAll(_ kind: LibraryKind) {
+        if window == nil { build() }
+        enter(.library)
+        sidebar.clearFilters()
+        sidebar.filter(byKind: kind)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
     /// Add somebody before a recording has introduced them, then open the page
     /// where notes, recordings and an optional summary can accumulate.
     func addPerson(suggestedName: String = "") {
@@ -1862,7 +1875,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         showSettings(Updater.shared.isPending ? .updates : nil)
     }
 
-    @objc private func newRecording() {
+    @objc func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the
         // same thing; this exists because someone reading a transcript should
         // not have to go to the menu bar to record the next meeting.

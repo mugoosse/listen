@@ -257,6 +257,10 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
     private var person: Person?
     var currentPersonLabel: String? { person?.label }
     private var editing = false
+    /// Person pages can span hundreds of recordings. Build the first useful
+    /// page immediately and let the reader extend it in bounded batches instead
+    /// of making one click pay for every row before the first frame.
+    private var recordingLimit = 24
 
     private let disc = InitialsDisc(size: 46)
     private let nameLabel = NSTextField(labelWithString: "")
@@ -388,7 +392,10 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
 
     func show(_ person: Person?) {
         loadViewIfNeeded()
-        if person?.label != self.person?.label { editing = false }
+        if person?.label != self.person?.label {
+            editing = false
+            recordingLimit = 24
+        }
         self.person = person
         render()
     }
@@ -557,7 +564,7 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
             add(none)
             return
         }
-        for recording in person.recordings {
+        for recording in person.recordings.prefix(recordingLimit) {
             let title = NSTextField(labelWithString: recording.displayTitle)
             title.font = .systemFont(ofSize: 13)
             title.lineBreakMode = .byTruncatingTail
@@ -585,6 +592,22 @@ final class PersonPane: NSViewController, NSTextFieldDelegate, NSTextViewDelegat
             row.toolTip = "Open this recording"
             add(row, width: true)
         }
+        let remaining = person.recordings.count - min(recordingLimit, person.recordings.count)
+        if remaining > 0 {
+            let amount = min(24, remaining)
+            let more = NSButton(title: "Show \(amount) more", target: self,
+                                action: #selector(showMoreRecordings))
+            more.bezelStyle = .inline
+            more.font = .systemFont(ofSize: 12, weight: .medium)
+            more.contentTintColor = .controlAccentColor
+            more.toolTip = "Show more recordings with \(person.display)"
+            add(more, spacingAfter: 8)
+        }
+    }
+
+    @objc private func showMoreRecordings() {
+        recordingLimit += 24
+        render()
     }
 
     private func facts(_ person: Person) -> String {

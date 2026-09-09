@@ -15,7 +15,7 @@ enum SpeakerSheet {
     static func present(for recording: Recording, speaker: String,
                         in parent: NSWindow?, done: @escaping () -> Void) {
         let alert = NSAlert()
-        alert.messageText = "Who is \(SpeakerName.display(speaker))?"
+        alert.messageText = "Identify \(SpeakerName.display(speaker))"
 
         let suggestions = VoiceBank.suggestions(for: speaker, in: recording)
         alert.informativeText = suggestions.isEmpty

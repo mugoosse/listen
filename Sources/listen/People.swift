@@ -38,13 +38,20 @@ struct Person {
 
 /// Who is in the library, and renaming them everywhere at once.
 ///
-/// No index and no cache, for the same reason there is no job table: the
-/// transcripts are the truth, and anything derived from them that lives
-/// somewhere else is something that can be wrong. Every call here re-reads
-/// `turns.json`, which is what the sidebar's transcript search already does on
-/// every keystroke. If a library ever grows big enough for that to hurt, the
-/// fix is a cache keyed on the file's modification date, not a database.
+/// Transcript files remain the truth. The small in-memory projection below is
+/// keyed by the file's modification date and byte count, so repeated roster,
+/// person-page and speaker-review draws do not decode an unchanged transcript
+/// again while edits still become visible on the next read.
 enum People {
+
+    private struct SpeakerCacheEntry {
+        let modified: Date?
+        let bytes: UInt64?
+        let speakers: [(label: String, seconds: Double)]
+    }
+
+    private static let speakerCacheLock = NSLock()
+    private static var speakerCache: [String: SpeakerCacheEntry] = [:]
 
     // MARK: - Reading
 
@@ -54,9 +61,31 @@ enum People {
     /// chip that shows one is how it gets named. It is only *across* recordings
     /// that they mean nothing.
     static func speakers(in recording: Recording) -> [(label: String, seconds: Double)] {
+        let url = recording.turnsURL
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let modified = attributes?[.modificationDate] as? Date
+        let bytes = (attributes?[.size] as? NSNumber)?.uint64Value
+        speakerCacheLock.lock()
+        let cached = speakerCache[url.path]
+        speakerCacheLock.unlock()
+        if let cached, cached.modified == modified, cached.bytes == bytes {
+            return cached.speakers
+        }
+
+        let speakers = speakers(in: recording.storedTurns)
+        speakerCacheLock.lock()
+        speakerCache[url.path] = SpeakerCacheEntry(
+            modified: modified, bytes: bytes, speakers: speakers)
+        speakerCacheLock.unlock()
+        return speakers
+    }
+
+    /// The same projection when the caller already decoded the transcript.
+    /// Speaker review uses this overload so one click performs one disk read.
+    static func speakers(in turns: [Turn]) -> [(label: String, seconds: Double)] {
         var seconds: [String: Double] = [:]
         var order: [String] = []
-        for turn in recording.storedTurns {
+        for turn in turns {
             if seconds[turn.speaker] == nil { order.append(turn.speaker) }
             seconds[turn.speaker, default: 0] += max(0, turn.end - turn.start)
         }

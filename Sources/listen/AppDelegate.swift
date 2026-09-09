@@ -303,6 +303,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LibraryWindow.shared.previewRecording(silent: want.hasSuffix("silent"))
         case "ask":
             LibraryWindow.shared.previewAsk()
+        case let want where want.hasPrefix("speaker-review"):
+            LibraryWindow.shared.previewSpeakerReview(filtered: want.hasSuffix(":filtered"))
         case let want where want.hasPrefix("person:"):
             LibraryWindow.shared.showPerson(String(want.dropFirst("person:".count)))
         // The About window, which is otherwise two clicks into a menu and is
@@ -377,6 +379,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var previewingPanel: Bool {
         guard let want = ProcessInfo.processInfo.environment["LISTEN_PANEL"] else { return false }
         return !want.hasPrefix("transcribing") && !want.hasPrefix("live")
+            && !want.hasPrefix("speaker-review")
             && !want.hasPrefix("settings") && !want.hasPrefix("person:") && want != "ask" && want != "about"
             && !want.hasPrefix("dictation")
     }

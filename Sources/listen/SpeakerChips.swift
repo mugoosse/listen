@@ -33,6 +33,15 @@ final class SpeakerChips: NSView {
     /// with a close reason of "standard" and no other symptom.
     var onPerson: ((String, NSView, NSRect) -> Void)?
 
+    /// A normal click selects this speaker for persistent review. Kept separate
+    /// from naming and the contact card so selecting somebody never has to guess
+    /// which of those two questions the reader meant.
+    var onReview: ((String) -> Void)?
+
+    /// Context-menu routes to the two review actions that do not edit anything.
+    var onPlay: ((String) -> Void)?
+    var onShowOnly: ((String) -> Void)?
+
     /// Something in a chip's menu changed the recording or the library.
     ///
     /// Pointing playback at one speaker is deliberately **not** here. It is not
@@ -161,6 +170,16 @@ final class SpeakerChips: NSView {
                     guard let self, let button else { return nil }
                     return (self, self.convert(button.frame, from: self.stack))
                 },
+                open: { [weak self] view, rect in
+                    guard let self else { return }
+                    if VoiceBank.isPlaceholder(label) {
+                        self.onName?(label, view, rect)
+                    } else {
+                        self.onPerson?(label, view, rect)
+                    }
+                },
+                play: { [weak self] in self?.onPlay?(label) },
+                showOnly: { [weak self] in self?.onShowOnly?(label) },
                 done: { [weak self] in self?.onChanged?() })
         }
         return button
@@ -189,6 +208,10 @@ final class SpeakerChips: NSView {
     }
 
     private func route(_ label: String, at rect: NSRect) {
+        if let onReview {
+            onReview(label)
+            return
+        }
         if VoiceBank.isPlaceholder(label) {
             onName?(label, self, rect)
         } else {

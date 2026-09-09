@@ -93,6 +93,8 @@ enum PersonPopover {
                      anchor: @escaping () -> (NSView, NSRect)?,
                      open: ((NSView, NSRect) -> Void)? = nil,
                      identify: ((NSView, NSRect) -> Void)? = nil,
+                     play: (() -> Void)? = nil,
+                     showOnly: (() -> Void)? = nil,
                      done: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         let named = !VoiceBank.isPlaceholder(label)
@@ -100,7 +102,19 @@ enum PersonPopover {
         // what makes a rename one operation rather than two that can disagree.
         let shown = SpeakerName.display(label)
 
+        func addReviewActions() {
+            if let play {
+                menu.addItem(Action("Play \(shown) Clips", "play.fill", play))
+            }
+            if let showOnly {
+                menu.addItem(Action("Show Only \(shown)",
+                                    "line.3.horizontal.decrease.circle", showOnly))
+            }
+        }
+
         if named {
+            addReviewActions()
+            if play != nil || showOnly != nil { menu.addItem(.separator()) }
             menu.addItem(Action("Contact Card", "person.crop.circle") {
                 guard let (view, rect) = anchor() else { return }
                 guard let open else {
@@ -126,7 +140,7 @@ enum PersonPopover {
             //
             // The sheet is still the answer when there is no anchor to point a
             // popover at, because a menu must not depend on a popover appearing.
-            menu.addItem(Action("Not \(shown)…", "person.crop.circle.badge.questionmark") {
+            menu.addItem(Action("Change Person…", "person.crop.circle.badge.questionmark") {
                 guard let (view, rect) = anchor() else {
                     SpeakerSheet.present(for: recording, speaker: label,
                                          in: NSApp.keyWindow, done: done)
@@ -140,7 +154,7 @@ enum PersonPopover {
                 identify(view, rect)
             })
         } else {
-            menu.addItem(Action("Who Is This?…", "person.crop.circle.badge.questionmark") {
+            menu.addItem(Action("Identify \(shown)…", "person.crop.circle.badge.questionmark") {
                 guard let open, let (view, rect) = anchor() else {
                     SpeakerSheet.present(for: recording, speaker: label,
                                          in: NSApp.keyWindow, done: done)
@@ -148,6 +162,10 @@ enum PersonPopover {
                 }
                 open(view, rect)
             })
+            if play != nil || showOnly != nil {
+                menu.addItem(.separator())
+                addReviewActions()
+            }
         }
         return menu
     }

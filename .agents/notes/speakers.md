@@ -1364,15 +1364,16 @@ not laziness. Playback stops **on its own** at the end of that speaker's last
 turn and nothing reports it back here, so a button drawn once would sit there
 offering to pause something already stopped.
 
-### Asking about a speaker points the player at them, and never takes the transcript away
+### Reviewing a speaker points at their evidence before it offers to hide anything
 
-Opening the popover about somebody makes play run through their turns in order
-and picks their bars out of the waveform. Closing it, by dismissing it or by
-applying a name, puts playback back. The transcript is untouched throughout.
+Selecting somebody makes Play clips run through their turns in order and picks
+their bars out of the waveform. The full transcript stays on screen, with the
+other speakers dimmed, until Show only is pressed explicitly.
 
-Two ways in, and they differ by one click: a chip under the title opens the
-popover directly, and a pill in the transcript opens a menu whose first item is
-that popover. See "Both buttons on a pill open the same menu" above.
+The ordinary click is review, from both a chip under the title and a label in the
+transcript. Identity is one named action inside that persistent inspector. A
+right click is the shortcut menu: Identify or Change person, Play clips and Show
+only, plus Contact Card and Open in People when the speaker already has a name.
 
 **It used to hide every paragraph but theirs, and that was the complaint it
 earned.** Two versions of the same mistake, in order:
@@ -1393,19 +1394,18 @@ greys everybody else so a speaker with four words in an hour is findable. See
 "The waveform dims everybody but one" in `window.md`, which was always the better
 half of this feature.
 
-`DetailView.focused` is what the state is called now. It may not filter `turns`,
-`sentences` or `turnViews`, and that constraint has outlived the filter: `refresh`
-indexes all three against each other twenty times a second and the sentence
-editor writes back through the same indices.
+`DetailView.focused` is what the selection is called. Filtering may not filter
+the `turns`, `sentences` or `turnViews` arrays: `refresh` indexes all three
+against each other twenty times a second and the sentence editor writes back
+through the same indices. The explicit mode therefore collapses only the
+non-matching arranged views and leaves those arrays complete and aligned.
 
-Two things survive from the old design:
+Two safeguards survive from the old design:
 
-1. **Both kinds of chip go through it.** A named speaker's card gets the same
-   treatment as the unnamed picker, through `PersonPopover.show(closed:)`, so
-   there is one rule rather than two that agree today.
-2. **The undo hangs off `viewWillDisappear`, not off a delegate.** It is the one
-   hook both ways out go through: a `.transient` popover is dismissed by clicking
-   anywhere and tells nobody, and applying a name closes it from the inside.
+1. **Both named and unnamed speakers enter the same review mode.** Identity
+   changes inside it, but the evidence and controls do not.
+2. **Selection and filtering are separate actions.** A click never deletes the
+   rest of the meeting from the screen; Show only is a second, labelled press.
 
 **The close is guarded by a token.** A transient popover reports its close
 whenever it gets round to it, and clicking a second chip opens one popover while
@@ -1417,7 +1417,7 @@ Verified by driving the real window over a scratch library: a 3 speaker, 48
 paragraph meeting reports 48 paragraphs before opening a speaker's popover and 48
 with it open, where the old build left 16.
 
-### The skipping belongs to the button that names it, and there is no bar
+### The skipping belongs to the control that says Play clips, and there is no transient bar
 
 There was one for a while, under the player: "Play runs through Edgar, skipping
 everybody else · 16 turns · 1:32". It was honest, and it was **a line of layout
@@ -1426,18 +1426,13 @@ whole transcript down a row and let it back up again. That is a worse thing to d
 to a reader than the sentence was a good thing to tell them, and it was reported
 as such within a day.
 
-So the bar is gone, and with it the case it existed to excuse. Skipping is now
-gated on `DetailView.playingFocused`, which is true only while the **popover's
-own Play** is what is running, and that button says "Play what they said,
-skipping everybody else" in the tooltip and stands next to "Spoke for 0:11 of
-this recording". Every other way to start playback means the meeting and clears
-the flag: the pane's play button (`playPressed`, which exists only to do that
-before calling `togglePlay`), a scrub, a click on a sentence, and closing the
-popover.
-
-The named side therefore no longer skips at all, because a contact card has no
-Play button and never explained it. What a card still does is colour that
-person's bars in the waveform, which moves nothing.
+So the transient bar is gone. Skipping is gated on
+`DetailView.playingFocused`, which is true only while **Play clips** in the
+persistent review inspector or the identity picker's preview is running. The
+button changes to Pause clips and its tooltip says it plays every turn by that
+speaker while skipping the others. The pane's main play button means the whole
+meeting unless Show only transcript is active, when the visible transcript and
+the transport deliberately agree. A scrub follows the same rule.
 
 Measured on a 4:10 recording whose speaker A has turns at 18.9-20.8 and
 42.3-67.9, sampling the transport clock twice a second:
@@ -1448,10 +1443,35 @@ Measured on a 4:10 recording whose speaker A has turns at 18.9-20.8 and
 The second line is the whole point of the flag: before it, that press jumped
 straight to 00:18 with only the bar to say why.
 
-What is deliberately **not** here: no way to filter the transcript to one
-speaker, from a menu or anywhere else. If reading one person ever becomes a real
-need it is a mode with its own control and its own way out, not something a click
-on a name does on the way past.
+### Show only is a mode now, with its way out on screen
+
+Real review proved that reading one person is a need: a meeting can have several
+misclassified clusters, and hearing them while seeing every occurrence is how
+the labels get completed. The earlier warning above was still right about the
+shape. Filtering is therefore inside a persistent 260-point speaker inspector,
+not inside a transient popover and not an implicit consequence of clicking a
+name.
+
+The inspector lists every speaker with turn count and duration, keeps the chosen
+speaker highlighted, and offers Identify or Change person, Play clips and Show
+only. In the filtered state that last control becomes **Show all transcript**.
+Opening review temporarily removes the unrelated Ask drawer, letting the
+inspector and transcript use the full height; closing review restores Ask.
+Escape first exits the filter, then closes the review on a second press. Closing
+or showing all restores the reader's pre-filter scroll position.
+
+Measured 9 September 2026 on a scratch copy of a 1h16m, three-speaker meeting:
+left-clicking `Speaker C` opened the inspector with all speakers still visible;
+Show only left its two turns at 1:06:49 and 1:08:13; Show all restored the full
+transcript; Play clips moved the transport to 1:06:49 and changed both play
+controls to Pause. AX exposed the unnamed menu as Identify / Play clips / Show
+only, and the named menu as Play clips / Show only / Contact Card / Open in
+People / Change Person. A follow-up pass verified that review removes Ask from
+both the live window and its accessibility tree, closing review restores it,
+and opening another speaker removes it again. Speaker rows give the colour dot
+a 12-point leading gutter and another 8 points optically before the name; a
+borderless AppKit button otherwise leaves the dot almost touching the selected
+background's edge.
 
 ### Play starts at their first turn, not their longest
 

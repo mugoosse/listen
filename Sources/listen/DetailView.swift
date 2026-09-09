@@ -9,7 +9,7 @@ import ListenKit
 /// labelling affordance. The playhead highlights the turn being spoken, which is
 /// what makes this readable while listening rather than instead of listening.
 @MainActor
-final class DetailView: NSView {
+final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     fileprivate var recording: Recording?
     private var turns: [Turn] = []
     private var sentences: [[Merge.Sentence]] = []
@@ -21,6 +21,7 @@ final class DetailView: NSView {
     let titleLabel = NSTextField(string: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let chips = SpeakerChips()
+    private let speakerReview = SpeakerReviewView()
 
     /// The offer to fetch the model that could have read this meeting.
     ///
@@ -99,8 +100,29 @@ final class DetailView: NSView {
     /// and the empty space is visibly the player's rather than a gap. See
     /// `setPlayer`.
     private let playerNote = NSTextField(labelWithString: "")
-    private let stack = NSStackView()
+    /// A view-based table is the transcript document. AppKit asks it only for
+    /// rows near the viewport, so opening a 472-turn meeting no longer creates
+    /// and lays out 472 paragraph trees before drawing the first frame.
+    private let transcriptTable = NSTableView()
+    private let transcriptColumn = NSTableColumn(identifier: .init("transcript"))
     private let scroll = NSScrollView()
+    private var scrollTrailing: NSLayoutConstraint!
+    private var scrollReviewTrailing: NSLayoutConstraint!
+    private var speakerReviewBottom: NSLayoutConstraint!
+
+    /// A deliberate speaker-review mode, opened by clicking a speaker label.
+    /// Unlike the transient focus owned by a popover, this stays until its close
+    /// button or Escape is pressed and therefore has room to state what playback
+    /// and filtering are doing.
+    private var reviewingSpeaker = false
+
+    /// Whether the transcript is narrowed to `focused`. The underlying `turns`
+    /// and `sentences` remain complete and index-aligned; the table maps its
+    /// visible rows back to those stable indices.
+    private var transcriptFiltered = false
+    /// Where the reader was before narrowing the transcript, so Show All puts
+    /// the conversation back under their eyes rather than merely restoring it.
+    private var transcriptFilterOrigin: NSPoint?
 
     /// The transcript's margins, which belong to the document and not to the
     /// scroll view around it.
@@ -123,15 +145,6 @@ final class DetailView: NSView {
     /// them, so 16 was a third margin stacked on two others.
     private static let transcriptInsets = NSEdgeInsets(top: 6, left: 24,
                                                        bottom: 40, right: 56)
-    /// What every row in the stack gives back to `transcriptInsets`.
-    ///
-    /// `NSStackView` lays its arranged views out inside `edgeInsets` but does
-    /// not size them, so each row states its own width and the two have to
-    /// agree. Derived rather than written out, because they came apart once
-    /// already: the insets moved and three constants elsewhere did not.
-    private static var transcriptSides: CGFloat {
-        transcriptInsets.left + transcriptInsets.right
-    }
     private let empty = NSTextField(labelWithString: "")
 
     /// The meeting being read, drawn while it happens. Replaces the sentence
@@ -290,13 +303,15 @@ final class DetailView: NSView {
     /// Kept in a field because the transcript is rebuilt from its turns and the
     /// tail is built with it, so the spacer has to be told again each time.
     private var drawerCover: CGFloat = 0
-    /// The spacer at the end of the transcript, which is the room above.
-    private var tailHeight: NSLayoutConstraint?
 
     func setBottomInset(_ points: CGFloat) {
         guard abs(drawerCover - points) > 0.5 else { return }
         drawerCover = points
-        tailHeight?.constant = RecordButton.clearance + points
+        if transcriptTable.numberOfRows > 0 {
+            transcriptTable.reloadData(
+                forRowIndexes: IndexSet(integer: transcriptTable.numberOfRows - 1),
+                columnIndexes: IndexSet(integer: 0))
+        }
         // The home page scrolls as well. The composer is an overlay, so its
         // height belongs at the end of this document just as it does at the end
         // of the transcript. Without this, the last recent row can be visible
@@ -308,6 +323,10 @@ final class DetailView: NSView {
         // and will not hold a view in place.
         notesBottom?.constant = -(RecordButton.clearance + points)
         chatListBottom?.constant = -(RecordButton.clearance + points)
+        // The review inspector is fixed UI, not scrollable transcript content.
+        // Its lower edge follows the shared drawer inset; review hides that
+        // drawer, reports zero here and therefore gets the full page height.
+        speakerReviewBottom?.constant = -points
     }
 
     private let askView = AskView()
@@ -414,6 +433,10 @@ final class DetailView: NSView {
     var onChanged: (() -> Void)?
     /// A conversation named on this page, handed to whoever owns the composer.
     var onOpenChat: ((Chat) -> Void)?
+    /// Speaker review is a focused correction task, so the window temporarily
+    /// removes its shared Ask drawer while this pane owns that task.
+    var onSpeakerReviewChanged: (() -> Void)?
+    var isReviewingSpeaker: Bool { reviewingSpeaker }
 
     /// Read this recording again with a model that is not on this Mac yet.
     ///
@@ -427,7 +450,7 @@ final class DetailView: NSView {
 
     private var player: AVAudioPlayer?
     private var tick: Timer?
-    private var turnViews: [TurnView] = []
+    private var displayedTurnIndexes: [Int] = []
 
     /// The playhead, kept here rather than read from the player.
     ///
@@ -529,6 +552,28 @@ final class DetailView: NSView {
         chips.onPerson = { [weak self] speaker, anchor, rect in
             self?.editSpeaker(speaker, from: anchor, rect: rect)
         }
+        chips.onReview = { [weak self] speaker in self?.review(speaker) }
+        chips.onPlay = { [weak self] speaker in
+            self?.review(speaker)
+            self?.playFocused()
+        }
+        chips.onShowOnly = { [weak self] speaker in
+            self?.review(speaker, filtered: true)
+        }
+
+        speakerReview.onSelect = { [weak self] speaker in self?.review(speaker) }
+        speakerReview.onIdentify = { [weak self] speaker, anchor, rect in
+            self?.identifyReviewedSpeaker(speaker, from: anchor, rect: rect)
+        }
+        speakerReview.onPlay = { [weak self] in
+            guard let self else { return }
+            if self.playingFocused && self.isPlaying { self.pausePlayback() }
+            else { self.playFocused() }
+        }
+        speakerReview.onFilter = { [weak self] filtered in
+            self?.setTranscriptFiltered(filtered)
+        }
+        speakerReview.onClose = { [weak self] in self?.closeSpeakerReview() }
 
         // Clicking a tag is a lens on the library rather than an edit, so it
         // goes straight to the sidebar. `endEditing` first for the reason a chip
@@ -572,17 +617,15 @@ final class DetailView: NSView {
         playerCard.layer?.borderWidth = 1
         styleCard()
 
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        // 10 rather than 18. Each turn already carries a speaker name in colour
-        // above it, so the gap was doing a job the label does: at 18 a two-line
-        // exchange read as two separate documents rather than as one
-        // conversation. It went 18, 12, 10, and the padding inside each turn
-        // came down with it: what separates two turns is the sum of three
-        // numbers, so trimming only this one never moved much.
-        stack.spacing = 10
-        stack.edgeInsets = Self.transcriptInsets
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        transcriptTable.addTableColumn(transcriptColumn)
+        transcriptTable.headerView = nil
+        transcriptTable.backgroundColor = .clear
+        transcriptTable.selectionHighlightStyle = .none
+        transcriptTable.intercellSpacing = NSSize(width: 0, height: 10)
+        transcriptTable.usesAutomaticRowHeights = true
+        transcriptTable.dataSource = self
+        transcriptTable.delegate = self
+        transcriptTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         // The clip view has to be flipped, and it has to be replaced before the
         // document view is set. An NSClipView is not flipped by default, so its
@@ -593,7 +636,7 @@ final class DetailView: NSView {
         // rule. Flipped, short content starts at the top and grows downward,
         // which is also the direction a conversation runs.
         scroll.contentView = TopAlignedClipView()
-        scroll.documentView = stack
+        scroll.documentView = transcriptTable
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         // No insets on any edge, so the scroller's track is the whole pane. The
@@ -642,11 +685,12 @@ final class DetailView: NSView {
         for v in [titleLabel, subtitleLabel, languageNotice, chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, chatList, noteTagChips, homeScroll,
-                  transcribing, live, findBar] {
+                  transcribing, live, findBar, speakerReview] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         live.isHidden = true
+        speakerReview.isHidden = true
 
         // The chips hang off the notice rather than off the subtitle, and the
         // notice collapses to nothing when there is no offer to make. With its
@@ -771,6 +815,12 @@ final class DetailView: NSView {
         tagChips.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         chips.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        scrollTrailing = scroll.trailingAnchor.constraint(equalTo: trailingAnchor)
+        scrollReviewTrailing = scroll.trailingAnchor.constraint(equalTo: speakerReview.leadingAnchor)
+        speakerReviewBottom = speakerReview.bottomAnchor.constraint(
+            equalTo: bottomAnchor, constant: -drawerCover)
+        scrollTrailing.isActive = true
+
         NSLayoutConstraint.activate([
             chipsTop,
             chipsHeight,
@@ -893,8 +943,12 @@ final class DetailView: NSView {
 
             scroll.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            speakerReview.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8),
+            speakerReview.trailingAnchor.constraint(equalTo: trailingAnchor),
+            speakerReviewBottom,
+            speakerReview.widthAnchor.constraint(equalToConstant: 260),
 
             // The transcript's box, because it is the third document about this
             // meeting and the three take turns in one reading area.
@@ -965,11 +1019,6 @@ final class DetailView: NSView {
                 equalTo: notesScroll.topAnchor, constant: Self.notesTextInset),
             notesPlaceholder.leadingAnchor.constraint(equalTo: notesScroll.leadingAnchor),
             notesPlaceholder.trailingAnchor.constraint(equalTo: notesScroll.trailingAnchor),
-
-            // The document is as wide as the scroll view, and the gutter the
-            // scroller needs is `transcriptInsets.right`. It used to be this
-            // constant, which the rows below then had to know about as well.
-            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
 
             // The library home is a top-aligned document. Full width gives the
             // scroller its ordinary edge while `homeColumn` below keeps the
@@ -2528,7 +2577,10 @@ final class DetailView: NSView {
         // player that is collapsed there anyway: switching to Ask already stops
         // playback. The Notes tab is the same argument, one tab in rather than
         // one mode over: the transcript it names is not on screen.
-        if !page || tab != .recording { setFocus(nil) }
+        if !page || tab != .recording {
+            if reviewingSpeaker { closeSpeakerReview() }
+            else { setFocus(nil) }
+        }
         // And the find bar with it, for the same reason: the three surfaces it
         // searches are the page's, and none of them is on screen in Ask. It
         // stays up across a tab switch, because the title and whichever
@@ -2668,6 +2720,16 @@ final class DetailView: NSView {
         showing = .ask
         askView.reload()
         applyShowing()
+    }
+
+    /// Reproduce the persistent speaker-review state without depending on a
+    /// context-menu gesture. Used only by the app's screenshot harness.
+    func previewSpeakerReview(filtered: Bool) {
+        guard let recording else { return }
+        let speakers = People.speakers(in: recording)
+        guard let subject = speakers.last(where: { VoiceBank.isPlaceholder($0.label) })
+                ?? speakers.last else { return }
+        review(subject.label, filtered: filtered)
     }
 
     func previewTranscribing(_ fraction: Double) {
@@ -2935,8 +2997,7 @@ final class DetailView: NSView {
         // one. The sidebar's lenses are the opposite and deliberately survive a
         // selection change: those narrow the library, and this is about the
         // meeting on screen.
-        focused = nil
-        waveform.focused = nil
+        if recording?.id != previous { closeSpeakerReview() }
         self.recording = recording
         updatePlayerActivity()
 
@@ -3045,6 +3106,17 @@ final class DetailView: NSView {
         // transcript on screen is still exactly the one the CLI and the MCP
         // server serve.
         sentences = Merge.sentences(in: turns, from: stored?.segments ?? [])
+        // A rename can remove the label under review. Stay in the task and move
+        // to the next unidentified speaker, or the first remaining speaker when
+        // everybody is named, rather than closing the inspector after every
+        // answer.
+        if reviewingSpeaker, !turns.contains(where: { $0.speaker == focused }) {
+            focused = People.speakers(in: recording)
+                .first(where: { VoiceBank.isPlaceholder($0.label) })?.label
+                ?? People.speakers(in: recording).first?.label
+            waveform.focused = focused
+            if focused == nil { closeSpeakerReview() }
+        }
         // **Opening a recording opens at the top; re-showing the one already on
         // screen keeps the reader's place.** `show` is not only how a selection
         // is answered: a speaker edit goes through it because a rename changes
@@ -3060,6 +3132,11 @@ final class DetailView: NSView {
         // lines around this one make, and for the same family of reasons.
         if recording.id != previous { closeFind() }
         renderTurns(scrollToTop: recording.id != previous)
+        if reviewingSpeaker, let focused {
+            speakerReview.configure(recording, selected: focused,
+                                    filtered: transcriptFiltered)
+            speakerReview.setPlaying(playingFocused && isPlaying)
+        }
 
         // No player while it is being recorded. The tracks exist and are
         // growing, so a mixdown made now would be of half a meeting and the
@@ -3295,116 +3372,27 @@ final class DetailView: NSView {
     }
 
     private func renderTurns(scrollToTop: Bool = true) {
-        // Taken before the stack is emptied, because emptying it is what makes
-        // the clip view forget. See `readingOrigin`.
+        let renderStarted = DEBUG ? CFAbsoluteTimeGetCurrent() : 0
+        // Taken before reload, because the table's new total height can clamp
+        // the clip view while it ret tiles. See `readingOrigin`.
         let keeping = scrollToTop ? nil : readingOrigin
-        for view in stack.arrangedSubviews { view.removeFromSuperview() }
-        turnViews = []
         editingTurn = nil
-        for (index, turn) in turns.enumerated() {
-            let view = TurnView(turn: turn,
-                                sentences: index < sentences.count ? sentences[index] : [])
-            view.onSeek = { [weak self] sentence in
-                self?.endEditing()
-                // Playing from a sentence is playing the meeting from there, so
-                // it takes the playhead off one speaker's turns.
-                self?.playingFocused = false
-                // The sentence that was clicked, falling back to the turn for a
-                // click that landed between sentences or on an imported
-                // transcript whose segments could not be located in their turn.
-                self?.seek(to: sentence?.start ?? turn.start, playing: true)
-            }
-            view.onSpeakerMenu = { [weak self] anchor, rect in
-                self?.turnMenu(turn, anchor: anchor, rect: rect)
-            }
-            // The words and who said them, corrected from one menu. They are the
-            // same repair at two depths, and having one on the paragraph and the
-            // other only on the pill above it makes the reader hunt for the half
-            // they want.
-            view.onSentenceSpeaker = { [weak self] anchor, rect, sentences in
-                guard let self else { return nil }
-                let paragraph = turn.text as NSString
-                let wanted = sentences
-                    .filter { $0.range.location != NSNotFound
-                        && NSMaxRange($0.range) <= paragraph.length }
-                    .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
-                guard !wanted.isEmpty else { return nil }
-                // The count is in the words, because the reader is about to
-                // hand some of a paragraph to somebody else and the one thing
-                // they cannot check afterwards is how much of it went.
-                let many = wanted.count > 1
-                return self.reassignItem(
-                    many ? "Speaker for These \(wanted.count) Sentences"
-                         : "Speaker for This Sentence",
-                    scope: .sentences(wanted), from: turn.speaker,
-                    asking: many ? "Who said these \(wanted.count) sentences?"
-                                 : "Who said this sentence?",
-                    anchor: anchor, rect: rect)
-            }
-            view.onSentenceDelete = { [weak self] sentences in
-                guard let self else { return nil }
-                let paragraph = turn.text as NSString
-                let wanted = sentences
-                    .filter { $0.range.location != NSNotFound
-                        && NSMaxRange($0.range) <= paragraph.length }
-                    .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
-                guard !wanted.isEmpty else { return nil }
-                // No confirmation, and the words are why. This removes exactly
-                // what is selected on screen, under a verb that says Delete, on
-                // a gesture the reader made deliberately; `.discard` asks
-                // because it removes a speaker's whole side of a meeting and
-                // there is no way to see how much that is. Naming the count is
-                // what this owes the reader instead.
-                return Action(wanted.count > 1
-                              ? "Delete \(wanted.count) Sentences" : "Delete Sentence",
-                              "trash") { [weak self] in
-                    self?.deleteSentences(wanted)
-                }
-            }
-            view.onEdit = { [weak self] sentence, was, text in
-                self?.applyEdit(sentence, was: was, to: text)
-            }
-            view.onEditingChanged = { [weak self] turn, editing in
-                guard let self else { return }
-                if editing {
-                    // Only one at a time. Clicking another paragraph normally
-                    // commits the first through the responder chain, but the
-                    // menu can be opened without that ever happening.
-                    if let open = editingTurn, open !== turn { open.commitEditing() }
-                    editingTurn = turn
-                    endEditingTitle()
-                } else if editingTurn === turn {
-                    editingTurn = nil
-                }
-            }
-            stack.addArrangedSubview(view)
-            view.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                        constant: -Self.transcriptSides).isActive = true
-            turnViews.append(view)
+        displayedTurnIndexes = turns.indices.filter {
+            !transcriptFiltered || turns[$0].speaker == focused
         }
-
-        // Room at the end: the plain reading margin `RecordButton.clearance` is,
-        // plus whatever the composer drawer is covering, which is `drawerCover`.
-        //
-        // A spacer in the stack and not `scroll.contentInsets`, which is what
-        // the note beside this has to use, for two reasons. Setting
-        // `contentInsets` turns `automaticallyAdjustsContentInsets` off, taking
-        // the *top* inset with it, and this scroll view's top is measured
-        // against nothing that would report the change. And a bottom content
-        // inset shortens the scroller by the same amount, because the scroller
-        // is laid out inside the content area: see `setBottomInset`. A view at
-        // the end of the document moves only the end of the document.
-        let tail = NSView()
-        tail.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(tail)
-        let height = tail.heightAnchor.constraint(
-            equalToConstant: RecordButton.clearance + drawerCover)
-        tailHeight = height
-        NSLayoutConstraint.activate([
-            height,
-            tail.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                        constant: -Self.transcriptSides),
-        ])
+        transcriptTable.reloadData()
+        if DEBUG {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let built = (0..<self.displayedTurnIndexes.count).reduce(into: 0) { count, row in
+                    if self.transcriptTable.view(atColumn: 0, row: row,
+                                                 makeIfNecessary: false) != nil { count += 1 }
+                }
+                trace("transcript first frame: \(self.turns.count) turns, "
+                    + "\(built) materialized, "
+                    + "\(Int((CFAbsoluteTimeGetCurrent() - renderStarted) * 1_000)) ms")
+            }
+        }
 
         // Every `TurnView` on the page is new, so the find highlights they were
         // carrying went with the old ones. One call here covers every rebuild
@@ -3421,6 +3409,136 @@ final class DetailView: NSView {
             return
         }
         restoreTranscriptScroll(to: keeping)
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        displayedTurnIndexes.count + 1 // final row is the drawer clearance
+    }
+
+    func tableView(_ tableView: NSTableView,
+                   viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row < displayedTurnIndexes.count else {
+            let host = NSView()
+            let spacer = NSView()
+            spacer.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(spacer)
+            NSLayoutConstraint.activate([
+                spacer.topAnchor.constraint(equalTo: host.topAnchor),
+                spacer.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                spacer.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                spacer.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+                spacer.heightAnchor.constraint(equalToConstant:
+                    RecordButton.clearance + drawerCover + Self.transcriptInsets.bottom),
+            ])
+            return host
+        }
+        let index = displayedTurnIndexes[row]
+        let turn = turns[index]
+        let view = TurnView(turn: turn,
+                            sentences: index < sentences.count ? sentences[index] : [])
+        wire(view, to: turn, at: index)
+        applyState(to: view, at: index)
+
+        let host = NSView()
+        host.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: host.topAnchor,
+                                      constant: row == 0 ? Self.transcriptInsets.top : 0),
+            view.leadingAnchor.constraint(equalTo: host.leadingAnchor,
+                                          constant: Self.transcriptInsets.left),
+            view.trailingAnchor.constraint(equalTo: host.trailingAnchor,
+                                           constant: -Self.transcriptInsets.right),
+            view.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        return host
+    }
+
+    private func wire(_ view: TurnView, to turn: Turn, at index: Int) {
+        view.onSeek = { [weak self] sentence in
+            self?.endEditing()
+            self?.playingFocused = self?.transcriptFiltered ?? false
+            self?.seek(to: sentence?.start ?? turn.start, playing: true)
+        }
+        view.onSpeakerMenu = { [weak self] anchor, rect in
+            self?.turnMenu(turn, anchor: anchor, rect: rect)
+        }
+        view.onSpeakerReview = { [weak self] in self?.review(turn.speaker) }
+        view.onSentenceSpeaker = { [weak self] anchor, rect, sentences in
+            guard let self else { return nil }
+            let paragraph = turn.text as NSString
+            let wanted = sentences
+                .filter { $0.range.location != NSNotFound
+                    && NSMaxRange($0.range) <= paragraph.length }
+                .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
+            guard !wanted.isEmpty else { return nil }
+            let many = wanted.count > 1
+            return self.reassignItem(
+                many ? "Speaker for These \(wanted.count) Sentences"
+                     : "Speaker for This Sentence",
+                scope: .sentences(wanted), from: turn.speaker,
+                asking: many ? "Who said these \(wanted.count) sentences?"
+                             : "Who said this sentence?",
+                anchor: anchor, rect: rect)
+        }
+        view.onSentenceDelete = { [weak self] sentences in
+            guard let self else { return nil }
+            let paragraph = turn.text as NSString
+            let wanted = sentences
+                .filter { $0.range.location != NSNotFound
+                    && NSMaxRange($0.range) <= paragraph.length }
+                .map { (index: $0.index, text: paragraph.substring(with: $0.range)) }
+            guard !wanted.isEmpty else { return nil }
+            return Action(wanted.count > 1
+                          ? "Delete \(wanted.count) Sentences" : "Delete Sentence",
+                          "trash") { [weak self] in self?.deleteSentences(wanted) }
+        }
+        view.onEdit = { [weak self] sentence, was, text in
+            self?.applyEdit(sentence, was: was, to: text)
+        }
+        view.onEditingChanged = { [weak self, weak view] changed, editing in
+            guard let self else { return }
+            if editing {
+                if let open = editingTurn, open !== changed { open.commitEditing() }
+                editingTurn = changed
+                endEditingTitle()
+            } else if editingTurn === changed {
+                editingTurn = nil
+            }
+            guard let view,
+                  let row = displayedTurnIndexes.firstIndex(of: index) else { return }
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, view != nil else { return }
+                self.transcriptTable.noteHeightOfRows(
+                    withIndexesChanged: IndexSet(integer: row))
+            }
+        }
+    }
+
+    private func materializedTurnView(at index: Int, make: Bool = false) -> TurnView? {
+        guard let row = displayedTurnIndexes.firstIndex(of: index),
+              let host = transcriptTable.view(atColumn: 0, row: row,
+                                              makeIfNecessary: make) else { return nil }
+        return host.subviews.compactMap { $0 as? TurnView }.first
+    }
+
+    private func applyState(to view: TurnView, at index: Int) {
+        view.isCurrent = currentTurn == index
+        view.highlight(currentTurn == index ? position : nil)
+        let match = reviewingSpeaker && turns[index].speaker == focused
+        view.setReviewMatch(reviewingSpeaker ? match : nil)
+        let ranges = found.compactMap { match -> NSRange? in
+            if case .turn(let foundIndex, let range) = match.place,
+               foundIndex == index { return range }
+            return nil
+        }
+        let current = foundAt.flatMap { $0 < found.count ? found[$0] : nil }
+        let currentRange: NSRange?
+        if case .turn(let foundIndex, let range) = current?.place, foundIndex == index {
+            currentRange = range
+        } else {
+            currentRange = nil
+        }
+        view.setFind(ranges, current: currentRange)
     }
 
     /// Put the reader back where they were before a rebuild.
@@ -3454,7 +3572,7 @@ final class DetailView: NSView {
     /// deliberate and confirmed.
     private func restoreTranscriptScroll(to origin: NSPoint) {
         DispatchQueue.main.async { [self] in
-            stack.layoutSubtreeIfNeeded()
+            transcriptTable.layoutSubtreeIfNeeded()
             let visible = scroll.contentView.bounds.height
             let document = scroll.documentView?.bounds.height ?? 0
             let limit = max(0, document - visible)
@@ -3605,6 +3723,11 @@ final class DetailView: NSView {
     /// here starts playback, `playFocused` included, and this press is the one
     /// that has to say "not one person".
     @objc private func playPressed() {
+        if transcriptFiltered {
+            if playingFocused && isPlaying { pausePlayback() }
+            else { playFocused() }
+            return
+        }
         playingFocused = false
         togglePlay()
     }
@@ -3665,7 +3788,12 @@ final class DetailView: NSView {
             systemSymbolName: playing ? "pause.fill" : "play.fill",
             accessibilityDescription: playing ? "Pause" : "Play")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-        playButton.toolTip = playing ? "Pause" : "Play"
+        if transcriptFiltered, let focused {
+            playButton.toolTip = playing ? "Pause" : "Play only \(SpeakerName.display(focused))"
+        } else {
+            playButton.toolTip = playing ? "Pause" : "Play"
+        }
+        speakerReview.setPlaying(playing && playingFocused)
     }
 
     /// Move the playhead without starting playback.
@@ -3677,7 +3805,7 @@ final class DetailView: NSView {
         guard length > 0 else { return }
         // Dragging through the meeting is a way of reading the meeting, so the
         // playhead stops skipping to one person's turns from here on.
-        playingFocused = false
+        playingFocused = transcriptFiltered
         follows = true
         seek(to: fraction * length, playing: player?.isPlaying ?? false)
     }
@@ -3749,13 +3877,13 @@ final class DetailView: NSView {
         if index != currentTurn {
             trace("playhead \(TranscriptFormat.stamp(position)) -> "
                   + (index.map { "turn \($0) \(turns[$0].speaker)" } ?? "nobody"))
-            if let old = currentTurn, old < turnViews.count {
-                turnViews[old].isCurrent = false
-                turnViews[old].highlight(nil)
+            if let old = currentTurn, let oldView = materializedTurnView(at: old) {
+                oldView.isCurrent = false
+                oldView.highlight(nil)
             }
             currentTurn = index
-            if let index, index < turnViews.count {
-                turnViews[index].isCurrent = true
+            if let index, let currentView = materializedTurnView(at: index) {
+                currentView.isCurrent = true
                 // **Only when the playhead has entered a different paragraph,
                 // and a paragraph is which one it is rather than where it sits
                 // in the list.**
@@ -3778,8 +3906,8 @@ final class DetailView: NSView {
             }
             currentStart = start
         }
-        if let currentTurn, currentTurn < turnViews.count {
-            turnViews[currentTurn].highlight(position)
+        if let currentTurn, let currentView = materializedTurnView(at: currentTurn) {
+            currentView.highlight(position)
         }
     }
 
@@ -3844,32 +3972,21 @@ final class DetailView: NSView {
     /// success.
     private func bring(_ index: Int, within range: NSRange? = nil,
                        atTop: Bool = false) {
-        guard index < turnViews.count else { return }
-        let view = turnViews[index]
-        var frame = view.frame
-        // **Nothing to scroll to before layout has run.**
-        //
-        // `renderTurns` empties the stack and fills it again in one pass, and
-        // every frame in it is zero until the layout that follows. `refresh`
-        // runs in that same pass, from both reloads, and clears `currentTurn`
-        // first, so it always asks for a reveal there. On a zero frame
-        // `scrollToVisible` is asked for `(0, -50, 0, 100)`, and the transcript
-        // stack is an unflipped `NSStackView`, so y = 0 is the **bottom** of the
-        // document: an hour-long meeting jumps to its last paragraph.
-        //
-        // A safety net rather than the fix for anything reported: what made the
-        // transcript scroll away after an edit was being asked to reveal at all,
-        // which `refresh(revealing:)` is about. This is here because scrolling
-        // to a view that has no layout cannot be right whatever asked for it.
-        guard frame.height > 0 else { return }
-        // Converted rather than added: the stack is unflipped, so hand
-        // arithmetic on y is the thing this whole comment is about.
-        if let range, let inside = view.rect(of: range) {
-            frame = view.convert(inside, to: stack)
-        }
-        guard !scroll.documentVisibleRect.contains(frame) else { return }
+        guard let row = displayedTurnIndexes.firstIndex(of: index) else { return }
         scrollingProgrammatically = true
         defer { DispatchQueue.main.async { self.scrollingProgrammatically = false } }
+        transcriptTable.scrollRowToVisible(row)
+        transcriptTable.layoutSubtreeIfNeeded()
+        var frame = transcriptTable.rect(ofRow: row)
+        if let view = materializedTurnView(at: index, make: true),
+           let range, let inside = view.rect(of: range) {
+            frame = view.convert(inside, to: transcriptTable)
+        }
+        // `scrollRowToVisible` is also how an off-screen automatic-height row
+        // is materialized. A find jump must still continue from that minimal
+        // scroll to its deliberate lead; playback can stop once the row is in
+        // view.
+        guard atTop || !scroll.documentVisibleRect.contains(frame) else { return }
 
         // **`scrollToVisible` scrolls the least it can, and the least it can put
         // a find match flush against the bottom edge of the window.**
@@ -3881,26 +3998,13 @@ final class DetailView: NSView {
         // turns before it filling the screen above, so the page looked like it
         // had not moved at all.
         //
-        // The stack is **unflipped**, so the top of the viewport is the frame's
-        // `maxY`, not its `minY`. Getting that backwards scrolls a whole
-        // window's height the wrong way, which is the same trap `reveal`
-        // records about a zero frame.
         guard atTop else {
-            stack.scrollToVisible(frame.insetBy(dx: 0, dy: -50))
+            transcriptTable.scrollToVisible(frame.insetBy(dx: 0, dy: -50))
             return
         }
-        // **Two coordinate systems, and they run opposite ways.** The stack is
-        // unflipped, so a turn's frame counts up from the bottom of the
-        // document and turn 0 has the *highest* y. `TopAlignedClipView` is
-        // flipped, so what `scroll(to:)` wants counts down from the top. The
-        // distance from the document's top to this frame's top edge is
-        // therefore `document - frame.maxY`, and using the frame's y directly
-        // scrolls most of a meeting the wrong way: measured on a 41-minute
-        // call, opening on the match at 15:51 landed the page at 21:14, six
-        // minutes past it, with the match off the top of the screen.
         let visible = scroll.contentView.bounds.height
-        let document = stack.bounds.height
-        let fromTop = document - frame.maxY
+        let document = transcriptTable.bounds.height
+        let fromTop = frame.minY
         let y = min(max(0, fromTop - Self.findLead), max(0, document - visible))
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
@@ -3990,8 +4094,10 @@ final class DetailView: NSView {
     /// takes the key ahead of this whenever it holds the caret, through
     /// `doCommandBy`.
     override func cancelOperation(_ sender: Any?) {
-        guard isFinding else { super.cancelOperation(sender); return }
-        closeFind()
+        if isFinding { closeFind(); return }
+        if transcriptFiltered { setTranscriptFiltered(false); return }
+        if reviewingSpeaker { closeSpeakerReview(); return }
+        super.cancelOperation(sender)
     }
 
     func findNext() { stepFind(1) }
@@ -4013,7 +4119,7 @@ final class DetailView: NSView {
         openFind()
         findBar.setQuery(query)
         DispatchQueue.main.async { [self] in
-            stack.layoutSubtreeIfNeeded()
+            transcriptTable.layoutSubtreeIfNeeded()
             findQueryChanged(query)
         }
     }
@@ -4133,7 +4239,8 @@ final class DetailView: NSView {
 
         renderTitle(marking: titleRanges, current: titleCurrent)
         markNote(noteRanges, current: noteCurrent)
-        for (index, view) in turnViews.enumerated() {
+        for index in displayedTurnIndexes {
+            guard let view = materializedTurnView(at: index) else { continue }
             let ranges = byTurn[index] ?? []
             view.setFind(ranges, current: turnCurrent?.0 == index ? turnCurrent?.1 : nil)
         }
@@ -4281,6 +4388,89 @@ final class DetailView: NSView {
 
     // MARK: - Asking about one speaker
 
+    /// Enter or update the persistent review mode. Selection keeps the whole
+    /// transcript visible; `filtered` is only supplied by the explicit Show Only
+    /// action in a menu or the inspector.
+    private func review(_ speaker: String, filtered: Bool? = nil) {
+        guard let recording, turns.contains(where: { $0.speaker == speaker }) else { return }
+        endEditing()
+        PersonPopover.close()
+        let enteredReview = !reviewingSpeaker
+        reviewingSpeaker = true
+        if let filtered {
+            if filtered && !transcriptFiltered { transcriptFilterOrigin = readingOrigin }
+            transcriptFiltered = filtered
+        }
+        setFocus(speaker)
+
+        speakerReview.isHidden = false
+        scrollTrailing.isActive = false
+        scrollReviewTrailing.isActive = true
+        speakerReview.configure(recording, selected: speaker, filtered: transcriptFiltered)
+        speakerReview.setPlaying(playingFocused && isPlaying)
+        applySpeakerReviewState()
+        needsLayout = true
+
+        if filtered == true { scrollTranscriptToTop() }
+        if enteredReview { onSpeakerReviewChanged?() }
+    }
+
+    /// Show or remove the transcript filter without changing which speaker is
+    /// being reviewed. The original reading position survives the round trip.
+    private func setTranscriptFiltered(_ filtered: Bool) {
+        guard reviewingSpeaker, self.transcriptFiltered != filtered else { return }
+        if filtered { transcriptFilterOrigin = readingOrigin }
+        self.transcriptFiltered = filtered
+        applySpeakerReviewState()
+        if let recording, let focused {
+            speakerReview.configure(recording, selected: focused, filtered: filtered)
+            speakerReview.setPlaying(playingFocused && isPlaying)
+        }
+        if filtered {
+            scrollTranscriptToTop()
+        } else if let origin = transcriptFilterOrigin {
+            transcriptFilterOrigin = nil
+            restoreTranscriptScroll(to: origin)
+        }
+    }
+
+    /// Keep all indexing arrays complete and change only the table's projection.
+    /// That preserves playhead and sentence-edit identities while Show Only
+    /// avoids constructing rows that are not part of the filtered transcript.
+    private func applySpeakerReviewState() {
+        let wanted = turns.indices.filter {
+            !transcriptFiltered || turns[$0].speaker == focused
+        }
+        if wanted != displayedTurnIndexes {
+            displayedTurnIndexes = wanted
+            transcriptTable.reloadData()
+        }
+        for index in displayedTurnIndexes {
+            guard let view = materializedTurnView(at: index) else { continue }
+            let match = reviewingSpeaker && turns[index].speaker == focused
+            view.setReviewMatch(reviewingSpeaker ? match : nil)
+        }
+    }
+
+    private func closeSpeakerReview() {
+        let leftReview = reviewingSpeaker
+        if playingFocused && isPlaying { pausePlayback() }
+        focusToken += 1
+        transcriptFiltered = false
+        reviewingSpeaker = false
+        setFocus(nil)
+        applySpeakerReviewState()
+        speakerReview.isHidden = true
+        scrollReviewTrailing.isActive = false
+        scrollTrailing.isActive = true
+        if let origin = transcriptFilterOrigin {
+            transcriptFilterOrigin = nil
+            restoreTranscriptScroll(to: origin)
+        }
+        needsLayout = true
+        if leftReview { onSpeakerReviewChanged?() }
+    }
+
     /// This speaker's turns, in order.
     private var focusTurns: [Turn] {
         guard let focused else { return [] }
@@ -4307,6 +4497,7 @@ final class DetailView: NSView {
         waveform.focused = next
         // Their turns are no longer what is playing, whoever is focused now.
         playingFocused = false
+        speakerReview.setPlaying(false)
     }
 
     /// Mark a speaker for as long as a popover is asking about them, and hand
@@ -4458,6 +4649,25 @@ final class DetailView: NSView {
         }
     }
 
+    /// The review inspector's naming action. Unlike `editSpeaker`, this always
+    /// opens the picker: on a named speaker the question is "change person", not
+    /// "show their contact card". Review focus persists when the picker closes,
+    /// because the inspector is the visible lifetime and remains on screen.
+    private func identifyReviewedSpeaker(_ speaker: String, from view: NSView, rect: NSRect) {
+        guard let recording else { return }
+        let anchor = convert(rect, from: view)
+        endEditing()
+        setFocus(speaker)
+        SpeakerPicker.show(
+            for: recording, speaker: speaker, from: self, rect: anchor,
+            preview: SpeakerPreview(
+                play: { [weak self] in self?.playFocused() },
+                pause: { [weak self] in self?.pausePlayback() },
+                isPlaying: { [weak self] in self?.isPlaying ?? false },
+                end: {}),
+            done: { [weak self] in self?.reloadAfterSpeakerChange() })
+    }
+
     /// Somebody's identity changed, which changes the whole page.
     ///
     /// `show` rather than the targeted reload below, because a rename, a merge
@@ -4531,6 +4741,13 @@ final class DetailView: NSView {
                                    from: view, rect: rect, turn: choice) {
                     [weak self] in self?.reloadAfterSpeakerChange()
                 }
+            },
+            play: { [weak self] in
+                self?.review(turn.speaker)
+                self?.playFocused()
+            },
+            showOnly: { [weak self] in
+                self?.review(turn.speaker, filtered: true)
             },
             done: { [weak self] in self?.reloadAfterSpeakerChange() })
         return menu
@@ -5031,6 +5248,9 @@ final class TurnView: NSView {
     /// speaker, and to this paragraph. Asked for when the menu opens, never
     /// before: a meeting is hundreds of turns and this is a menu apiece.
     var onSpeakerMenu: ((NSView, NSRect) -> NSMenu?)?
+    /// A normal click selects this speaker for persistent review. The contextual
+    /// menu remains on the right button for identity and correction actions.
+    var onSpeakerReview: (() -> Void)?
     /// Some sentences in this turn were right-clicked, and this is the item that
     /// changes who said them. A list because a selection is what the reader
     /// means; one entry is the case where they selected nothing.
@@ -5053,6 +5273,9 @@ final class TurnView: NSView {
     /// the playhead is one attribute change rather than a restyle.
     private let base: NSMutableAttributedString
     private var highlighted: Int?
+    /// nil outside review, true for this speaker and false for context kept on
+    /// screen around them.
+    private var reviewMatch: Bool?
 
     /// A turn can run for minutes, so its tint is deliberately fainter than the
     /// sentence highlight inside it. This one answers "who is talking"; the
@@ -5060,10 +5283,23 @@ final class TurnView: NSView {
     var isCurrent = false {
         didSet {
             guard isCurrent != oldValue else { return }
-            layer?.backgroundColor = isCurrent
-                ? Brand.accent.withAlphaComponent(0.07).cgColor
-                : NSColor.clear.cgColor
+            updateBackground()
         }
+    }
+
+    func setReviewMatch(_ match: Bool?) {
+        guard reviewMatch != match else { return }
+        reviewMatch = match
+        alphaValue = match == false ? 0.38 : 1
+        updateBackground()
+    }
+
+    private func updateBackground() {
+        let alpha: CGFloat
+        if isCurrent { alpha = 0.07 }
+        else if reviewMatch == true { alpha = 0.035 }
+        else { alpha = 0 }
+        layer?.backgroundColor = Brand.accent.withAlphaComponent(alpha).cgColor
     }
 
     /// This turn's find matches, pushed down by the pane.
@@ -5217,11 +5453,8 @@ final class TurnView: NSView {
         speakerButton.show(turn.speaker)
         speakerButton.target = self
         speakerButton.action = #selector(speakerTapped)
-        // What the first item of the menu will say, since that is what a click
-        // is for; the rest of it is the same either way.
-        speakerButton.toolTip = (VoiceBank.isPlaceholder(turn.speaker)
-            ? "Name this speaker" : "Open their card")
-            + ", or hand this turn to somebody else."
+        speakerButton.toolTip = "Review every turn by \(SpeakerName.display(turn.speaker)). "
+            + "Right-click for more actions."
         // Empty, and filled by `menuNeedsUpdate` the moment it opens. An
         // `NSMenu` with a delegate is how AppKit builds a menu late; assigning a
         // built one here would build hundreds of them for a meeting, on a pane
@@ -5297,22 +5530,8 @@ final class TurnView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// **Both buttons open the same menu.** A left click used to go straight to
-    /// the popover about that speaker, which put the two questions a reader has
-    /// about a name on different buttons: who is this, on the left, and who
-    /// really said this, on the right. Nobody finds the second one that way, and
-    /// a name in a transcript is exactly where the doubt about it appears.
-    ///
-    /// Nothing is lost by the extra click. The first item of the menu is the
-    /// popover the click used to open, so the old gesture is now click, click.
-    ///
-    /// Positioned like `SpeakerChips.showOverflow`, so the two places a speaker
-    /// menu drops from behave the same.
     @objc private func speakerTapped() {
-        guard let menu = speakerButton.menu else { return }
-        menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: speakerButton.bounds.height + 4),
-                   in: speakerButton)
+        onSpeakerReview?()
     }
 
     // MARK: - Editing a sentence
@@ -5591,6 +5810,8 @@ final class DetailViewController: NSViewController {
 
     var isLoadingTranscript: Bool { detail.isLoadingTranscript }
 
+    var isReviewingSpeaker: Bool { detail.isReviewingSpeaker }
+
     /// The Chats tab comes and goes with `Settings.askEnabled`, and the window
     /// is the only thing that hears the toggle. `loadViewIfNeeded` first,
     /// because Settings can be entered before any meeting has been opened.
@@ -5665,6 +5886,11 @@ final class DetailViewController: NSViewController {
         detail.previewAsk()
     }
 
+    func previewSpeakerReview(filtered: Bool) {
+        loadViewIfNeeded()
+        detail.previewSpeakerReview(filtered: filtered)
+    }
+
     func previewTranscribing(_ fraction: Double) {
         loadViewIfNeeded()
         detail.previewTranscribing(fraction)
@@ -5689,6 +5915,11 @@ final class DetailViewController: NSViewController {
     var onOpenChat: ((Chat) -> Void)? {
         get { detail.onOpenChat }
         set { loadViewIfNeeded(); detail.onOpenChat = newValue }
+    }
+
+    var onSpeakerReviewChanged: (() -> Void)? {
+        get { detail.onSpeakerReviewChanged }
+        set { detail.onSpeakerReviewChanged = newValue }
     }
 
     func setBottomInset(_ points: CGFloat) {

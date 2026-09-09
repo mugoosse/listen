@@ -262,13 +262,12 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
 
         let asked: String
         switch purpose {
-        // A named speaker is a different question with the same answers. "Who is
-        // Céline Goossens?" reads as the app having forgotten, when what is
-        // being said is that the name on this voice is wrong.
+        // A named speaker is a change, while a placeholder is an identification.
+        // Both are verbs so the heading says what committing a row will do.
         case .name where !VoiceBank.isPlaceholder(speaker):
-            asked = "Who is this really?"
+            asked = "Change \(SpeakerName.display(speaker))"
         case .name:
-            asked = "Who is \(SpeakerName.display(speaker))?"
+            asked = "Identify \(SpeakerName.display(speaker))"
         case .pick(let asking, _):
             asked = asking
         }

@@ -3194,3 +3194,12 @@ question puts the answer on a page with Back and New chat in the title bar and
 neither of the card's two controls anywhere in the tree, Back leaves the
 composer where it was with the conversation let go, asking again takes the page
 again, and `LISTEN_CHAT` at launch opens a page rather than a panel over one.
+
+## Long conversations render the latest forty messages first
+
+The Ask page keeps the entire `Chat` as model context, but initially builds
+only its latest 40 message views. If older history exists, one quiet “Show 40
+earlier messages” row sits above them and grows the visible window in batches.
+Loading that batch stays at the top rather than first jumping to the newest
+answer. New chats and changed Ask contexts reset the visible window, so an old
+conversation cannot make the next one pay its rendering cost.

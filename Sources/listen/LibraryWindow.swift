@@ -459,6 +459,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         detail.onOpenChat = { [weak self] chat in
             self?.composerHost?.open(chat)
         }
+        detail.onSpeakerReviewChanged = { [weak self] in
+            self?.updateComposer()
+        }
         composerHost.onDrawerHeight = { [weak self] points in
             self?.detail.setBottomInset(points)
         }
@@ -1004,13 +1007,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         let live = isShowingLiveMeeting
             || (mode == .library && detailHost.current === detail
                 && detail.isLoadingTranscript)
+        // **Review gets the whole remaining page.** Identifying and checking a
+        // speaker is one focused correction task; Ask is unrelated chrome that
+        // otherwise competes for the same bottom-right space. The detail pane
+        // reports both edges of the task, so closing review restores Ask using
+        // the same eligibility rules as every other screen transition.
+        let reviewingSpeaker = mode == .library
+            && detailHost.current === detail
+            && detail.isReviewingSpeaker
         // **Chat mode always has one, whatever is behind it.** The composer is
         // that screen: hiding the drawer there would hide the conversation and
         // leave a mode with nothing in it. It cannot be reached from a meeting
         // being recorded anyway, because that screen has no composer to grow and
         // no History to open, but a rule that depends on a screen being
         // unreachable is a rule waiting to be broken.
-        composerHost?.showsComposer = mode == .chat || (mode != .settings && !live)
+        composerHost?.showsComposer = mode == .chat
+            || (mode != .settings && !live && !reviewingSpeaker)
     }
 
     /// Put the list's highlight on the conversation the page is showing.
@@ -1311,6 +1323,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         show()
         if let first = Recording.all().first { sidebar.select(first.id) }
         detail.previewAsk()
+    }
+
+    /// Open speaker review on a real multi-speaker transcript. This is visual
+    /// test scaffolding reached only through `LISTEN_PANEL=speaker-review`, or
+    /// `speaker-review:filtered` for the explicit transcript-filter state.
+    func previewSpeakerReview(filtered: Bool) {
+        show()
+        let recordings = Recording.all()
+        guard let subject = recordings.first(where: { People.speakers(in: $0).count > 1 })
+                ?? recordings.first else { return }
+        sidebar.select(subject.id)
+        detail.previewSpeakerReview(filtered: filtered)
     }
 
     func previewTranscribing(_ fraction: Double) {

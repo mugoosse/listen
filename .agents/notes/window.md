@@ -2574,3 +2574,51 @@ Actions and drop Chats, and pressing it lands on "Select something from the
 list, or ask about your library below."; a conversation opened from a meeting
 carries Back and Close both, and they go to different places, the meeting and
 the home page respectively.
+
+## Opening a long transcript pays for every paragraph before the first frame
+
+Measured 9 September 2026 on a scratch copy of the 1h16m Telegram recording.
+Opening its 472-turn transcript reached the next main-thread turn in 879–1,182
+ms. JSON was not the cost: `transcript.json` decoded in 1.9 ms and `turns.json`
+plus sentence mapping took 1.1–1.2 ms. Constructing 472 `TurnView`s took
+139–150 ms; the first AppKit layout of that full stack took another 535–1,001
+ms. A mechanically shortened 50-turn copy reached the same point in 105 ms,
+with 16 ms spent constructing rows and 15 ms in first layout.
+
+The apparent Ask cost was only where the deferred layout bill happened to be
+collected. Skipping the obsolete detail-level `askView.show` moved the same
+roughly 535 ms layout into the window composer's next update; it did not remove
+it. Waveform sample loading is already detached, and notes, chats, decoding and
+player setup together were single-digit milliseconds.
+
+The durable fix is transcript virtualization: an `NSTableView` (or equivalent
+recycling document) with variable-height rows should create and lay out only
+the visible turns. A smaller first step is progressive batches after showing a
+real first viewport, but that still spends the same total main-thread time and
+needs optional/index-stable row storage so playback, find, edits and speaker
+filtering cannot address the wrong turn. Caching JSON or moving waveform work
+will not materially change this symptom.
+
+## The long transcript is now a variable-height table
+
+Implemented 9 September 2026. `DetailView` now gives AppKit an `NSTableView`
+data source instead of constructing one `TurnView` for every turn. The same
+scratch recording, now 469 turns after corrections, showed 17 materialized
+rows and reached the first post-layout main-thread turn in 109–193 ms on warm
+runs (one cold launch was 384 ms), versus the 879–1,182 ms baseline above.
+The diagnostic is available only with `LISTEN_DEBUG=1`; its enumeration of
+materialized rows has no production cost.
+
+`displayedTurnIndexes` is the boundary between table rows and stored turns.
+Playback, editing, find results and speaker filtering all translate through
+that array rather than treating a filtered table row as a turn index. The
+search verifier still placed its selected match exactly 60 points below the
+viewport top, and the speaker verifier exercised filter and undo. Accessibility
+clients may deliberately ask AppKit to materialize off-screen rows; ordinary
+visual opening and scrolling do not.
+
+Speaker summaries have a separate mtime-and-size projection cache for
+`turns.json`, and callers that already hold decoded turns use the array
+overload. The People page presents recordings in batches of 24 so a person
+with a long history does not construct every recording row before its first
+frame.

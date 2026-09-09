@@ -161,6 +161,10 @@ final class AskView: NSView {
 
     private let scroll = NSScrollView()
     private let turns = NSStackView()
+    /// Bound the first layout of a long saved conversation. Current chats are
+    /// normally much smaller, so this changes nothing until history grows past
+    /// the point where eager AppKit layout becomes noticeable.
+    private var historyLimit = 40
     private let starterRow = NSStackView()
     /// The starters and the drawer's collapsed-state controls, on one line.
     private let starterLine = NSStackView()
@@ -950,6 +954,7 @@ final class AskView: NSView {
         // Nothing is lost by dropping it. Every conversation is in History, and
         // a meeting's own are named on the page under "Also about this".
         chat = Chat()
+        historyLimit = 40
         redraw()
     }
 
@@ -975,6 +980,7 @@ final class AskView: NSView {
         // Fresh, for the reason `show(_:)` records. Their conversations are in
         // History like everybody else's.
         chat = Chat()
+        historyLimit = 40
         redraw()
     }
 
@@ -988,6 +994,7 @@ final class AskView: NSView {
         trace("askview open: \(chat.id ?? "none") with \(chat.turns.count) turns")
         stop()
         self.chat = chat
+        historyLimit = 40
         recording = chat.sources.first.flatMap { Recording.find($0) }
         person = chat.person
         field.placeholderString = placeholder(for: recording, person: person)
@@ -1012,6 +1019,7 @@ final class AskView: NSView {
     func startNew() {
         stop()
         chat = Chat()
+        historyLimit = 40
         pinned = false
         redraw()
     }
@@ -1047,7 +1055,7 @@ final class AskView: NSView {
         window?.makeFirstResponder(nil)
     }
 
-    private func redraw() {
+    private func redraw(scrollToLatest: Bool = true) {
         trace("askview redraw: \(chat.turns.count) turns, id \(chat.id ?? "none"), "
               + "scrollHidden \(scroll.isHidden), page \(isPage)")
         for view in turns.arrangedSubviews { view.removeFromSuperview() }
@@ -1061,8 +1069,18 @@ final class AskView: NSView {
         // The question each answer belongs to, tracked while walking the list so
         // a conversation saved before `Chat.Turn.question` existed still titles
         // its notes from the right place.
-        var asked = ""
-        for (index, turn) in chat.turns.enumerated() {
+        let first = max(0, chat.turns.count - historyLimit)
+        var asked = chat.turns[..<first].last(where: { $0.who == Chat.you })?.text ?? ""
+        if first > 0 {
+            let earlier = NSButton(title: "Show \(min(40, first)) earlier messages",
+                                   target: self, action: #selector(showEarlierTurns))
+            earlier.bezelStyle = .inline
+            earlier.font = .systemFont(ofSize: 12, weight: .medium)
+            earlier.contentTintColor = .controlAccentColor
+            earlier.toolTip = "Load earlier messages in this conversation"
+            addTurn(earlier)
+        }
+        for (index, turn) in chat.turns.enumerated() where index >= first {
             if turn.who == Chat.you { asked = turn.text }
             let built = view(for: turn, asking: turn.question ?? asked)
             // Only the last turn may offer Try again, and `view(for:)` cannot
@@ -1092,7 +1110,17 @@ final class AskView: NSView {
         // the drawer resizes. Starting a new conversation changes what there is
         // to go back to without changing which state the pane is in.
         setPage(isPage)
-        scrollToEnd()
+        if scrollToLatest { scrollToEnd() }
+    }
+
+    @objc private func showEarlierTurns() {
+        historyLimit += 40
+        redraw(scrollToLatest: false)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.scroll.contentView.scroll(to: .zero)
+            self.scroll.reflectScrolledClipView(self.scroll.contentView)
+        }
     }
 
     /// Show `sourceChip` when a reopened conversation names one clear
@@ -2017,6 +2045,7 @@ final class AskView: NSView {
         pinned = false
         if let id = chat.id { Chat.forget(id: id) }
         chat = Chat()
+        historyLimit = 40
         redraw()
     }
 
@@ -2026,6 +2055,7 @@ final class AskView: NSView {
         stop()
         if let id = chat.id { Chat.forget(id: id) }
         chat = Chat()
+        historyLimit = 40
         redraw()
     }
 

@@ -2493,3 +2493,49 @@ exactly when the view is loaded.
 
 Verified by `verify_ask_handoff.sh`, case 2, which asserts that Back out of a
 conversation lands on the home page's own sentence and not on "Your name".
+
+## Every page has a cross, and on a conversation it is not Back
+
+The title bar's right-hand group was Record and the ellipsis in the library,
+New chat and the ellipsis on a conversation. Both end in a cross now, in the
+last slot, on every screen that is a page: a meeting, a note, a person and a
+conversation. The home page does not get one, because there is nothing under
+it to close and a cross there would offer to close the screen it lands on.
+
+**It is the menu's Close promoted, and the menu keeps its row.** Close has
+been the first item of the ellipsis since the pane stopped being a holding
+screen, which made the one navigation everybody needs the one thing behind a
+menu. The item stays where it is: a menu somebody has already learned should
+not lose a row because a button appeared for it, and the sidebar's right-click
+menu shares that delegate and has no toolbar to borrow from.
+
+**The conversation page is the one that is not obvious, and it is deliberately
+not Back.** Chat mode covers whatever page the question was asked from rather
+than replacing it, which is what makes Back a return: `chatReturn` is the mode
+the question came from, and pressing it uncovers the meeting that was on
+screen. A cross that did the same thing would be a second Back drawn in a
+different corner. So `closePage` takes two steps there, `enter(.library)` and
+then `closeSelected()`, and lands on the library home with nothing open. Back
+goes back; the cross puts all of it away. Two controls, two answers.
+
+**`isHome` is what decides whether the item is in the set**, not
+`sidebar.hasSelection`, and the difference is one route. `open(note:)` puts a
+note up with no row selected behind it, because a note reached from a numbered
+reference in an answer can be about four meetings or none. The page is what
+draws the cross, so the cross was there and `sidebar.deselect()` returned
+immediately: `closeSelected` now falls through to the pane swap `onSelect(nil)`
+would have done. `isHome` is already half of `ContentShape`, so
+`syncToolbarWithHome` rebuilds on exactly the click that adds the item or takes
+it away, and no other.
+
+`xmark` rather than `xmark.circle`, because the ellipsis beside it is a bare
+glyph inside the toolbar's own glass and a symbol carrying its own ring would
+be the only control in this title bar wearing a second shape.
+
+Driven through `axprobe` on 0.35.0 over a scratch library, all four pages and
+the one screen that is not a page: home has Settings, Sidebar, Chats, Record
+and Actions and no Close; a meeting, a person and a note each add Close after
+Actions and drop Chats, and pressing it lands on "Select something from the
+list, or ask about your library below."; a conversation opened from a meeting
+carries Back and Close both, and they go to different places, the meeting and
+the home page respectively.

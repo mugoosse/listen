@@ -117,6 +117,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
     private static let chatActionsItem = NSToolbarItem.Identifier("chatActions")
+    /// The way off whatever page is open, in the last slot of the title bar.
+    ///
+    /// It is the menu's Close item promoted to a control, and the menu keeps its
+    /// row: a menu somebody has already learned should not lose an item when a
+    /// button appears for it. The cross sits to the right of the ellipsis on
+    /// every screen that is a page rather than the home one, which is a meeting,
+    /// a note, a person and a conversation. `closePage` is what it runs, and it
+    /// is the menu's verb plus the one step a conversation needs.
+    private static let closeItem = NSToolbarItem.Identifier("closePage")
 
     /// The drawer, so the History toolbar item can borrow its menu.
     private weak var composerHost: DetailWithComposer?
@@ -1084,8 +1093,46 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     /// Put the open page away, back to the library and the composer.
+    ///
+    /// The ordinary case is the selection: a row was clicked, so dropping it is
+    /// what carries the nil onwards to `onSelect` and hands the pane back.
+    ///
+    /// **A page can be open with no row behind it, and then deselecting is a
+    /// no-op.** `open(note:)` is the route: a note reached from a numbered
+    /// reference in an answer selects nothing on the way, because a note can be
+    /// about four meetings or none. Without the second branch the cross was
+    /// drawn over that page, because the page is what puts it there, and
+    /// pressing it did nothing at all.
     @objc func closeSelected() {
-        sidebar.deselect()
+        if sidebar.hasSelection { sidebar.deselect(); return }
+        // What `onSelect(nil)` would have done. `DetailView.show` saves a
+        // half-typed note and stops the player itself, so this is the pane swap
+        // and the surfaces that follow it.
+        detailHost.show(detail)
+        detail.show(nil)
+        askBar.show(nil)
+        updateComposer()
+        syncToolbarWithHome()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    /// The cross in the corner, on every screen that is a page.
+    ///
+    /// It means one thing on all four of them: close what is open and land on
+    /// the library, which is the home page with the composer in the middle of
+    /// it. A meeting, a note and a person are the same move, since all three are
+    /// a row in the one list.
+    ///
+    /// **A conversation takes two steps, and that is what makes it different
+    /// from Back.** Chat mode covers whatever page the question was asked from
+    /// rather than replacing it, so leaving the mode uncovers a meeting nobody
+    /// asked to see again. Back is the control that deliberately goes there,
+    /// and it keeps that job: `chatReturn` is where the question came from. The
+    /// cross is the other answer, "put all of this away", and a control that
+    /// duplicated Back would be worth less than either.
+    @objc func closePage() {
+        if mode == .chat { enter(.library) }
+        closeSelected()
     }
 
     /// Open somebody's card, or the list of everybody.
@@ -1349,7 +1396,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.recordItem,
-         Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem]
+         Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem,
+         Self.closeItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -1444,6 +1492,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 items.append(Self.chatsItem)
             }
             items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
+            // And the way out of it, in the corner, last. Everything in the
+            // ellipsis acts *on* the page; this puts the page away, so it is
+            // outside the menu rather than the first row of it, which is where
+            // Close still is as well.
+            //
+            // **Only when there is a page to close.** The home page has nothing
+            // under the toolbar but the greeting and the composer, and a cross
+            // there would offer to close the screen it lands on. `isHome` is
+            // already half of `contentShape`, so `syncToolbarWithHome` rebuilds
+            // on exactly the click that adds this item or takes it away.
+            if !isHome { items.append(Self.closeItem) }
             return items
         case .settings:
             // The same shape as every other mode: what this pane is on the
@@ -1465,9 +1524,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // word takes the masthead's slot, Back takes the collapse control's,
             // and both sit before the tracking separator where the sidebar's own
             // controls live. What differs is the right-hand half: a conversation
-            // has verbs and a settings section does not, so New chat and the
-            // ellipsis are there, in the slots Record and the recording's
-            // actions menu occupy in the library.
+            // has verbs and a settings section does not, so New chat, the
+            // ellipsis and the cross are there, in the slots Record, the
+            // recording's actions menu and Close occupy in the library.
+            //
+            // The cross is unconditional here where the library asks `isHome`
+            // first, because chat mode is only ever a page: there is no version
+            // of this screen with nothing open on it.
             //
             // **No History.** The list it used to open *is* the sidebar here,
             // and a menu of the rows already down the left of the window is the
@@ -1482,7 +1545,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             if Capture.shared.isRecording { items += [Self.recordItem, .space] }
             // The common move first, which is the order New Recording and the
             // ellipsis are read in on every other screen in this window.
-            items += [Self.newChatItem, Self.chatActionsItem]
+            items += [Self.newChatItem, Self.chatActionsItem, Self.closeItem]
             return items
         }
     }
@@ -1760,6 +1823,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                                  accessibilityDescription: "Actions")
             item.menu = recordingActionsMenu
             item.showsIndicator = false
+            return item
+
+        case Self.closeItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Close"
+            // Named after what is on screen rather than after the control, so
+            // the tooltip on a conversation says conversation. Both land in the
+            // library; see `closePage` for why one of them takes two steps.
+            item.toolTip = mode == .chat
+                ? "Close this conversation and go back to the library"
+                : "Close this page and go back to the library"
+            // `xmark`, not `xmark.circle`: the ellipsis beside it is a bare
+            // glyph inside the toolbar's own glass, and a symbol that draws its
+            // own ring would be the only control in this title bar wearing a
+            // second shape.
+            item.image = NSImage(systemSymbolName: "xmark",
+                                 accessibilityDescription: "Close")
+            item.target = self
+            item.action = #selector(closePage)
             return item
 
         default:

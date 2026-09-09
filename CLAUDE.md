@@ -373,6 +373,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Chats is the third tab, and it took the conversations off "Also about this"
 - The tab is gone when Ask is off, and `NSSegmentedControl` cannot hide a segment
 - Asking whether the responder is in settings *opened* settings
+- Every page has a cross, and on a conversation it is not Back
 - The gap under the tab bar belongs to the column, not to the first line in it
 
 ### `.agents/notes/appkit.md` (35k)

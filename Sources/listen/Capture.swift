@@ -305,8 +305,10 @@ final class Capture {
     /// first minute of the meeting, and that minute is where people say who
     /// they are.
     @discardableResult
-    func start(source: String = "manual", app: String? = nil) throws -> Recording {
+    func start(source: String = "manual", app: String? = nil,
+               suggestedPerson: String? = nil) throws -> Recording {
         if let current { return current }
+        ContextService.shared.yieldToForeground()
         try Library.prepare()
 
         let now = Date()
@@ -324,7 +326,7 @@ final class Capture {
         // `noteApp` exists.
         let bundleID = app ?? MeetingDetector.activeCallers().first
 
-        var recording = Recording(folder: folder, metadata: Metadata(
+        var metadata = Metadata(
             id: id,
             title: Metadata.untitled,
             recorded_at: Metadata.iso(now),
@@ -336,7 +338,9 @@ final class Capture {
             // is the identifier itself, and storing that would leave a name
             // field holding `com.google.Chrome` for ever, which reads as a name
             // everywhere it is printed.
-            app_name: bundleID.flatMap(AppNames.installedName)))
+            app_name: bundleID.flatMap(AppNames.installedName))
+        metadata.suggested_people = suggestedPerson.map { [$0] }
+        var recording = Recording(folder: folder, metadata: metadata)
         try recording.save()
 
         // Named from the calendar here rather than only at the end, so the row

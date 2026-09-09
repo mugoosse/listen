@@ -704,6 +704,22 @@ final class LinkLine: NSTextView {
             owner: self)
         addTrackingArea(area)
         hoverArea = area
+        scrollHover.sync()
+    }
+
+    /// The notes pane scrolls, and the underline is a hover like any other: the
+    /// line moving out from under the pointer is sent nothing at all, so
+    /// without this a link stays underlined halfway up the pane. See
+    /// `ScrollHover`.
+    private lazy var scrollHover = ScrollHover(self) { [weak self] on in
+        guard let self else { return }
+        guard on, let window else { underline(nil); return }
+        underline(link(at: convert(window.mouseLocationOutsideOfEventStream, from: nil)))
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scrollHover.follow()
     }
 
     override func mouseMoved(with event: NSEvent) {

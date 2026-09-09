@@ -11,8 +11,9 @@ notes, and the `listen` CLI does the same thing without an MCP client.
 
 **The whole skill is one idea: narrow before you read.** Transcripts are the
 only expensive thing here and everything else exists so you can decide which
-ones you need. There is no summary layer, no index and no embedding store, and
-there does not need to be. The numbers, measured on a real 33-recording library:
+ones you need. Person context and local semantic search now provide the first
+step: read compact evidence before requesting a transcript. For comparison,
+these numbers were measured on a real 33-recording library:
 
 | | |
 |---|---|
@@ -24,6 +25,46 @@ there does not need to be. The numbers, measured on a real 33-recording library:
 So the limit you will meet is the context window, never the disk. Reading
 fifteen transcripts to answer a question that three would have answered is the
 only way to fail at this.
+
+## Start with person context and meaning
+
+```
+search_context      {"query": "Atlas project"}
+get_person_context  {"person": "Edgar"}
+```
+
+`get_person_context` and `get_project_context` accept a person/project name or
+stable entity ID, `question`, `token_budget` (default 1500, 256–16000), and optional
+`as_of` (YYYY-MM-DD). `list_context_entities` discovers names and reviewed aliases.
+The shared builder returns a brief, relevant details and one-hop relationships,
+source quotations, assertion/status/effective-time fields, pending state and
+omitted count. `offset`/`limit` select the candidate window before the token cap.
+Cite original source IDs from entry evidence, never opaque observation IDs.
+Recorded time is not effective time. Unknown dates stay unknown. Historical
+queries use supported half-open validity intervals; ordinary retrieval excludes
+ended states. Multiple roles may coexist. Do not turn a reported plan into a
+completed event or an old commitment into a current one.
+
+`search_context` combines SQLite FTS5/keyword search with local text embeddings.
+It searches facts, relationships and original passages. `person` means context
+about somebody, including explicit mentions. Optional `kinds` (`fact`,
+`relationship`, `passage`), `tags`, `after`, `before` and `limit` narrow results.
+Apple vectors are language-specific; optional multilingual E5 vectors share one
+space. Incompatible model/revision vectors are never compared. If inference is
+unavailable, keywords still work; there is no remote embedding fallback. Scores
+rank retrieval candidates and never express truth confidence.
+
+Generated memory is fallible and may be incomplete. Check pending/failed counts
+and source dates; read cited passages when exact wording matters. Missing
+context is not evidence that something never happened. Changed/deleted sources
+and hidden facts are excluded automatically. There is no model call on these
+read tools. Generation uses the user's configured background model (Ask's choice by default), via an explicit
+update or the optional background routine.
+
+CLI equivalents are `listen context person <name> --json` and
+`listen context search <query> --json`. `listen context status --json` reports
+coverage; `listen context update` processes pending evidence. Do not turn on
+automatic processing unless the user requests it.
 
 ## 1. Work out who or when, not what
 
@@ -43,7 +84,8 @@ everything recorded on the 14th. `person` here means **was in the room**.
 
 Three meetings about one thing often share no word, no attendee and no week: a
 recruiter screen, a hiring manager chat and a referral catch-up have nothing in
-common but what they are about. A tag is the only thing that says so.
+common but what they are about. A tag records the user's explicit filing; a
+semantic match can suggest related material but does not assign that tag.
 
 ```
 list_tags

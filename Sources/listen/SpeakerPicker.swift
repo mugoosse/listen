@@ -581,6 +581,13 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         let taken = Set(recording.speakers)
         let ranked = VoiceBank.suggestions(for: speaker, in: recording)
 
+        for label in recording.metadata.suggested_people ?? []
+        where label != speaker && !taken.contains(label) {
+            out.append(Candidate(label: label, name: SpeakerName.display(label), email: nil,
+                                 detail: "From the person page where recording started",
+                                 section: "Suggested"))
+        }
+
         // First, and above the voice bank's ranking: a shorter list, a more
         // concrete one, and the one that answers the diarizer's commonest
         // mistake, which is one person arriving as two speakers in one meeting.
@@ -608,7 +615,8 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // score. See `VoiceConfidence`: the number it replaced ran on a scale
         // where the whole answer lives between 0.37 and 0.91, so "60%" read as a
         // coin flip on a match that was not close.
-        for match in ranked where !taken.contains(match.name) {
+        var offered = Set(out.map(\.label))
+        for match in ranked where !taken.contains(match.name) && !offered.contains(match.name) {
             var detail = match.confidence.label
             detail += " · heard in \(match.recordings) "
                 + (match.recordings == 1 ? "recording" : "recordings")
@@ -623,6 +631,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
             out.append(Candidate(label: match.name,
                                  name: SpeakerName.display(match.name), email: nil,
                                  detail: detail, section: "Sounds like"))
+            offered.insert(match.name)
         }
 
         let named = Set(out.map(\.label))
@@ -643,7 +652,7 @@ private final class PickerController: NSViewController, NSTextFieldDelegate {
         // this replaced was an explicit `!person.isYou`, which left an imported
         // mix-only recording, the one kind with no microphone side, unable to
         // say that a speaker was you at all.
-        let offered = Set(out.map(\.label))
+        offered = Set(out.map(\.label))
         for person in People.roster()
         where !taken.contains(person.label) && !offered.contains(person.label) {
             out.append(Candidate(label: person.label, name: person.display, email: nil,

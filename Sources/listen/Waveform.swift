@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ListenKit
 
 /// The peak envelope of a recording, for the player's scrubber.
 ///
@@ -33,10 +34,21 @@ extension Recording {
     /// it is what playback will use. Otherwise both tracks, so the picture
     /// covers both sides of the conversation without paying for a mixdown a
     /// recording nobody replays does not need.
+    ///
+    /// **The master last, and leaving it out was a bug with a screen behind
+    /// it.** A recording this Mac only ever received has neither the tracks
+    /// nor a mixdown: a phone memo once the Mac has taken the audio, and
+    /// anything synced from the other Mac, are `master.flac` and nothing else.
+    /// `playbackURL` already falls back to it and `hasAudio` already counts
+    /// it, so the player card was shown, the meeting played, and the scrubber
+    /// beside it was blank. This is the same fallback in the same order the
+    /// other two use.
     var waveformSources: [URL] {
         let fm = FileManager.default
         if fm.fileExists(atPath: mixURL.path) { return [mixURL] }
-        return tracks
+        if !tracks.isEmpty { return tracks }
+        if let master = AudioMaster.found(in: folder) { return [master.url] }
+        return []
     }
 }
 
@@ -113,11 +125,23 @@ extension Waveform {
             while frame < file.length {
                 do { try file.read(into: buffer) } catch { break }
                 let count = Int(buffer.frameLength)
-                guard count > 0, let channel = buffer.floatChannelData?[0] else { break }
+                guard count > 0, let data = buffer.floatChannelData else { break }
+                // **Every channel, not the first one.** The tracks and the
+                // mixdown are mono, so for years this loop and `[0]` were the
+                // same thing. A `.tracks` master is not: it is the microphone
+                // on the left and the room on the right, and reading channel
+                // zero of one would draw the user talking to nobody, with the
+                // far end of the meeting missing from the picture. Summed per
+                // frame and divided by the channel count, so a stereo master
+                // and the mixdown of the same meeting have the same shape
+                // rather than one being twice the other.
+                let channels = Int(buffer.format.channelCount)
                 for i in 0..<count {
                     let bucket = min(resolution - 1,
                                      Int(Double(frame + AVAudioFramePosition(i)) * scale))
-                    let value = Double(channel[i])
+                    var value = 0.0
+                    for c in 0..<channels { value += Double(data[c][i]) }
+                    value /= Double(channels)
                     energy[bucket] += value * value
                     counts[bucket] += 1
                 }

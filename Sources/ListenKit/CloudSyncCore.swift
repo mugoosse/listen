@@ -302,13 +302,33 @@ public struct CloudSyncCore: Sendable {
         var base = state.base
         defer { state.everSeen = seen; state.base = base }
 
+        // Read once, before the loop, and consulted per record below. A record
+        // an active tombstone names is not written to disk at all: applying the
+        // list afterwards would be correct, but it would download a whole
+        // recording, write it, and move it straight to the trash, leaving a
+        // fortnight of `.trash` entries for meetings this device is not
+        // supposed to have. The window it happens in is small and is exactly
+        // the one this feature is about.
+        var deleted = Deletions.load(library).active(now: now)
+
         do {
             let changes = try await store.changes(in: .library, since: base[file: "token"],
                                                   withAssets: !progressive)
 
-            let total = changes.changed.count
+            // **Blobs first, because one of them decides what the rest are.**
+            // The deletion list is an r3 like `contacts.json`, and a restore
+            // arriving in the same batch as the recording it restores has to be
+            // read before that recording is judged, or the record is skipped as
+            // deleted and the change token moves past it: the feed never
+            // mentions it again, and the restore is lost until somebody runs
+            // `listen sync refetch`. Nothing else in a pass depends on the
+            // order, and blobs are at most a handful.
+            let ordered = changes.changed.sorted { a, b in
+                (a.type == .blob ? 0 : 1) < (b.type == .blob ? 0 : 1)
+            }
+            let total = ordered.count
             if total > 4 { progress?("Fetching \(total) items") }
-            for (index, record) in changes.changed.enumerated() {
+            for (index, record) in ordered.enumerated() {
                 if total > 4, index % 5 == 0 {
                     progress?("Fetching \(index + 1) of \(total)")
                 }
@@ -325,8 +345,9 @@ public struct CloudSyncCore: Sendable {
                         // following push never repairs the cloud record. Let
                         // push fetch and compare once; an exact match is still
                         // a no-op, while a richer folder is sent.
-                        let pulled = try await pullRecording(record, base: &base,
-                                                             into: &report)
+                        guard let pulled = try await pullRecording(
+                            record, deleted: deleted, base: &base, into: &report)
+                        else { break }
                         let id = pulled.id
                         // Remember who holds the audio even when that is
                         // nobody. A device without the bytes had no way to
@@ -346,8 +367,17 @@ public struct CloudSyncCore: Sendable {
                                 ? CloudSyncCore.acknowledged
                                 : CloudSyncCore.claimed(at: now)
                         }
-                    case .note: try pullNote(record, base: &base, into: &report)
-                    case .blob: try pullBlob(record, into: &report)
+                    case .note: try pullNote(record, deleted: deleted, base: &base,
+                                             into: &report)
+                    case .blob:
+                        try await pullBlob(record, into: &report)
+                        // One of the six blobs is the deletion list itself, and
+                        // a tombstone arriving mid-loop has to apply to the
+                        // records after it rather than a pass later. Which blob
+                        // it was is inside the sealed payload, so this reloads
+                        // for any of them: a small file read, at most six times
+                        // a pass.
+                        deleted = Deletions.load(library).active(now: now)
                     default: break
                     }
                 } catch {
@@ -383,6 +413,12 @@ public struct CloudSyncCore: Sendable {
         } catch {
             report.note(error)
         }
+
+        // Whatever the list says, applied to what is on disk, and outside the
+        // `do` on purpose: a tombstone that arrived on an earlier pass is still
+        // owed even when this pass's fetch failed on the network. The pull is
+        // the half that obeys; `pushDeletions` is the half that publishes.
+        applyDeletions(&base, &seen, into: &report)
 
         // Contents after rows, and inside the same pass, so one pull is still
         // one pull as far as its report and its caller are concerned.
@@ -544,10 +580,17 @@ public struct CloudSyncCore: Sendable {
     struct Pulled { var id: String; var delivered: Bool }
 
     @discardableResult
-    private func pullRecording(_ record: StoredRecord, base: inout SyncState,
-                               into report: inout CloudReport) async throws -> Pulled {
+    private func pullRecording(_ record: StoredRecord, deleted: Set<String>,
+                               base: inout SyncState,
+                               into report: inout CloudReport) async throws -> Pulled? {
         let blob = try CloudRecords.openRecording(record, key: key)
         guard Metadata.isValidID(blob.id) else { throw InvalidName.id(blob.id) }
+        // Deleted on some device, and this record is the copy that has not
+        // caught up yet. Nil rather than a `Pulled`, so the caller does not
+        // stamp `audioOn` or a claim for a recording it is not keeping.
+        guard !deleted.contains(Deletions.key(Deletions.recording, blob.id)) else {
+            return nil
+        }
         let folder = library.folder(for: blob.id)
         let isNew = Recording.load(folder) == nil
 
@@ -709,10 +752,12 @@ public struct CloudSyncCore: Sendable {
         return outcome
     }
 
-    private func pullNote(_ record: StoredRecord, base: inout SyncState,
+    private func pullNote(_ record: StoredRecord, deleted: Set<String>,
+                          base: inout SyncState,
                           into report: inout CloudReport) throws {
         let blob = try CloudRecords.openNote(record, key: key)
         guard Note.isValidSlug(blob.slug) else { throw InvalidName.slug(blob.slug) }
+        guard !deleted.contains(Deletions.key(Deletions.note, blob.slug)) else { return }
         let mine = library.note(blob.slug)
 
         switch decideNote(base: base[note: blob.slug], local: mine?.version,
@@ -738,13 +783,65 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
-    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport) throws {
+    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport) async throws {
+        let header = try CloudRecords.blobHeader(record, key: key)
+        guard policy.blobs.contains(header.name) else { return }
+        var record = record
+        if let asset = header.contentsAsset, record.assets[asset] == nil {
+            guard let complete = try await store.fetch(record.name, in: .library) else {
+                throw ContextDatabase.Failure(message: "The synced memory is not available yet.")
+            }
+            record = complete
+        }
         let blob = try CloudRecords.openBlob(record, key: key)
-        guard policy.blobs.contains(blob.name) else { return }
+        if blob.name == MemoryPreferences.filename {
+            _ = try MemoryPreferences.receive(blob.contents, root: library.root)
+            report.pulledSidecars += 1; return
+        }
+        if blob.name == ContextSync.editsFilename {
+            _ = try ContextSync.receive(blob.contents, root: library.root)
+            report.pulledSidecars += 1; return
+        }
+        // Merged, never written over. The caller applies whatever this adds
+        // before the pass is out; see `applyDeletions`.
+        if blob.name == Deletions.filename {
+            _ = try Deletions.receive(blob.contents, library: library)
+            report.pulledSidecars += 1; return
+        }
+        if blob.name == ContextSnapshot.filename { _ = try ContextSnapshot.decode(blob.contents) }
         let url = library.root.appendingPathComponent(blob.name)
         if let have = try? Data(contentsOf: url), sha256Hex(have) == blob.version { return }
         try blob.contents.write(to: url, options: .atomic)
         report.pulledSidecars += 1
+    }
+
+    /// Obey every deletion this library has been told about, wherever it was
+    /// made.
+    ///
+    /// Called three times a pass and cheap twice: after the pull's changed
+    /// records, at the top of the push, and once more inside `pushDeletions`,
+    /// which runs after the blob loop that is the third way a tombstone
+    /// arrives. An empty list returns immediately, so the two extra calls cost
+    /// a set construction on a library nobody has deleted anything from.
+    ///
+    /// **Before the push, not only after the pull**, and that is the whole
+    /// point of it. The failure this replaces was a device pushing work of its
+    /// own into the gap between a deletion being made and being seen: nothing
+    /// consulted the deletion, so `library.all()` still listed the recording
+    /// and the loop below sent it back. Filtering the library through this
+    /// first means `push`, `pushMasters`, `pushVoiceprints` and the phone's
+    /// `upload` are all covered by one call rather than four guards.
+    @discardableResult
+    private func applyDeletions(_ base: inout SyncState, _ seen: inout Set<String>,
+                                into report: inout CloudReport,
+                                now: Date = Date()) -> Deletions.Applied {
+        let active = Deletions.load(library).active(now: now)
+        let applied = Deletions.apply(active, to: library, base: &base, seen: &seen,
+                                      key: key, policy: policy)
+        report.deletedLocally += applied.recordings.count + applied.notes.count
+        report.conflicts.append(contentsOf: applied.conflicts)
+        if applied.didSomething { arrived?() }
+        return applied
     }
 
     /// Remove a local thing whose record has gone from the container.
@@ -761,21 +858,14 @@ public struct CloudSyncCore: Sendable {
         for recording in library.all()
         where CloudNaming.recordName(.recording, recording.id, key: key) == recordName {
             Trash.accept(recording.folder, in: library)
-            base[sent: recording.id] = nil
-            base.forgetSidecars(recording.id)
-            base[owed: recording.id] = false
-            base[audioOn: recording.id] = nil
-            base[master: recording.id] = nil
-            base[masterMiss: recording.id] = nil
-            base[bank: recording.id] = nil
-            base[pinned: recording.id] = false
+            base.forgetRecording(recording.id)
             return true
         }
         for note in library.allNotes()
         where CloudNaming.recordName(.note, note.slug, key: key) == recordName {
             Trash.accept(library.notes.appendingPathComponent(note.slug + ".md"),
                          in: library)
-            base[note: note.slug] = nil
+            base.forgetNote(note.slug)
             return true
         }
         return false
@@ -1226,7 +1316,25 @@ public struct CloudSyncCore: Sendable {
 
     public func push(into report: inout CloudReport) async {
         var base = state.base
-        defer { state.base = base }
+        var seen = state.everSeen
+        defer { state.base = base; state.everSeen = seen }
+
+        // **First, so that everything below reads a library with the deleted
+        // things already out of it.** This is the line the 7 September
+        // resurrection needed: a Mac waking with work of its own listed the
+        // recording, found no record, and created one. Every loop after this
+        // point walks `library.all()`, so one call covers them all.
+        applyDeletions(&base, &seen, into: &report)
+
+        // **Published before the recordings, and that ordering is load bearing
+        // for exactly one case.** A restore puts the recording back on this
+        // device and clears its `sent:` stamp, so the loop below pushes the
+        // record again. If the list went up after it, another device could pull
+        // that record while still holding the active tombstone, skip it, and
+        // only then learn of the restore: the token has moved past the record
+        // by then and the feed will never mention it again. The generic blob
+        // loop skips this name because of it.
+        await pushBlob(Deletions.filename, into: &report)
 
         // Only the ones that have changed since this device last sent them.
         //
@@ -1269,6 +1377,40 @@ public struct CloudSyncCore: Sendable {
             let name = CloudNaming.recordName(.recording, recording.id, key: key)
             do {
                 let existing = try await store.fetch(name, in: .library)
+
+                // **Gone from the container, and this device has held it
+                // before.** That is somebody's deletion, not a recording this
+                // device has yet to send, and the two are only distinguishable
+                // by what this device remembers: a recording it has never
+                // pushed and never received is not its to speak about.
+                //
+                // The note loop below has had this branch for a while, and its
+                // comment claimed recordings were safe from the same bug
+                // "by their stamps, which match without a fetch". They are not,
+                // and the difference is a recording that changed locally: a
+                // master arriving, an audio reclaim, a speaker labelled, a
+                // pipeline finishing. Any of those puts the recording in
+                // `mine`, and then this fetch is the first thing that asks the
+                // container about a record somebody deleted an hour ago.
+                // Measured on 7 September 2026, three recordings, twice.
+                //
+                // A tombstone would normally have taken this recording off the
+                // disk long before the loop reached it. This is for the
+                // deletions no tombstone was written for: one made by a build
+                // that predates `Deletions`, or by `listen sync forget`.
+                if existing == nil, seen.contains(name) || base[sent: recording.id] != nil {
+                    if Deletions.unsentEdit(recording, base: base, policy: policy) {
+                        report.conflicts.append(
+                            "\(recording.id): deleted elsewhere, and edited here "
+                            + "since it was sent")
+                    }
+                    Trash.accept(recording.folder, in: library)
+                    base.forgetRecording(recording.id)
+                    seen.remove(name)
+                    report.deletedLocally += 1
+                    continue
+                }
+
                 var record = try CloudRecords.recording(recording, policy: policy, key: key)
                 if let existing, !ingests {
                     record = try CloudRecords.addingPhoneContent(record, to: existing, key: key)
@@ -1338,8 +1480,14 @@ public struct CloudSyncCore: Sendable {
                 // base: a note never pushed has none. Without this the deleting
                 // device removes the record and the next device to push puts it
                 // straight back, so a deleted note returns and nothing reports
-                // anything. Recordings are safe from this by their stamps,
-                // which match without a fetch; notes have no stamp.
+                // anything.
+                //
+                // **This used to say recordings were safe from it "by their
+                // stamps, which match without a fetch". They were not.** A
+                // recording that changed locally is in `mine` and is fetched,
+                // and then it takes exactly this branch's absence to resurrect
+                // it. The recording loop above now has the same guard, and the
+                // sentence is kept here as the record of a wrong one.
                 //
                 // Ordinarily the pull earlier in the same pass has already
                 // applied the deletion. This is for the pass whose pull failed
@@ -1385,53 +1533,49 @@ public struct CloudSyncCore: Sendable {
         }
 
         for name in policy.blobs {
-            let url = library.root.appendingPathComponent(name)
-            guard let contents = try? Data(contentsOf: url) else { continue }
-            let recordName = CloudNaming.recordName(.blob, name, key: key)
-            do {
-                let existing = try await store.fetch(recordName, in: .library)
-                if let existing,
-                   try CloudRecords.openBlob(existing, key: key).version == sha256Hex(contents) {
-                    continue
-                }
-                var record = try CloudRecords.blob(name: name, contents: contents, key: key)
-                record.changeTag = existing?.changeTag
-                _ = try await store.save(record)
-            } catch {
-                report.note(error, about: name)
-            }
+            if name == ContextSnapshot.filename && !policy.publishesContext { continue }
+            // Already sent, at the top of this function, and for a reason
+            // stated there.
+            if name == Deletions.filename { continue }
+            await pushBlob(name, into: &report)
         }
 
-        await pushDeletions(&base, into: &report)
+        await pushDeletions(&base, &seen, into: &report)
     }
-
-    /// Take out of the container what this device has deleted.
+    /// Take out of the container everything this library has been told to
+    /// delete, wherever it was told.
     ///
-    /// Deletion was receive-only until now: `deleteLocally` applied what the
-    /// container reported, and nothing reported the other way. So a recording
-    /// deleted in the Mac app went from that Mac and stayed in the container
-    /// and on every other device for ever, and the change token being
-    /// incremental was the only reason it did not immediately come back. Found
-    /// by deleting one recording and counting: 71 on this Mac, 72 in the
-    /// container. The offline suite passed throughout, because the seam it
-    /// covered called `store.delete` itself and then checked the receiving
-    /// device, which tests half a round trip.
+    /// **This used to infer a deletion from an absence, and that is the bug it
+    /// no longer has.** The rule was "a `sent:` stamp with no folder was
+    /// deleted here", which cannot be told apart from a disk that failed to
+    /// mount, a library restored underneath a running app, or a state directory
+    /// that outlived the tree it described. One of those happened: a scratch
+    /// library removed and recreated at the same path kept its state, the next
+    /// pass saw a stamp for every recording and a folder for none, and
+    /// seventy-three recordings and fourteen notes went from the container and
+    /// from both Macs. The recovery was a backup.
     ///
-    /// **A local absence is only a deletion if the folder is gone.** Not if it
-    /// merely fails to load: `Library.all` is a compactMap over `Recording
-    /// .load`, so one unreadable `metadata.json` looks exactly like a deleted
-    /// recording, and treating it as one would delete the last good copy of a
-    /// meeting from every device at once. Checking the directory is what makes
-    /// a corrupt sidecar cost nothing.
+    /// The guard that was bolted on afterwards refused to send a deletion that
+    /// looked like a whole library vanishing. It worked, and it was a heuristic
+    /// standing in for a fact nobody had written down. Now the fact is written
+    /// down: a deletion is an entry in `Deletions`, made by the code path a
+    /// person's click reaches, and **an absence with no tombstone behind it is
+    /// not a deletion at all**. A library that loses every file now publishes
+    /// nothing rather than being talked out of it, and the crude check that
+    /// used to decide is gone along with the sentence it printed.
     ///
-    /// The stamps are what make this answerable at all. An id this device has
-    /// pushed and no longer holds was deleted here; an id it has never pushed
-    /// is not this device's to speak about, which is also why nothing is
-    /// deleted on the first pass after the stamps arrive.
-    private func pushDeletions(_ base: inout SyncState, into report: inout CloudReport) async {
-        let manager = FileManager.default
-        var drop: [String] = []
-
+    /// The container is asked once per entry, not once per pass: `tombdone:`
+    /// marks what has already been taken out, and is dropped again when the
+    /// entry stops being active, so a restore followed by a second deletion is
+    /// not a silent no-op.
+    ///
+    /// `seen` is the caller's, deliberately: `push` holds it for the whole pass
+    /// and writes it back once. A copy taken here would be read before the
+    /// caller's defer ran and written after it, so each would quietly undo the
+    /// other's removals.
+    private func pushDeletions(_ base: inout SyncState, _ seen: inout Set<String>,
+                               into report: inout CloudReport,
+                               now: Date = Date()) async {
         // Voiceprint debts first, and on every device: the phone does not
         // keep voiceprints, but a recording deleted from the phone still has
         // to take its r6 record with it, and this is the retry path when
@@ -1439,119 +1583,124 @@ public struct CloudSyncCore: Sendable {
         await settleVoiceprintDebts(&base, into: &report)
         await settleMasterDebts(&base, into: &report)
 
-        // A library that has lost everything is not a library that deleted
-        // everything.
-        //
-        // This is the failure it exists to stop, and it happened: a scratch
-        // library was removed and recreated at the same path, its state
-        // directory survived because that is keyed on the path, and the next
-        // pass saw a stamp for every recording and a folder for none. It
-        // deleted seventy-three recordings and fourteen notes from the
-        // container, both Macs followed, and the recovery was a backup.
-        //
-        // Nothing about that required a scratch library. A disk that fails to
-        // mount, a library restored underneath a running app, a folder moved
-        // in the Finder: each of them presents as "everything is gone" and each
-        // would have propagated. One person deleting one meeting looks nothing
-        // like this, so the two are worth telling apart even though the check
-        // is crude.
-        //
-        // Refuse rather than ask, and report it, because a sync engine that is
-        // this unsure of itself should not be the thing that decides.
-        var missingRecordings = 0, missingNotes = 0
-        for key in base.base.keys {
-            if key.hasPrefix(SyncState.sentKey("")) {
-                let id = String(key.dropFirst(SyncState.sentKey("").count))
-                guard !id.hasPrefix("audio:") else { continue }
-                if !manager.fileExists(atPath: library.folder(for: id).path) {
-                    missingRecordings += 1
-                }
-            } else if key.hasPrefix(SyncState.noteKey("")) {
-                let slug = String(key.dropFirst(SyncState.noteKey("").count))
-                if !manager.fileExists(
-                    atPath: library.notes.appendingPathComponent(slug + ".md").path) {
-                    missingNotes += 1
-                }
-            }
-        }
-        let heldRecordings = library.all().count
-        let heldNotes = library.allNotes().count
+        // Once more, because the blob loop that ran between the top of `push`
+        // and here is the third way a tombstone arrives. Free when the list is
+        // empty, which it is for a library nobody has deleted anything from.
+        applyDeletions(&base, &seen, into: &report, now: now)
 
-        // Per kind, not in total. The first attempt compared everything to
-        // everything, and the notes that survived kept the total above zero
-        // while every recording had gone, which is the exact shape of the
-        // event this is here to stop.
-        //
-        // Vanishing entirely is the signal. More than one, because deleting
-        // your last remaining recording is a thing somebody may genuinely do
-        // and is indistinguishable from it otherwise.
-        let gone = (heldRecordings == 0 && missingRecordings > 1)
-            || (heldNotes == 0 && missingNotes > 1)
-            || (missingRecordings + missingNotes > 5
-                && missingRecordings + missingNotes > heldRecordings + heldNotes)
-        if gone {
-            report.errors.append(
-                "\(missingRecordings + missingNotes) items are missing from this "
-                + "device and only \(heldRecordings + heldNotes) remain, so nothing "
-                + "was deleted from iCloud. If you meant to empty this library, "
-                + "remove its sync state.")
-            return
+        let list = Deletions.load(library)
+        let active = list.active(now: now)
+
+        // Anything marked done that is no longer active: expired, or put back.
+        // Dropped here rather than left to grow, and dropped *before* the loop
+        // below, so a restore and a second deletion inside one pass still
+        // reaches the container.
+        for key in base.base.keys where key.hasPrefix(SyncState.tombDoneKey("")) {
+            let entry = String(key.dropFirst(SyncState.tombDoneKey("").count))
+            if !active.contains(entry) { base.base[key] = nil }
         }
 
-        for key in base.base.keys where key.hasPrefix(SyncState.sentKey("")) {
-            let id = String(key.dropFirst(SyncState.sentKey("").count))
-            // `sent:audio:<id>` marks an upload, not a recording this device
-            // claims to hold, and an upload is deleted by whoever ingests it.
-            if id.hasPrefix("audio:") { continue }
-            guard !manager.fileExists(atPath: library.folder(for: id).path) else { continue }
-            do {
-                try await store.delete(CloudNaming.recordName(.recording, id, key: self.key),
-                                       in: .library)
-                report.deletedRemotely += 1
-                drop.append(key)
-                // The voiceprint goes with the recording. Not gated on
-                // either voiceprint flag: a deletion this device originates
-                // has to clean the zone whether or not it reads that zone,
-                // and a recording nobody holds has no bank to defend. A miss
-                // is a no-op, a failure becomes a debt.
+        for entry in list.entries where active.contains(entry.key) {
+            guard base.base[SyncState.tombDoneKey(entry.key)] == nil else { continue }
+            switch entry.kind {
+            case Deletions.recording:
+                let id = entry.id
                 do {
-                    try await store.delete(CloudNaming.recordName(.voiceprint, id,
-                                                                  key: self.key),
-                                           in: .voiceprints)
+                    try await store.delete(
+                        CloudNaming.recordName(.recording, id, key: self.key), in: .library)
+                    report.deletedRemotely += 1
+                    // The voiceprint goes with the recording. Not gated on
+                    // either voiceprint flag: a deletion this device originates
+                    // has to clean the zone whether or not it reads that zone,
+                    // and a recording nobody holds has no bank to defend. A
+                    // miss is a no-op, a failure becomes a debt.
+                    do {
+                        try await store.delete(
+                            CloudNaming.recordName(.voiceprint, id, key: self.key),
+                            in: .voiceprints)
+                    } catch {
+                        base.base[SyncState.r6DropKey(id)] = "due"
+                    }
+                    // And the audio master, which is the largest thing a
+                    // deleted recording can leave behind: tens of megabytes in
+                    // a zone nothing lists, so nothing would ever notice it
+                    // again.
+                    do {
+                        try await store.delete(CloudRecords.masterName(id, key: self.key),
+                                               in: .masters)
+                    } catch {
+                        base.base[SyncState.r5DropKey(id)] = "due"
+                    }
+                    base.forgetRecording(id)
+                    seen.remove(CloudNaming.recordName(.recording, id, key: self.key))
+                    // Last, and only once the r1 delete landed. A failure
+                    // leaves no mark, so the next pass tries the whole entry
+                    // again.
+                    base.base[SyncState.tombDoneKey(entry.key)] = Metadata.stamp(now)
                 } catch {
-                    base.base[SyncState.r6DropKey(id)] = "due"
+                    report.note(error, about: "delete \(id)")
                 }
-                // And the audio master, which is the largest thing a deleted
-                // recording can leave behind: tens of megabytes in a zone
-                // nothing lists, so nothing would ever notice it again.
+            case Deletions.note:
+                let slug = entry.id
                 do {
-                    try await store.delete(CloudRecords.masterName(id, key: self.key),
-                                           in: .masters)
+                    try await store.delete(
+                        CloudNaming.recordName(.note, slug, key: self.key), in: .library)
+                    report.deletedRemotely += 1
+                    base.forgetNote(slug)
+                    seen.remove(CloudNaming.recordName(.note, slug, key: self.key))
+                    base.base[SyncState.tombDoneKey(entry.key)] = Metadata.stamp(now)
                 } catch {
-                    base.base[SyncState.r5DropKey(id)] = "due"
+                    report.note(error, about: "delete note \(slug)")
                 }
-                base[master: id] = nil
-                base[pinned: id] = false
-            } catch {
-                report.note(error, about: "delete \(id)")
+            default:
+                // A kind this build has never heard of, carried by `merged` so
+                // a newer Listen's deletions survive a round trip through this
+                // one. Nothing here can act on it and nothing should try.
+                continue
             }
         }
+    }
 
-        for key in base.base.keys where key.hasPrefix(SyncState.noteKey("")) {
-            let slug = String(key.dropFirst(SyncState.noteKey("").count))
-            let file = library.notes.appendingPathComponent(slug + ".md")
-            guard !manager.fileExists(atPath: file.path) else { continue }
-            do {
-                try await store.delete(CloudNaming.recordName(.note, slug, key: self.key),
-                                       in: .library)
-                report.deletedRemotely += 1
-                drop.append(key)
-            } catch {
-                report.note(error, about: "delete note \(slug)")
+    /// Put one library-level file into the container.
+    ///
+    /// Extracted from the loop that used to be the only caller, because the
+    /// deletion list has to go up before the recordings loop and everything
+    /// else may go up after it. One body, so the three files with a merge hook
+    /// cannot be merged one way here and another way there.
+    ///
+    /// A merge hook is what makes a blob converge rather than letting the last
+    /// writer win: the file this device holds is reconciled with the one the
+    /// container holds, and the result is both written to disk and published.
+    private func pushBlob(_ name: String, into report: inout CloudReport) async {
+        let url = library.root.appendingPathComponent(name)
+        guard var contents = try? Data(contentsOf: url) else { return }
+        let recordName = CloudNaming.recordName(.blob, name, key: key)
+        do {
+            let existing = try await store.fetch(recordName, in: .library)
+            if name == MemoryPreferences.filename, let existing {
+                contents = try MemoryPreferences.receive(CloudRecords.openBlob(existing, key: key).contents, root: library.root)
             }
+            if name == ContextSync.editsFilename, let existing {
+                contents = try ContextSync.receive(CloudRecords.openBlob(existing, key: key).contents, root: library.root)
+            }
+            // The other side of the merge, and the one that makes two devices
+            // deleting different things in the same window both land: whichever
+            // pushes second starts from a fetch of the first rather than from
+            // its own list alone.
+            if name == Deletions.filename, let existing {
+                contents = try Deletions.receive(
+                    CloudRecords.openBlob(existing, key: key).contents, library: library)
+            }
+            if let existing,
+               try CloudRecords.openBlob(existing, key: key).version == sha256Hex(contents) {
+                return
+            }
+            var record = try CloudRecords.blob(name: name, contents: contents, key: key)
+            record.changeTag = existing?.changeTag
+            _ = try await store.save(record)
+        } catch {
+            report.note(error, about: name)
         }
-
-        for key in drop { base.base[key] = nil }
     }
 
     /// Whether the container's copy already says what ours does.
@@ -2164,11 +2313,29 @@ public struct CloudSyncCore: Sendable {
         guard let changes = try? await store.changes(in: .transfer, since: nil,
                                                      withAssets: false) else { return }
 
+        let deleted = Deletions.load(library).active(now: now)
+
         for record in changes.changed {
             // A cancelled pass has to stop here, or the per-record catch
             // below swallows the cancellation and the loop walks the rest of
             // the library making failed calls. See `CloudSyncHost`'s watchdog.
             if Task.isCancelled { break }
+
+            // **A deleted memo must not be ingested back into the library.**
+            // The phone re-offers a recording whose transfer has gone and whose
+            // marker is older than `offerRecheck`, which is exactly what a Mac
+            // deleting the recording leaves behind: the transfer is deleted by
+            // whoever ingests it, so from the phone's side the two are
+            // indistinguishable. Without this the pipe puts the meeting back on
+            // the Mac that just deleted it, folder and all, every fifteen
+            // minutes. The header opens without the asset bodies, which is what
+            // the listing above asked for.
+            if let waiting = try? CloudRecords.openTransfer(record, key: key),
+               deleted.contains(Deletions.key(Deletions.recording, waiting.id)) {
+                try? await store.delete(record.name, in: .transfer)
+                continue
+            }
+
             guard let claimed = try? await claim(record, preferred: preferred,
                                                  window: window, now: now), claimed
             else { continue }

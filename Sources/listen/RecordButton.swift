@@ -70,7 +70,7 @@ final class RecordButton: NSView {
         }
     }
 
-    private let label = NSTextField(labelWithString: "New Recording")
+    private let label = NSTextField(labelWithString: "Record")
     private let icon = NSImageView()
     /// Everything that is drawn on top of the glass, in one view, because on
     /// macOS 26 that view is handed to `NSGlassEffectView` rather than added
@@ -221,7 +221,7 @@ final class RecordButton: NSView {
         let symbol: String
         switch state {
         case .start:
-            label.stringValue = "New Recording"
+            label.stringValue = "Record"
             symbol = "record.circle"
             toolTip = "Record this Mac's audio and your microphone (⌘N)"
         case .stop:

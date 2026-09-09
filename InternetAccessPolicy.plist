@@ -81,9 +81,9 @@
             <key>Port</key>
             <string>443</string>
             <key>Purpose</key>
-            <string>Downloading the Parakeet speech model you selected, once, about 2.4 GB. No audio is ever uploaded.</string>
+            <string>Downloading selected models: Parakeet speech (about 2.4 GB) or optional multilingual text search (about 500 MB). Downloads contain model files; audio, notes and transcripts are not uploaded.</string>
             <key>DenyConsequences</key>
-            <string>The Parakeet engines cannot be downloaded. The Apple Intelligence engine needs no download and still works.</string>
+            <string>Selected speech or multilingual search models cannot be downloaded. Existing local models and keyword search still work.</string>
         </dict>
         <dict>
             <key>IsIncoming</key>

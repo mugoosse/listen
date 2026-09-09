@@ -92,6 +92,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Built once each and kept, so returning to a section finds it where it
     /// was left rather than scrolled back to the top with its fields cleared.
     private var panes: [SettingsTab: Pane] = [:]
+    /// Retained for the life of its sheet. The window owns the creation flow;
+    /// every doorway into it therefore produces the same person and lands on the
+    /// same page.
+    private var addPersonController: AddPersonController?
     /// Whether the sidebar was collapsed before settings forced it open.
     private var sidebarWasCollapsed = false
 
@@ -113,6 +117,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
     private static let chatActionsItem = NSToolbarItem.Identifier("chatActions")
+    /// The way off whatever page is open, in the last slot of the title bar.
+    ///
+    /// It is the menu's Close item promoted to a control, and the menu keeps its
+    /// row: a menu somebody has already learned should not lose an item when a
+    /// button appears for it. The cross sits to the right of the ellipsis on
+    /// every screen that is a page rather than the home one, which is a meeting,
+    /// a note, a person and a conversation. `closePage` is what it runs, and it
+    /// is the menu's verb plus the one step a conversation needs.
+    private static let closeItem = NSToolbarItem.Identifier("closePage")
 
     /// The drawer, so the History toolbar item can borrow its menu.
     private weak var composerHost: DetailWithComposer?
@@ -520,6 +533,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         w.titleVisibility = .hidden
         w.styleMask.insert(.fullSizeContentView)
         w.titlebarAppearsTransparent = true
+        // A content-view-controller window can inherit the split controller's
+        // current fitting ceiling. That left the library capped at 1,136
+        // points even though the main split item has no maximum thickness.
+        // The panes are fluid; their minimum thicknesses still protect the
+        // usable layout, while the window itself should fill a large display.
+        w.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                  height: CGFloat.greatestFiniteMagnitude)
         w.setContentSize(NSSize(width: 1040, height: 680))
         w.center()
         // Frame first, then the divider. Restoring the frame resizes the
@@ -893,8 +913,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             //
             // Settings *does* swap the pane, in `showPane`, so coming back from
             // there has something to restore.
-            if was != .chat { detailHost.show(detail) }
+            if was != .chat {
+                if sidebar.selectedNote != nil { detailHost.show(notePane) }
+                else if sidebar.selectedPerson != nil { detailHost.show(personPane) }
+                else { detailHost.show(detail) }
+            }
             reload()
+            if was == .settings { askBar.refreshModelSelection() }
             // **`isViewLoaded` first, and asking without it was a bug in the
             // shipped app.** `settingsNav.view` *loads* the view controller,
             // `SettingsNavViewController` selects its first row as it comes up,
@@ -1068,8 +1093,46 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     /// Put the open page away, back to the library and the composer.
+    ///
+    /// The ordinary case is the selection: a row was clicked, so dropping it is
+    /// what carries the nil onwards to `onSelect` and hands the pane back.
+    ///
+    /// **A page can be open with no row behind it, and then deselecting is a
+    /// no-op.** `open(note:)` is the route: a note reached from a numbered
+    /// reference in an answer selects nothing on the way, because a note can be
+    /// about four meetings or none. Without the second branch the cross was
+    /// drawn over that page, because the page is what puts it there, and
+    /// pressing it did nothing at all.
     @objc func closeSelected() {
-        sidebar.deselect()
+        if sidebar.hasSelection { sidebar.deselect(); return }
+        // What `onSelect(nil)` would have done. `DetailView.show` saves a
+        // half-typed note and stops the player itself, so this is the pane swap
+        // and the surfaces that follow it.
+        detailHost.show(detail)
+        detail.show(nil)
+        askBar.show(nil)
+        updateComposer()
+        syncToolbarWithHome()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    /// The cross in the corner, on every screen that is a page.
+    ///
+    /// It means one thing on all four of them: close what is open and land on
+    /// the library, which is the home page with the composer in the middle of
+    /// it. A meeting, a note and a person are the same move, since all three are
+    /// a row in the one list.
+    ///
+    /// **A conversation takes two steps, and that is what makes it different
+    /// from Back.** Chat mode covers whatever page the question was asked from
+    /// rather than replacing it, so leaving the mode uncovers a meeting nobody
+    /// asked to see again. Back is the control that deliberately goes there,
+    /// and it keeps that job: `chatReturn` is where the question came from. The
+    /// cross is the other answer, "put all of this away", and a control that
+    /// duplicated Back would be worth less than either.
+    @objc func closePage() {
+        if mode == .chat { enter(.library) }
+        closeSelected()
     }
 
     /// Open somebody's card, or the list of everybody.
@@ -1098,6 +1161,37 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             ?? People.roster().first(where: { SpeakerName.matches($0.label, label) })
         else { NSSound.beep(); return }
         sidebar.reveal(person: person)
+    }
+
+    /// Move from a recent sample on the home page to the complete collection
+    /// in the one library list. "All" clears an old search or lens first; a
+    /// stale tag filter would otherwise make the destination smaller than the
+    /// action promises.
+    func showAll(_ kind: LibraryKind) {
+        if window == nil { build() }
+        enter(.library)
+        sidebar.clearFilters()
+        sidebar.filter(byKind: kind)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Add somebody before a recording has introduced them, then open the page
+    /// where notes, recordings and an optional summary can accumulate.
+    func addPerson(suggestedName: String = "") {
+        if window == nil { build() }
+        enter(.library)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        let controller = AddPersonController(suggestedName: suggestedName) { [weak self] person in
+            guard let self else { return }
+            self.addPersonController = nil
+            self.sidebar.reload()
+            self.showPerson(person.label)
+        }
+        addPersonController = controller
+        controller.present(on: window)
     }
 
     private func showPane(_ tab: SettingsTab) {
@@ -1146,7 +1240,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // finished appears without anyone clicking away and back.
         if let id = sidebar.selectedRecording?.id, let fresh = Recording.find(id) {
             detail.show(fresh)
-        } else if sidebar.selectedRecording == nil {
+        } else if sidebar.selectedRecording == nil,
+                  sidebar.selectedPerson == nil, sidebar.selectedNote == nil {
             detail.show(nil)
         }
         // After the pane has been re-shown, because what it is showing is half
@@ -1191,6 +1286,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// too and which carries the reasoning.
     @discardableResult
     func writeShot(to path: String) -> Bool {
+        // A sheet is its own window, so drawing the library's content view
+        // gives a picture of the page *behind* the thing being previewed. The
+        // sheet wins when there is one, which is the only way a sheet can be
+        // photographed at all on a locked Mac.
+        if let sheet = window?.attachedSheet, let view = sheet.contentView {
+            return view.writeShot(to: path)
+        }
         guard let view = window?.contentView else { return false }
         return view.writeShot(to: path)
     }
@@ -1307,7 +1409,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.backItem,
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.recordItem,
-         Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem]
+         Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem,
+         Self.closeItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -1402,6 +1505,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 items.append(Self.chatsItem)
             }
             items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
+            // And the way out of it, in the corner, last. Everything in the
+            // ellipsis acts *on* the page; this puts the page away, so it is
+            // outside the menu rather than the first row of it, which is where
+            // Close still is as well.
+            //
+            // **Only when there is a page to close.** The home page has nothing
+            // under the toolbar but the greeting and the composer, and a cross
+            // there would offer to close the screen it lands on. `isHome` is
+            // already half of `contentShape`, so `syncToolbarWithHome` rebuilds
+            // on exactly the click that adds this item or takes it away.
+            if !isHome { items.append(Self.closeItem) }
             return items
         case .settings:
             // The same shape as every other mode: what this pane is on the
@@ -1423,9 +1537,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // word takes the masthead's slot, Back takes the collapse control's,
             // and both sit before the tracking separator where the sidebar's own
             // controls live. What differs is the right-hand half: a conversation
-            // has verbs and a settings section does not, so New chat and the
-            // ellipsis are there, in the slots Record and the recording's
-            // actions menu occupy in the library.
+            // has verbs and a settings section does not, so New chat, the
+            // ellipsis and the cross are there, in the slots Record, the
+            // recording's actions menu and Close occupy in the library.
+            //
+            // The cross is unconditional here where the library asks `isHome`
+            // first, because chat mode is only ever a page: there is no version
+            // of this screen with nothing open on it.
             //
             // **No History.** The list it used to open *is* the sidebar here,
             // and a menu of the rows already down the left of the window is the
@@ -1440,7 +1558,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             if Capture.shared.isRecording { items += [Self.recordItem, .space] }
             // The common move first, which is the order New Recording and the
             // ellipsis are read in on every other screen in this window.
-            items += [Self.newChatItem, Self.chatActionsItem]
+            items += [Self.newChatItem, Self.chatActionsItem, Self.closeItem]
             return items
         }
     }
@@ -1720,6 +1838,25 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.showsIndicator = false
             return item
 
+        case Self.closeItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Close"
+            // Named after what is on screen rather than after the control, so
+            // the tooltip on a conversation says conversation. Both land in the
+            // library; see `closePage` for why one of them takes two steps.
+            item.toolTip = mode == .chat
+                ? "Close this conversation and go back to the library"
+                : "Close this page and go back to the library"
+            // `xmark`, not `xmark.circle`: the ellipsis beside it is a bare
+            // glyph inside the toolbar's own glass, and a symbol that draws its
+            // own ring would be the only control in this title bar wearing a
+            // second shape.
+            item.image = NSImage(systemSymbolName: "xmark",
+                                 accessibilityDescription: "Close")
+            item.target = self
+            item.action = #selector(closePage)
+            return item
+
         default:
             return nil
         }
@@ -1738,14 +1875,22 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         showSettings(Updater.shared.isPending ? .updates : nil)
     }
 
-    @objc private func newRecording() {
+    @objc func newRecording() {
         // Start, and stop, from the same control. The menu bar item does the
         // same thing; this exists because someone reading a transcript should
         // not have to go to the menu bar to record the next meeting.
         if Capture.shared.isRecording {
             NSApp.sendAction(#selector(App.stopRecordingFromUI), to: nil, from: self)
         } else {
-            NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
+            // A recording started while reading somebody's page remembers that
+            // intent as a suggestion. It does not name a speaker: the ordinary
+            // picker still asks, with this person placed first.
+            let person = detailHost.current === personPane ? personPane.currentPersonLabel : nil
+            if let app = NSApp.delegate as? App {
+                app.startRecordingFromPersonPage(suggesting: person)
+            } else {
+                NSApp.sendAction(#selector(App.startRecordingFromUI), to: nil, from: self)
+            }
         }
     }
 
@@ -3094,6 +3239,12 @@ extension LibraryWindow: NSMenuDelegate {
     /// window could create and only the CLI and an agent could delete was a
     /// verb the user did not have.
     private func appendNoteActions(to menu: NSMenu, for note: Note) {
+        let privacy = Action("Exclude from AI", "sparkles") { [weak self] in
+            do { try Notes.excludeFromAI(!note.excludedFromAI, note: note); self?.reload(); ContextService.shared.sourcesChanged() }
+            catch { let alert = NSAlert(); alert.messageText = error.localizedDescription; alert.runModal() }
+        }
+        privacy.state = note.excludedFromAI ? .on : .off
+        menu.addItem(privacy); menu.addItem(.separator())
         // The working-out it was promoted out of, when the library still has it.
         // The same destination the question on the page links to, offered here
         // as well because the right-hand menu is where a Mac user looks for the
@@ -3159,7 +3310,8 @@ extension LibraryWindow: NSMenuDelegate {
             Notes.isYours(note)
                 ? "your notes on \(sources.first?.title ?? "this recording")"
                 : note.title)
-        var lost = "The note file is deleted from disk. This cannot be undone."
+        var lost = "The note is removed from every device. You can put it back "
+            + "within 14 days with `listen sync trash --restore \(note.slug)`."
         if !sources.isEmpty {
             lost += Notes.isYours(note)
                 ? "\n\nThe recording, its audio and its transcript are kept."
@@ -3172,6 +3324,7 @@ extension LibraryWindow: NSMenuDelegate {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? Notes.delete(note.slug)
+        CloudSyncHost.shared.syncSoon()
         // The page goes before the row does. `reload` puts a selection back by
         // slug and finds nothing to put it on, which leaves `selectedNote`
         // holding a note that is no longer on disk and the pane still showing
@@ -3448,8 +3601,14 @@ extension LibraryWindow: NSMenuDelegate {
         // a call can in principle be had again, and a thought somebody had
         // while it was happening cannot. Notes an agent wrote are derived from
         // the transcript, so they are not worth a sentence here.
-        var lost = "The audio and the transcript are deleted from disk. "
-            + "This cannot be undone."
+        // The recovery is named because it exists now: a deletion goes to
+        // `.trash` on every device for a fortnight, including this one, and
+        // `listen sync trash --restore` is the way back. Saying "cannot be
+        // undone" when it can is the worse error of the two, because it is the
+        // sentence that stops somebody asking.
+        var lost = "The audio and the transcript are removed from every device. "
+            + "You can put it back within 14 days with "
+            + "`listen sync trash --restore \(recording.id)`."
         if let yours = Notes.yours(for: recording), !yours.body.isEmpty {
             // Kept rather than deleted, and said so rather than left to be
             // discovered. Notes live in the library and not in the recording
@@ -3467,6 +3626,11 @@ extension LibraryWindow: NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? recording.delete()
         ActivityLog.append("recording_deleted", ["recording_id": recording.id])
+        // Now, rather than on the next two-minute poll. The phone has always
+        // done this; the Mac left a window in which another device could still
+        // be handed the recording it had just deleted, and that window is what
+        // the 7 September resurrection happened inside.
+        CloudSyncHost.shared.syncSoon()
         reload()
     }
 }

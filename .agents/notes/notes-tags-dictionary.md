@@ -54,6 +54,40 @@ a real 709-segment transcript: the synthesized decoder fails, the hand-written
 `init(from:)` with `decodeIfPresent` reads it. The custom init lives in an
 extension so the memberwise init survives.
 
+### The corrections half is shared with the phone, and the terms half cannot be
+
+`CustomDictionary` is split across two files, and the split is physical rather
+than tidy-minded. `ListenKit/CustomDictionary.swift` holds the entries, the file
+format and the exact replacements; `listen/CustomDictionary.swift` is an
+extension of the same type holding everything that matches by sound. The iOS
+project compiles ListenKit's sources straight into its app target, so moving a
+file there is the whole of "sharing" it.
+
+The reason for the line falling there is `/usr/share/dict/words`. The
+sounds-like pass leans on it to refuse rewriting a real English word, and iOS
+has no such file. Ported whole, the phone would have done one of two things,
+both silent: `terms(in:entries:)` returns early on an empty lexicon, so nothing
+would happen at all, and if that guard were removed instead, `isRealWord` would
+answer false for everything and every guard would be off at once. Neither is a
+state to leave reachable, so the phone cannot reach it: the code is not in its
+target.
+
+`LocalTranscribe.corrected(_:)` is the phone's call, per segment, matching
+`Pipeline.run`. It counts nothing, deliberately. On the Mac every rewrite leaves
+a number in `StoredTranscript.dictionary` because that transcript is the
+archive; the phone's `transcript.local.json` is provisional and the Mac's
+`transcript.json` replaces it by existing, so a counter there is a number nobody
+can act on. The same rules are counted on the Mac's pass over the same audio.
+
+Both devices read one `dictionary.json`, which `DevicePolicy` already syncs into
+the library root that `Library.phone()` returns. That is the point of the whole
+arrangement: a device with a different vocabulary produces a differently
+corrected transcript of the same audio, and the difference reads as a quality
+gap when it is a vocabulary one.
+
+If the word list is ever bundled for iOS, the shared file is where the two
+halves meet again. 235,976 words, 2.5 MB, 754 KB gzipped, measured on `web2`.
+
 ### Two dictionaries, not one shared file
 
 Speak's is at `~/Library/Application Support/speak/dictionary.json` and Listen's
@@ -164,6 +198,246 @@ rewrites an archive nobody may read for a week, so a change to the matcher is
 measured by putting real prose through it and reading every difference, not by
 trying the word that prompted it: 38.9 kB of dictation history, two rules fired,
 five differences, all of them the name.
+
+### Sounding alike is not enough, and the corpus said so on the first run
+
+`listen dictionary backfill` was written, pointed at 75 real transcripts, and
+its dry run rewrote three sentences it had no business touching:
+
+```
+"and it knows the email address"     ->  "and it Kinsight email address"
+"I know I said we'll talk tomorrow"  ->  "I Kinsight we'll talk tomorrow"
+"how you Kinsight to work for them"  ->  "how you Kinsight work for them"
+```
+
+Two of those destroy a sentence and the third eats a word. All three are the
+gap-closing spans doing what they were built to do, over a term that is eight
+letters and not an English word, so every guard that existed passed. Soundex
+keeps the first letter and codes the rest into groups, so `knowsthe` and
+`knowisaid` both code exactly as `Kinsight` does, and neither is in
+`/usr/share/dict/words` for the real-word guard to catch.
+
+**This was live at transcription time long before the backfill existed.** The
+term had fired 19 times across the library and some of those were this. What
+the backfill added was scale, and a dry run over the whole library, which is
+what made a three-in-twenty error rate visible in one command.
+
+Two guards, and the second one is measured:
+
+**A span that already contains the term is left alone.** "Kinsight to" matched
+as a gap-closed span and was replaced by "Kinsight", so the sentence lost its
+"to". Nothing is gained by rewriting text that is already right, and the shorter
+candidate that follows matches the word itself and takes the "already right"
+path.
+
+**A match has to look like the term as well as sound like it.** Edit distance to
+the term, over the candidates this library actually produced:
+
+```
+kinsite   3     the case the feature was built for ("kin site")
+kinside   3     the same, one word
+kimsite   4     the same again, and the reason the bound is not 3
+cansite   5     already refused by Soundex, and should stay refused
+knowsthe  6     "knows the"
+knowisaid 7     "know I said"
+```
+
+Everything real sits at 3 or 4, everything wrong starts at 5, so the bound is
+half the term's length: 4 for an eight-letter term.
+
+**Judged on the joined form for a span, and on the word itself otherwise.**
+Comparing "kim site" to "Kinsight" with its space charges an edit for a space
+the speaker did put in, which puts a real mishearing at 5 and loses it. Joined
+up it is 4 and stays.
+
+**The single-word half needed the same bound, and a term found it.** With
+"Beehiiv" in the list, the preview wanted to rewrite `"Bye-bye." -> "Beehiiv."`
+in 17 recordings: Soundex collapses b and v, so the two code alike, and
+"bye-bye" is not in the lexicon to be refused as a real word. It is 5 edits from
+"Beehiiv" against a bound of 3. The cases the feature exists for are all well
+inside it: "Gusens" is 3 from "Goossens", "beehiv" is 1 from "Beehiiv".
+
+**One more guard, for a span with a one-letter word in it.** "know I got" codes
+as "Kinsight" and its joined form sits exactly on the bound at 4, so distance
+alone could not separate it without also refusing "kim site". A one-letter word
+is a pronoun or an article and never a syllable of somebody's product name;
+"fly in public" and "kin site" have none. Measured over the library with the
+real dictionary, that guard is worth exactly one rewrite, and the rewrite is
+"you know I got depressed" becoming "you Kinsight depressed".
+
+The whole set, measured end to end on 75 real transcripts: **59 proposed
+rewrites before the guards, 58 after, and the one that went was the destructive
+one.** Nothing the guards removed was wanted, and nothing new appeared.
+
+## Applying the list to transcripts that already exist
+
+The rule above is still the rule for everything automatic: `Pipeline.run` is the
+only place the dictionary runs unasked. `listen dictionary backfill` and the
+pane's "Fix older transcripts" are the one deliberate pass over what is *already*
+in the library, and they are asked for by name, previewed, and then applied.
+Never at launch, never as a side effect of adding a rule.
+
+The reason it earns the exception is that the alternative is an archive that
+disagrees with itself. A rule added today fixes tomorrow's meeting and leaves
+every meeting where the mistake was first noticed spelled wrong for ever, so a
+search for the right spelling misses exactly the conversations that caused the
+rule.
+
+Measured on the real library, one command, 75 recordings: **59 sentences in 14
+recordings**, and the other 61 recordings are not written to at all. That matters
+beyond tidiness. A file that is rewritten loses its `ContextSource` fingerprint
+and is re-extracted, and it is re-uploaded on the next sync pass, so "only where
+something changed" is what keeps a backfill from looking like a library-wide
+edit to everything downstream.
+
+Notes, chats and saved answers are never touched. Those are the user's own
+writing, and a dictionary that edited them would be rewriting a person rather
+than a model.
+
+### A backfill is not a human correction, so it takes no backup
+
+`TranscriptEditor.change` copies `transcript.json` to `<id>.raw.json.bak` before
+the first edit, and that file is how `Recording.hasHumanEdits` knows somebody
+corrected this transcript, which is what makes Transcribe Again ask before
+throwing the corrections away.
+
+A backfill passes `backup: false`, the same flag and the same argument as
+`VoiceBank.autoAssign`. What it writes is what the pipeline would have written
+if the rule had existed then, and transcribing again re-applies the list anyway,
+so there is nothing to warn about losing. Backing up would make every recording
+a backfill touched claim human corrections nobody made, for ever.
+
+What stands in for the backup is the dry run. `backfill` prints every
+`before -> after` line and writes nothing without `--apply`, the sheet shows the
+count and two examples before it saves, and the pane's button shows four and
+asks.
+
+### A count is a change, not a match
+
+`CustomDictionary.apply` reports what a rule *matched*, and a case-insensitive
+correction whose replacement still matches its own pattern matches on every pass
+for ever. Counting matches would inflate a rule's total every time a backfill
+ran over a library it had already fixed.
+
+So `DictionaryBackfill.plan` compares the segment before and after and counts
+only sentences that changed, and `TranscriptEditor` merges those counts into
+`StoredTranscript.dictionary` in the same write as the text. Verified on the
+real library: 55 fires before, 119 after, and a second pass adds nothing and
+changes nothing.
+
+## One row per word, and the mechanism is Listen's to choose
+
+The pane was a segmented control over *terms* and *corrections* with an editable
+table under each, which asked the wrong question first. Somebody with a word
+Listen keeps getting wrong had to decide whether it was a sounds-like term or an
+exact correction before they could type anything, and getting it wrong is
+silent: a term under five letters never fires, and a term that sounds like an
+English word never fires either.
+
+The library said how that had gone. One term, `Kinsight`, had fired 19 times.
+Five hand-written corrections for the same word had fired 9 between them and
+three of the five had never fired at all. In 5 of the 8 recordings where the
+term fired, it was the only rule that fired. The evidence that the sounds-like
+half was carrying the feature existed the whole time, in `StoredTranscript.
+dictionary`, and the pane showed a name and a checkbox.
+
+So: one read-only row per word, with its spellings and its fire count, and
+`DictionaryWordSheet` for adding and editing. The word on top, "also heard as"
+underneath, and Listen decides which mechanism carries which.
+
+**The file did not change.** `dictionary.json` still holds one entry per
+pattern, which is what Speak wrote, what an import reads and what the counts are
+keyed on. `DictionaryWord.group` is a lens over it, keyed on the right spelling:
+a term's own text, or a correction's replacement.
+
+### A term that sounds like an English word does nothing, and the sheet says so
+
+`accepts` refuses to swap a real English word for a term, which is what stops
+"Codex" rewriting "codes". The consequence nobody can see is that a term whose
+*sound* collides with an English word never fires on the mishearing it was added
+for: "Beehiiv" cannot fix "beehive" or "bee hive", because "beehive" is a word.
+
+`CustomDictionary.englishSoundalike` indexes the lexicon by sound, once and only
+when asked, so the sheet can say it in a sentence while the word is being typed.
+
+**The bucket has to be whole, and two versions of it silently were not.** The
+index first kept the shortest word per key, then the twelve shortest, and in
+both cases the sheet told somebody adding "Beehiiv" that the sounds-like half
+would carry it. The code is lossy enough that "b1" is shared by hundreds of
+words and "beehive" is nowhere near the shortest of them; the word that explains
+a term is the one *spelled* like it, and length has nothing to do with it. The
+buckets are whole now and the caller picks the closest by edit distance.
+
+Sharing a key is also not enough on its own. "knagged" codes the same as
+"Kinsight" and the first version of this warned about it, which is false: the
+term fires on "kinside" and "kin site" perfectly well. A collision worth a
+sentence is one somebody might type, so the word has to be within the same
+half-the-length bound the matcher uses. "beehive" is 2 from "Beehiiv" and stays;
+"knagged" is 6 from "Kinsight" and goes.
+Three answers, and each has cost somebody a week of a word staying wrong: long
+enough and distinctive, too short to be matched by sound, or it sounds like an
+English word.
+
+### The preview is six seconds, and the stale one must not win
+
+A full-library preview is about 6 seconds on 75 recordings, measured twice warm,
+and almost all of it is reading 8.9 MB of JSON: 10,000 words of text go through
+the rules in 0.04s. So the sheet debounces at 0.8s, says it is working, and
+tags each pass with a generation number, because two passes started a keystroke
+apart finish in whichever order they like.
+
+## Every hand edit is a labelled pair, and nothing was collecting them
+
+Correcting a sentence in the transcript is the one place in the app where
+somebody says, in their own words, what the model should have written.
+`TranscriptEditor` now hands each `.retext` to `DictionarySuggestions`, and the
+pair with its sentence and its recording is a suggestion. Nothing is ever added
+to the dictionary on its own: a rule rewrites recordings quietly, and with the
+backfill it rewrites recordings that already exist.
+
+Only a substitution in the middle of an otherwise unchanged sentence, at most
+three words on each side. Rewriting half a paragraph is a person fixing the
+meaning, not a spelling anybody wants generalised.
+
+A pair that differs only in capitals is recorded as case-sensitive. A
+case-insensitive rule for one matches its own replacement and rewrites for ever.
+
+### The fire-and-forget version silently did nothing
+
+`observe` was written to push its work onto a background queue, since nothing is
+waiting on it and the first call loads `/usr/share/dict/words`. `listen edit`
+calls `exit(0)` on the line after the edit, so the queued work never ran and a
+correction made at the CLI taught the dictionary nothing. It is synchronous now.
+The cost it was avoiding is a whole `listen dictionary test` process, lexicon
+load included, at 0.07s, against an edit that has already rewritten two JSON
+files.
+
+### The encoder wrote ISO-8601 and the decoder did not read it
+
+The suggestions file encoded dates with `.iso8601` and read them back with a
+plain `JSONDecoder`, which expects seconds since 2001 and throws on a string.
+`try?` turned that into an empty document: every suggestion was written
+correctly to disk and none of them was ever visible, with nothing anywhere
+saying so. Both ends name the strategy now.
+
+### The library scan needed a second opinion, and one guard was worth 13 rows
+
+The other source needs no edit at all: a word that is not in the lexicon,
+repeats, and sounds like somebody on the roster. Run with only those guards over
+a bilingual library it offered "niet -> Nadia" 454 times, "maar -> Mauro" 344,
+"email -> Emily" 146 and "grote -> Geert" 21. Soundex codes t and d alike and
+`/usr/share/dict/words` is English, so every common Dutch word reads as a
+misspelt name, and each of those rows is a rule that would rewrite hundreds of
+sentences.
+
+Two more guards fixed it: the word has to be within one edit per three
+characters of the name, and it has to be capitalised, because a model that took
+a word for a name writes it like one. Same run afterwards: 14 suggestions became
+1, and the survivor is "Celine -> Céline", which is right.
+
+The excerpt is the evidence, so it is windowed around the word rather than taken
+from the front of the sentence. The first version printed "Celine -> Céline"
+beside a sentence about a spider, because the word sat 190 characters in.
 
 ## A tag is a name string, and the vocabulary is derived
 

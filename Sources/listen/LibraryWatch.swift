@@ -44,8 +44,18 @@ final class LibraryWatch {
         // Recursive, because the interesting files are two levels down in
         // `recordings/<id>/`. A `DispatchSource` on a directory descriptor
         // watches one directory and would miss every one of them.
-        let callback: FSEventStreamCallback = { _, _, _, _, _, _ in
-            Task { @MainActor in CloudSyncHost.shared.syncSoon() }
+        let callback: FSEventStreamCallback = { _, _, count, rawPaths, _, _ in
+            let pointers = rawPaths.assumingMemoryBound(to: UnsafePointer<CChar>.self)
+            let paths = (0..<count).map { String(cString: pointers[$0]) }
+            let contextChanged = paths.contains { path in
+                path.hasSuffix("/contacts.json") || path.hasSuffix("/" + MemoryPreferences.filename) || path.hasSuffix("/" + ContextSync.editsFilename)
+                    || path.contains("/notes/") && path.hasSuffix(".md")
+                    || path.contains("/recordings/") && ["/turns.json", "/transcript.json", "/metadata.json"].contains(where: path.hasSuffix)
+            }
+            Task { @MainActor in
+                CloudSyncHost.shared.syncSoon()
+                if contextChanged { ContextService.shared.sourcesChanged() }
+            }
         }
         var context = FSEventStreamContext()
         guard let created = FSEventStreamCreate(

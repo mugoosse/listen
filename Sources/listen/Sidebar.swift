@@ -42,6 +42,9 @@ final class SidebarViewController: NSViewController {
         case recording(Recording)
         case note(Note)
         case person(Person)
+        /// A name searched for inside the People lens that does not exist yet.
+        /// It opens the same Add Person sheet as the landing page.
+        case addPerson(String)
         /// How many conversations mention what was typed, and the way over to
         /// them.
         ///
@@ -398,6 +401,8 @@ final class SidebarViewController: NSViewController {
             }
         }
 
+        scheduleContextSearch(filter)
+
         let kind = filter.kind
         // A query still being typed sections the list even before it matches
         // anything, so the headings do not appear and disappear under the
@@ -508,6 +513,11 @@ final class SidebarViewController: NSViewController {
             rows.append(.header(people.count == 1 ? "Person" : "People"))
             rows.append(contentsOf: people.map { Row.person($0) })
         }
+        let proposedPerson = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kind == .people, people.isEmpty, !proposedPerson.isEmpty {
+            rows.append(.header("People"))
+            rows.append(.addPerson(proposedPerson))
+        }
 
         guard !sectionsByKind else {
             // Searching: one heading per kind, in the order somebody reads them
@@ -530,6 +540,7 @@ final class SidebarViewController: NSViewController {
                 rows.append(.header("Recordings"))
                 rows.append(contentsOf: recordings)
             }
+            appendContextRows(filter, library: library, notes: everyNote)
             appendChatsRow(for: filter)
             finishReload(keepID: keepID)
             return
@@ -546,6 +557,74 @@ final class SidebarViewController: NSViewController {
         }
 
         finishReload(keepID: keepID)
+    }
+
+    private var contextSearchKey = ""
+    private var contextSearchTask: Task<Void, Never>?
+    private var contextMatches: [ContextSearchResult.Match] = []
+
+    private func scheduleContextSearch(_ filter: RecordingFilter) {
+        let query = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = filter.after.map { Metadata.iso($0) } ?? ""
+        let before = filter.before.map { Metadata.iso($0) } ?? ""
+        let key = [query, filter.tags.joined(separator: "|"), filter.kind?.rawValue ?? "",
+                   String(filter.needsSpeakers), after, before,
+                   SemanticIndex.freshnessKey()].joined(separator: "\n")
+        guard key != contextSearchKey else { return }
+        contextSearchKey = key; contextSearchTask?.cancel(); contextMatches = []
+        guard query.count >= 3, !filter.needsSpeakers else { return }
+        contextSearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let found = try? await Task.detached(priority: .userInitiated) {
+                try SemanticIndex.search(query, limit: 30, tags: filter.tags,
+                                         after: filter.after, before: filter.before)
+            }.value
+            guard !Task.isCancelled, self?.contextSearchKey == key else { return }
+            self?.contextMatches = found?.matches ?? []
+            self?.reload()
+        }
+    }
+
+    /// Exact matches keep their existing sections. Meaning-based matches and
+    /// extracted person context follow them, with excerpts and real navigation.
+    private func appendContextRows(_ filter: RecordingFilter, library: [Recording], notes: [Note]) {
+        guard !filter.query.isEmpty, !filter.needsSpeakers, !contextMatches.isEmpty else { return }
+        var used: Set<String> = Set(rows.compactMap { row in
+            switch row {
+            case .recording(let r): return "rec:" + r.id
+            case .note(let n): return "note:" + n.slug
+            case .person(let p): return "person:" + p.label
+            default: return nil
+            }
+        })
+        let roster = People.roster(in: library)
+        var extra: [Row] = []
+        for match in contextMatches {
+            if match.kind != "passage", filter.kind == nil || filter.kind == .people {
+                for label in match.people {
+                    if let person = roster.first(where: { $0.label == label }),
+                       used.insert("person:" + label).inserted { extra.append(.person(person)) }
+                }
+            }
+            for evidence in match.evidence {
+                guard !used.contains(evidence.source) else { continue }
+                let excerpt = NSAttributedString(string: String(match.text.prefix(240)), attributes: [
+                    .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
+                ])
+                if evidence.source.hasPrefix("rec:"), filter.kind == nil || filter.kind == .recordings,
+                   let recording = library.first(where: { "rec:" + $0.id == evidence.source }) {
+                    used.insert(evidence.source); extra.append(.recording(recording))
+                    rowMatches[recording.id] = RowMatch(excerpt: excerpt, count: 1, titleRanges: [])
+                } else if evidence.source.hasPrefix("note:"), filter.kind == nil || filter.kind == .notes,
+                          let note = notes.first(where: { "note:" + $0.slug == evidence.source }) {
+                    used.insert(evidence.source); extra.append(.note(note))
+                    rowMatches[note.slug] = RowMatch(excerpt: excerpt, count: 1, titleRanges: [])
+                }
+            }
+            if extra.count >= 6 { break }
+        }
+        if !extra.isEmpty { rows.append(.header("Related context")); rows.append(contentsOf: extra.prefix(6)) }
     }
 
     /// The row at the foot of a search saying how many conversations mention it.
@@ -1301,6 +1380,11 @@ final class SidebarViewController: NSViewController {
         LibraryWindow.shared.enterChats(searching: query)
     }
 
+    @objc private func addPersonRowClicked(_ sender: NSButton) {
+        guard let name = sender.identifier?.rawValue else { return }
+        LibraryWindow.shared.addPerson(suggestedName: name)
+    }
+
     private func rowMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
@@ -1320,6 +1404,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         // link it is, and a card behind that would be two highlights for one
         // target.
         if case .chats = rows[row] { return nil }
+        if case .addPerson = rows[row] { return nil }
         return HoverRowView()
     }
 
@@ -1361,6 +1446,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         guard rows.indices.contains(row) else { return 52 }
         if case .header = rows[row] { return 30 }
         if case .chats = rows[row] { return ChatsRow.height }
+        if case .addPerson = rows[row] { return AddPersonRow.height }
         let base: CGFloat = match(at: row)?.excerpt == nil ? 52 : 86
         guard case .recording(let recording) = rows[row],
               RecordingCell.drawsBar(RecordingCell.activity(for: recording))
@@ -1374,7 +1460,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch rows[row] {
         case .recording(let recording): return rowMatches[recording.id]
         case .note(let note): return rowMatches[note.slug]
-        case .header, .chats, .person: return nil
+        case .header, .chats, .person, .addPerson: return nil
         }
     }
 
@@ -1382,7 +1468,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch rows[row] {
         // A heading is a lens, and the handoff row is a way out of this list.
         // Neither is a document, so neither is a selection.
-        case .header, .chats: return false
+        case .header, .chats, .addPerson: return false
         case .recording, .note, .person: return true
         }
     }
@@ -1425,6 +1511,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
                                action: #selector(chatsRowClicked))
             row.identifier = NSUserInterfaceItemIdentifier("chats-handoff")
             return row
+
+        case .addPerson(let name):
+            return AddPersonRow(name: name, target: self,
+                                action: #selector(addPersonRowClicked(_:)))
 
         case .note(let note):
             // `NoteCell`, the same class the Notes collection drew, rather than
@@ -1484,7 +1574,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             onSelectNote?(note)
         // Neither is selectable, so neither can arrive here; both are listed
         // rather than defaulted so a fifth kind of row has to say what it does.
-        case .header, .chats:
+        case .header, .chats, .addPerson:
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
@@ -2149,6 +2239,59 @@ extension NSView {
 /// conversations mention "business"" is 34 characters and does not fit beside
 /// an icon in 280 points, and it is in the search field a few rows above, on
 /// screen the whole time.
+/// The no-result action in a People search. It looks like a quiet list action,
+/// not a person result: the person does not exist until the sheet is saved.
+@MainActor
+final class AddPersonRow: NSView {
+    static let height: CGFloat = 38
+
+    private let icon = NSImageView()
+    private let button = HoverButton(.ink)
+
+    init(name: String, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        icon.image = NSImage(systemSymbolName: "person.badge.plus",
+                             accessibilityDescription: nil)
+        icon.contentTintColor = Brand.accent
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+
+        let title = "Add \u{201c}\(name)\u{201d}"
+        button.title = title
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.rest = Brand.accent
+        button.bright = Brand.accent.blended(withFraction: 0.35, of: .white) ?? Brand.accent
+        button.target = target
+        button.action = action
+        button.identifier = NSUserInterfaceItemIdentifier(name)
+        button.toolTip = title
+        button.setAccessibilityLabel(title)
+        button.cell?.lineBreakMode = .byTruncatingTail
+
+        for view in [icon, button] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: RecordingCell.textInset),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            button.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                             constant: -RecordingCell.textInset),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 @MainActor
 final class ChatsRow: NSView {
     /// Tall enough to be a target and short enough not to read as a result.

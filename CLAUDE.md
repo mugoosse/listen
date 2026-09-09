@@ -265,9 +265,21 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 
 - The dictionary rewrites the library, and only the library
 - Adding a field to `StoredTranscript` needs `init(from:)` by hand
+- The corrections half is shared with the phone, and the terms half cannot be
 - Two dictionaries, not one shared file
 - A silent "gh" is a consonant, so a term could not match its own name
 - A one-word term could only ever match one spoken word
+- Sounding alike is not enough, and the corpus said so on the first run
+- Applying the list to transcripts that already exist
+- A backfill is not a human correction, so it takes no backup
+- A count is a change, not a match
+- One row per word, and the mechanism is Listen's to choose
+- A term that sounds like an English word does nothing, and the sheet says so
+- The preview is six seconds, and the stale one must not win
+- Every hand edit is a labelled pair, and nothing was collecting them
+- The fire-and-forget version silently did nothing
+- The encoder wrote ISO-8601 and the decoder did not read it
+- The library scan needed a second opinion, and one guard was worth 13 rows
 - A tag is a name string, and the vocabulary is derived
 - `tag:job ` looks finished and is not, and the field lifted the wrong pill
 - `kind:` is not a predicate on a recording, and `apply(to:)` ignores it
@@ -315,6 +327,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - A toolbar item will not draw an image you hand it, and accessibility says it did
 - The transcript opened near the end of the meeting
 - A peak envelope of a meeting is a solid block
+- The player fell back to the master and the waveform did not
 - Turns overlap, so the first one spanning the playhead is the wrong one
 - Sentence highlighting is search, not arithmetic
 - The sentence field wraps, and still opened one line high
@@ -361,6 +374,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Chats is the third tab, and it took the conversations off "Also about this"
 - The tab is gone when Ask is off, and `NSSegmentedControl` cannot hide a segment
 - Asking whether the responder is in settings *opened* settings
+- Every page has a cross, and on a conversation it is not Back
 - The gap under the tab bar belongs to the column, not to the first line in it
 
 ### `.agents/notes/appkit.md` (35k)
@@ -387,6 +401,7 @@ this app, so read them before building any new window, menu or popover.
 - `intrinsicContentSize` is four points narrower than the text
 - A typed chevron is not aligned with the text beside it
 - A tool tip is a tracking area, so clearing them all takes it with it
+- Scrolling moves the rows and not the pointer, and only the arrivals are reported
 - An attributed title's colour wins over `contentTintColor`
 - An attributed string brings its own truncation, which is none
 - `glyphIndex(for:in:)` answers with the nearest glyph, however far away
@@ -413,6 +428,8 @@ that repo is being archived.**
 - Synchronous means deciding, not opening the microphone: one wedged USB mic
   took 5.1 s to open and held every keystroke on the Mac
 - Timing a chord with your own tap lies, because Listen's runs first
+- The mask is the smallest one that does the job, and press-and-hold is why
+- The rebuild cannot happen on the tap's own stack
 - fn is invisible to NSEvent on Apple Silicon
 - Secure input takes character key events away
 - Two capture paths, and why they are not one
@@ -487,6 +504,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - Nothing bounded a CloudKit call, and the default for an asset is seven days
 - A long-lived upload must not be startable twice
 - The voice bank was the one sidecar with no merge base
+- A deletion is data, or a Mac that wakes up undoes it
 
 ### `.agents/notes/agent.md` (172k)
 
@@ -612,6 +630,17 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 
+### `.agents/notes/person-context.md`
+
+Person summaries, facts, relationships, background extraction and local semantic
+search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor`,
+`SemanticIndex`, `ContextService`, `PersonContextView`, `PeopleContextPane` or `ContextCLI`.
+
+- The model proposes; Listen owns identity and evidence
+- The source check is also the read gate
+- Background generation is a separate consent from local search
+- Text embeddings are not voiceprints
+
 ### `.agents/notes/telemetry.md` (16k)
 
 What the apps send, and what reading it back for the first time proved wrong.
@@ -689,10 +718,21 @@ One script stands in for one, over the app built in the working directory:
                         # backup-permission and activity-log claims
 ./verify_speakers.sh    # every size of speaker edit, and the turn window that
                         # used to move two paragraphs when asked for one
+./verify_dictionary.sh  # the dictionary end to end over a synthetic library:
+                        # the two guards that keep the sounds-like matcher off
+                        # ordinary English, the backfill previewing, applying
+                        # and being idempotent, the counts it merges, the
+                        # absence of a `.raw.json.bak`, and the suggestions a
+                        # hand edit through `listen edit` leaves behind. The
+                        # pane's ten assertions need an unlocked screen and
+                        # skip without one (uitest copy)
 ./verify_note_tags.sh   # tags on a note: the file on disk, files written by
                         # hand or by an older build, the shared vocabulary in
                         # both directions, no inheritance, and `listen mcp
                         # --tools` refusing a tool by name
+python3 tools/verify_context.py  # synthetic person memory, validation, retries,
+                        # source invalidation, local semantic search, CLI/MCP
+                        # pagination and one writer across processes
 ./verify_desktop_connect.sh  # `listen mcp connect-desktop` over scratch
                         # configs: merge, backup, idempotence, refusals
 ./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying

@@ -1,4 +1,5 @@
 import Foundation
+import ListenKit
 
 /// Edits to a stored transcript: rename, discard, merge.
 ///
@@ -63,6 +64,22 @@ enum TranscriptEditor {
         /// index after it and the list was gathered against the transcript as it
         /// was.
         case remove([(index: Int, text: String)])
+
+        /// Replace several sentences at once, and record which rules did it.
+        ///
+        /// `DictionaryBackfill`'s write, and deliberately not a loop over
+        /// `.retext`. A recording where twenty sentences name the same product
+        /// is one edit, not twenty: one read, one rebuild of `turns.json`, one
+        /// pair of atomic writes, one title refresh. A loop would also leave a
+        /// recording half-rewritten if the eleventh sentence had moved under it.
+        ///
+        /// `counts` is what separates this from a hand correction. The rewrite
+        /// came from rules, so the rules answer for it: the counts are merged
+        /// into `StoredTranscript.dictionary`, which is the same record
+        /// `Pipeline` writes and the same one the Dictionary pane reads. They
+        /// are counted from text that actually changed rather than from what
+        /// matched, so running a backfill twice adds nothing the second time.
+        case rewrite([(index: Int, was: String, to: String)], counts: [String: Int])
     }
 
     /// Which segments a reassignment moves.
@@ -170,7 +187,12 @@ enum TranscriptEditor {
             // you say "remove this", and a sentence removed by an empty commit
             // would take its timing with it with nothing on screen having asked.
             guard !new.isEmpty else { return false }
-            return change(recording) { segments in
+            // What the sentence said before this edit, kept so the suggestion
+            // can carry it. Read here rather than inside `mutate`, which runs
+            // against the transcript on disk and may refuse.
+            let stored = recording.storedTranscript?.segments ?? []
+            let previous = stored.indices.contains(index) ? stored[index].text : was
+            guard change(recording, { segments in
                 guard index >= 0, index < segments.count else { return false }
                 // Trimmed on both sides. The window's copy of the old text is
                 // the substring it found inside the turn, and `Merge.sentences`
@@ -183,6 +205,26 @@ enum TranscriptEditor {
                 guard current == was.trimmingCharacters(in: .whitespacesAndNewlines),
                       current != new else { return false }
                 segments[index].text = new
+                return true
+            }) else { return false }
+            // The one place in the app where somebody says, in their own words,
+            // what the model should have written. See `DictionarySuggestions`.
+            DictionarySuggestions.observe(was: previous, now: new, in: recording)
+            return true
+
+        case .rewrite(let wanted, let counts):
+            guard !wanted.isEmpty else { return false }
+            return change(recording, backup: backup, counts: counts) { segments in
+                // Checked in full before anything is written, for the reason
+                // `.remove` gives: a plan built against a transcript that has
+                // moved must be refused whole rather than half-applied.
+                for one in wanted {
+                    guard one.index >= 0, one.index < segments.count,
+                          segments[one.index].text == one.was,
+                          !one.to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    else { return false }
+                }
+                for one in wanted { segments[one.index].text = one.to }
                 return true
             }
 
@@ -297,11 +339,18 @@ enum TranscriptEditor {
     /// edit that still leaves a `.raw.json.bak` and a rewritten `turns.json`
     /// behind it. The transcript is re-read here rather than passed in, so the
     /// check inside `mutate` is against what is on disk now.
+    ///
+    /// `counts` is merged into `StoredTranscript.dictionary` in the same write,
+    /// so a rewrite and the record of what caused it cannot come apart. Only
+    /// `.rewrite` passes any: a hand edit is a person, and the counts are the
+    /// rules' own ledger.
     private static func change(_ recording: Recording, backup takeBackup: Bool = true,
+                               counts: [String: Int] = [:],
                                _ mutate: (inout [LabelledSegment]) -> Bool) -> Bool {
         guard var transcript = recording.storedTranscript else { return false }
         var proposed = transcript.segments
         guard mutate(&proposed) else { return false }
+        CustomDictionary.combine(counts, into: &transcript.dictionary)
 
         // The path lives on `Recording` because this is no longer the only
         // reader: whether a backup exists is how `hasHumanEdits` knows somebody

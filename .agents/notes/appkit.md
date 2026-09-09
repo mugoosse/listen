@@ -470,12 +470,92 @@ override func updateTrackingAreas() {
 `trackingAreas` is not a list of what this class put there. `NSToolTipManager`
 installs one per tool tip rect, and `updateTrackingAreas` runs on every geometry
 change, so a view that clears the array removes its own tool tip a fraction of a
-second after AppKit installed it. `HoverRow` gets away with it because a sidebar
-row has no tool tip; the drawer's cross, resize and new-conversation buttons all
-have one, and each is the only thing that says what its glyph means.
+second after AppKit installed it. The drawer's cross, resize and
+new-conversation buttons all have one, and each is the only thing that says what
+its glyph means.
+
+`HoverRow` was written down here as getting away with it, on the grounds that a
+sidebar row has no tool tip. That was read from the class rather than from its
+callers: a person's meetings carry "Open this recording", the card's recent
+people carry "Open <name>", the person popover's rows carry the first, and the
+context view's evidence rows carry the quote they came from. So it was clearing
+four lists' tool tips on every layout pass, and it now holds its own area like
+the rest.
 
 The fix is to hold your own area and remove it by name, which is what
-`HoverButton`, `LinkLine`, `SendButton` and `AnswerTurn.HeaderRow` all do now.
+`HoverRow`, `HoverButton`, `LinkLine`, `SendButton` and `AnswerTurn.HeaderRow`
+all do now.
+
+## Scrolling moves the rows and not the pointer, and only the arrivals are reported
+
+A tracking area is weighed against the pointer when the **pointer** moves. Scroll
+a list under a pointer that is standing still, and AppKit sends `mouseEntered` to
+the row that arrives under it and sends nothing at all to the row that left.
+
+Measured on 0.35.0, on a person's page listing 64 meetings: one flick of the
+wheel left every row the pointer had crossed lit at once, and each stayed lit
+until it was entered and left by hand.
+
+Neither `.inVisibleRect` nor rebuilding the area in `updateTrackingAreas` is the
+fix, because **taking a tracking area away while the pointer is inside it is not
+an exit either**. A rebuild during the scroll leaves the row lit and adds a
+fresh `mouseEntered` for whatever is under the pointer now, which is the same
+picture arrived at twice.
+
+So the state cannot be accumulated from the events. `ScrollHover` subscribes to
+the enclosing clip view's `boundsDidChangeNotification` and asks the pointer
+where it is, on every scroll and on every rebuild of the tracking area:
+
+```swift
+var pointerIsOver: Bool {
+    guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+    guard visibleRect.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    else { return false }
+    return NSWindow.windowNumber(at: NSEvent.mouseLocation,
+                                 belowWindowWithWindowNumber: 0) == window.windowNumber
+}
+```
+
+`visibleRect` and not `bounds`: a row scrolled half under the header is still
+inside its own bounds, and the pointer up there is over the header. The window
+number is what separates the pointer being at those coordinates from the pointer
+being on this row, since a popover or another app's window in front of it has
+the pointer and this row only has the geometry. It is asked last, and only of the
+one row the geometry allows, because it is a question for the window server and
+sixty rows must not ask it sixty times a second. `mouseEntered` and `mouseExited`
+are kept, because they are the cheap answer for the ordinary case of a pointer
+moving over a list that is standing still.
+
+The assignment is guarded on the value rather than the write, for the same
+reason: every row answers every scroll notification, and all but one of those
+answers is the same as the last.
+
+**A highlight that never arrives and one that never leaves are the same
+screenshot**, which is how this shipped, so the state itself is traceable now.
+`LISTEN_DEBUG=1` prints `hover <recording id> in` and `... out` per row, and
+after a scroll every `in` must have an `out` under it.
+
+Four classes use it, which is every hover in the app that can be scrolled under
+a pointer: `HoverRow`, `HoverButton` (the card's Add Person, the two chips under
+an answer, the sidebar's Chats and Add Person rows), `AnswerTurn.HeaderRow` and
+`LinkLine`, whose version of the symptom is a link left underlined halfway up
+the notes pane. The rest are on surfaces that do not scroll: the composer's send
+button, the find bar, the record button and the dictation pill.
+
+`TableHover` is the sidebar's version of the same fix, written first and by hand:
+it recomputes every visible row from a `.scrollWheel` monitor, which it can do
+because it owns the whole table. A view that only knows about itself cannot.
+
+**How it was measured, and how to measure it again.** A synthetic wheel-click
+scroll does not reproduce it: the shape that does is a trackpad's, continuous and
+phased, with a momentum tail. `tools/hover_scroll.swift` presses Cmd-Shift-P for
+People, selects a person by setting the roster's `AXSelectedRows` to the row
+*element* (an array of indices is accepted and silently ignored), parks the
+pointer over the list, and posts that gesture. On 0.35.0 the build before this
+fix left ten rows lit and the build after it left one, the row under the pointer.
+With `LISTEN_DEBUG=1` the rows print `hover <recording id> in|out`, so the state
+is readable without a screenshot, which matters here because **a highlight that
+never arrives and one that never leaves are the same picture**.
 
 ## An attributed title's colour wins over `contentTintColor`
 

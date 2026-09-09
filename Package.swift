@@ -29,6 +29,8 @@ let package = Package(
         // we can drive the model download ourselves and get a progress
         // callback: STT.loadModel does not forward one.
         .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.9.0"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "3.31.4"),
+        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.3"),
     ],
     targets: [
         // The half both apps share: the folder contract, the sealing and the
@@ -52,6 +54,8 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "PostHog", package: "posthog-ios"),
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "Sources/listen",
             linkerSettings: [

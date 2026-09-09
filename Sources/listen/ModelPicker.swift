@@ -226,3 +226,132 @@ final class ModelPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         return column
     }
 }
+
+/// The same provider and model choice in Ask and People & Memory.
+@MainActor
+final class AgentModelMenu: NSObject {
+    private weak var window: NSWindow?
+    private let onChange: () -> Void
+    private let background: Bool
+
+    private init(window: NSWindow?, background: Bool, onChange: @escaping () -> Void) {
+        self.window = window
+        self.background = background
+        self.onChange = onChange
+    }
+
+    static func present(from anchor: NSView, background: Bool = false, onChange: @escaping () -> Void) {
+        let chooser = AgentModelMenu(window: anchor.window, background: background, onChange: onChange)
+        withExtendedLifetime(chooser) { chooser.show(from: anchor) }
+    }
+
+    private func show(from anchor: NSView) {
+        // Refresh for the next opening without blocking this menu.
+        AgentCLI.refreshStaleProviders(onChange)
+        let menu = NSMenu()
+        if background {
+            let follow = NSMenuItem(title: "Use the Ask model", action: #selector(followAsk), keyEquivalent: "")
+            follow.target = self; follow.state = Settings.contextModelChoice == nil ? .on : .off
+            menu.addItem(follow); menu.addItem(.separator())
+        }
+        for status in AgentCLI.cached ?? [] {
+            guard status.usable else { continue }
+            let header = NSMenuItem(title: status.name, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+
+            let chosen = (background ? ContextModel.chosen(cachedOnly: true)?.key : AgentCLI.cachedChosen()?.key) == status.key
+            let current = background && Settings.contextModelChoice?.provider == status.key ? Settings.contextModelChoice?.model : Settings.agentModel(status.key)
+            add(to: menu, status.key, model: nil,
+                title: "Default", on: chosen && current == nil)
+
+            // **A short list is shown whole; a long one becomes recents.**
+            // Ollama with what you have pulled, and Claude's three aliases, are
+            // menus already. A provider offering hundreds is a catalogue, and a
+            // menu that shows the first twelve of one is twelve rows nobody
+            // chose plus no way to reach the rest.
+            let offered: [AgentModel]
+            if status.models.count <= Settings.modelsShownInFull {
+                offered = status.models
+            } else {
+                var recent = Settings.recentModels(status.key)
+                // Whatever is in use belongs in the menu whether or not it has
+                // been used since this list existed, or switching away from it
+                // would be a one-way door.
+                if let current, !recent.contains(current) { recent.insert(current, at: 0) }
+                offered = recent.compactMap { id in
+                    status.models.first { $0.id == id }
+                        // A model that is no longer offered, or was typed by
+                        // hand, still shows: it is what the user picked, and
+                        // dropping it silently would look like the setting had
+                        // been lost.
+                        ?? (id == current ? AgentModel(id: id, name: id) : nil)
+                }
+            }
+            for model in offered {
+                add(to: menu, status.key, model: model.id,
+                    title: model.name, on: chosen && current == model.id)
+            }
+
+            if status.models.count > Settings.modelsShownInFull {
+                let browse = NSMenuItem(title: "Choose a model…",
+                                        action: #selector(browseModels(_:)), keyEquivalent: "")
+                browse.target = self
+                browse.indentationLevel = 1
+                browse.representedObject = status.key
+                menu.addItem(browse)
+            }
+            if status.key != (AgentCLI.cached ?? []).last(where: { $0.usable })?.key {
+                menu.addItem(.separator())
+            }
+        }
+        if menu.items.isEmpty {
+            let empty = NSMenuItem(title: "No agent is set up", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+    }
+
+    private func add(to menu: NSMenu, _ key: String, model: String?,
+                     title: String, on: Bool) {
+        let item = NSMenuItem(title: title, action: #selector(pickModel(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = on ? .on : .off
+        // Indented under the backend heading, which is what makes the heading
+        // read as a heading rather than as a disabled row.
+        item.indentationLevel = 1
+        item.representedObject = [key, model as Any] as [Any]
+        menu.addItem(item)
+    }
+
+    @objc private func pickModel(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Any],
+              let key = pair.first as? String else { return }
+        use(key, model: pair.count > 1 ? pair[1] as? String : nil)
+    }
+
+    /// The whole catalogue, searchable, for the providers that have one.
+    @objc private func browseModels(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String,
+              let status = (AgentCLI.cached ?? []).first(where: { $0.key == key }) else { return }
+        ModelPicker.present(models: status.models, current: background ? ContextModel.model(status) : Settings.agentModel(key),
+                            over: window) { [self] id in
+            use(key, model: id)
+        }
+    }
+
+    /// Switch to a backend and a model, and remember that the model was used.
+    private func use(_ key: String, model: String?) {
+        if background { Settings.contextModelChoice = ContextModelChoice(provider: key, model: model) }
+        else { Settings.agentChoice = key; Settings.setAgentModel(key, model) }
+        // Recorded on the choice rather than on a successful answer: a model
+        // that turned out not to support tools is still one that was reached
+        // for, and hiding it would make the failure awkward to retry.
+        Settings.noteModelUsed(key, model)
+        onChange()
+    }
+    @objc private func followAsk() { Settings.contextModelChoice = nil; onChange() }
+
+}

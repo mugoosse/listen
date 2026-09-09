@@ -93,6 +93,63 @@ A microphone that takes longer than 1.5 seconds is now logged with the number,
 unconditionally. That one line is the difference between "dictation is broken"
 and "this one device is broken", and nothing else on the Mac distinguishes them.
 
+## The mask is the smallest one that does the job, and press-and-hold is why
+
+The tap subscribed to `flagsChanged` **and** `keyDown`, always. For a
+modifier-only chord, which is the default and what most people end up with, that
+means Listen sat in front of every character key on the Mac, as a
+`.headInsertEventTap` with `.defaultTap` options, so it could delete a keystroke
+it was never going to be asked about.
+
+`keyDown` is needed for exactly three things, and all three are transient: a
+shortcut that includes a character key, the moment Settings is capturing a new
+chord, and Escape while a dictation is running. So `wantsKeyDown` answers those
+three, `install` builds the mask from it, and the log line says which mask it
+armed rather than only that it armed:
+
+```
+[Listen] dictation hotkey armed (CGEventTap, modifiers only)
+[Listen] dictation hotkey armed (CGEventTap, modifiers and keys)
+```
+
+**What prompted it was press-and-hold.** Holding "e" for the accent panel did
+nothing in Listen's own text fields, and it is not a setting:
+`ApplePressAndHoldEnabled` is unset globally, unset for Listen, and only two
+terminal apps on the machine turn it off for themselves. The remaining suspect
+was the only thing Listen does to key events at all, and a tap that can delete
+events is exactly the wrong thing to sit in front of a key-repeat gesture.
+
+**Confirmed from the keyboard, 2026-09-09.** With the narrowed mask installed,
+holding "e" in the dictionary sheet raises the accent panel, and the chord and
+Escape-to-cancel both still work. So the tap was the cause, and it was costing
+press-and-hold everywhere in Listen for the whole time it was armed. The two
+states that widen the mask are exercised by that second half: starting a
+dictation widens it, which means the deferred rebuild ran, and Escape then
+reached `handleKeyDown` through the wider tap.
+
+### The rebuild cannot happen on the tap's own stack
+
+A tap's mask is fixed at creation, so a change is a teardown and a rebuild, and
+`Dictation.phase` moving is what triggers one. That move happens **inside the
+tap callback**: `handleFlags` calls `onToggle`, which starts a dictation, which
+sets `phase = .starting`, which lands in `refreshMask`. Tearing down there means
+calling `CFMachPortInvalidate` on the port whose callback is still running and
+is about to return an event through it. So the rebuild is deferred with
+`RunLoop.main.perform(inModes: [.common])`, common modes for the reason
+`Capture`'s levels are: the main dispatch queue does not drain while a menu is
+open.
+
+`comboLatched` is carried across the rebuild by hand, because `uninstall` clears
+it and a chord still physically held would otherwise read as a fresh press and
+toggle the dictation straight back off.
+
+### `phase` owns the flag, not its ten assignments
+
+`Dictation` sets `phase` in ten places. `catchEscape` hangs off a `didSet` on
+the property rather than being set beside each of them, because the one that got
+missed would leave the tap holding every keystroke on the Mac for the rest of
+the session, and nothing on screen would say so.
+
 ## fn is invisible to NSEvent on Apple Silicon
 
 `NSEvent.addGlobalMonitorForEvents` never sees the Globe/fn key; the system

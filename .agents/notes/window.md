@@ -914,6 +914,41 @@ deliberately so: playback volume has to stay true to the recording, but a
 scrubber drawn at true amplitude is a flat line for anyone who recorded
 quietly.
 
+## The player fell back to the master and the waveform did not
+
+Reported as "why am I not seeing the waveform on the recording that was made on
+my phone". The player card was there, the clock said `27:15 / 43:42` and the
+audio played, so nothing about the screen said the picture was missing rather
+than empty.
+
+A recording this Mac only ever *received* has no `mic.wav`, no `system.wav` and
+no `mix.m4a`. It has `master.flac` and the sidecars, which is the ordinary
+shape of a phone memo once the Mac has taken the audio, and of anything synced
+from the other Mac. Three pieces of code answer "where is the audio" and only
+two of them knew that: `Recording.hasAudio` counts the master, so the card was
+shown instead of the "the audio for this meeting is on ..." note, and
+`DetailView.playbackURL` falls back to it, so play worked. `waveformSources`
+was the mixdown or the two tracks and nothing else, so it returned `[]`,
+`Waveform.make` bailed at its `guard !sources.isEmpty`, `load` returned nil and
+the view kept `peaks = []` and drew nothing.
+
+Two recordings in the library were in that state, both with no `waveform.json`
+next to the audio that would have made one. The fix is the same fallback in the
+same order the other two use, and the rule it records is that **a new place
+audio can live has to be added to all three**.
+
+Reading it needed a second change. `make` summed `buffer.floatChannelData?[0]`,
+which was the whole file for as long as every source was mono: `mic.wav`,
+`system.wav` and `Mixdown`'s output all are. A `.tracks` master is not. It is
+the microphone left and the room right, so channel zero of one is the user
+talking to nobody, with the far end of the meeting absent from the picture. The
+loop averages the channels per frame, which leaves every existing cache
+byte-for-byte identical (they are all mono) and so needs no `version` bump.
+
+Verified on the recording it was reported from, symlinked into a scratch
+library: 1400 buckets, all non-zero, mean 0.133, duration 2622.41 s against the
+2622.40 in `metadata.json`.
+
 ## Turns overlap, so the first one spanning the playhead is the wrong one
 
 Reported as "I clicked a line, it played the right audio and highlighted the line
@@ -2493,3 +2528,49 @@ exactly when the view is loaded.
 
 Verified by `verify_ask_handoff.sh`, case 2, which asserts that Back out of a
 conversation lands on the home page's own sentence and not on "Your name".
+
+## Every page has a cross, and on a conversation it is not Back
+
+The title bar's right-hand group was Record and the ellipsis in the library,
+New chat and the ellipsis on a conversation. Both end in a cross now, in the
+last slot, on every screen that is a page: a meeting, a note, a person and a
+conversation. The home page does not get one, because there is nothing under
+it to close and a cross there would offer to close the screen it lands on.
+
+**It is the menu's Close promoted, and the menu keeps its row.** Close has
+been the first item of the ellipsis since the pane stopped being a holding
+screen, which made the one navigation everybody needs the one thing behind a
+menu. The item stays where it is: a menu somebody has already learned should
+not lose a row because a button appeared for it, and the sidebar's right-click
+menu shares that delegate and has no toolbar to borrow from.
+
+**The conversation page is the one that is not obvious, and it is deliberately
+not Back.** Chat mode covers whatever page the question was asked from rather
+than replacing it, which is what makes Back a return: `chatReturn` is the mode
+the question came from, and pressing it uncovers the meeting that was on
+screen. A cross that did the same thing would be a second Back drawn in a
+different corner. So `closePage` takes two steps there, `enter(.library)` and
+then `closeSelected()`, and lands on the library home with nothing open. Back
+goes back; the cross puts all of it away. Two controls, two answers.
+
+**`isHome` is what decides whether the item is in the set**, not
+`sidebar.hasSelection`, and the difference is one route. `open(note:)` puts a
+note up with no row selected behind it, because a note reached from a numbered
+reference in an answer can be about four meetings or none. The page is what
+draws the cross, so the cross was there and `sidebar.deselect()` returned
+immediately: `closeSelected` now falls through to the pane swap `onSelect(nil)`
+would have done. `isHome` is already half of `ContentShape`, so
+`syncToolbarWithHome` rebuilds on exactly the click that adds the item or takes
+it away, and no other.
+
+`xmark` rather than `xmark.circle`, because the ellipsis beside it is a bare
+glyph inside the toolbar's own glass and a symbol carrying its own ring would
+be the only control in this title bar wearing a second shape.
+
+Driven through `axprobe` on 0.35.0 over a scratch library, all four pages and
+the one screen that is not a page: home has Settings, Sidebar, Chats, Record
+and Actions and no Close; a meeting, a person and a note each add Close after
+Actions and drop Chats, and pressing it lands on "Select something from the
+list, or ask about your library below."; a conversation opened from a meeting
+carries Back and Close both, and they go to different places, the meeting and
+the home page respectively.

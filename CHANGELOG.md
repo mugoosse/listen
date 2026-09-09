@@ -8,6 +8,61 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.36.0
+
+A deleted recording stays deleted.
+
+### Deleting something now says so, instead of leaving a gap
+
+Delete a meeting on one Mac and it could come back. Not always, and not
+straight away, which is what made it hard to catch: it needed a second device
+that was asleep when you deleted, had something of its own to send about that
+recording, and woke up before it had heard the news. It then found nothing in
+iCloud where the recording should be, decided the recording was missing, and
+helpfully put it back. Every other device pulled it down again.
+
+It happened on 7 September. Five recordings were deleted at 11:55, the second
+Mac opened at 11:56 with freshly arrived audio for three of them, and those
+three had to be deleted a second time at 12:03. Nothing on either machine said
+anything was wrong.
+
+The cause is that a deletion was never written down anywhere. It was the
+absence of a recording, and an absence has other explanations: a drive that did
+not mount, a library restored underneath the app, a folder moved in the Finder.
+Listen had to guess which it was looking at, and a guess is the wrong tool for
+something that cannot be undone.
+
+So a deletion is now a fact Listen records and sends, the same way it already
+records asking it to forget somebody's voice. Every device reads that list
+before it sends anything, so a Mac that has been closed for a week obeys the
+deletion instead of arguing with it, and a device holding an edit nobody has
+seen yet still obeys it and tells you what it set aside. A recording that
+simply goes missing from the disk now deletes nothing anywhere, which is the
+half that used to need a guess.
+
+### Deleting is undoable for 14 days, on the device you deleted from
+
+Deleting something on one device already left the other devices a copy for a
+fortnight, and the device you were sitting at threw its copy away immediately.
+That was backwards, since the device you are sitting at is where you notice the
+mistake.
+
+Now every device keeps it, and there is a way back:
+
+```
+listen sync trash --restore <recording-id-or-note-name>
+```
+
+It puts the files back and tells your other devices to do the same. The
+confirmation dialogs say this rather than saying it cannot be undone, and
+`listen sync deletions` lists what Listen currently believes was deleted.
+Entries there expire after 90 days.
+
+Deleting a voice memo on your iPhone had a second version of the same problem:
+the phone offers your Mac any recording your Mac does not appear to have, so a
+memo you deleted was offered again fifteen minutes later, and again after that.
+The Mac now recognises one it has been told to delete and declines it.
+
 ## 0.35.0 (2026-09-06)
 
 Short recordings get names too.

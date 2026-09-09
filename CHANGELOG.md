@@ -8,60 +8,137 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
-## 0.36.0
+## 0.36.0 (2026-09-09)
 
-A deleted recording stays deleted.
+Listen remembers the people in your meetings, and a deleted recording stays
+deleted.
 
-### Deleting something now says so, instead of leaving a gap
+### People and Memory
 
-Delete a meeting on one Mac and it could come back. Not always, and not
-straight away, which is what made it hard to catch: it needed a second device
+A person's page is no longer a list of their recordings. Listen can now build
+a summary of what it has heard about somebody, with every detail carrying where
+it came from: which recording, which speaker, when it was said, and when it
+became true. Corrections you make survive a rebuild, and so do the things you
+pin, hide or exclude.
+
+**It is off until you ask for it, per person.** Nothing is generated in the
+background for anybody you have not switched on, adding a person never calls a
+model, and there is a global pause plus a daily limit for when it is on. The
+summaries use whichever Ask provider and model you pick at the time, so this
+needs Ask set up; the rest of the page does not.
+
+You can also add a person before their first recording, from the home screen or
+an empty People search, and a name you type is merged with the speakers in your
+transcripts rather than becoming a second identity beside them. Manual profiles
+sync between your Macs.
+
+Searching people is local: keywords and Apple's on-device semantic search, with
+an optional multilingual model if you want to download one. Ask, library search,
+the CLI and MCP all read through the same retrieval, including asking what
+Listen knew at a past date. Your iPhone receives an encrypted summary; raw
+transcripts, vectors, jobs and credentials stay on the Mac.
+
+### The dictionary is a list of words, and it can fix what is already written
+
+The dictionary pane used to ask which matching mechanism a word wanted before
+it would accept one. That is a question about Soundex, not about the word, and
+getting it wrong failed silently. On a real library one term had fired 19 times
+while five hand-written corrections for the same word had fired 9 between them,
+and three of those five had never fired at all. The counts existed the whole
+time and nothing showed them.
+
+Now there is one row per word, with its spellings and how often it has fired,
+and adding one tells you which mechanism it chose. A new word can also correct
+the transcripts you already have: it previews what it would change, and only
+does it when you say so.
+
+Running that preview over 75 real transcripts is what found something worse.
+The sounds-like matcher had been rewriting ordinary English: "and it knows the
+email address" became "and it Kinsight email address", and with a Beehiiv term
+in the list "Bye-bye." became "Beehiiv." in 17 recordings. Soundex is lossy
+enough that those code identically. A match now has to look like the term as
+well as sound like it: 59 proposed rewrites before the guards, 58 after, and
+the one that went was the destructive one.
+
+Your iPhone applies the dictionary's exact spellings too, so a name you taught
+Listen is spelled right in the transcript the phone writes while your Mac is
+asleep. The sounds-like half stays on the Mac deliberately, because it depends
+on a system word list iOS does not have, and running it there with the guards
+off is worse than not running it.
+
+### A deleted recording stays deleted
+
+Delete a meeting on one Mac and it could come back. It needed a second device
 that was asleep when you deleted, had something of its own to send about that
-recording, and woke up before it had heard the news. It then found nothing in
-iCloud where the recording should be, decided the recording was missing, and
-helpfully put it back. Every other device pulled it down again.
+recording, and woke up before it had heard the news. It found nothing in iCloud
+where the recording should be, decided the recording was missing rather than
+deleted, and put it back. Every other device then pulled it down again.
 
 It happened on 7 September. Five recordings were deleted at 11:55, the second
 Mac opened at 11:56 with freshly arrived audio for three of them, and those
 three had to be deleted a second time at 12:03. Nothing on either machine said
 anything was wrong.
 
-The cause is that a deletion was never written down anywhere. It was the
-absence of a recording, and an absence has other explanations: a drive that did
-not mount, a library restored underneath the app, a folder moved in the Finder.
-Listen had to guess which it was looking at, and a guess is the wrong tool for
-something that cannot be undone.
+The cause is that a deletion was never written down. It was the absence of a
+recording, and an absence has other explanations: a drive that did not mount, a
+library restored underneath the app, a folder moved in the Finder. Listen had to
+guess which one it was looking at, and a guess is the wrong tool for something
+that cannot be undone.
 
 So a deletion is now a fact Listen records and sends, the same way it already
-records asking it to forget somebody's voice. Every device reads that list
+records being asked to forget somebody's voice. Every device reads that list
 before it sends anything, so a Mac that has been closed for a week obeys the
-deletion instead of arguing with it, and a device holding an edit nobody has
-seen yet still obeys it and tells you what it set aside. A recording that
-simply goes missing from the disk now deletes nothing anywhere, which is the
-half that used to need a guess.
+deletion instead of arguing with it. A device holding an edit nobody has seen
+yet also obeys it, and tells you what it set aside. A recording that simply goes
+missing from the disk now deletes nothing anywhere, which is the half that used
+to need a guess.
 
 ### Deleting is undoable for 14 days, on the device you deleted from
 
-Deleting something on one device already left the other devices a copy for a
-fortnight, and the device you were sitting at threw its copy away immediately.
-That was backwards, since the device you are sitting at is where you notice the
-mistake.
+Deleting something already left your *other* devices a copy for a fortnight, and
+the device you were sitting at threw its copy away at once. That was backwards,
+since the device you are sitting at is where you notice the mistake.
 
-Now every device keeps it, and there is a way back:
+Every device keeps it now, and there is a way back:
 
 ```
 listen sync trash --restore <recording-id-or-note-name>
 ```
 
 It puts the files back and tells your other devices to do the same. The
-confirmation dialogs say this rather than saying it cannot be undone, and
-`listen sync deletions` lists what Listen currently believes was deleted.
-Entries there expire after 90 days.
+confirmation dialogs say that rather than saying it cannot be undone, and
+`listen sync deletions` lists what Listen believes was deleted.
 
-Deleting a voice memo on your iPhone had a second version of the same problem:
-the phone offers your Mac any recording your Mac does not appear to have, so a
+Deleting a voice memo on your iPhone had a second version of the same problem.
+The phone offers your Mac any recording the Mac does not appear to have, so a
 memo you deleted was offered again fifteen minutes later, and again after that.
 The Mac now recognises one it has been told to delete and declines it.
+
+### Smaller things
+
+- The library home page is built around recent activity rather than the full
+  list, with larger rows.
+- Every page has a cross in its corner. Closing one used to be the first row of
+  a menu.
+- A recording whose only audio is the synced master draws its waveform. The
+  player already worked, so the scrubber beside it was blank for anything that
+  came from your phone or your other Mac.
+- Scrolling a long list under a still pointer left up to ten rows lit at once.
+  AppKit only weighs a hover against the pointer when the pointer moves.
+- The main window can fill a large display instead of stopping at the width the
+  split view was willing to fit.
+- Dictation held every key press for the whole system whether or not your
+  shortcut used a character key. Press-and-hold for accents works again in
+  Listen's own text fields.
+
+### Known limitations
+
+- Person summaries need an Ask provider and model. Everything else on a person
+  page works without one.
+- The dictionary's sounds-like matching is Mac-only. Your phone applies exact
+  spellings.
+- A deletion is remembered for 90 days. A device switched off for longer than
+  that can still bring a recording back, and deleting it again removes it.
 
 ## 0.35.0 (2026-09-06)
 

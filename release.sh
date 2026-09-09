@@ -5,10 +5,11 @@
 #   ./release.sh --publish       also create the GitHub release and upload
 #   ./release.sh --resume <id>   reuse an existing notarization submission
 #
-# Notarization runs only when a Developer ID certificate and stored notarytool
-# credentials are both present. Without them the artifacts are still produced,
-# just with a warning: users will meet Gatekeeper on first launch, and
-# --publish refuses to ship them.
+# Notarization runs only when a Developer ID certificate and notarytool
+# credentials are both present. Prefer the same App Store Connect API key the
+# iPhone release uses; a stored Keychain profile remains the fallback. Without
+# either, the artifacts are still produced, just with a warning: users will
+# meet Gatekeeper on first launch, and --publish refuses to ship them.
 #
 # One-time notarytool setup (needs the paid Apple Developer Program):
 #   xcrun notarytool store-credentials listen-notary \
@@ -21,6 +22,30 @@ DIST="$ROOT/dist"
 APP="$ROOT/Listen.app"
 VERSION=$(tr -d ' \n' < "$ROOT/VERSION")
 KEYCHAIN_PROFILE="${LISTEN_NOTARY_PROFILE:-listen-notary}"
+# The iPhone publisher already authenticates with this App Store Connect key.
+# Using the file directly avoids making a Keychain password item a dependency
+# of every release. That item has disappeared repeatedly on this machine,
+# including once between two calls in the same release run.
+ASC_CONFIG="${ASC_CONFIG:-$HOME/.appstoreconnect/listen.conf}"
+if [ -f "$ASC_CONFIG" ]; then
+    . "$ASC_CONFIG"
+fi
+ASC_KEY_ID="${ASC_KEY_ID:-}"
+ASC_ISSUER_ID="${ASC_ISSUER_ID:-}"
+ASC_KEY_PATH="${ASC_KEY_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8}"
+NOTARY_AUTH=profile
+if [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -f "$ASC_KEY_PATH" ]; then
+    NOTARY_AUTH=api-key
+fi
+
+notarytool() {
+    if [ "$NOTARY_AUTH" = api-key ]; then
+        xcrun notarytool "$@" --key "$ASC_KEY_PATH" \
+            --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID"
+    else
+        xcrun notarytool "$@" --keychain-profile "$KEYCHAIN_PROFILE"
+    fi
+}
 # SPARKLE_PUBLIC_KEY and SPARKLE_ACCOUNT, the same file make_app.sh reads.
 . "$ROOT/sparkle.conf"
 PUBLISH=0
@@ -249,24 +274,26 @@ if [ "$PUBLISH" -eq 1 ]; then
         echo "       the result. See RELEASING.md, signing." >&2
         exit 1
     fi
-    # `notarytool history` is the cheapest call that proves the stored profile
-    # both exists and still authenticates, and it is the one the notarize step
+    # `notarytool history` is the cheapest call that proves the selected
+    # credentials still authenticate, and it is the one the notarize step
     # already made on its own account. It talks to Apple, so its failure is two
-    # different things and the message has to say which: a missing item is
-    # setup, and anything else is usually the network or an app-specific
-    # password that has been revoked.
-    if ! NOTARY_ERROR=$(xcrun notarytool history \
-            --keychain-profile "$KEYCHAIN_PROFILE" 2>&1); then
-        echo "error: notarytool profile '$KEYCHAIN_PROFILE' cannot be used, so" >&2
+    # different things and the message has to say which: a missing profile is
+    # setup, and anything else is usually the network or revoked credentials.
+    if ! NOTARY_ERROR=$(notarytool history 2>&1); then
+        echo "error: notarytool credentials cannot be used, so" >&2
         echo "       nothing could be notarized and Gatekeeper would block the" >&2
         echo "       result." >&2
-        case "$NOTARY_ERROR" in
-            *"No Keychain password item"*)
+        case "$NOTARY_AUTH:$NOTARY_ERROR" in
+            profile:*"No Keychain password item"*)
                 echo "       Nothing is stored under that name. Store it once:" >&2
                 echo "         xcrun notarytool store-credentials $KEYCHAIN_PROFILE \\" >&2
                 echo "             --apple-id <apple id> --team-id <team id>" >&2
                 echo "       Leave --password off and it prompts for it. See" >&2
                 echo "       RELEASING.md, notarytool credentials." >&2
+                ;;
+            api-key:*)
+                echo "       The App Store Connect API key from $ASC_CONFIG failed:" >&2
+                printf '%s\n' "$NOTARY_ERROR" | sed 's/^/         /' >&2
                 ;;
             *)
                 echo "       notarytool said:" >&2
@@ -375,8 +402,7 @@ if [ -z "${HAS_CREDS:-}" ]; then
     HAS_DEVID=$(security find-identity -v -p codesigning 2>/dev/null \
         | grep -c "Developer ID Application" || true)
     HAS_CREDS=0
-    NOTARY_ERROR=$(xcrun notarytool history \
-        --keychain-profile "$KEYCHAIN_PROFILE" 2>&1) && HAS_CREDS=1
+    NOTARY_ERROR=$(notarytool history 2>&1) && HAS_CREDS=1
 fi
 
 # Submit a path and print the submission id. Submit and wait are separate
@@ -385,7 +411,7 @@ fi
 # accepted server-side, which then has to be thrown away. Splitting them means
 # a lost connection costs a retry of the wait, not of the upload.
 submit_for_notarization() {
-    xcrun notarytool submit "$1" --keychain-profile "$KEYCHAIN_PROFILE" \
+    notarytool submit "$1" \
         --output-format json | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
 }
 
@@ -397,8 +423,7 @@ await_and_staple() {
     # Retry the wait rather than the upload. Apple's queue has taken over four
     # hours on a first submission from a new Developer ID account.
     _attempt=1
-    until xcrun notarytool wait "$_id" \
-        --keychain-profile "$KEYCHAIN_PROFILE" --timeout 30m; do
+    until notarytool wait "$_id" --timeout 30m; do
         _attempt=$((_attempt + 1))
         [ "$_attempt" -gt 3 ] && break
         echo "wait failed, retrying ($_attempt/3). Resume later with:" >&2
@@ -406,14 +431,12 @@ await_and_staple() {
         sleep 30
     done
 
-    _status=$(xcrun notarytool info "$_id" \
-        --keychain-profile "$KEYCHAIN_PROFILE" --output-format json \
+    _status=$(notarytool info "$_id" --output-format json \
         | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
     if [ "$_status" != "Accepted" ]; then
         echo "error: notarization returned '$_status'." >&2
         echo "       Reasons:" >&2
-        xcrun notarytool log "$_id" \
-            --keychain-profile "$KEYCHAIN_PROFILE" 2>/dev/null >&2 || true
+        notarytool log "$_id" 2>/dev/null >&2 || true
         exit 1
     fi
 
@@ -458,9 +481,13 @@ else
     # Which of the two it was, because "no profile stored" over what is really
     # a dropped network is a wrong answer somebody will act on.
     if [ "$HAS_CREDS" -eq 0 ]; then
-        case "${NOTARY_ERROR:-}" in
-            *"No Keychain password item"*)
+        case "$NOTARY_AUTH:${NOTARY_ERROR:-}" in
+            profile:*"No Keychain password item"*)
                 echo "         no notarytool profile '$KEYCHAIN_PROFILE' stored." >&2
+                ;;
+            api-key:*)
+                echo "         App Store Connect API key did not answer:" >&2
+                printf '%s\n' "${NOTARY_ERROR:-}" | sed 's/^/           /' >&2
                 ;;
             *)
                 echo "         notarytool profile '$KEYCHAIN_PROFILE' did not answer:" >&2

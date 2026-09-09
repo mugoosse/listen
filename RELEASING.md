@@ -84,6 +84,25 @@ codesign -d -r- /Applications/Listen.app      # must not contain cdhash
 
 ### 2. notarytool credentials
 
+The preferred path is the same App Store Connect API key used by the iPhone
+release. Put its identifiers in `~/.appstoreconnect/listen.conf` and its private
+key at `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`:
+
+```sh
+ASC_KEY_ID=XXXXXXXXXX
+ASC_ISSUER_ID=00000000-0000-0000-0000-000000000000
+```
+
+`release.sh` passes that key directly to `notarytool`. It does not copy it into
+the Keychain, which matters on this machine: the `listen-notary` password item
+has disappeared between releases three times and once disappeared during a
+single run. The file-backed API key has also been validated independently
+against notarization history, so it is now the durable authentication source
+for both Mac and iPhone releases.
+
+The older Keychain profile remains a fallback for another release machine with
+no API key configured:
+
 ```sh
 xcrun notarytool store-credentials listen-notary \
     --apple-id you@example.com --team-id TEAMID \
@@ -105,8 +124,9 @@ The address is deliberately not written down here. This repository is public, an
 an Apple ID beside the team it administers is the addressed half of a phishing
 attempt. The machine already knows it, and the line above is how to ask.
 
-`--publish` checks this profile in preflight, before it builds, and refuses with
-the command above if nothing is stored under that name. It is checked every run
+`--publish` checks the selected credentials in preflight, before it builds. It
+prefers the API key and otherwise checks this profile, refusing with the command
+above if nothing is stored under that name. Credentials are checked every run
 rather than assumed: on 0.24.1 the profile that had published 0.24.0 the same
 afternoon was gone from the login keychain by the evening, and before the check
 existed that cost a ten minute build to discover.

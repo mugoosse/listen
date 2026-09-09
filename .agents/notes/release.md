@@ -366,6 +366,22 @@ asserts the alert and the decline path against the real thing.
 
 ## The notarytool profile went missing between two releases on the same day, three times
 
+### The API key is now the primary credential
+
+The fourth preflight failure made the operational distinction clear. The App
+Store Connect API key already used by `listen-ios` authenticated successfully
+against 100 notarization-history records, while asking `notarytool` to recreate
+the `listen-notary` item from that same valid key failed with `User interaction
+is not allowed` in the non-interactive release process. The API key was healthy;
+turning it into a Keychain profile was the failing boundary.
+
+`release.sh` now reads `~/.appstoreconnect/listen.conf` and passes the private
+key, key ID and issuer directly to every `notarytool` call. The old profile is a
+fallback for machines without the file. This does not explain what external
+process deleted the item, and it does not need to: the disappearing item is no
+longer on the release path, while the same preflight still validates credentials
+against Apple before spending time on a build.
+
 0.24.1 built, signed and packaged, and then `release.sh` refused to publish:
 
 ```

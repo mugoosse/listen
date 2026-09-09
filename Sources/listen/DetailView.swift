@@ -1813,10 +1813,11 @@ final class DetailView: NSView {
             homeColumn.addArrangedSubview(record)
             homeColumn.setCustomSpacing(30, after: record)
         } else {
-            let rows = recordings.prefix(4).map { recording in
+            let rows = recordings.prefix(2).map { recording in
                 homeRow(title: recording.displayTitle,
                         detail: [recording.when, recording.lengthText]
                             .filter { !$0.isEmpty }.joined(separator: " · "),
+                        leading: homeRecordingIcon(recording),
                         identifier: recording.id,
                         action: #selector(openRecentRecording(_:)),
                         toolTip: "Open this recording")
@@ -1839,9 +1840,10 @@ final class DetailView: NSView {
         addPerson.action = #selector(addPersonFromHome)
         addPerson.toolTip = "Add somebody before your first recording together"
         addPerson.setAccessibilityLabel("Add Person")
-        let peopleRows: [NSView] = people.prefix(4).map { person, date in
+        let peopleRows: [NSView] = people.prefix(2).map { person, date in
             homeRow(title: person.display,
                     detail: recentActivity(date) + " · " + person.summary,
+                    leading: homePersonIcon(person),
                     identifier: person.label,
                     action: #selector(openRecentPerson(_:)),
                     toolTip: "Open \(person.display)")
@@ -1854,7 +1856,7 @@ final class DetailView: NSView {
                        empty: "People appear here when you name a speaker or add somebody yourself.")
 
         if !notes.isEmpty {
-            let rows = notes.prefix(4).map { note in
+            let rows = notes.prefix(2).map { note in
                 var detail = [recentActivity(activityDate(note.updated)
                     ?? activityDate(note.created) ?? .distantPast),
                     Notes.isYours(note) ? "Your note" : "Generated note"]
@@ -1863,6 +1865,7 @@ final class DetailView: NSView {
                         ? "1 recording" : "\(note.recordings.count) recordings")
                 }
                 return homeRow(title: note.title, detail: detail.joined(separator: " · "),
+                               leading: homeSymbolIcon("note.text"),
                                identifier: note.slug,
                                action: #selector(openRecentNote(_:)),
                                toolTip: "Open this note")
@@ -1874,7 +1877,7 @@ final class DetailView: NSView {
         }
 
         if !chats.isEmpty {
-            let rows = chats.prefix(4).compactMap { chat -> NSView? in
+            let rows = chats.prefix(2).compactMap { chat -> NSView? in
                 guard let id = chat.id else { return nil }
                 var detail = [recentActivity(activityDate(chat.updated)
                     ?? activityDate(chat.created) ?? .distantPast)]
@@ -1891,6 +1894,7 @@ final class DetailView: NSView {
                 }
                 return homeRow(title: chat.displayTitle,
                                detail: detail.joined(separator: " · "),
+                               leading: homeSymbolIcon("bubble.left.and.bubble.right"),
                                identifier: id,
                                action: #selector(openRecentChat(_:)),
                                toolTip: "Open this conversation")
@@ -1961,10 +1965,11 @@ final class DetailView: NSView {
     }
 
     private func homeRow(title text: String, detail detailText: String,
+                         leading: NSView,
                          identifier: String, action: Selector,
                          toolTip: String) -> HoverRow {
         let title = NSTextField(labelWithString: text)
-        title.font = .systemFont(ofSize: 13)
+        title.font = .systemFont(ofSize: 13, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
         title.textColor = .labelColor
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1972,22 +1977,78 @@ final class DetailView: NSView {
 
         let detail = NSTextField(labelWithString: detailText)
         detail.font = .systemFont(ofSize: 11)
-        detail.textColor = .tertiaryLabelColor
+        detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
-        detail.setContentHuggingPriority(.required, for: .horizontal)
+        detail.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let content = NSStackView(views: [title, detail])
+        let labels = NSStackView(views: [title, detail])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 1
+        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        title.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
+        detail.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
+
+        let content = NSStackView(views: [leading, labels])
         content.orientation = .horizontal
+        content.alignment = .centerY
         content.distribution = .fill
-        content.spacing = 8
+        content.spacing = 10
 
-        let row = HoverRow(content: content, target: self, action: action)
+        let row = HoverRow(content: content, target: self, action: action,
+                           inset: 6, height: 46)
         row.identifier = NSUserInterfaceItemIdentifier(identifier)
         row.toolTip = toolTip
         row.setAccessibilityElement(true)
         row.setAccessibilityRole(.button)
         row.setAccessibilityLabel(toolTip)
         return row
+    }
+
+    /// Recent recordings use the same source favicon as the sidebar. Listen's
+    /// icon fills the slot for an ordinary voice memo, keeping one stable left
+    /// edge while still making calls from other apps instantly recognisable.
+    private func homeRecordingIcon(_ recording: Recording) -> NSImageView {
+        let icon = NSImageView()
+        icon.image = NSImage(contentsOf: recording.sourceIconURL)
+            ?? recording.appBundleID.flatMap(AppNames.icon) ?? AppNames.own
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.toolTip = recording.appLabel ?? "Recorded in Listen"
+        icon.setAccessibilityElement(false)
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28),
+        ])
+        return icon
+    }
+
+    /// The person list elsewhere in the app already owns this identity system:
+    /// deterministic colour plus initials in a circle. Reusing it here makes a
+    /// person look like the same person wherever they appear.
+    private func homePersonIcon(_ person: Person) -> InitialsDisc {
+        let icon = InitialsDisc(size: 28)
+        icon.show(person)
+        icon.setAccessibilityElement(false)
+        return icon
+    }
+
+    /// Notes and conversations share the same 28-point leading column without
+    /// pretending to have a source app or a person avatar.
+    private func homeSymbolIcon(_ name: String) -> NSImageView {
+        let icon = NSImageView()
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        icon.image = image?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
+        icon.contentTintColor = .secondaryLabelColor
+        icon.imageScaling = .scaleNone
+        icon.setAccessibilityElement(false)
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28),
+        ])
+        return icon
     }
 
     /// The landing page is ordered by activity rather than by how often somebody

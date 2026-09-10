@@ -12,7 +12,20 @@ import simd
 /// pointer, which reads as the picture being wrong rather than the maths.
 struct GalaxyCamera: Equatable {
     static let defaultDistance: Float = 18
-    static let minimumDistance: Float = 2.5
+
+    /// How close a scroll may bring the camera, derived from the shells rather
+    /// than picked.
+    ///
+    /// **It was 2.5, which is inside the people shell.** At that distance the
+    /// camera sits within the innermost sphere looking outwards: the centre
+    /// fills most of the frame, the shells stop reading as concentric, and
+    /// there is nothing on screen to say which way is out. The floor is the
+    /// innermost radius, plus the centre's own drawn radius, plus a margin so
+    /// its glow is not the picture — 5 + 1.2 + 1.8. Derived so it follows the
+    /// shells if those ever move.
+    static var minimumDistance: Float {
+        (Galaxy.shellRadius(kind: Galaxy.Node.person) ?? 5) + 1.2 + 1.8
+    }
     static let maximumDistance: Float = 90
     /// Half of the 45 degree vertical field of view, which every projection
     /// here is built from. Stated once so the camera and the renderer cannot
@@ -65,9 +78,14 @@ struct GalaxyCamera: Equatable {
     ///
     /// Log units because zooming is multiplicative: a step should feel the same
     /// close up and far out, and adding a constant to a distance does not. The
-    /// whole range, 2.5 to 90, is `ln(36)` = 3.58 of these, so a 250-point
-    /// swipe covers most of it.
-    static let zoomPerScrollPoint: Float = 0.009
+    /// range, 8 to 90, is `ln(11.25)` = 2.42 of these, so a 250-point swipe is
+    /// about seventy per cent of it: one gesture crosses most of the way
+    /// without a flick landing on either stop.
+    ///
+    /// It was 0.0015, which made a good swipe a forty per cent change, and
+    /// then 0.009 while the floor was still 2.5 and the range half again as
+    /// long.
+    static let zoomPerScrollPoint: Float = 0.007
     /// And one line of a mouse wheel, which reports in lines rather than
     /// points: three or so per notch where a trackpad sends hundreds. One rate
     /// for both would make a wheel useless or a trackpad unusable.
@@ -606,8 +624,11 @@ final class GalaxyRenderer {
 /// pattern of coloured dots and carries no recording, note or person's name.
 /// That is what makes it safe to write one out of somebody's own library.
 enum GalaxyImage {
+    /// `zoom` is a distance for the camera, for looking at a stop rather than
+    /// at the opening view: the near one is the whole point of having one, and
+    /// no screenshot of a live window can be relied on to be exactly there.
     static func write(_ snapshot: Galaxy.Snapshot, to output: URL,
-                      width: Int = 1600, height: Int = 1000) throws {
+                      width: Int = 1600, height: Int = 1000, zoom: Float? = nil) throws {
         guard width > 0, height > 0 else { throw GalaxyRendererError.bufferAllocation }
         guard let device = MTLCreateSystemDefaultDevice() else { throw GalaxyRendererError.metalUnavailable }
         let renderer = try GalaxyRenderer(device: device)
@@ -646,6 +667,14 @@ enum GalaxyImage {
 
         var camera = GalaxyCamera()
         camera.frameGalaxy(aspect: Float(width) / Float(height))
+        if let zoom {
+            // Driven through `zoom` rather than set, so the clamp under test is
+            // the one a scroll wheel goes through. Bounded, because asking for
+            // a distance the clamp forbids is exactly what this is for and the
+            // loop would never reach it.
+            for _ in 0..<2000 where camera.distance > zoom + 0.01 { camera.zoom(delta: 0.05) }
+            camera = camera.focused(on: .zero, distance: camera.distance)
+        }
         guard let commandBuffer = renderer.commandQueue.makeCommandBuffer() else {
             throw GalaxyRendererError.commandBuffer
         }

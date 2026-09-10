@@ -99,11 +99,17 @@ import simd
         further.zoom(delta: -1)
         check(further.distance > camera.distance, "and a negative one pushes it away")
 
-        // A 250-point swipe, which is one comfortable trackpad gesture.
+        // A 250-point swipe, which is one comfortable trackpad gesture, taken
+        // from the far stop so the near one cannot clamp the answer and make a
+        // rate look slower than it is.
         var swiped = camera
+        for _ in 0..<200 { swiped.zoom(delta: -4) }
+        let farthest = swiped.distance
         swiped.zoom(delta: 250 * GalaxyCamera.zoomPerScrollPoint)
-        check(camera.distance / swiped.distance > 3,
+        check(farthest / swiped.distance > 3,
               "one trackpad swipe is worth more than three times the distance")
+        check(swiped.distance > GalaxyCamera.minimumDistance,
+              "and does not land on the near stop, so a second one still does something")
         // And one notch of a wheel, which must be a step somebody can feel
         // without being a jump across the whole range.
         var notched = camera
@@ -121,6 +127,18 @@ import simd
         var zoomed = camera
         for _ in 0..<200 { zoomed.zoom(delta: 4) }
         check(zoomed.distance >= GalaxyCamera.minimumDistance, "zooming in stops before the centre")
+        // **And it stops outside the innermost shell**, which is the thing the
+        // number is for: at 2.5 the camera sat inside the people sphere
+        // looking outwards, the centre filled the frame, and nothing on screen
+        // said which way was out.
+        let innermost = Galaxy.shellRadius(kind: Galaxy.Node.person) ?? 5
+        check(zoomed.distance > innermost,
+              "and outside the people shell, so the picture stays concentric")
+        // Far enough out that the centre is a star rather than the sky. Drawn
+        // at 1.2, so this is the fraction of a 45-degree frame it fills.
+        let sunHalfAngle = atan(1.2 / zoomed.distance)
+        check(sunHalfAngle < GalaxyCamera.halfFieldOfView * 0.6,
+              "and the centre is still a star, not the whole frame")
         for _ in 0..<400 { zoomed.zoom(delta: -4) }
         check(zoomed.distance <= GalaxyCamera.maximumDistance, "and zooming out stops")
 

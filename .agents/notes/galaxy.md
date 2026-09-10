@@ -275,6 +275,27 @@ The rate is per point of viewport height rather than a fixed constant, at
 Three's `rotateSpeed` of 0.45, so a drag across the pane is the same turn
 whatever size the window is.
 
+### The near stop is derived from the shells, and only a picture bounds it
+
+`minimumDistance` was 2.5, which is **inside** the people shell at 5: a scroll
+took the camera within the innermost sphere looking outwards, the centre filled
+most of the frame, stars ran off every edge, and nothing on screen said which
+way was out. It is the innermost radius plus the centre's own drawn radius plus
+a margin now, 5 + 1.2 + 1.8, computed from `Galaxy.shellRadius` so it follows
+the shells if those move.
+
+**The geometry checks bound the camera; only a picture bounds the glow.** The
+centre is drawn at radius 1.2, and `tools/galaxy_geometry.swift` asserts what
+that subtends, but what fills the frame is the bloom around it, which is a
+fragment shader and not a number. `listen galaxy --image out.png --closest`
+renders at the stop and `verify_galaxy.sh` counts the lit pixels.
+
+Shrinking the range changed what a scroll is worth, which is worth knowing
+before touching either. The range went from `ln(36)` to `ln(11.25)` log units,
+so 0.009 per point stopped being two thirds of a swipe and became almost all of
+it: the rate is 0.007. A check that measures a swipe has to start from the far
+stop, too, or the near one clamps the result and a correct rate reads as slow.
+
 ### Framing a selection is framing its neighbourhood
 
 A fixed 14 units from the selected star was the obvious version and it put the

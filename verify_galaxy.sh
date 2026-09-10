@@ -216,6 +216,19 @@ sky=$(python3 "$ROOT/tools/pngstats.py" "$SHOT" pixel 40 40)
 [ "$sky" = "10 15 29" ]
 check $? "the galaxy's sky is Brand.canvas, byte for byte (got $sky)"
 
+# **The near stop, which is a question about the glow and not the radius.**
+# Zoomed all the way in, the camera used to sit inside the people shell with
+# the centre filling most of the frame and nothing on screen saying which way
+# was out. The geometry checks bound the camera's distance; only a picture
+# bounds what the centre's glow actually covers.
+NEAR="$DIR/closest.png"
+LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --image "$NEAR" --closest >/dev/null 2>&1
+nearLit=$(python3 "$ROOT/tools/pngstats.py" "$NEAR" bright)
+[ "$nearLit" -lt 240000 ] 2>/dev/null
+check $? "zoomed all the way in, the centre is not most of the frame ($nearLit of 1600000 px lit)"
+[ "$nearLit" -gt "$bright" ] 2>/dev/null
+check $? "and it is closer than the opening view, so the stop is not the start"
+
 EMPTYSHOT="$DIR/empty.png"
 LISTEN_LIBRARY="$DIR/empty" "$APP_BIN" galaxy --image "$EMPTYSHOT" >/dev/null 2>&1
 emptyBright=$(python3 "$ROOT/tools/pngstats.py" "$EMPTYSHOT" bright)

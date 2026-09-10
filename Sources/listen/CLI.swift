@@ -1832,9 +1832,9 @@ enum CLI {
                                  window's Delete Sentence, for the sentence the
                                  model heard twice
       people [<name>]            who is in the library, or where one person is
-      galaxy [--json] [--image F.png]
-                                 what the galaxy would draw, in counts,
-                                 and optionally as an image with no titles
+      galaxy [--json] [--image F.png [--closest]]
+                                 what the galaxy would draw, in counts, and
+                                 optionally as an image with no titles
       context <command>          person facts, relationships and local semantic search
                                 (run context help for update and search options)
       rename <name> <new name>   rename one person in every recording
@@ -2723,10 +2723,16 @@ enum CLI {
     private static func galaxy(_ args: [String]) -> Never {
         var asJSON = false
         var image: URL?
+        // Render at the nearest zoom the camera allows rather than at the
+        // opening view. The near stop is the whole point of having one, and
+        // what it looks like is a question about the glow around the centre
+        // rather than about its radius, so only a picture answers it.
+        var closest = false
         var i = 0
         while i < args.count {
             switch args[i] {
             case "--json": asJSON = true
+            case "--closest": closest = true
             case "--image":
                 i += 1
                 guard i < args.count else { fail("--image needs a path ending in .png") }
@@ -2746,7 +2752,7 @@ enum CLI {
             // Stars, links and the shell guides. No titles, because the labels
             // are AppKit text fields over the scene rather than anything the
             // GPU draws, so an image of a real library names nobody.
-            do { try GalaxyImage.write(snapshot, to: image) }
+            do { try GalaxyImage.write(snapshot, to: image, zoom: closest ? 0 : nil) }
             catch { fail("\(error.localizedDescription)") }
             log("wrote \(image.path)")
         }

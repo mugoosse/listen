@@ -654,6 +654,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - A window colour is four things, not one
 - Every hue belongs to a shell, and everything else is grey
 - The scene follows the pointer, and one axis shipped the other way
+- The near stop is derived from the shells, and only a picture bounds it
 - Framing a selection is framing its neighbourhood
 - The label pass returns when nothing it depends on has moved
 - Attraction is towards the average neighbour, never the sum of them

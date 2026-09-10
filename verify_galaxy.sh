@@ -119,7 +119,14 @@ echo
 echo "3. the same library twice is the same picture"
 second=$(LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --json 2>/dev/null)
 [ "$out" = "$second" ]
-check $? "a second read is identical, so a star does not move between launches"
+check $? "a second read is identical"
+# The counts above agree even for a layout that reshuffled every star, so the
+# claim the seeded hash exists to make needs its own number.
+digest=$(echo "$out" | jq_ layout_digest)
+[ -n "$digest" ] && [ "$digest" != "0000000000000000" ]
+check $? "the layout has a digest ($digest)"
+[ "$digest" = "$(echo "$second" | jq_ layout_digest)" ]
+check $? "and it is the same one, so no star moved between launches"
 
 echo
 echo "4. the cap is disclosed, never silent"
@@ -227,7 +234,8 @@ echo "$dump" | grep -q "on four shells"
 check $? "the status line says how much of the library is drawn"
 field "$dump" "Pause motion"
 check $? "the motion switch is on the pane, named, and reachable"
-grep -q "galaxy snapshot 17 stars" "$TRACE"
+# 12 recordings + 4 notes + 4 people + the centre.
+grep -q "galaxy snapshot 21 stars" "$TRACE"
 check $? "the snapshot it drew is the library, read on a background queue"
 stop
 

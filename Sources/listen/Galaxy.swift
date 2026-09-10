@@ -197,6 +197,28 @@ enum Galaxy {
         return turns == 1 ? "1 question" : "\(turns) questions"
     }
 
+    /// A short, stable fingerprint of where everything ended up.
+    ///
+    /// For `listen galaxy --json`, so a script can assert that two reads of the
+    /// same library put every star in the same place. It carries no id and no
+    /// title: a list of positions with names beside them would be a list of
+    /// every recording, note and person in the library.
+    static func digest(_ snapshot: Snapshot) -> String {
+        var value: UInt64 = 14_695_981_039_346_656_037
+        func mix(_ text: String) {
+            for byte in text.utf8 { value ^= UInt64(byte); value &*= 1_099_511_628_211 }
+        }
+        for node in snapshot.nodes.sorted(by: { $0.id < $1.id }) {
+            mix(node.id)
+            // Rounded, because the last bit of a float sum is not a position
+            // and a layout that has not moved must not look as though it has.
+            for axis in [node.position.x, node.position.y, node.position.z] {
+                mix(String(format: "%.3f", axis))
+            }
+        }
+        return String(format: "%016llx", value)
+    }
+
     // -----------------------------------------------------------------------
     // The presentation
     // -----------------------------------------------------------------------

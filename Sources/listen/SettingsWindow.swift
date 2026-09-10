@@ -484,8 +484,9 @@ final class GeneralPane: Pane {
         heading("Galaxy")
         galaxyBox = checkbox("Show the galaxy in the View menu", Settings.galaxyEnabled) { on in
             Settings.galaxyEnabled = on
+            // The menu row is the only thing that reads this outside the pane
+            // itself: see `LibraryWindow`'s note where the handler would be.
             MainMenu.refreshGalaxy()
-            LibraryWindow.shared.galaxyEnabledChanged()
         }
         // The trade-off out loud rather than in a tooltip, which is this app's
         // rule: what it costs is the GPU, and what it does not cost is anything

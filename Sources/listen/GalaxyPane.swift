@@ -35,6 +35,20 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private var loading = false
     private var reloadPending = false
     private var observing = false
+    /// Bumped whenever the snapshot is replaced, so the label pass can tell a
+    /// new library from the same one without comparing every node.
+    private var snapshotGeneration = 0
+
+    /// Everything the label layout depends on. See `updateLabels`.
+    private struct LabelState: Equatable {
+        var camera: GalaxyCamera
+        var time: Double
+        var selected: String?
+        var hovered: String?
+        var size: CGSize
+        var generation: Int
+    }
+    private var labelState: LabelState?
 
     private var metalView: GalaxyMetalView?
     private var labels: [NSTextField] = []
@@ -47,6 +61,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private var controlsBottom: NSLayoutConstraint!
     private var inspectorBottom: NSLayoutConstraint!
     private var bottomInset: CGFloat = 0
+    private var legendHasChats = false
 
     /// Counters the verification script reads. Nothing else may.
     private(set) var renderedFrameCount = 0
@@ -191,20 +206,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         legend.spacing = 5
         legend.translatesAutoresizingMaskIntoConstraints = false
         legend.setAccessibilityLabel("What the shells are, from the centre outwards")
-        let heading = NSTextField(labelWithString: "FROM THE CENTRE OUTWARDS")
-        heading.font = .systemFont(ofSize: 9, weight: .semibold)
-        heading.textColor = NSColor.white.withAlphaComponent(0.45)
-        legend.addArrangedSubview(heading)
-        var rows: [(String, String)] = [(Galaxy.Node.device, "Listen on this Mac"),
-                                        (Galaxy.Node.person, "People"), (Galaxy.Node.note, "Notes")]
-        // **No Chats row with Ask off.** `Galaxy.build` reads no conversations
-        // then, so the row would name a shell that is always empty, which
-        // reads as a shell that is broken.
-        if Settings.askEnabled { rows.append((Galaxy.Node.chat, "Chats")) }
-        rows.append((Galaxy.Node.recording, "Recordings"))
-        for (kind, name) in rows {
-            legend.addArrangedSubview(GalaxyLegendRow(kind: kind, name: name))
-        }
+        buildLegend()
         view.addSubview(legend)
 
         statusLabel.font = .systemFont(ofSize: 11)
@@ -265,6 +267,27 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         ])
     }
 
+    private func buildLegend() {
+        let wantsChats = Settings.askEnabled
+        guard legend.arrangedSubviews.isEmpty || wantsChats != legendHasChats else { return }
+        legendHasChats = wantsChats
+        legend.arrangedSubviews.forEach { legend.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let heading = NSTextField(labelWithString: "FROM THE CENTRE OUTWARDS")
+        heading.font = .systemFont(ofSize: 9, weight: .semibold)
+        heading.textColor = NSColor.white.withAlphaComponent(0.45)
+        legend.addArrangedSubview(heading)
+        var rows: [(String, String)] = [(Galaxy.Node.device, "Listen on this Mac"),
+                                        (Galaxy.Node.person, "People"), (Galaxy.Node.note, "Notes")]
+        // **No Chats row with Ask off.** `Galaxy.build` reads no conversations
+        // then, so the row would name a shell that is always empty, which
+        // reads as a shell that is broken.
+        if wantsChats { rows.append((Galaxy.Node.chat, "Chats")) }
+        rows.append((Galaxy.Node.recording, "Recordings"))
+        for (kind, name) in rows {
+            legend.addArrangedSubview(GalaxyLegendRow(kind: kind, name: name))
+        }
+    }
+
     private func showFailure(_ message: String) {
         failureLabel.stringValue = message
         failureLabel.isHidden = false
@@ -301,6 +324,12 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
 
     private func apply(_ built: Galaxy.Snapshot) {
         snapshot = built
+        snapshotGeneration += 1
+        // `Galaxy.build` re-reads `Settings.askEnabled` every time, and the
+        // switch is in the same window: the legend has to be rebuilt with the
+        // scene or it keeps a key for a shell that is gone, or loses the key
+        // for one that has come back.
+        buildLegend()
         trace("galaxy snapshot \(built.nodes.count) stars \(built.edges.count) links")
         // A star that has gone from the library cannot stay selected: the card
         // would offer to open a recording that is not there any more.
@@ -533,8 +562,21 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     /// second typographic system to keep agreeing with the first. The cap is
     /// what keeps that affordable: the stars and lines stay GPU-instanced.
     private func updateLabels() {
-        labelUpdateCount += 1
         guard let metalView, metalView.bounds.width > 0, metalView.bounds.height > 0 else { return }
+        // **Nothing to do is a return, and it has to be, because adding a
+        // subview is a layout.** These labels have autoresizing frames in an
+        // Auto-Layout superview, so removing and re-adding them marks the pane
+        // as needing layout, which calls `viewDidLayout`, which calls
+        // `invalidate`, which lands back here. Without this the pane rebuilt
+        // two dozen text fields and asked for a frame for ever, on an idle
+        // galaxy with the motion paused and nothing selected, which is exactly
+        // the cost `GalaxyMotionPolicy` exists to prevent.
+        let state = LabelState(camera: camera, time: motionTime, selected: selectedID,
+                               hovered: hoveredID, size: metalView.bounds.size,
+                               generation: snapshotGeneration)
+        guard state != labelState else { return }
+        labelState = state
+        labelUpdateCount += 1
         labels.forEach { $0.removeFromSuperview() }
         labels.removeAll(keepingCapacity: true)
         let size = metalView.drawableSize

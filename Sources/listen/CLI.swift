@@ -2765,6 +2765,15 @@ enum CLI {
                 "centre_edges": snapshot.edges.filter {
                     $0.source == Galaxy.deviceID || $0.target == Galaxy.deviceID
                 }.count,
+                // **A digest of the positions, not the positions.** The whole
+                // point of the seeded hash is that a star is in the same place
+                // next launch, and counts cannot say whether it moved: two
+                // runs of a layout that reshuffled everything agree on every
+                // other number here. Rounded to a thousandth so the float
+                // arithmetic's last bit does not make a stable layout look
+                // unstable, and it is a digest rather than a list because the
+                // ids beside them would name every recording in the library.
+                "layout_digest": Galaxy.digest(snapshot),
                 "label": snapshot.label,
             ]
             let data = try? JSONSerialization.data(withJSONObject: payload,

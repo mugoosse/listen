@@ -393,15 +393,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         attempt()
     }
 
-    /// The galaxy has been turned off in Settings while it is on screen.
+    /// Nothing to do when the galaxy is switched off, and that is worth
+    /// stating rather than leaving a handler that never fires.
     ///
-    /// Settings is a mode of this window, so the switch is thrown from inside
-    /// the same window the galaxy is under. Nothing else reads the flag once
-    /// the mode is entered, so leaving is the whole of it.
-    func galaxyEnabledChanged() {
-        guard window != nil, !Settings.galaxyEnabled, mode == .galaxy else { return }
-        enter(.library)
-    }
+    /// `askEnabledChanged` has work because chat mode can be underneath the
+    /// settings pane that turns Ask off, and `chatReturn` can point at it. The
+    /// galaxy has neither: entering settings records no return mode, so Back
+    /// goes to the library from there whatever this flag says, and the only
+    /// other consumer is the menu row, which `MainMenu.refreshGalaxy` hides.
 
     /// Open whatever a star stands for.
     ///
@@ -1028,6 +1027,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // because theirs is a different list; the galaxy is drawn from the
             // same recordings the sidebar is showing, so taking it away would
             // be hiding the answer to "which of these is that star".
+            //
+            // Left alone means put back, not ignored. Both of the modes this
+            // can be arrived at from lock the sidebar open, and only the
+            // library branch used to unlock it: galaxy, then a conversation,
+            // then Back, and the collapse control was dead with nothing on
+            // screen to explain why. The same two lines the library runs.
+            sidebarItem.canCollapse = true
+            split.canToggleSidebar = true
+            if was == .settings { sidebarItem.isCollapsed = sidebarWasCollapsed }
+            // And the list itself, which settings and chat each replace with
+            // one of their own. Cmd-Shift-G out of Settings left the section
+            // list down the side of the galaxy.
+            sidebarHost.show(sidebar)
             detailHost.show(galaxyPane)
             galaxyPane.setBottomInset(drawerHeight)
             // Explicitly rather than through `viewDidAppear`: a pane that is

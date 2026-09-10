@@ -218,8 +218,14 @@ enum MainMenu {
         // competing with Record for the eye. Hidden rather than removed when
         // the setting is off, for the reason Chats is: `install` may not be
         // called twice, so the row cannot be rebuilt when a checkbox moves.
-        galaxyItem = add(menu, "Galaxy", #selector(MenuActions.openGalaxy), "g",
-                         [.command, .shift])
+        // **No key equivalent, and G is why.** Galaxy has one obvious letter
+        // and Edit already owns Cmd-Shift-G for Find Previous. The Edit menu
+        // is searched first, so the shortcut would open the galaxy most of the
+        // time and silently step backwards through a find instead whenever the
+        // reader had a find bar up, which is the worst kind of shortcut: one
+        // that works until it does not. Nothing else here is mnemonic enough
+        // to be worth teaching for a screen opened once in a while.
+        galaxyItem = add(menu, "Galaxy", #selector(MenuActions.openGalaxy), "")
         galaxyItem?.target = MenuActions.shared
         refreshAsk()
         refreshGalaxy()

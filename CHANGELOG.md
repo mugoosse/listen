@@ -16,7 +16,7 @@ as one picture.
 
 ### The galaxy
 
-**View → Galaxy**, or Cmd-Shift-G, draws the whole library at once: your
+**View → Galaxy** draws the whole library at once: your
 recordings, notes, people and Ask conversations on four shells around this Mac,
 with a line wherever the library already records a relationship between two of
 them. A note that names a meeting is a line. Somebody speaking in one is a

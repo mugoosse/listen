@@ -46,6 +46,11 @@ or covered, under Reduce Motion and in Low Power Mode.
 The window takes a deep blue-black rather than the system grey, so the galaxy
 sits in the same temperature as everything around it instead of against a seam.
 
+The strip of meters along the bottom of a live recording came with it. It was a
+translucent panel bolted to the foot of the page, blurring nothing, because
+nothing sits behind it: measured at 28,30,37 against the page's own 11,15,28.
+It draws the page's ground now.
+
 ### A call that was cut in two is one meeting again
 
 If a recording stops part way through a call and you start another one, Listen
@@ -99,6 +104,10 @@ same typing costs 111 ms for the first letter and 88 ms after it.
   the centre, and clearing the selection never brought the pivot back.
 - Hiding the sidebar left the window's own controls sitting on top of the
   galaxy's legend.
+- A summary asked for while this Mac was recording waited for the whole meeting
+  and never said why: the person page said "Waiting for this Mac to begin" and
+  nothing more. Nothing should compete with the meeting being recorded, so the
+  waiting itself is right; the line now names the recording it is waiting on.
 - The picture described itself to VoiceOver, and none of that description was
   ever reachable: it said what the shells are, how many stars are drawn and that
   the list beside it opens the same pages, all of it inert.

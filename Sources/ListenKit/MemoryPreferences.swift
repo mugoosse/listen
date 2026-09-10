@@ -161,12 +161,122 @@ public enum MemoryPreferences {
             try cancel(request.id, root: root)
         }
     }
+    /// **Legacy, and read-only from here on.** The advertisement moved to each
+    /// device's own record; see `CloudRecords.DeviceBlob.summaryModel` for what
+    /// a single shared key cost. This still reads, so a Mac that has not been
+    /// updated yet goes on being usable from a phone that has.
     public static func model(root: URL) throws -> Model? {
         guard let text = try read(root: root)["model"]?.text else { return nil }
         return try JSONDecoder().decode(Model.self, from: Data(text.utf8))
     }
-    public static func advertise(_ model: Model, root: URL) throws {
-        if try self.model(root: root) != model { try set(json(model), key: "model", root: root) }
+
+    /// How recently a Mac must have said something to count as awake.
+    ///
+    /// A heartbeat republishes when its sentence changes and hourly regardless,
+    /// so a Mac that is open and syncing is never quiet for longer than the
+    /// pass interval by much. Fifteen minutes is comfortably past that and
+    /// comfortably short of "it will be a while": long enough not to call an
+    /// open Mac asleep between two passes, short enough that a lid closed
+    /// after lunch is not still being called awake.
+    public static let awakeWithin: TimeInterval = 15 * 60
+
+    /// A Mac's standing offer to run summaries.
+    public struct Offer: Sendable {
+        public var device: CloudRecords.DeviceBlob
+        public var model: Model
+        /// Whether it has been heard from recently enough to start now.
+        public var awake: Bool
+        public var name: String { device.name }
+    }
+
+    /// What a phone should do about a summary right now.
+    ///
+    /// **The preferred Mac is a preference and not a lock**, which is the whole
+    /// design decision. A lock turns "the Mac I chose is shut" into a request
+    /// that never runs and never says why, which is the failure this whole area
+    /// has just been repaired for. Automatic substitution is no better: two Macs
+    /// can offer different models from different providers, so quietly running
+    /// somewhere else changes what the summary costs and what wrote it.
+    ///
+    /// So the preference decides who is asked, freshness decides who *can* be
+    /// asked, and where the two disagree both are handed to the screen and
+    /// neither is chosen here. See `PersonBriefView`.
+    public struct Plan: Sendable {
+        /// The offer a request would be addressed to, or nil when no Mac has
+        /// advertised at all.
+        public var use: Offer?
+        /// An awake Mac that is not the preferred one, offered as the
+        /// alternative when the preferred one is asleep. Nil when there is no
+        /// disagreement to put to anybody.
+        public var insteadOf: Offer?
+        /// Every offer, for a settings list.
+        public var all: [Offer]
+    }
+
+    public static let preferredKey = "preferred-device"
+
+    /// The device id the owner picked, or nil for "whichever Mac is awake".
+    ///
+    /// The sync device id rather than the executor id inside the model, because
+    /// this is a choice about a machine and the machine is what the settings
+    /// list shows. The executor is read back off that machine's own row when a
+    /// request is addressed, so a Mac that changes its Ask model keeps the
+    /// preference pointed at it.
+    public static func preferredDevice(root: URL) -> String? {
+        let value = (try? read(root: root))?[preferredKey]?.text ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    public static func setPreferredDevice(_ id: String?, root: URL) throws {
+        try set(id ?? "", key: preferredKey, root: root)
+    }
+
+    public static func plan(_ devices: [CloudRecords.DeviceBlob], root: URL,
+                            now: Date = Date()) -> Plan {
+        let all = offers(devices, now: now).map {
+            Offer(device: $0.device, model: $0.model,
+                  awake: $0.device.isLive(now, within: awakeWithin))
+        }
+        guard !all.isEmpty else { return Plan(use: nil, insteadOf: nil, all: []) }
+        guard let wanted = preferredDevice(root: root),
+              let preferred = all.first(where: { $0.device.id == wanted }) else {
+            // No preference, or it names a Mac that is not offering. The
+            // freshest awake one, and the freshest of any when none is awake:
+            // a request addressed to a shut Mac still runs when it opens.
+            return Plan(use: all.first { $0.awake } ?? all.first, insteadOf: nil, all: all)
+        }
+        if preferred.awake { return Plan(use: preferred, insteadOf: nil, all: all) }
+        // Asleep. Addressed to it anyway, because that is what was asked for,
+        // and the awake alternative is handed up rather than taken.
+        return Plan(use: preferred,
+                    insteadOf: all.first { $0.awake && $0.device.id != preferred.device.id },
+                    all: all)
+    }
+
+    /// Every device offering to run a summary, freshest heartbeat first.
+    ///
+    /// The device is returned beside the model because a phone cannot say
+    /// anything useful without it. "Waiting for your Mac" is not an answer
+    /// when there are two of them and one has been shut since Friday; the
+    /// row's name and `seenAgo` are what turn it into one.
+    public static func offers(_ devices: [CloudRecords.DeviceBlob], now: Date = Date())
+        -> [(device: CloudRecords.DeviceBlob, model: Model)] {
+        devices.filter { $0.isLive(now) }
+            .compactMap { device in device.summaryModel.map { (device, $0) } }
+            .sorted { $0.device.lastSeen > $1.device.lastSeen }
+    }
+
+    /// The offer a request should be addressed to, or nil when no Mac is
+    /// offering one.
+    ///
+    /// The freshest live offer wins, because the machine that said something
+    /// most recently is the one most likely to be awake to do the work. The
+    /// legacy key is consulted only when the roster offers nothing at all,
+    /// which is a library whose Macs have not been updated yet.
+    public static func offered(_ devices: [CloudRecords.DeviceBlob], root: URL,
+                               now: Date = Date()) -> Model? {
+        if let best = offers(devices, now: now).first { return best.model }
+        return try? model(root: root)
     }
     @discardableResult
     public static func request(person: String, name: String, sources: Set<String>, model: Model, root: URL) throws -> Request {

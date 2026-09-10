@@ -336,12 +336,46 @@ public enum CloudRecords {
         /// payload with a 1 MB ceiling.
         public var holdsAudio: [String]?
 
+        /// The summary model this device is offering to run, if it is offering
+        /// one at all.
+        ///
+        /// **A per-device fact belongs in a per-device row**, and it used to
+        /// live in a single `model` key inside the shared memory-settings blob
+        /// instead. One key, one last writer, and a value carrying the id of
+        /// the device that wrote it: two Macs with different Ask selections
+        /// could never agree, so each rewrote the other's advertisement for
+        /// ever. Measured on this account on 9 September 2026, the key changed
+        /// hands every few minutes all evening, and every flip was a CloudKit
+        /// save from both machines.
+        ///
+        /// Here it cannot happen, for the reason stated at the top of this
+        /// type: each device writes only its own record. Two Macs offering
+        /// different models is now two rows saying two true things rather than
+        /// one row being fought over.
+        ///
+        /// The second reason it lives here rather than in the blob is
+        /// delivery. The devices zone is listed with `since: nil` on every
+        /// pass, so a phone that misses one heartbeat sees the next. A blob
+        /// arrives through the library change feed, which mentions a record
+        /// once: a pull that fails, is throttled, or dies with a suspended app
+        /// lets the token move past it and the phone never hears about that
+        /// change again. Readiness is exactly the state that must not be
+        /// deliverable once.
+        ///
+        /// Optional, for the reason `keepsAudio` is: a build that predates it
+        /// wrote no such key, and `openDevice` runs behind a `try?`, so a
+        /// throwing decoder would drop that machine out of the roster rather
+        /// than report anything.
+        public var summaryModel: MemoryPreferences.Model?
+
         public init(id: String, name: String, kind: String,
                     lastSeen: String, appVersion: String,
-                    keepsAudio: Bool? = nil, holdsAudio: [String]? = nil) {
+                    keepsAudio: Bool? = nil, holdsAudio: [String]? = nil,
+                    summaryModel: MemoryPreferences.Model? = nil) {
             self.id = id; self.name = name; self.kind = kind
             self.lastSeen = lastSeen; self.appVersion = appVersion
             self.keepsAudio = keepsAudio; self.holdsAudio = holdsAudio
+            self.summaryModel = summaryModel
         }
 
         /// What this device asked for, with the answer an older build could

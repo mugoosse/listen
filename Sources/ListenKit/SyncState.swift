@@ -67,6 +67,11 @@ public struct SyncState: Codable, Sendable {
         "sidecar:" + id + "/" + file
     }
     public static func sentKey(_ id: String) -> String { "sent:" + id }
+    /// Their own prefixes, disjoint from `sent:` and `file:`, so the deletion
+    /// scan in `pushDeletions` cannot read a blob's bookkeeping as a recording
+    /// stamp with no folder behind it.
+    public static func blobOwedKey(_ name: String) -> String { "blobowed:" + name }
+    public static func blobSentKey(_ name: String) -> String { "blobsent:" + name }
     /// A tombstone this device has already taken out of the container, so a
     /// deletion costs one round of deletes rather than one per pass for the
     /// ninety days the entry lives. Its own prefix for the reason every other
@@ -258,6 +263,48 @@ public struct SyncState: Codable, Sendable {
     public subscript(owed id: String) -> Bool {
         get { base[SyncState.owedKey(id)] != nil }
         set { base[SyncState.owedKey(id)] = newValue ? "1" : nil }
+    }
+
+    /// A library-level blob whose contents this device could not take, so the
+    /// next pass goes back for it.
+    ///
+    /// **The change feed mentions a record once.** A blob that throws while
+    /// being opened, or whose asset cannot be fetched, is caught by the pull's
+    /// per-record handler and the token then moves past it: nothing offers
+    /// that change again until some other device happens to rewrite the
+    /// record. For a recording that debt is `owed:`; for the six files at the
+    /// library root there was no equivalent, and one missed pull could leave a
+    /// phone without a Mac's advertised summary model indefinitely while every
+    /// pass reported success.
+    ///
+    /// Keyed by blob name, of which there are six, so the whole debt is at
+    /// most six strings.
+    public subscript(blobOwed name: String) -> Bool {
+        get { base[SyncState.blobOwedKey(name)] != nil }
+        set { base[SyncState.blobOwedKey(name)] = newValue ? "1" : nil }
+    }
+
+    /// Every library blob still waiting to be taken.
+    public var blobsOwing: [String] {
+        base.keys
+            .filter { $0.hasPrefix(SyncState.blobOwedKey("")) }
+            .map { String($0.dropFirst(SyncState.blobOwedKey("").count)) }
+            .sorted()
+    }
+
+    /// The digest of a blob as this device last successfully put it in the
+    /// container.
+    ///
+    /// Not a merge base: blobs merge per entry and need none. It answers one
+    /// question, and it is a question a person asks: **has what I just did
+    /// left this device yet?** A summary requested on a phone is a row in a
+    /// blob, and until this matches the file on disk that request exists
+    /// nowhere but in the pocket it was made in. The phone said "Waiting for
+    /// your Mac" for it regardless, which names the wrong device and the wrong
+    /// problem.
+    public subscript(blobSent name: String) -> String? {
+        get { base[SyncState.blobSentKey(name)] }
+        set { base[SyncState.blobSentKey(name)] = newValue }
     }
 
     /// Every recording still waiting for its contents, newest first.

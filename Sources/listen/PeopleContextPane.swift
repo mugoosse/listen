@@ -180,9 +180,8 @@ final class PeopleContextPane: Pane {
         }
     }
     private func syncWithPhone() {
-        if let choice = ContextService.modelChoice() {
-            try? MemoryPreferences.advertise(choice, root: Library.root)
-        }
+        // The pass below publishes this Mac's offer with its heartbeat, so
+        // there is nothing to write here first.
         update?.isEnabled = false
         activity?.stringValue = Settings.cloudSyncApplies ? "Syncing with iPhone…" : "Checking for summary updates…"
         detail?.stringValue = ""

@@ -138,7 +138,15 @@ public enum FakeSync {
         let phone = CloudSyncCore(library: phoneLib, state: EngineState(library: phoneLib),
                                   store: store, key: key, policy: .phone,
                                   device: "phone-1", ingests: false)
-        try await memoryContext(mac: mac, phone: phone, macLib: macLib, phoneLib: phoneLib, store: store, key: key)
+        // **Progressive, because that is what the phone actually runs.** The
+        // phone takes the change feed without asset bodies, so an asset-carrying
+        // blob reaches it only through the inline refetch in `pullBlob`. A
+        // non-progressive core here takes the assets with the listing and never
+        // exercises that route, which is the one route the phone has.
+        let memoryPhone = CloudSyncCore(library: phoneLib, state: EngineState(library: phoneLib),
+                                        store: store, key: key, policy: .phone,
+                                        device: "phone-1", ingests: false, progressive: true)
+        try await memoryContext(mac: mac, phone: memoryPhone, macLib: macLib, phoneLib: phoneLib, store: store, key: key)
         ok("encrypted memory assets, phone reading ownership and concurrent corrections round-trip")
 
         // MARK: the audio master
@@ -3153,12 +3161,45 @@ public enum FakeSync {
         let received = try ContextSync.edits(root: phoneLib.root)["test-claim"]
         try check(received?.pinned == true && received?.replacement == correction.replacement,
             "concurrent Mac pin replaced the phone's correction")
+        // **The advertisement rides each device's own row.** It used to be one
+        // `model` key inside this blob, which two Macs with different Ask
+        // selections overwrote from each other for ever, and which reached a
+        // phone only through a change feed that names a record once.
         let model = MemoryPreferences.Model(provider: "claude", model: "sonnet", name: "Sonnet · Claude Code", executor: "test-mac")
-        try MemoryPreferences.advertise(model, root: macLib.root)
-        var choicesPush = CloudReport(); await mac.push(into: &choicesPush)
-        var choicesPull = CloudReport(); await phone.pull(into: &choicesPull)
-        try check(choicesPush.errors.isEmpty && choicesPull.errors.isEmpty, "model choice exchange failed")
-        try check(try MemoryPreferences.model(root: phoneLib.root) == model, "phone lost the selected Mac/provider/model")
+        _ = await mac.heartbeat(name: "Test Mac", kind: "Mac", appVersion: "test", summaryModel: model)
+        let roster = await phone.heartbeat(name: "Test iPhone", kind: "iPhone", appVersion: "test")
+        try check(MemoryPreferences.offered(roster, root: phoneLib.root) == model,
+            "the phone did not read the Mac's offer from the device roster")
+
+        // A second Mac offering something else is a second row. This is the
+        // exact shape that could not be expressed before: one key, one winner,
+        // and a value naming the device that wrote it.
+        let otherModel = MemoryPreferences.Model(provider: "claude", model: nil, name: "Provider default · Claude Code", executor: "test-mac-2")
+        _ = try await store.save(try CloudRecords.device(CloudRecords.DeviceBlob(
+            id: "test-mac-2", name: "Second Mac", kind: "Mac",
+            lastSeen: Metadata.stamp(Date().addingTimeInterval(-3600)), appVersion: "test",
+            keepsAudio: true, holdsAudio: [], summaryModel: otherModel), key: key))
+        let both = await phone.heartbeat(name: "Test iPhone", kind: "iPhone", appVersion: "test")
+        try check(MemoryPreferences.offers(both).count == 2,
+            "a second Mac's offer replaced the first instead of joining it")
+        try check(MemoryPreferences.offered(both, root: phoneLib.root) == model,
+            "the phone did not address the Mac that was heard from most recently")
+
+        // **A preference, not a lock.** A pin that silently waits for a shut
+        // Mac is the failure this area was just repaired for; a pin that
+        // silently runs somewhere else changes which model wrote the summary.
+        // So the preferred Mac is still the one addressed, and the awake one is
+        // handed up for the screen to offer rather than taken here.
+        try MemoryPreferences.setPreferredDevice("test-mac-2", root: phoneLib.root)
+        let pinned = MemoryPreferences.plan(both, root: phoneLib.root)
+        try check(pinned.use?.device.id == "test-mac-2",
+            "a preferred Mac that is asleep was silently replaced")
+        try check(pinned.use?.awake == false && pinned.insteadOf?.device.id == "mac-1",
+            "no awake alternative was offered for a preferred Mac that is asleep")
+        try MemoryPreferences.setPreferredDevice(nil, root: phoneLib.root)
+        let unpinned = MemoryPreferences.plan(both, root: phoneLib.root)
+        try check(unpinned.use?.device.id == "mac-1" && unpinned.insteadOf == nil,
+            "with no preference set the freshest Mac was not simply used")
         let request = try MemoryPreferences.request(person: "test-person", name: "Test person", sources: ["rec:test"], model: model, root: phoneLib.root)
         var requestPush = CloudReport(); await phone.push(into: &requestPush)
         var requestPull = CloudReport(); await mac.pull(into: &requestPull)
@@ -3167,6 +3208,37 @@ public enum FakeSync {
         let preferenceName = CloudNaming.recordName(.blob, MemoryPreferences.filename, key: key)
         let preferenceRecord = try await store.fetch(preferenceName, in: .library)!
         try check(preferenceRecord.assets["context.json"] != nil && preferenceRecord.payload.range(of: Data("Test person".utf8)) == nil, "person choices were not transported as an encrypted owner asset")
+
+        // **Whether what somebody just did has left this device.** A request is
+        // a row in this blob, and between making one and the pass that carries
+        // it away it exists nowhere else. The phone said "Waiting for your Mac"
+        // for a request no Mac had been told about.
+        try check(!phone.unsentBlob(MemoryPreferences.filename),
+            "a blob the container already agrees with read as unsent")
+        try MemoryPreferences.associate("Somebody else", id: "test-person-2", root: phoneLib.root)
+        try check(phone.unsentBlob(MemoryPreferences.filename),
+            "a change made on this device read as already sent")
+        var sending = CloudReport(); await phone.push(into: &sending)
+        try check(sending.errors.isEmpty && !phone.unsentBlob(MemoryPreferences.filename),
+            "a change this pass pushed still read as unsent")
+
+        // **A blob that could not be taken is owed, and the next pass repairs
+        // it.** The library change feed names a record once: before this, a
+        // single failed pull left the token past the only announcement of a
+        // Mac's offer, and every pass afterwards reported success while the
+        // phone went on believing no Mac had ever advertised one.
+        let phoneState = EngineState(library: phoneLib)
+        var owing = phoneState.base
+        owing[blobOwed: MemoryPreferences.filename] = true
+        phoneState.base = owing
+        try FileManager.default.removeItem(
+            at: phoneLib.root.appendingPathComponent(MemoryPreferences.filename))
+        var repair = CloudReport(); await phone.pull(into: &repair)
+        try check(repair.errors.isEmpty, "the pass settling a blob debt reported an error")
+        try check(try MemoryPreferences.requests(root: phoneLib.root).contains { $0.id == request.id },
+            "a blob owed from a failed pull was never fetched again")
+        try check(!EngineState(library: phoneLib).base[blobOwed: MemoryPreferences.filename],
+            "the debt outlived the pass that settled it")
         try MemoryPreferences.cancel(request.id, root: phoneLib.root)
         try MemoryPreferences.finish(request, state: "complete", root: macLib.root)
         var finishPush = CloudReport(); await mac.push(into: &finishPush)

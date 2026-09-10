@@ -426,6 +426,14 @@ enum SyncCLI {
                     row += blob.keeps ? ", keeps audio, holds \(holds.count)"
                                       : ", frees audio, holds \(holds.count)"
                 }
+                // What this Mac is offering to run summaries with. It rides
+                // the device row now rather than a shared key, and this is the
+                // only place a person can check that a phone is being told
+                // about it. A device saying nothing here is offering nothing,
+                // which is also what a build predating the field looks like.
+                if let offer = blob.summaryModel {
+                    row += ", offers \(offer.name)"
+                }
                 print(row)
             }
             print("\n  drop one with: listen sync inspect --forget <id>")

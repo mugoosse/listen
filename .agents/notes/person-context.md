@@ -254,3 +254,14 @@ no new CloudKit record fields. Voice draft capture is independent of speaker
 identification and Ask; saving a note alone never opts anyone into generation.
 
 The iPhone reading view must mount a loading or empty row before its async card read. A `.task` on an initially empty `Group` inside `List` never started in the simulator: search and the controls saw five entries, but the brief stayed invisible. Keep the read on the always-mounted Brief section; verify actual person navigation, not only shared retrieval tests.
+
+**A preferred Mac is a preference, not a lock.** Two Macs can offer different
+models from different providers, so quietly running somewhere else changes what
+wrote the summary and what it cost; and a hard pin turns "the Mac I chose is
+shut" into a request that never runs and never says why, which is the failure
+this area was repaired for in September 2026. `MemoryPreferences.plan` therefore
+addresses the preferred Mac even when it is asleep, and hands the awake
+alternative up as `insteadOf` for the screen to offer. Nothing substitutes on
+anybody's behalf. A waiting request can be handed to another Mac from the person
+page, and only while it is still `pending`: one a Mac has claimed is running
+somewhere, and re-addressing it would put two Macs on the same conversation.

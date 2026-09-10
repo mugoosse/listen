@@ -505,6 +505,9 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A long-lived upload must not be startable twice
 - The voice bank was the one sidecar with no merge base
 - A deletion is data, or a Mac that wakes up undoes it
+- A blob is announced once, and one missed pull lasts for ever
+- What a person just did leaves first, not last
+- A per-device fact in one shared key is a fight, not a fact
 
 ### `.agents/notes/agent.md` (172k)
 
@@ -640,6 +643,7 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - The source check is also the read gate
 - Background generation is a separate consent from local search
 - Text embeddings are not voiceprints
+- A preferred Mac is a preference, not a lock
 
 ### `.agents/notes/telemetry.md` (16k)
 

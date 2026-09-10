@@ -535,7 +535,10 @@ final class ContextService {
         // per-person automatic policy may start a provider. Legacy global opt-in
         // is now a pause control, never authorization for a whole library.
         if manual { isPaused = false }
-        if let choice = Self.modelChoice() { try? MemoryPreferences.advertise(choice, root: Library.root) }
+        // No advertisement here any more. What this Mac offers rides its own
+        // device record, published by the sync pass's heartbeat, because a
+        // per-device fact in one shared key is a fight between Macs rather
+        // than a fact. See `CloudRecords.DeviceBlob.summaryModel`.
         let requests = (try? MemoryPreferences.requests(root: Library.root)) ?? []
         let request = requests.first { ["pending", "running"].contains($0.state) && $0.model.executor == Self.deviceID }
         let automaticAllowed = Settings.askEnabled && Settings.peopleContextEnabled && !isPaused

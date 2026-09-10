@@ -658,6 +658,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - The globe carries the page, and the sidebar is what brings you back
 - A script cannot click this app's sidebar
 - A search narrows the picture to its matches and their links
+- A role is not an accessibility element, and the whole sentence was inert
 - A selection names itself and its links, and nothing else
 - A title is the star, and testing its rect is why dragging still works
 - The inspector card is painted, not blended, and its way out is a cross

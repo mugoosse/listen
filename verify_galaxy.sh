@@ -458,6 +458,45 @@ check $? "and the pane really did take the sidebar's width ($ox -> $ax)"
 check $? "bringing the sidebar back puts the legend back ($back_at)"
 stop
 
+echo
+echo "12. the sidebar's search narrows the picture"
+: > "$TRACE"
+launch galaxy
+# **What is drawn is countable, and only through the Metal view's own label.**
+# The stars are pixels, so there is nothing in the tree to count; the view says
+# how many it drew, which is `updateSceneAccessibility`, and that sentence is
+# the only handle a script has on the filter.
+stars() { "$PROBE" texts $APP 2>/dev/null | sed -n 's/.*picture: \([0-9]*\) stars.*/\1/p' | head -1; }
+narrow() {
+  "$PROBE" focus $APP "Search" >/dev/null 2>&1
+  sleep 1
+  "$PROBE" settext $APP "Search" "$1" >/dev/null 2>&1
+  sleep 3
+}
+whole=$(stars)
+[ "$whole" = "19" ]
+check $? "the picture opens whole (19 stars, got ${whole:-nothing})"
+# One note, the two meetings it is written about, and the centre. The
+# neighbours are the point: the matches alone would be one star in an empty
+# sphere, which answers "is it in here" and nothing else.
+narrow "Write-up 2"
+narrowed=$(stars)
+[ "$narrowed" = "3" ]
+check $? "a search leaves its match and what it links to (3 stars, got ${narrowed:-nothing})"
+# The sidebar is still the sidebar: the same word narrows the list beside it.
+dump=$("$PROBE" texts $APP 2>&1)
+echo "$dump" | grep -q "Write-up 2"
+check $? "and the list beside it is narrowed by the same word"
+narrow "zzqqzz"
+dump=$("$PROBE" texts $APP 2>&1)
+echo "$dump" | grep -q "Nothing here matches"
+check $? "a search nothing answers says so, rather than going blank"
+narrow ""
+back=$(stars)
+[ "$back" = "$whole" ]
+check $? "clearing the field gives the whole picture back ($back)"
+stop
+
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1
 rm -rf "$DIR"
 echo

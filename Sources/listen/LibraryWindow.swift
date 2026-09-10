@@ -818,6 +818,20 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         chatNav.onSelect = { [weak self] chat in
             self?.composerHost?.open(chat)
         }
+        // **The galaxy narrows with the list beside it.** Typing in the sidebar
+        // filters the rows whatever mode is up, and with the picture on screen
+        // a word that narrows the list to two people and leaves 300 stars lit
+        // reads as the search being broken. Both halves of this existed for
+        // several builds with nothing joining them, which is why the pane's
+        // `setSearch` had no caller at all.
+        //
+        // Guarded on the mode before `galaxyPane` is touched, because the pane
+        // is lazy: reaching for it from the library would build a Metal view
+        // and read the library again for a mode nobody has opened.
+        sidebar.onSearchChanged = { [weak self] query in
+            guard let self, self.mode == .galaxy else { return }
+            self.galaxyPane.setSearch(query)
+        }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         // The list, and not the pane that just wrote the change. `reload` calls
         // `detail.show`, which stops playback, puts the playhead back to zero
@@ -1128,6 +1142,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // motion policy that silently depends on that is a galaxy that
             // opens frozen if it ever stops arriving.
             galaxyPane.refreshMotionPolicy()
+            // The field keeps its word across a mode change, so the picture has
+            // to open already narrowed by it. `onSearchChanged` only fires on a
+            // change, and switching mode is not one.
+            galaxyPane.setSearch(sidebar.searchQuery)
             galaxyPane.reload()
 
         case .library:

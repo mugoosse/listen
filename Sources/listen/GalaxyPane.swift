@@ -318,6 +318,13 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             // answer: the sidebar beside this pane is the same library as a
             // list, and it is fully navigable. `updateStatus` keeps the counts
             // in this sentence current.
+            // **A role is not an element.** `NSView.isAccessibilityElement` is
+            // false by default, so a view that sets a role and a label and
+            // nothing else is still not in the tree: every sentence below was
+            // written for VoiceOver and none of it was ever reachable, and the
+            // count of what is drawn is the only handle `verify_galaxy.sh` has
+            // on the search filter.
+            metal.setAccessibilityElement(true)
             metal.setAccessibilityRole(.image)
             metal.setAccessibilityRoleDescription("galaxy")
             updateSceneAccessibility()
@@ -531,6 +538,13 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         } else if snapshot.nodes.count <= 1 {
             statusLabel.stringValue = "Nothing to draw yet. Record something, or write a note,"
                 + " and it appears here."
+        } else if !search.isEmpty && matches.isEmpty {
+            // **A search nobody's library answers empties the picture.** With
+            // the neighbours gone too there is nothing left but the centre, and
+            // a galaxy that goes blank says "broken" rather than "no matches".
+            // Same rule as the cap: what the reader cannot check by looking is
+            // the thing worth a sentence.
+            statusLabel.stringValue = "Nothing here matches \u{201C}\(search)\u{201D}."
         } else if snapshot.omitted > 0 {
             // The one thing a reader cannot check by looking.
             statusLabel.stringValue = "\(snapshot.omitted) not drawn: the picture stops at"

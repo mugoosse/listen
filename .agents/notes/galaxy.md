@@ -419,6 +419,37 @@ where the neighbours answer "and what about him".
 A selection outranks a search, because clicking a star while a search is up is
 the narrower question and two sets of lit stars would answer neither.
 
+**Both halves of this shipped with nothing joining them.** `Sidebar` had
+`onSearchChanged` and `GalaxyPane` had `setSearch`, and the window never
+subscribed one to the other: the pane's entry point had no caller anywhere in
+the repo, and typing a name narrowed the list to two rows beside a picture with
+every star still in it. Reported as "searching still doesn't filter the galaxy
+nodes", which is what it was. Two things it needs beyond the subscription: the
+handler is guarded on the mode *before* `galaxyPane` is touched, because the
+pane is lazy and reaching for it from the library builds a Metal view and reads
+the library for a mode nobody has opened; and `enter(.galaxy)` applies
+`sidebar.searchQuery` on the way in, because the field keeps its word across a
+mode change and `onSearchChanged` only fires on a change.
+
+A search nothing answers says so. With the neighbours gone too there is nothing
+left but the centre, and a galaxy that goes blank reads as broken rather than
+as empty: the status line names the word that emptied it, which is the same
+rule as the cap being disclosed.
+
+### A role is not an accessibility element, and the whole sentence was inert
+
+The Metal view sets a role, a role description and a label saying what the
+picture is and where the same things can be reached as a list. None of it was
+in the tree. `NSView.isAccessibilityElement` is false by default, so a view
+that sets a role and a label and nothing else is still not an element, and
+`axprobe texts` could not find a word of it.
+
+That is worth more than the VoiceOver fix, because **the label is the only
+handle a script has on what the GPU drew**: the stars are pixels, so the count
+in that sentence is the one measurable thing about a filter. Section 12 of
+`verify_galaxy.sh` reads it before and after a search, 19 stars to 3 and back,
+which is an assertion no screenshot and no other element in the tree can make.
+
 ### A selection names itself and its links, and nothing else
 
 The label budget takes turns between the four shells only while nothing is

@@ -2,6 +2,8 @@
 
 ## Verdict: PARTIAL
 
+**Current build blocker after merging upstream `3d5f9ef`:** `bash verify.sh --ui` cannot reach the tests because the scoped ListenKit build omits the new `CloudRecords` dependency of `MemoryPreferences`. Earlier verification below predates that merge; it is not a passing result for the current branch. The last working executable can still export synthetic scenes. See the [follow-up checklist](FOLLOW_UP.md) for acceptance criteria and references.
+
 The isolated AppKit + MetalKit vertical slice builds and renders on this Mac using Command Line Tools and runtime Metal shader compilation. It is not integrated into production Listen. The device-centered spherical-shell design is implemented in the standalone prototype, including a bounded one-shot force relaxation and Galaxy-inspired ambient rendering. Production integration and live Ask conversation ingestion remain outside this milestone.
 
 Everything here is isolated from production Sources, the installed app, inference, consent, and library writes. The default is explicitly synthetic. Real-library access requires an explicit path.

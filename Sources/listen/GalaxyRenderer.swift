@@ -103,16 +103,6 @@ struct GalaxyCamera: Equatable {
     mutating func zoom(delta: Float) {
         distance = min(max(distance * exp(-delta), Self.minimumDistance), Self.maximumDistance)
     }
-    mutating func pan(deltaX: Float, deltaY: Float, viewportSize: SIMD2<Float>) {
-        guard viewportSize.x > 0, viewportSize.y > 0 else { return }
-        let forward = simd_normalize(target - eye)
-        let right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
-        let up = simd_normalize(simd_cross(right, forward))
-        // Points on screen to world units at the target's depth, so a drag
-        // moves the thing under the pointer by the distance the pointer moved.
-        let scale = 2 * distance * tan(Self.halfFieldOfView) / viewportSize.y
-        target += (-right * deltaX + up * deltaY) * scale
-    }
 
     /// Frame the whole outermost shell, whatever the library holds.
     ///

@@ -144,6 +144,10 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private let inspector = GalaxyInspector()
     private var controlsBottom: NSLayoutConstraint!
     private var inspectorBottom: NSLayoutConstraint!
+    private var legendTop: NSLayoutConstraint!
+    /// How much of the top of this pane the window's title bar is drawn over.
+    /// Zero until there is a window to ask. See `updateTitlebarInset`.
+    private var titlebarInset: CGFloat = 0
     private var bottomInset: CGFloat = 0
     private var legendHasChats = false
     private var legendCentreTitle = ""
@@ -224,6 +228,34 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             hasFramedForRealSize = true
             camera.frameGalaxy(aspect: Float(view.bounds.width / view.bounds.height))
         }
+        updateTitlebarInset()
+        invalidate()
+    }
+
+    /// **Collapsing the sidebar puts the window's own controls over this
+    /// pane.** The window is `fullSizeContentView`, so the picture has always
+    /// run up under the title bar; what kept the legend clear of it was the
+    /// sidebar, because everything before `.sidebarTrackingSeparator` (the
+    /// traffic lights, the masthead, the gear, the collapse control) is drawn
+    /// over the sidebar's own width. Take the sidebar away and all of it lands
+    /// on the galaxy's top-left corner, on top of the legend.
+    ///
+    /// So the question is not "is the sidebar collapsed", which this pane has
+    /// no business knowing, but "does this pane reach the window's left edge",
+    /// which is where those controls are. Measured rather than assumed: the
+    /// title bar's height is whatever the window says is outside its content
+    /// layout rect, which counts the toolbar and follows a style change.
+    private func updateTitlebarInset() {
+        guard let window = view.window, let content = window.contentView else { return }
+        let reachesTheCorner = view.convert(view.bounds, to: nil).minX < 12
+        let bar = content.bounds.height - window.contentLayoutRect.height
+        let inset = reachesTheCorner ? bar : 0
+        guard inset != titlebarInset else { return }
+        titlebarInset = inset
+        legendTop.constant = 18 + inset
+        // The legend has moved, so the titles told to keep clear of it have to
+        // be laid out again. See `setBottomInset`, which is the same rule at
+        // the other end of the pane.
         invalidate()
     }
 
@@ -269,11 +301,6 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             metal.onOrbit = { [weak self] x, y in
                 guard let height = self?.metalView?.bounds.height else { return }
                 self?.moveCamera { $0.orbit(deltaX: Float(x), deltaY: Float(y), viewportHeight: Float(height)) }
-            }
-            metal.onPan = { [weak self] x, y in
-                guard let size = self?.metalView?.bounds else { return }
-                self?.moveCamera { $0.pan(deltaX: Float(x), deltaY: Float(y),
-                                          viewportSize: SIMD2(Float(size.width), Float(size.height))) }
             }
             metal.onZoom = { [weak self] delta in self?.moveCamera { $0.zoom(delta: Float(delta)) } }
             view.addSubview(metal)
@@ -347,9 +374,10 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
 
         controlsBottom = controls.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
         inspectorBottom = inspector.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
+        legendTop = legend.topAnchor.constraint(equalTo: view.topAnchor, constant: 18)
         NSLayoutConstraint.activate([
             legend.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            legend.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
+            legendTop,
             statusLabel.leadingAnchor.constraint(equalTo: legend.leadingAnchor),
             statusLabel.topAnchor.constraint(equalTo: legend.bottomAnchor, constant: 14),
             statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 260),
@@ -719,7 +747,19 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             }
             if policy.flights { focusFlight = (camera, goal, 0) } else { camera = goal; focusFlight = nil }
         } else {
-            focusFlight = nil
+            // **Clearing puts the pivot back at the centre.** Selecting a star
+            // moves the camera's target to it, which is what makes orbiting
+            // around the thing you are inspecting work; nothing moved it back,
+            // so after one click and a clear the whole galaxy rotated about a
+            // recording somewhere out on the fourth shell and the star with
+            // your name on it swung around the frame. Reset view was the only
+            // way home, and nothing on screen said so.
+            //
+            // The distance is kept: how far in somebody has zoomed is theirs,
+            // and only what the picture turns about is being corrected.
+            let home = camera.focused(on: .zero, distance: camera.distance)
+            if policy.flights { focusFlight = (camera, home, 0) } else { camera = home }
+            if !policy.flights { focusFlight = nil }
         }
         refreshMotionPolicy()
         updateInspector()
@@ -781,8 +821,17 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // The corners the chrome occupies, so a title never lands under the
         // legend or behind the inspector card. Part of the key as well as the
         // layout: see `LabelState`.
+        // The strip under the title bar is chrome too, and unlike the four
+        // views it is not one of this pane's own. It is only reserved when the
+        // window's controls are actually over the picture, so an open sidebar
+        // costs the labels nothing. See `updateTitlebarInset`.
+        let strip = titlebarInset > 0
+            ? CGRect(x: 0, y: view.bounds.height - titlebarInset,
+                     width: view.bounds.width, height: titlebarInset)
+            : .zero
         let reserved = [legend.frame, statusLabel.frame, controls.frame,
-                        inspector.isHidden ? .zero : inspector.frame].map { $0.insetBy(dx: -6, dy: -6) }
+                        inspector.isHidden ? .zero : inspector.frame, strip]
+            .filter { !$0.isEmpty }.map { $0.insetBy(dx: -6, dy: -6) }
         let state = LabelState(camera: camera, time: motionTime, selected: selectedID,
                                hovered: hoveredID, size: metalView.bounds.size,
                                generation: renderGeneration, reserved: reserved)
@@ -1219,13 +1268,11 @@ private final class GalaxyMetalView: MTKView {
     var onHover: ((CGPoint?) -> Void)?
     var onInteraction: ((Bool) -> Void)?
     var onOrbit: ((CGFloat, CGFloat) -> Void)?
-    var onPan: ((CGFloat, CGFloat) -> Void)?
     var onZoom: ((CGFloat) -> Void)?
 
     private var hoverArea: NSTrackingArea?
     private var dragOrigin: CGPoint?
     private var pressOrigin: CGPoint?
-    private var panning = false
     private var dragged = false
 
     override func updateTrackingAreas() {
@@ -1250,7 +1297,6 @@ private final class GalaxyMetalView: MTKView {
         dragOrigin = point
         pressOrigin = point
         dragged = false
-        panning = event.modifierFlags.contains(.shift) || event.type == .rightMouseDown
     }
     override func rightMouseDown(with event: NSEvent) { mouseDown(with: event) }
     override func mouseDragged(with event: NSEvent) { drag(with: event) }
@@ -1264,7 +1310,13 @@ private final class GalaxyMetalView: MTKView {
         // threshold every click orbits the camera a little before selecting.
         if hypot(dx, dy) > 1 { dragged = true }
         dragOrigin = point
-        if panning { onPan?(dx, dy) } else { onOrbit?(dx, dy) }
+        // **Every drag orbits.** Shift-drag used to pan, which moves the
+        // camera's target off the centre, and a target off the centre is a
+        // galaxy that rotates about nothing in particular with no cue about
+        // which way to drag back. The reference disables panning for the same
+        // reason. See the note in `.agents/notes/galaxy.md`, which had claimed
+        // this was already true for a while before it was.
+        onOrbit?(dx, dy)
     }
 
     override func mouseUp(with event: NSEvent) {

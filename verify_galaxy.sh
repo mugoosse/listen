@@ -426,6 +426,38 @@ else
 fi
 stop
 
+echo
+echo "11. the legend gets out of the way of the window's own controls"
+: > "$TRACE"
+launch galaxy
+# **Collapsing the sidebar puts the traffic lights on the legend.** Everything
+# before `.sidebarTrackingSeparator` is drawn over the sidebar's width, so with
+# it gone the lights, the masthead, the gear and the collapse control all land
+# on this pane's top-left corner, where the legend is. Measured, because where
+# a view landed is exactly what a `texts` dump cannot say: the assertion is the
+# whole point of `axprobe frame`.
+open_at=$("$PROBE" frame $APP "listen brain")
+"$PROBE" press $APP "Sidebar" >/dev/null
+sleep 2
+away_at=$("$PROBE" frame $APP "listen brain")
+"$PROBE" press $APP "Sidebar" >/dev/null
+sleep 2
+back_at=$("$PROBE" frame $APP "listen brain")
+read -r ox oy _ _ <<<"$open_at"
+read -r ax ay _ _ <<<"$away_at"
+[ -n "$oy" ] && [ -n "$ay" ]
+check $? "the legend can be found and measured ($open_at)"
+# Screen coordinates here are top-left origin, so down is a larger y. One title
+# bar is 52 points on this build; 30 is the smallest move that cannot be a
+# rounding of staying put.
+[ "$ay" -ge "$((oy + 30))" ]
+check $? "collapsing the sidebar drops the legend clear of the title bar ($oy -> $ay)"
+[ "$ax" -lt "$ox" ]
+check $? "and the pane really did take the sidebar's width ($ox -> $ax)"
+[ "$back_at" = "$open_at" ]
+check $? "bringing the sidebar back puts the legend back ($back_at)"
+stop
+
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1
 rm -rf "$DIR"
 echo

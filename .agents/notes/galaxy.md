@@ -245,6 +245,29 @@ only one of them was a bug:
   over Listen. A solid Listen-coloured box floating over somebody's editor is a
   worse thing than a slightly different dark.
 
+### Collapsing the sidebar puts the window's own controls on the legend
+
+The window is `fullSizeContentView`, so the picture has always run up under the
+title bar. What kept the legend clear of it was the sidebar: everything before
+`.sidebarTrackingSeparator` (the traffic lights, the masthead, the gear, the
+collapse control) is drawn over the sidebar's own width. Collapse it and all of
+that lands on this pane's top-left corner, on top of the legend, which is what
+the reader saw.
+
+`updateTitlebarInset` asks the question the pane can actually answer: not "is
+the sidebar collapsed", which is the split view's business, but **does this pane
+reach the window's left edge**, which is where those controls are. The title
+bar's height is measured rather than remembered, as whatever falls outside
+`window.contentLayoutRect`, so it follows a toolbar style change. The same strip
+is reserved for the label pass while it applies, so no star's title is written
+under the traffic lights either, and an open sidebar costs the labels nothing.
+
+**Where a view landed is invisible to a `texts` dump**, which is why this could
+ship broken under a suite that already read every string on the pane. `axprobe
+frame` was added for it: it prints the screen rect of the first element matching
+a needle, and section 11 of `verify_galaxy.sh` presses the collapse control and
+asserts the legend drops by more than half a title bar and comes back.
+
 ### Every hue belongs to a shell, and everything else is grey
 
 Four shells, four colours, and the two rules that took three passes to find.
@@ -296,6 +319,26 @@ cost a wrong red the first time this was tested.
 The rate is per point of viewport height rather than a fixed constant, at
 Three's `rotateSpeed` of 0.45, so a drag across the pane is the same turn
 whatever size the window is.
+
+### Selecting moves the pivot, and nothing moved it back
+
+Clicking a star sets `camera.target` to it, which is what makes the next drag
+orbit around the thing being inspected rather than around the middle of the
+library. Clearing the selection left it there. So after one click and one
+cross, the galaxy turned about a recording out on the fourth shell: the bright
+centre swung around the frame, and Reset view was the only way home. Reported
+as "the star with my name in it is not the centre of the rotation", which is
+exactly what it was.
+
+`select(nil)` puts the target back at the origin now, and keeps the distance:
+how far in somebody has zoomed is theirs, and only what the picture turns about
+is being corrected. `tools/galaxy_geometry.swift` asserts both halves, because
+this is invisible to every count and to a still image alike.
+
+The other thing that moved the pivot was **shift-drag panning**, which was
+wired while the list of decisions below claimed "No panning". A panned target
+leaves the galaxy off screen with no cue which way to drag back, the reference
+disables it, and it is gone: every drag orbits.
 
 ### The near stop is derived from the shells, and only a picture bounds it
 
@@ -509,7 +552,8 @@ in a second place from the code that sets its uniforms.
   a lens over the snapshot, not a narrower read of the library, and it reaches
   no preference: a filter somebody finds still applied a week later is one they
   have no memory of setting.
-- **No panning.** The reference disables it too. With the target pinned to the
+- **No panning.** The reference disables it too, and this was a claim before it
+  was true: shift-drag panned for several builds after the sentence was written. With the target pinned to the
   centre the camera is two angles and a distance, which is what makes Reset a
   guarantee rather than a best effort; a panned target can leave the galaxy off
   screen with no cue about which way to drag back.

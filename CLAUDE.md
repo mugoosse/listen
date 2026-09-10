@@ -665,6 +665,8 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - A window colour is four things, not one
 - Every hue belongs to a shell, and everything else is grey
 - The scene follows the pointer, and one axis shipped the other way
+- Selecting moves the pivot, and nothing moved it back
+- Collapsing the sidebar puts the window's own controls on the legend
 - The near stop is derived from the shells, and only a picture bounds it
 - Framing a selection is framing its neighbourhood
 - The label pass returns when nothing it depends on has moved
@@ -875,7 +877,7 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
 ```
 
 The AX-driven ones share `tools/axprobe.swift`, compiled on demand into
-`.xcbuild/tools/axprobe`: texts, press, showmenu, focus, settext, selectrow,
+`.xcbuild/tools/axprobe`: texts, press, showmenu, focus, settext, selectrow, frame,
 hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
 **`showmenu` is not a nicety.** The toolbar's ellipsis is an
 `NSMenuToolbarItem` and the recording screen's two pull-downs are
@@ -883,7 +885,11 @@ hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
 success, nothing happens, and the items read as missing from the tree
 afterwards, which is indistinguishable from a menu that was never built. A
 menu's items are in the tree **only while it is open**, so the order is always
-showmenu, read, press. It exits
+showmenu, read, press. **`frame` answers where.** A `texts` dump reads every
+string on a window and can say nothing about what landed on top of what, so a
+control sitting under the traffic lights passes every assertion in it; `frame`
+prints an element's screen rect, and the galaxy's legend moving out from under
+the title bar is asserted with it. It exits
 specially when the terminal lacks Accessibility permission and when the tree
 comes back empty, because a sleeping display empties every window's subtree
 and a script grepping for absence would pass on nothing.

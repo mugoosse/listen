@@ -15,6 +15,11 @@
 //                                    value or description contains <needle>.
 //                                    The ellipsis and the recording screen's
 //                                    pull-downs open on this and ignore AXPress
+//   axprobe frame <pid> <needle>     "x y w h" in screen points (top-left
+//                                    origin, so y grows downwards) of the first
+//                                    element whose title, value or description
+//                                    contains <needle>. Where a view landed is
+//                                    otherwise invisible to a script
 //   axprobe hasclose <pid> <title>   "yes"/"no": does the window whose title
 //                                    contains <title> expose a close button
 //
@@ -106,6 +111,31 @@ case "press":
     }
     print(pressed ? "pressed" : "not found")
     exit(pressed ? 0 : 1)
+
+case "frame":
+    guard arguments.count >= 4 else { exit(2) }
+    let needle = arguments[3].lowercased()
+    var reported = false
+    walk(app, budget: &budget) { element in
+        guard !reported else { return false }
+        let haystack = [string(element, kAXTitleAttribute),
+                        (attribute(element, kAXValueAttribute) as? String) ?? "",
+                        string(element, kAXDescriptionAttribute)]
+            .joined(separator: " ").lowercased()
+        guard haystack.contains(needle),
+              let rawPoint = attribute(element, kAXPositionAttribute),
+              let rawSize = attribute(element, kAXSizeAttribute),
+              CFGetTypeID(rawPoint) == AXValueGetTypeID(),
+              CFGetTypeID(rawSize) == AXValueGetTypeID() else { return true }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(rawPoint as! AXValue, .cgPoint, &point)
+        AXValueGetValue(rawSize as! AXValue, .cgSize, &size)
+        print("\(Int(point.x)) \(Int(point.y)) \(Int(size.width)) \(Int(size.height))")
+        reported = true
+        return false
+    }
+    exit(reported ? 0 : 1)
 
 case "showmenu":
     // The same walk as `press`, performing AXShowMenu instead.

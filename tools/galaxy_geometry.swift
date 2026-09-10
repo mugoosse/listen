@@ -154,6 +154,18 @@ import simd
         let alone = camera.focused(on: star, including: [], aspect: 1.6)
         check(alone.distance >= 11, "a star that links to nothing is not pressed against the lens")
 
+        // **Clearing a selection puts the pivot back.** Selecting moves the
+        // camera's target to the star, which is what makes orbiting around the
+        // thing you are inspecting work; nothing moved it back, so after one
+        // click and a clear the galaxy rotated about a recording out on the
+        // fourth shell and the centre swung around the frame.
+        let outer = SIMD3<Float>(0, 0, 17)
+        let picked = camera.focused(on: outer, including: [], aspect: 1.6)
+        check(picked.target == outer, "selecting a star pivots on it")
+        let cleared = picked.focused(on: .zero, distance: picked.distance)
+        check(cleared.target == .zero, "and clearing puts the pivot back at the centre")
+        check(cleared.distance == picked.distance, "keeping how far in somebody had zoomed")
+
         print("\npicking agrees with what is drawn")
         // The radius the shader scales a quad by is the radius picking tests,
         // or a click selects the star beside the one under the pointer.

@@ -93,12 +93,18 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard trimmed != search else { return }
         search = trimmed
+        // Timed for the same reason the sidebar's reload is: this runs on every
+        // keystroke, on the main thread, and the question of whether it needs a
+        // debounce is a measurement rather than an opinion.
+        let began = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
         // A star that has fallen out of the search cannot stay selected.
         if let id = selectedID, visible.node(id) == nil { select(nil) }
         renderGeneration += 1
         pushToRenderer()
         updateStatus()
         invalidate()
+        trace("galaxy search \(visible.nodes.count) of \(snapshot.nodes.count) stars in "
+              + "\((DispatchTime.now().uptimeNanoseconds - began) / 1_000_000) ms")
     }
     /// Bumped whenever the snapshot is replaced, so the label pass can tell a
     /// new library from the same one without comparing every node.

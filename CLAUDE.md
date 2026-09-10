@@ -311,6 +311,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - The heading is a button, and it is the first one here that answers to accessibility (superseded)
 - A heading that lights up under the pointer is a control, and this one was not
 - Three things about the search field that are not obvious
+- Every keystroke read the whole library, and the galaxy was blamed for it
 - The recording in progress is not in the library
 - One elapsed clock per screen, and the row is the one that always counts
 - A sidebar reload is not somebody choosing a recording

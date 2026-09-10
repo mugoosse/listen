@@ -397,6 +397,55 @@ live.** A menu built once in `loadView` lists the tags that existed at launch
 for ever. `menuTags` is the last vocabulary it was built from, and `reload`
 rebuilds it when that changes, which is rare.
 
+## Every keystroke read the whole library, and the galaxy was blamed for it
+
+Reported as the picture being slow to keep up with typing. It was not the
+picture. `LISTEN_DEBUG=1` prints a line per rebuild, against a fixture the shape
+of the development library, 120 hour-long meetings and 8 MB of `turns.json`:
+
+    sidebar reload 152 rows for "rita" in 380 ms (read 7, notes 8, tags 0, search 290)
+    galaxy search 30 of 175 stars in 6 ms
+
+Three separate costs, and a debounce would have hidden all three:
+
+- **`storedTurns` decoded the file on every access, with no cache.** Its own doc
+  comment said so. `RecordingFilter.search` scans turn by turn, so one keystroke
+  re-read and re-decoded every transcript in the library. `TurnStore` keeps them
+  in memory keyed on the file's modification date and size, which cannot go
+  stale the way an invalidation somebody has to remember would: four processes
+  write these files. 290 ms to 150 ms.
+- **The turn loop called into ICU 54,000 times.** One search over the joined
+  text of a recording rejects it whole, and only what survives is walked turn by
+  turn. It cannot miss anything, because a substring of a turn is a substring of
+  the join and both use the same options. 150 ms to 75 ms, and 30 ms when
+  nothing matches.
+- **A one-letter query built 300,000 `Hit`s to show one excerpt and a number.**
+  `Find.count` walks without allocating and `Find.first` stops at the first
+  occurrence, so a row carries the hits it can show and a count of the rest.
+  That is the first keystroke of every search: 616 ms to 111 ms.
+
+**And the field's own delayed action rebuilt the query it had already done.**
+`NSSearchField` fires `action` after every burst of typing, and
+`controlTextDidChange` had already handled the same text; both called `reload`.
+The subsection above says the action is too late to edit text, which is true and
+is not a reason to redo the list. It reloads when the lift changed something or
+the text differs, which is what it is for. Two or three rebuilds a keystroke
+became one, plus the one the semantic search brings back when it returns.
+
+**The first keystroke still paid for the cold cache**, so the sidebar warms it
+on a background queue when the field takes the caret: the last moment before
+typing that is still not typing. It stops at the cache's budget rather than
+evicting what it has just read.
+
+Where it landed, same fixture, and every one of these is one line of
+`LISTEN_DEBUG` output rather than a claim to take on trust:
+
+    one letter        616 ms -> 111 ms
+    a settled query   380 ms ->  88 ms
+    no match          140 ms ->  58 ms
+    rebuilds each     2 or 3 -> 1 or 2
+    the galaxy          6 ms ->   3 ms
+
 ## Collection navigation is in the sidebar, not the toolbar
 
 **Superseded: see the section above.** Kept because the constraint is still

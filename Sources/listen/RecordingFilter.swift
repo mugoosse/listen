@@ -117,8 +117,18 @@ struct RecordingFilter {
     /// The library narrowed, and where the query was found in what survived.
     struct Found {
         var recordings: [Recording]
-        /// Recording id to its hits. Empty when nothing was typed.
+        /// Recording id to the hits a row can show: every hit in the title,
+        /// which the row marks in place, and the **first** hit in the body,
+        /// which it quotes.
+        ///
+        /// **Not every hit.** A row shows one excerpt and a number, and
+        /// building a `Hit` for each occurrence of a one-letter query over a
+        /// library of hour-long meetings is 300,000 of them: 600 ms on the
+        /// first keystroke of every search, for 299,999 that are never read.
         var hits: [String: [Hit]]
+        /// How many times the query occurs in each, which is the number on the
+        /// row. Counted in the same pass, without keeping the occurrences.
+        var counts: [String: Int]
     }
 
     /// The same narrowing as `apply(to:)`, keeping what it found.
@@ -130,25 +140,51 @@ struct RecordingFilter {
     func search(_ library: [Recording]) -> Found {
         var out = narrow(library)
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return Found(recordings: out, hits: [:]) }
+        guard !q.isEmpty else { return Found(recordings: out, hits: [:], counts: [:]) }
 
         var hits: [String: [Hit]] = [:]
+        var counts: [String: Int] = [:]
         out = out.filter { recording in
             var found: [Hit] = []
+            var total = 0
             // The title first, so a row that matched only its own name can say
             // so by marking the words already on it rather than by growing a
             // line that repeats them.
             for range in Find.ranges(of: q, in: recording.displayTitle) {
                 found.append(Hit(turn: nil, start: 0, speaker: "",
                                  range: range, text: recording.displayTitle))
+                total += 1
             }
             // **Turn by turn, never over the joined string.** `transcriptText`
             // joins paragraphs with a space, so a query straddling two of them
             // matched text nobody said, and a hit found there has no speaker
             // and no timestamp to attribute it to. Scanning each turn fixes the
             // false positive and yields both for free.
+            // **One search over the whole recording decides whether the turn
+            // loop runs at all.** The loop below calls into ICU once per turn,
+            // and a library of hour-long meetings is 54,000 turns: measured at
+            // 150 ms a keystroke, against 8 ms when most recordings are
+            // rejected by a single pass over their joined text first.
+            //
+            // It cannot miss anything: a substring of a turn is a substring of
+            // the join, both use the same options, and a query that straddles
+            // two turns lets the recording through here and then finds no hit
+            // below, which is exactly the answer the turn loop exists to give.
+            guard Find.contains(q, in: recording.transcriptText) else {
+                guard !found.isEmpty else { return false }
+                hits[recording.id] = found
+                counts[recording.id] = total
+                return true
+            }
+            var quoted = false
             for (index, turn) in recording.storedTurns.enumerated() {
-                for range in Find.ranges(of: q, in: turn.text) {
+                let here = Find.count(of: q, in: turn.text)
+                guard here > 0 else { continue }
+                total += here
+                // The first hit in the body is the one the row quotes, and the
+                // only one it needs. See `Found.hits`.
+                if !quoted, let range = Find.first(of: q, in: turn.text) {
+                    quoted = true
                     found.append(Hit(turn: index, start: turn.start,
                                      speaker: SpeakerName.display(turn.speaker),
                                      range: range, text: turn.text))
@@ -156,9 +192,10 @@ struct RecordingFilter {
             }
             guard !found.isEmpty else { return false }
             hits[recording.id] = found
+            counts[recording.id] = total
             return true
         }
-        return Found(recordings: out, hits: hits)
+        return Found(recordings: out, hits: hits, counts: counts)
     }
 
     func apply(to library: [Recording]) -> [Recording] {

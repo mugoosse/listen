@@ -242,21 +242,122 @@ extension Recording {
         ModelChoice.forRepo(repo)?.title ?? repo
     }
 
-    /// The transcript as one string, for searching.
-    var transcriptText: String {
-        storedTurns.map(\.text).joined(separator: " ")
-    }
+    /// The transcript as one string, for searching. Cached with the turns it
+    /// is built from: `RecordingFilter.search` asks every recording for this
+    /// on every keystroke.
+    var transcriptText: String { TurnStore.text(at: turnsURL) }
 
     var storedTranscript: StoredTranscript? {
         guard let data = try? Data(contentsOf: transcriptURL) else { return nil }
         return try? JSONDecoder().decode(StoredTranscript.self, from: data)
     }
 
-    var storedTurns: [Turn] {
-        guard let data = try? Data(contentsOf: turnsURL),
-              let turns = try? JSONDecoder().decode([Turn].self, from: data)
-        else { return [] }
-        return turns
+    var storedTurns: [Turn] { TurnStore.turns(at: turnsURL) }
+}
+
+/// Decoded `turns.json`, kept in memory and checked against the file.
+///
+/// **Every keystroke in the search field decoded the whole library.**
+/// `RecordingFilter.search` scans turn by turn, and `storedTurns` re-read and
+/// re-decoded the file on every access, so typing four letters cost four passes
+/// over every transcript on disk. Measured on a fixture the shape of the
+/// development library, 120 hour-long meetings and 8 MB of turns:
+///
+///     reload: Recording.all      7 ms
+///     reload: Notes.all          8 ms
+///     reload: Tags.all           0 ms
+///     reload: filter.search    290 ms      <- all of it here
+///     sidebar reload           380 ms      <- and two or three of these a keystroke
+///     galaxy search              6 ms
+///
+/// The lag was reported against the galaxy, which is 6 ms of it. `LISTEN_DEBUG`
+/// still prints all six lines, because the next person to be sure where the
+/// time goes should be able to check rather than believe this comment.
+///
+/// **Keyed on the file's own modification date and size, never on a
+/// notification.** Four writers touch these: the window, the CLI, the
+/// transcription queue and a sync pull. A `stat` per access costs microseconds
+/// and cannot go stale, where a cache invalidated by whoever remembered to
+/// invalidate it would eventually hand somebody an old transcript.
+enum TurnStore {
+    private struct Entry {
+        var stamp: Date
+        var size: Int
+        var turns: [Turn]
+        /// The turns joined, built on the first ask and kept: the search's
+        /// cheap pass over a whole recording needs it once per keystroke.
+        var joined: String?
+        var cost: Int
+        var used: UInt64
+    }
+
+    private static let lock = NSLock()
+    private static var entries: [String: Entry] = [:]
+    private static var held = 0
+    private static var clock: UInt64 = 0
+
+    /// About 32 MB of turn text, which is six times the development library and
+    /// still bounded: a library past the cap keeps the ones most recently read
+    /// and pays the decode again for the rest. The alternative, no bound, is a
+    /// process that grows with every recording anybody searches.
+    private static let budget = 32 * 1024 * 1024
+
+    /// Is there room for another transcript, for a warm that should stop
+    /// rather than evict what it has just read? See `Sidebar.warmTurns`.
+    static var wantsMore: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return held < budget
+    }
+
+    /// Read on the main thread by the sidebar and on background queues by the
+    /// galaxy, the context extractor and the enroller, so this is locked.
+    static func turns(at url: URL) -> [Turn] { entry(at: url)?.turns ?? [] }
+
+    /// Every turn joined with a space, which is what a search scans first.
+    static func text(at url: URL) -> String {
+        guard let found = entry(at: url) else { return "" }
+        if let joined = found.joined { return joined }
+        let joined = found.turns.map(\.text).joined(separator: " ")
+        lock.lock()
+        entries[url.path]?.joined = joined
+        lock.unlock()
+        return joined
+    }
+
+    private static func entry(at url: URL) -> Entry? {
+        let key = url.path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: key)
+        let stamp = (attributes?[.modificationDate] as? Date) ?? .distantPast
+        let size = (attributes?[.size] as? Int) ?? -1
+        lock.lock()
+        if let hit = entries[key], hit.stamp == stamp, hit.size == size {
+            clock += 1
+            entries[key]?.used = clock
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+        // Decoded outside the lock. Two threads asking for the same cold file
+        // decode it twice, which costs one wasted parse; holding the lock
+        // across the parse would put the galaxy's background read in front of
+        // the keystroke this exists to make fast.
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([Turn].self, from: data)
+        else { return nil }
+        let cost = decoded.reduce(0) { $0 + $1.text.utf8.count } * 2
+        lock.lock()
+        clock += 1
+        if let old = entries[key] { held -= old.cost }
+        let fresh = Entry(stamp: stamp, size: size, turns: decoded,
+                          joined: nil, cost: cost, used: clock)
+        entries[key] = fresh
+        held += cost
+        while held > budget, entries.count > 1,
+              let oldest = entries.min(by: { $0.value.used < $1.value.used })?.key {
+            held -= entries.removeValue(forKey: oldest)?.cost ?? 0
+        }
+        lock.unlock()
+        return fresh
     }
 }
 

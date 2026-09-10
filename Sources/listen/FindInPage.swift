@@ -233,6 +233,58 @@ enum Find {
     /// the needle's length**: a diacritic-insensitive match can be a different
     /// number of characters from the thing that was typed, and stepping by the
     /// needle either rescans a character or skips one.
+    /// Is the query anywhere in this text, with the same rules `ranges` uses?
+    ///
+    /// The two must agree, or the cheap pass in `RecordingFilter.search` would
+    /// skip a recording that does match: same options, one call, stops at the
+    /// first hit instead of walking the whole string.
+    static func contains(_ query: String, in text: String) -> Bool {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty, !text.isEmpty else { return false }
+        return (text as NSString).range(
+            of: wanted, options: [.caseInsensitive, .diacriticInsensitive]).location != NSNotFound
+    }
+
+    /// How many times the query occurs, without building the list.
+    ///
+    /// The row shows a count and one excerpt, so `ranges` was allocating an
+    /// array per turn and a `Hit` per occurrence to produce a number: a
+    /// one-letter query over 120 hour-long meetings is about 300,000 of them,
+    /// which is 600 ms and the whole cost of the first keystroke.
+    static func count(of query: String, in text: String) -> Int {
+        walk(query, text) { _ in true }
+    }
+
+    /// The first occurrence, for the one turn a row quotes.
+    static func first(of query: String, in text: String) -> NSRange? {
+        var found: NSRange?
+        _ = walk(query, text) { range in found = range; return false }
+        return found
+    }
+
+    /// One pass, stopping when `each` says to. The three entry points above
+    /// share it so they cannot disagree about what a match is.
+    @discardableResult
+    private static func walk(_ query: String, _ text: String,
+                             _ each: (NSRange) -> Bool) -> Int {
+        let wanted = query.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty, !text.isEmpty else { return 0 }
+        let haystack = text as NSString
+        var seen = 0
+        var from = 0
+        while from < haystack.length {
+            let rest = NSRange(location: from, length: haystack.length - from)
+            let found = haystack.range(of: wanted,
+                                       options: [.caseInsensitive, .diacriticInsensitive],
+                                       range: rest)
+            guard found.location != NSNotFound else { break }
+            seen += 1
+            if !each(found) { break }
+            from = max(NSMaxRange(found), found.location + 1)
+        }
+        return seen
+    }
+
     static func ranges(of query: String, in text: String) -> [NSRange] {
         let wanted = query.trimmingCharacters(in: .whitespaces)
         guard !wanted.isEmpty, !text.isEmpty else { return [] }

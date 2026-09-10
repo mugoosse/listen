@@ -217,6 +217,9 @@ final class SidebarViewController: NSViewController {
     /// What the field holds now, for a surface that wants to narrow with it.
     var searchQuery: String { query }
 
+    /// One background warm at a time. See `controlTextDidBeginEditing`.
+    private var warming = false
+
     private(set) var selectedRecording: Recording?
     private(set) var selectedNote: Note?
     private(set) var selectedPerson: Person?
@@ -370,6 +373,22 @@ final class SidebarViewController: NSViewController {
     // MARK: - Data
 
     func reload() {
+        // **Timed, because every keystroke runs this.** `controlTextDidChange`
+        // calls it synchronously on the main thread, and what it does is read
+        // the library off disk. `LISTEN_DEBUG=1` prints the cost so the answer
+        // to "should this be debounced" is a number rather than a guess.
+        let began = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
+        var stages: [String] = []
+        func stage(_ name: String, _ from: UInt64) {
+            guard DEBUG else { return }
+            stages.append("\(name) \((DispatchTime.now().uptimeNanoseconds - from) / 1_000_000)")
+        }
+        defer {
+            trace("sidebar reload \(rows.count) rows for "
+                  + "\(query.isEmpty ? "no query" : "\u{201C}\(query)\u{201D}") in "
+                  + "\((DispatchTime.now().uptimeNanoseconds - began) / 1_000_000) ms"
+                  + " (\(stages.joined(separator: ", ")))")
+        }
         // The list is rebuilt whenever capture changes, and capture can change
         // before the window has ever been shown: the menu bar is built at
         // launch and a recording can be running by then. `table` is created in
@@ -389,20 +408,26 @@ final class SidebarViewController: NSViewController {
         // started: the row has to show a title changed since, and the folder is
         // the truth about a recording here as everywhere else.
         let live = Capture.shared.current.map { Recording.load($0.folder) ?? $0 }
+        let tRead = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
         let library = Recording.all()
+        stage("read", tRead)
 
         // Read once and passed down, rather than derived again inside
         // `Tags.all` and again in the note rows below. The vocabulary spans
         // both kinds now, so this list is needed to parse the search field as
         // well as to build the rows.
+        let tNotes = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
         let everyNote = Notes.all()
+        stage("notes", tNotes)
 
         // `tag:` in the search field is a lens typed rather than clicked, so it
         // is parsed against the tags that exist: see `RecordingFilter.parse`.
         // A tag only a note carries is one of those, which is what makes
         // `tag:` over a note-only subject complete in the field at all.
+        let tTags = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
         var filter = RecordingFilter.parse(
             q, knownTags: Tags.all(in: library, notes: everyNote).map(\.name))
+        stage("tags", tTags)
         for lens in lenses {
             switch lens {
             case .tag(let name): filter.tags.append(name)
@@ -422,12 +447,16 @@ final class SidebarViewController: NSViewController {
 
         // `search` rather than `apply`, so the rows can show the sentence that
         // matched instead of only the fact that something did.
+        let tSearch = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
         let searched = kind == nil || kind == .recordings
             ? filter.search(library)
-            : RecordingFilter.Found(recordings: [], hits: [:])
+            : RecordingFilter.Found(recordings: [], hits: [:], counts: [:])
+        stage("search", tSearch)
         let matching = searched.recordings
         rowMatches = [:]
-        for (id, hits) in searched.hits { rowMatches[id] = Self.summarise(hits) }
+        for (id, hits) in searched.hits {
+            rowMatches[id] = Self.summarise(hits, count: searched.counts[id] ?? hits.count)
+        }
 
         // Notes stand alongside recordings, sorted into the same days, because
         // a note is a page that happens to have no audio. Ordinarily only the
@@ -477,7 +506,9 @@ final class SidebarViewController: NSViewController {
                 guard Self.pageless(note) || !mayDoubleUp else { return false }
                 guard let hits = Self.matches(note, query: filter.query,
                                               tags: filter.tags) else { return false }
-                if !hits.isEmpty { rowMatches[note.slug] = Self.summarise(hits) }
+                if !hits.isEmpty {
+                    rowMatches[note.slug] = Self.summarise(hits, count: hits.count)
+                }
                 return true
               }
             : []
@@ -851,11 +882,11 @@ final class SidebarViewController: NSViewController {
     /// The first hit in the body rather than the "best" one. There is no
     /// ranking worth the name over a transcript, and a first match is at least
     /// an answer somebody can predict: it is where the find bar will open too.
-    private static func summarise(_ hits: [RecordingFilter.Hit]) -> RowMatch {
+    private static func summarise(_ hits: [RecordingFilter.Hit], count: Int) -> RowMatch {
         let titles = hits.filter { $0.turn == nil }
         let bodies = hits.filter { $0.turn != nil }
         guard let first = bodies.first else {
-            return RowMatch(excerpt: nil, count: hits.count,
+            return RowMatch(excerpt: nil, count: count,
                             titleRanges: titles.map(\.range))
         }
         let line = NSMutableAttributedString()
@@ -879,7 +910,7 @@ final class SidebarViewController: NSViewController {
                                    width: Excerpt.width - line.length,
                                    font: .systemFont(ofSize: 11),
                                    colour: .secondaryLabelColor))
-        return RowMatch(excerpt: line, count: hits.count,
+        return RowMatch(excerpt: line, count: count,
                         titleRanges: titles.map(\.range))
     }
 
@@ -1193,8 +1224,16 @@ final class SidebarViewController: NSViewController {
         // usually run first and left `query` correct already; this is what
         // catches a value the lift is holding, which is the whole point of
         // Return being the other way to finish one. See `liftOperators`.
-        liftOperators(finishing: true)
-        query = searchField.stringValue
+        //
+        // **And then it is a second reload of the same query.** "usually run
+        // first" is the common case, not the rare one: the field's delay fires
+        // after every burst of typing, so every settled query rebuilt the list
+        // twice, at 380 ms a rebuild on a library of hour-long meetings. Reload
+        // when this call changed something, which is what it is for.
+        let lifted = liftOperators(finishing: true)
+        let next = searchField.stringValue
+        guard lifted || next != query else { return }
+        query = next
         reload()
     }
 
@@ -1603,6 +1642,33 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 /// `NSSearchField`'s `action` fires on Return and on its own delay: far too
 /// late to take an operator out from under a caret that has moved on.
 extension SidebarViewController: NSSearchFieldDelegate {
+    /// **The first keystroke used to pay for the whole library.** Every search
+    /// scans the transcripts, and `TurnStore` only holds what something has
+    /// already read, so the first letter typed after launch decoded all of them
+    /// on the main thread: 616 ms on a 120-meeting fixture, against 120 ms for
+    /// every letter after it.
+    ///
+    /// Taking the caret is the signal, because it is the last moment before
+    /// typing that is still not typing. It reads rather than writes, so it is
+    /// safe on a background queue, and it stops at the cache's budget instead of
+    /// evicting what it has just put there.
+    func controlTextDidBeginEditing(_ note: Notification) {
+        guard !warming else { return }
+        warming = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let began = DispatchTime.now().uptimeNanoseconds
+            var read = 0
+            for recording in Recording.all() {
+                guard TurnStore.wantsMore else { break }
+                _ = recording.transcriptText
+                read += 1
+            }
+            trace("sidebar warmed \(read) transcripts in "
+                  + "\((DispatchTime.now().uptimeNanoseconds - began) / 1_000_000) ms")
+            DispatchQueue.main.async { self?.warming = false }
+        }
+    }
+
     func controlTextDidChange(_ note: Notification) {
         // The completion inserts text, which arrives back here. Without this
         // the insertion asks to complete the thing it has just completed.

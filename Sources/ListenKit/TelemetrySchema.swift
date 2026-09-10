@@ -199,6 +199,12 @@ public enum TelemetrySchema {
         /// the event that would most obviously carry a person's name, and it
         /// carries none.
         case speakerNamedOnPhone = "speaker_named_on_phone"
+        /// The galaxy was opened. The fact only: never how many stars, which
+        /// would be a library size, and never what any of them are.
+        ///
+        /// It is here because the galaxy is one row in one menu, and a feature
+        /// nobody finds is indistinguishable from a feature nobody wants.
+        case galaxyOpened = "galaxy_opened"
     }
 
     public enum Subsystem: String, Sendable {

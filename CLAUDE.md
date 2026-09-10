@@ -655,7 +655,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - `mouseUp` must compare against where the press started
 - The sidebar stays live, so a row picked there has to leave the mode
 - The shader is compiled from source, not added to the build
-- What is deliberately not here: no inferred edges, no importance in the radius
+- What is deliberately not here: no inferred edges, no importance in the radius, no accessible element per star
 
 ### `.agents/notes/person-context.md`
 

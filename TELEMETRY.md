@@ -165,13 +165,19 @@ trace: exact timings and fixed tool names stay in the device's unified log.
 ### `feature_used`
 A closed list, and the fact only: `note_saved` (never the note), `sync_enabled`, `dictation_enabled`,
 `calendar_connected`, `share_export`, `import`, `iphone_capture`,
-`keep_audio_toggle`, `recognise_voices_toggle`, `speaker_named_on_phone`.
+`keep_audio_toggle`, `recognise_voices_toggle`, `speaker_named_on_phone`,
+`galaxy_opened`.
 
 `recognise_voices_toggle` is the iPhone's voice bank being switched on or off.
 `speaker_named_on_phone` is somebody saying who a voice is. Both are the fact
 and nothing else: no name, no voiceprint, no recording id, and no count of who
 the bank holds. The second is the event in this list that would most obviously
 carry a person's name, so it is worth saying twice that it does not.
+
+`galaxy_opened` is the picture of the library being opened, and it is the fact
+alone: not how many stars were drawn, which would be a library size, and not
+what any of them are. It is here because the galaxy is one row in one menu, and
+a feature nobody finds looks exactly like a feature nobody wants.
 
 ### `operation_failed`
 `subsystem` (`capture`, `model_download`, `sync`, `dictation`, `library`,

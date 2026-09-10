@@ -170,6 +170,16 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                 metal.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ])
             metalView = metal
+            // **What VoiceOver is told this is.** A Metal view is one opaque
+            // element, and the stars inside it are pixels rather than views, so
+            // there is nothing here to read or to move between. Saying so, and
+            // saying where the same things *can* be reached, is the honest
+            // answer: the sidebar beside this pane is the same library as a
+            // list, and it is fully navigable. `updateStatus` keeps the counts
+            // in this sentence current.
+            metal.setAccessibilityRole(.image)
+            metal.setAccessibilityRoleDescription("galaxy")
+            updateSceneAccessibility()
         } catch {
             showFailure(error.localizedDescription)
         }
@@ -185,9 +195,14 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         heading.font = .systemFont(ofSize: 9, weight: .semibold)
         heading.textColor = NSColor.white.withAlphaComponent(0.45)
         legend.addArrangedSubview(heading)
-        for (kind, name) in [(Galaxy.Node.device, "Listen on this Mac"),
-                             (Galaxy.Node.person, "People"), (Galaxy.Node.note, "Notes"),
-                             (Galaxy.Node.chat, "Chats"), (Galaxy.Node.recording, "Recordings")] {
+        var rows: [(String, String)] = [(Galaxy.Node.device, "Listen on this Mac"),
+                                        (Galaxy.Node.person, "People"), (Galaxy.Node.note, "Notes")]
+        // **No Chats row with Ask off.** `Galaxy.build` reads no conversations
+        // then, so the row would name a shell that is always empty, which
+        // reads as a shell that is broken.
+        if Settings.askEnabled { rows.append((Galaxy.Node.chat, "Chats")) }
+        rows.append((Galaxy.Node.recording, "Recordings"))
+        for (kind, name) in rows {
             legend.addArrangedSubview(GalaxyLegendRow(kind: kind, name: name))
         }
         view.addSubview(legend)
@@ -308,6 +323,20 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                 + " each one already written down."
         }
         statusLabel.setAccessibilityLabel(statusLabel.stringValue)
+        updateSceneAccessibility()
+    }
+
+    private func updateSceneAccessibility() {
+        let stars = max(0, snapshot.nodes.count - 1)
+        metalView?.setAccessibilityLabel(
+            stars == 0
+                ? "Your library as a picture. Nothing to draw yet."
+                : "Your library as a picture: \(stars) "
+                  + "\(stars == 1 ? "star" : "stars") on four shells around this Mac, "
+                  + "\(snapshot.edges.count) \(snapshot.edges.count == 1 ? "link" : "links"). "
+                  + "The stars are drawn rather than laid out, so they cannot be "
+                  + "reached from here. The list beside this pane is the same "
+                  + "library, and every row in it opens the same page.")
     }
 
     // -----------------------------------------------------------------------

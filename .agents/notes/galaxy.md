@@ -243,6 +243,13 @@ in a second place from the code that sets its uniforms.
   a note. Filters or a contextual highlight are the shape worth trying, and
   neither is designed yet.
 - **No editing.** Every verb is on the page the star opens.
+- **No keyboard navigation of the stars, and no accessible element per star.**
+  They are pixels the GPU drew inside one `MTKView`, not views, so there is
+  nothing to focus and nothing to read. Building an accessible element per star
+  would be building a second list of the library beside the one already in the
+  sidebar, which is fully navigable and opens the same pages. The Metal view
+  says exactly that to VoiceOver, with the counts, rather than presenting
+  itself as an empty image.
 - **No second read of the library.** The pane calls `Galaxy.build` on a
   background queue and coalesces requests: the window reloads on activation, on
   a recording arriving and on the queue advancing, and three passes for one

@@ -108,6 +108,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private var addPersonController: AddPersonController?
     /// Whether the sidebar was collapsed before settings forced it open.
     private var sidebarWasCollapsed = false
+    /// How much room the Ask bar is taking at the bottom of the content area.
+    /// See `composerHost.onDrawerHeight`.
+    private var drawerHeight: CGFloat = 0
 
     private static let brandItem = NSToolbarItem.Identifier("listenBrand")
     private static let settingsTitleItem = NSToolbarItem.Identifier("settingsTitle")
@@ -361,6 +364,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if window == nil { build() }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        // Before `enter`, which returns early when this is already the mode:
+        // counting a second Cmd-Shift-G on a galaxy already on screen would
+        // make the number a count of keystrokes rather than of openings.
+        if mode != .galaxy { Telemetry.featureUsed(.galaxyOpened) }
         enter(.galaxy)
     }
 
@@ -546,10 +553,15 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self?.updateComposer()
         }
         composerHost.onDrawerHeight = { [weak self] points in
-            self?.detail.setBottomInset(points)
-            // The galaxy's controls and its card float over the scene rather
-            // than scrolling in it, so the Ask bar would sit on top of them.
-            self?.galaxyPane.setBottomInset(points)
+            guard let self else { return }
+            self.detail.setBottomInset(points)
+            // **Remembered, and only handed over in galaxy mode.** The pane is
+            // `lazy`, and touching it here would build it, its Metal device and
+            // its shader for every window this app has ever opened, including
+            // for somebody who never opens the galaxy at all. `enter(.galaxy)`
+            // applies whatever the last number was.
+            self.drawerHeight = points
+            if self.mode == .galaxy { self.galaxyPane.setBottomInset(points) }
         }
         // **The drawer asks; the window decides.** A page is a mode, and a mode
         // change is the window's to make: it swaps the sidebar's list, its
@@ -1017,6 +1029,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // same recordings the sidebar is showing, so taking it away would
             // be hiding the answer to "which of these is that star".
             detailHost.show(galaxyPane)
+            galaxyPane.setBottomInset(drawerHeight)
+            // Explicitly rather than through `viewDidAppear`: a pane that is
+            // added to an already-visible window does get the callback, and a
+            // motion policy that silently depends on that is a galaxy that
+            // opens frozen if it ever stops arriving.
+            galaxyPane.refreshMotionPolicy()
             galaxyPane.reload()
 
         case .library:

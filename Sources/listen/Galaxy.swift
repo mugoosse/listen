@@ -209,6 +209,15 @@ enum Galaxy {
     static func scene(nodes input: [Node], edges: [Edge], deviceTitle: String = "Listen · This Mac",
                       maximumNodes: Int = 1200) -> Snapshot {
         var seen: Set<String> = []
+        // Sorted by kind and then id, so the picture is the same every launch.
+        // The kind is first for a second reason: alphabetically it runs chat,
+        // note, person, recording, so the cap below cuts recordings and keeps
+        // everything else. That is the right way round rather than an accident
+        // worth leaving unexplained. A library has far more recordings than it
+        // has people, notes and conversations put together, so cutting the
+        // largest kind is what keeps the shape of the picture; cutting a
+        // proportional slice of each would empty the three shells that carry
+        // the structure.
         let sorted = input
             .filter { $0.id != deviceID && shellRadius(kind: $0.kind) != nil }
             .sorted { ($0.kind, $0.id) < ($1.kind, $1.id) }

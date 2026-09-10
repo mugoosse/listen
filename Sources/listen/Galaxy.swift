@@ -86,6 +86,10 @@ enum Galaxy {
         var edges: [Edge] = []
         /// What the inspector says the picture is, including anything left out.
         var label: String = ""
+        /// Stars the presentation limit dropped. A number rather than a phrase
+        /// inside `label`, because the pane says it differently from the CLI
+        /// and splitting a sentence to find it is how the two come apart.
+        var omitted: Int = 0
 
         func node(_ id: String) -> Node? { nodes.first { $0.id == id } }
     }
@@ -222,7 +226,7 @@ enum Galaxy {
                 + " the picture stops at \(maximumNodes)."
         }
         return relax(Snapshot(nodes: (visible + [device]).sorted { $0.id < $1.id },
-                              edges: kept, label: label))
+                              edges: kept, label: label, omitted: omitted))
     }
 
     /// A bounded, one-shot relaxation across the shells.
@@ -252,7 +256,9 @@ enum Galaxy {
         }
         let edges = snapshot.edges.sorted { $0.id < $1.id }
         let passes = max(0, min(iterations, 24))
-        guard passes > 0 else { return Snapshot(nodes: nodes, edges: edges, label: snapshot.label) }
+        guard passes > 0 else {
+            return Snapshot(nodes: nodes, edges: edges, label: snapshot.label, omitted: snapshot.omitted)
+        }
 
         // How many edges each star has, computed once. See the loop below for
         // why the number is needed rather than just the edges.
@@ -317,7 +323,7 @@ enum Galaxy {
                 nodes[index].position = unit(direction + delta[index]) * (shellRadius(kind: nodes[index].kind) ?? 0)
             }
         }
-        return Snapshot(nodes: nodes, edges: edges, label: snapshot.label)
+        return Snapshot(nodes: nodes, edges: edges, label: snapshot.label, omitted: snapshot.omitted)
     }
 
     private struct Cell: Hashable {

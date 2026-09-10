@@ -366,6 +366,24 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// never resumes a conversation you did not ask for.
     @objc func openChats() { enterChats(searching: nil) }
 
+    /// Open the galaxy on whatever page is up, with that page's star picked.
+    ///
+    /// The globe between the ellipsis and the cross on every page. What it
+    /// opens is the same picture the View menu opens; what it adds is the
+    /// selection, so a person's page becomes that person's star with its links
+    /// lit rather than the whole library and a hunt.
+    @objc func showGalaxyForPage() {
+        guard Settings.galaxyEnabled else { return }
+        let star: String?
+        if mode == .chat, let id = composerHost?.currentChatID { star = Galaxy.chatID(id) }
+        else if let note = sidebar.selectedNote { star = Galaxy.noteID(note.slug) }
+        else if let person = sidebar.selectedPerson { star = Galaxy.personID(person.label) }
+        else if let recording = sidebar.selectedRecording { star = Galaxy.recordingID(recording.id) }
+        else { star = nil }
+        showGalaxy()
+        if let star { galaxyPane.select(whenLoaded: star) }
+    }
+
     /// Show the library as concentric shells. The View menu, and nothing else.
     @objc func showGalaxy() {
         // The menu item is rebuilt away when the galaxy is off, and this is
@@ -383,6 +401,20 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     var isShowingGalaxy: Bool { mode == .galaxy }
+
+    /// Open the first recording's page, for `LISTEN_PANEL=page`.
+    ///
+    /// Visual test scaffolding, in the family of `previewAsk`. **The sidebar's
+    /// rows cannot be reached from a script**: every one is a `HoverRow`, a
+    /// plain NSView with a target and an action, so neither `press` nor
+    /// `selectrow` finds one, and the status menu's Recent rows only cover the
+    /// newest few. Without this there is no way to put a page on screen and
+    /// check what its toolbar carries.
+    func previewPage() {
+        show()
+        guard let first = Recording.all().first else { return }
+        sidebar.select(first.id)
+    }
 
     /// Pick the first recording in the galaxy, for `LISTEN_PANEL=galaxy:selected`.
     ///
@@ -804,6 +836,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         detail.onUseModel = { [weak self] choice in
             guard let recording = self?.selected else { return }
             self?.retranscribe(recording, using: choice)
+        }
+        // A call that was cut in two, put back together. The later recording
+        // has been deleted by the time this fires, so the sidebar is stale and
+        // the selection is pointing at a folder in the trash: reload, then open
+        // the recording that absorbed it.
+        detail.onJoined = { [weak self] id in
+            self?.reload()
+            self?.open(recording: id, note: nil)
         }
         settingsNav.onSelect = { [weak self] tab in self?.showPane(tab) }
         // A note names the meetings it is about, and those names are the way
@@ -1745,8 +1785,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // menu has nothing in it but the sentence saying so. See
             // `galaxyToolbarItem`.
             items += [.flexibleSpace, Self.recordItem, .space]
-            if isHome && Settings.galaxyEnabled { items.append(Self.galaxyToolbarItem) }
-            else { items.append(Self.actionsItem) }
+            // On the home page the globe takes the ellipsis's slot, where that
+            // menu has one row saying "No recording selected". On a page the
+            // ellipsis has verbs, so the globe goes between it and the cross:
+            // the same trio on every page, and the middle one is the way from
+            // the thing you are reading to the thing in the picture.
+            if isHome {
+                items.append(Settings.galaxyEnabled ? Self.galaxyToolbarItem : Self.actionsItem)
+            } else {
+                items.append(Self.actionsItem)
+                if Settings.galaxyEnabled { items.append(Self.galaxyToolbarItem) }
+            }
             // And the way out of it, in the corner, last. Everything in the
             // ellipsis acts *on* the page; this puts the page away, so it is
             // outside the menu rather than the first row of it, which is where
@@ -1812,7 +1861,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             if Capture.shared.isRecording { items += [Self.recordItem, .space] }
             // The common move first, which is the order New Recording and the
             // ellipsis are read in on every other screen in this window.
-            items += [Self.newChatItem, Self.chatActionsItem, Self.closeItem]
+            items += [Self.newChatItem, Self.chatActionsItem]
+            if Settings.galaxyEnabled { items.append(Self.galaxyToolbarItem) }
+            items.append(Self.closeItem)
             return items
         }
     }
@@ -2097,7 +2148,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.label = "Galaxy"
             item.toolTip = "Your library as one picture"
             item.target = self
-            item.action = #selector(showGalaxy)
+            // One selector for both slots. On the home page there is no
+            // selection to carry and it opens the whole picture, which is what
+            // `showGalaxyForPage` does with nothing selected.
+            item.action = #selector(showGalaxyForPage)
             // A sphere with meridians on it, which is what the shell guides
             // actually draw. `sparkles` and the hex grid both read as something
             // else in a Mac toolbar.
@@ -2792,6 +2846,9 @@ final class DetailWithComposer: NSViewController {
     func open(_ chat: Chat) {
         composer.open(chat)
     }
+
+    /// The conversation on screen, for the galaxy's globe.
+    var currentChatID: String? { composer.currentChatID }
 
     /// Whether this screen has a composer at all.
     ///

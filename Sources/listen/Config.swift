@@ -989,6 +989,25 @@ extension Settings {
     /// nil until somebody chooses, and nil again when they clear the field.
     /// Empty is stored as absent rather than as "", so a cleared field shows
     /// `Me` rather than a nameless chip.
+    /// Recordings somebody has said are not a continuation of anything.
+    ///
+    /// **A preference and never library data**, which is why it is here rather
+    /// than in `metadata.json`. Starting a second recording deliberately is an
+    /// ordinary thing to do, so the offer has to be refusable; but the refusal
+    /// is one person's answer on one Mac about one row on a screen, and putting
+    /// it in the recording would replicate it to every device and to the phone,
+    /// which has no such row to hide.
+    ///
+    /// Keyed by the later recording's id, because that is the page the offer
+    /// appears on.
+    static func joinOfferDismissed(_ id: String) -> Bool {
+        defaults.bool(forKey: "joinOfferDismissed." + id)
+    }
+
+    static func dismissJoinOffer(_ id: String) {
+        defaults.set(true, forKey: "joinOfferDismissed." + id)
+    }
+
     static var userName: String? {
         get {
             // A screenshot must not inherit the name from the developer's real

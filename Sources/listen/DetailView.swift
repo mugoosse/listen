@@ -43,6 +43,17 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let languageNoticeButton = NSButton(title: "", target: nil, action: nil)
     /// The model the button would fetch, so the action does not re-derive it.
     private var languageNoticeModel: ModelChoice?
+private let continuationNotice = NSView()
+private let continuationLabel = NSTextField(labelWithString: "")
+private let continuationJoin = NSButton(title: "", target: nil, action: nil)
+private let continuationDismiss = NSButton(title: "", target: nil, action: nil)
+
+/// The join this page is offering, worked out off the main thread.
+///
+/// Held rather than recomputed when the button is pressed, because working it
+/// out means opening every recording's audio to ask how long it is, and the
+/// answer must not be read on the main thread twice.
+private var continuationPlan: Join.Plan?
     private let tagChips = TagChips()
     private let playerCard = NSView()
     /// Find in page. Collapsed to nothing until Cmd-F, see `findTop`.
@@ -448,6 +459,14 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// downloader itself.
     var onUseModel: ((ModelChoice) -> Void)?
 
+    /// Two recordings became one, and the surviving id is the argument.
+    ///
+    /// The page cannot handle this itself: the recording it was showing has
+    /// been deleted, so the sidebar has to be reloaded and the selection moved
+    /// to the recording that absorbed it. Leaving the window on a folder that
+    /// is now in the trash is the failure this exists to prevent.
+    var onJoined: ((String) -> Void)?
+
     private var player: AVAudioPlayer?
     private var tick: Timer?
     private var displayedTurnIndexes: [Int] = []
@@ -475,6 +494,8 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private var chipsHeight: NSLayoutConstraint!
     private var languageNoticeTop: NSLayoutConstraint!
     private var languageNoticeHeight: NSLayoutConstraint!
+private var continuationTop: NSLayoutConstraint!
+private var continuationHeight: NSLayoutConstraint!
 
     /// Whether the transcript follows the playhead. Turned off the moment the
     /// user scrolls, because scrolling away during playback is a decision, and
@@ -681,8 +702,10 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         buildLanguageNotice()
+        buildContinuationNotice()
 
-        for v in [titleLabel, subtitleLabel, languageNotice, chips, tagChips, playerCard, modeBar,
+        for v in [titleLabel, subtitleLabel, languageNotice, continuationNotice,
+                  chips, tagChips, playerCard, modeBar,
                   scroll, noteInfo, notesScroll, notesPlaceholder, askView,
                   chatLinks, chatList, noteTagChips, homeScroll,
                   transcribing, live, findBar, speakerReview] {
@@ -701,7 +724,13 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         languageNoticeTop = languageNotice.topAnchor.constraint(
             equalTo: subtitleLabel.bottomAnchor, constant: 0)
         languageNoticeHeight = languageNotice.heightAnchor.constraint(equalToConstant: 0)
-        chipsTop = chips.topAnchor.constraint(equalTo: languageNotice.bottomAnchor,
+        // Chained under the language notice and collapsing the same way, so a
+        // page with neither offer lays out exactly as it did before either
+        // existed. The chips hang off whichever is last in the chain.
+        continuationTop = continuationNotice.topAnchor.constraint(
+            equalTo: languageNotice.bottomAnchor, constant: 0)
+        continuationHeight = continuationNotice.heightAnchor.constraint(equalToConstant: 0)
+        chipsTop = chips.topAnchor.constraint(equalTo: continuationNotice.bottomAnchor,
                                               constant: 10)
         chipsHeight = chips.heightAnchor.constraint(equalToConstant: 24)
 
@@ -861,6 +890,12 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             languageNotice.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             languageNotice.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
                                                      constant: -24),
+
+            continuationTop,
+            continuationHeight,
+            continuationNotice.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            continuationNotice.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor,
+                                                         constant: -24),
 
             playerTop,
             playerHeight,
@@ -2668,6 +2703,135 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         ])
     }
 
+    /// The row that says this meeting is the second half of another one.
+    ///
+    /// **The offer goes where the split is visible.** Listen already knows the
+    /// two facts that make it: the recording before this one ended a minute and
+    /// a half earlier and both were the same app. Putting that on the later
+    /// recording's own page is the only place somebody is already asking "why
+    /// is this call only eight minutes long", and it states the evidence rather
+    /// than asserting a match, because the person reading it is the one who can
+    /// check.
+    ///
+    /// Never automatic. Starting a second recording on purpose is ordinary, and
+    /// joining is a delete.
+    private func buildContinuationNotice() {
+        continuationNotice.wantsLayer = true
+        continuationNotice.layer?.cornerRadius = 6
+        // Blue rather than the orange above: nothing here went wrong with this
+        // recording, and one warning colour on this page means this is not it.
+        continuationNotice.layer?.backgroundColor =
+            NSColor.systemBlue.withAlphaComponent(0.12).cgColor
+
+        continuationLabel.font = .systemFont(ofSize: 11)
+        continuationLabel.textColor = .secondaryLabelColor
+        continuationLabel.lineBreakMode = .byTruncatingTail
+        continuationLabel.translatesAutoresizingMaskIntoConstraints = false
+        continuationNotice.addSubview(continuationLabel)
+
+        for (button, action) in [(continuationJoin, #selector(joinContinuation)),
+                                 (continuationDismiss, #selector(dismissContinuation))] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11, weight: .medium)
+            button.target = self
+            button.action = action
+            button.translatesAutoresizingMaskIntoConstraints = false
+            continuationNotice.addSubview(button)
+        }
+        continuationJoin.title = "Join them"
+        continuationDismiss.title = "Not now"
+
+        NSLayoutConstraint.activate([
+            continuationLabel.leadingAnchor.constraint(
+                equalTo: continuationNotice.leadingAnchor, constant: 10),
+            continuationLabel.centerYAnchor.constraint(
+                equalTo: continuationNotice.centerYAnchor),
+            continuationJoin.leadingAnchor.constraint(
+                equalTo: continuationLabel.trailingAnchor, constant: 10),
+            continuationJoin.centerYAnchor.constraint(
+                equalTo: continuationNotice.centerYAnchor),
+            continuationDismiss.leadingAnchor.constraint(
+                equalTo: continuationJoin.trailingAnchor, constant: 6),
+            continuationDismiss.trailingAnchor.constraint(
+                equalTo: continuationNotice.trailingAnchor, constant: -8),
+            continuationDismiss.centerYAnchor.constraint(
+                equalTo: continuationNotice.centerYAnchor),
+        ])
+    }
+
+    /// Ask whether this recording continues another, off the main thread.
+    ///
+    /// Answering means opening every recording's tracks to ask how long they
+    /// are, which is a file open per recording and grows with the library. It
+    /// is hidden first and shown when the answer arrives, so a page never
+    /// flashes an offer belonging to the recording that was open before this
+    /// one: the guard on the way back checks the page is still showing the
+    /// recording that was asked about.
+    private func showContinuationNotice(for recording: Recording) {
+        continuationPlan = nil
+        continuationNotice.isHidden = true
+        continuationHeight.constant = 0
+        continuationTop.constant = 0
+        guard !Settings.joinOfferDismissed(recording.id) else { return }
+
+        let id = recording.id
+        Task.detached(priority: .utility) {
+            let library = Recording.all()
+            guard let recording = library.first(where: { $0.id == id }),
+                  let (earlier, evidence) = Join.predecessor(of: recording, in: library),
+                  let plan = try? Join.plan(recording, into: earlier) else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.recording?.id == id else { return }
+                self.continuationPlan = plan
+                self.continuationLabel.stringValue =
+                    "This looks like the rest of \u{201C}\(earlier.displayTitle)\u{201D}: "
+                    + "\(evidence.phrase)."
+                self.continuationNotice.isHidden = false
+                self.continuationHeight.constant = 30
+                self.continuationTop.constant = 10
+                self.needsLayout = true
+            }
+        }
+    }
+
+    @objc private func joinContinuation() {
+        guard let plan = continuationPlan else { return }
+        continuationJoin.isEnabled = false
+        continuationDismiss.isEnabled = false
+        continuationLabel.stringValue = "Joining\u{2026}"
+        // Off the main thread: this copies both tracks of both recordings
+        // through a new file, which is 90 MB for a twenty minute meeting.
+        Task.detached(priority: .userInitiated) {
+            let failure: String? = {
+                do { try Join.apply(plan); return nil } catch { return error.localizedDescription }
+            }()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.continuationJoin.isEnabled = true
+                self.continuationDismiss.isEnabled = true
+                if let failure {
+                    self.continuationLabel.stringValue = "Could not join them: \(failure)"
+                    return
+                }
+                // The recording this page was showing no longer exists, so the
+                // window has to be sent to the one that absorbed it rather than
+                // left on a folder that is now in the trash.
+                self.onJoined?(plan.earlier.id)
+            }
+        }
+    }
+
+    @objc private func dismissContinuation() {
+        guard let id = recording?.id else { return }
+        Settings.dismissJoinOffer(id)
+        continuationPlan = nil
+        continuationNotice.isHidden = true
+        continuationHeight.constant = 0
+        continuationTop.constant = 0
+        needsLayout = true
+    }
+
     /// Offer the other model, when this recording looks like it needed it.
     ///
     /// Only when the model is **not** on disk. With it on disk the recording
@@ -2965,7 +3129,9 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// keeps a light border after the Mac switches to dark at sunset.
     private func styleCard() {
         playerCard.layer?.borderColor = NSColor.separatorColor.cgColor
-        playerCard.layer?.backgroundColor = NSColor.controlBackgroundColor
+        // See `Brand.raised`: a card on this ground, not a card from
+        // another app's ground.
+        playerCard.layer?.backgroundColor = Brand.raised
             .withAlphaComponent(0.55).cgColor
     }
 
@@ -3090,6 +3256,7 @@ final class DetailView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
 
         showLanguageNotice(for: recording)
+        showContinuationNotice(for: recording)
 
         // Who is in this recording and what it is about, on one line above the
         // player. Collapsed to nothing when there is neither, so a live or
@@ -5788,6 +5955,13 @@ final class DetailViewController: NSViewController {
     var onUseModel: ((ModelChoice) -> Void)? {
         get { detail.onUseModel }
         set { detail.onUseModel = newValue }
+    }
+
+    /// Forwarded for the same reason: the offer is on the page and the reload
+    /// belongs to the window.
+    var onJoined: ((String) -> Void)? {
+        get { detail.onJoined }
+        set { detail.onJoined = newValue }
     }
 
     /// Forwarded so the window can tell the Ask pane how much room its floating

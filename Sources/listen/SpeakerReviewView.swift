@@ -38,7 +38,9 @@ final class SpeakerReviewView: NSView {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
+        // See `Brand.raised`. Still translucent, so the transcript behind
+        // it stays legible as context.
+        layer?.backgroundColor = Brand.raised.withAlphaComponent(0.82).cgColor
 
         separator.boxType = .custom
         separator.borderType = .noBorder

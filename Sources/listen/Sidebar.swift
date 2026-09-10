@@ -207,6 +207,15 @@ final class SidebarViewController: NSViewController {
     /// A person picked out of the search results, which is the only route to
     /// the card now that the roster is not a collection you can navigate to.
     var onSelectPerson: ((Person) -> Void)?
+    /// The free-text part of the search, whenever it changes.
+    ///
+    /// Fired from `reload` rather than from the field, because the query moves
+    /// on four paths: typing, Return, an operator being lifted into a pill,
+    /// and `clearFilters`. One of those is the field's own action and the other
+    /// three are not, and a hook on the field would miss them.
+    var onSearchChanged: ((String) -> Void)?
+    /// What the field holds now, for a surface that wants to narrow with it.
+    var searchQuery: String { query }
 
     private(set) var selectedRecording: Recording?
     private(set) var selectedNote: Note?
@@ -368,6 +377,7 @@ final class SidebarViewController: NSViewController {
         loadViewIfNeeded()
         let keepID = selectedRecording?.id
         let q = query.trimmingCharacters(in: .whitespaces)
+        onSearchChanged?(q)
 
         // The recording being made now is in staging, not the library, so
         // `Recording.all()` cannot see it. It is listed anyway, from the first

@@ -256,6 +256,12 @@ final class AskView: NSView {
     /// the library, and never about two of those at once.
     private var person: String?
     private var chat = Chat()
+    /// The conversation on screen, when it has been saved and so has an id.
+    /// The galaxy's globe carries it: a chat star is keyed on this.
+    var currentChatID: String? {
+        guard let id = chat.id, !id.isEmpty else { return nil }
+        return id
+    }
     /// Has a context ever been shown? See `show`.
     private var loaded = false
     /// Is the field being typed into? What the starter chips and the drawer's

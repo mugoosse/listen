@@ -93,6 +93,14 @@ enum Brand {
     /// cool cast at the other end, not a grey.
     static var canvas: NSColor { dynamic(light: 0xF3F5F9, dark: 0x0A0F1D) }
 
+    /// `canvas` lifted, for the cards that sit on it.
+    ///
+    /// A player, a review panel, a filled field: things that have to read as
+    /// raised without leaving the window's temperature. `controlBackgroundColor`
+    /// is what those used to be, and beside a blue-black ground the system grey
+    /// reads as a piece of a different app rather than as a card.
+    static var raised: NSColor { dynamic(light: 0xFFFFFF, dark: 0x151B2C) }
+
     static func hex(_ value: Int) -> NSColor {
         NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
                 green: CGFloat((value >> 8) & 0xFF) / 255,

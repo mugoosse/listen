@@ -45,16 +45,60 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     /// applied a week later with no memory of setting it.
     private var hiddenKinds: Set<String> = []
 
+    /// What the sidebar's search field holds. The galaxy narrows with it.
+    private var search = ""
+
+    /// Stars whose title matches the search, which are the ones drawn lit.
+    private var matches: Set<String> {
+        guard !search.isEmpty else { return [] }
+        return Set(snapshot.nodes
+            .filter { $0.title.localizedCaseInsensitiveContains(search) }
+            .map(\.id))
+    }
+
     /// What is actually drawn: the snapshot minus the struck-out shells, and
-    /// any link with an end in one of them. Computed rather than stored, so
+    /// narrowed to a search when there is one. Computed rather than stored, so
     /// there is one snapshot on this pane and no second copy to go stale.
+    ///
+    /// **A search keeps what the matches link to.** Narrowing to the matches
+    /// alone leaves two stars floating in an empty sphere with no lines, which
+    /// answers "is Herman in here" and nothing else; the neighbours are the
+    /// answer to "and what about him". They are drawn dim, so the matches are
+    /// still the thing the eye lands on.
     private var visible: Galaxy.Snapshot {
-        guard !hiddenKinds.isEmpty else { return snapshot }
-        let nodes = snapshot.nodes.filter { !hiddenKinds.contains($0.kind) }
+        var nodes = snapshot.nodes
+        if !hiddenKinds.isEmpty { nodes = nodes.filter { !hiddenKinds.contains($0.kind) } }
+        if !search.isEmpty {
+            let hits = matches
+            let neighbours = Set(snapshot.edges.flatMap { edge -> [String] in
+                if hits.contains(edge.source) { return [edge.source, edge.target] }
+                if hits.contains(edge.target) { return [edge.source, edge.target] }
+                return []
+            })
+            // The centre stays whatever the search says, because it is where
+            // the picture is drawn from and its absence reads as a bug.
+            nodes = nodes.filter {
+                hits.contains($0.id) || neighbours.contains($0.id) || $0.kind == Galaxy.Node.device
+            }
+        }
+        guard nodes.count != snapshot.nodes.count else { return snapshot }
         let ids = Set(nodes.map(\.id))
         return Galaxy.Snapshot(nodes: nodes,
                                edges: snapshot.edges.filter { ids.contains($0.source) && ids.contains($0.target) },
-                               label: snapshot.label)
+                               label: snapshot.label, omitted: snapshot.omitted)
+    }
+
+    /// Narrow the picture to what the sidebar is searching for.
+    func setSearch(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard trimmed != search else { return }
+        search = trimmed
+        // A star that has fallen out of the search cannot stay selected.
+        if let id = selectedID, visible.node(id) == nil { select(nil) }
+        renderGeneration += 1
+        pushToRenderer()
+        updateStatus()
+        invalidate()
     }
     /// Bumped whenever the snapshot is replaced, so the label pass can tell a
     /// new library from the same one without comparing every node.
@@ -103,6 +147,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private var bottomInset: CGFloat = 0
     private var legendHasChats = false
     private var legendCentreTitle = ""
+    private var pendingSelection: String?
 
     /// The sky the renderer clears to, and the one colour the pane, the
     /// shader and the window's sidebar all have to agree on. Stated once
@@ -259,7 +304,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         legend.alignment = .leading
         legend.spacing = 5
         legend.translatesAutoresizingMaskIntoConstraints = false
-        legend.setAccessibilityLabel("What the shells are, from the centre outwards")
+        legend.setAccessibilityLabel("What each colour in the picture means")
         buildLegend()
         view.addSubview(legend)
 
@@ -297,6 +342,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             self?.onOpen?(id)
         }
         inspector.onClear = { [weak self] in self?.select(nil) }
+        inspector.onFollow = { [weak self] id in self?.select(id) }
         view.addSubview(inspector)
 
         controlsBottom = controls.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
@@ -336,7 +382,14 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         legendHasChats = wantsChats
         legendCentreTitle = centre
         legend.arrangedSubviews.forEach { legend.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let heading = NSTextField(labelWithString: "FROM THE CENTRE OUTWARDS")
+        // **Whose library this is, rather than how to read the diagram.** It
+        // said "FROM THE CENTRE OUTWARDS", which explains the ordering once
+        // and then sits there for ever; the rows are in that order and a
+        // reader works it out from the first glance. `Settings.userName` is
+        // the same name the transcript and the roster use, and "Your" is what
+        // it says before anybody has given one, because "Me's" is not English.
+        let owner = Settings.userName.map { "\($0)'s" } ?? "Your"
+        let heading = NSTextField(labelWithString: "\(owner) Listen brain".uppercased())
         heading.font = .systemFont(ofSize: 9, weight: .semibold)
         heading.textColor = NSColor.white.withAlphaComponent(0.45)
         legend.addArrangedSubview(heading)
@@ -410,7 +463,8 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     }
 
     private func pushToRenderer() {
-        renderer?.update(snapshot: visible, selectionID: selectedID, hoverID: hoveredID)
+        renderer?.update(snapshot: visible, selectionID: selectedID,
+                         hoverID: hoveredID, highlight: matches)
     }
 
     private func apply(_ built: Galaxy.Snapshot) {
@@ -426,32 +480,37 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // A star that has gone from the library cannot stay selected: the card
         // would offer to open a recording that is not there any more.
         if let id = selectedID, built.node(id) == nil { select(nil) }
+        if let wanted = pendingSelection, built.node(wanted) != nil {
+            pendingSelection = nil
+            select(wanted)
+        }
         pushToRenderer()
         updateStatus()
         updateInspector()
         invalidate()
     }
 
+    /// **What is wrong or missing, and nothing else.**
+    ///
+    /// It used to read "159 of your library, on four shells. 186 links, each
+    /// one already written down." on every galaxy, for ever. That sentence is
+    /// true, and it is the picture restating itself: the shells are visible,
+    /// the links are visible, and the legend already names them. What a reader
+    /// cannot see is what is *not* drawn, so that is all this says now.
     private func updateStatus() {
         if loading && snapshot.nodes.isEmpty {
             statusLabel.stringValue = "Reading your library…"
         } else if snapshot.nodes.count <= 1 {
             statusLabel.stringValue = "Nothing to draw yet. Record something, or write a note,"
                 + " and it appears here."
+        } else if snapshot.omitted > 0 {
+            // The one thing a reader cannot check by looking.
+            statusLabel.stringValue = "\(snapshot.omitted) not drawn: the picture stops at"
+                + " \(snapshot.nodes.count - 1)."
         } else {
-            let drawn = visible
-            var text = snapshot.label
-                + "\n\(drawn.edges.count) \(drawn.edges.count == 1 ? "link" : "links"),"
-                + " each one already written down."
-            // Struck out, not lost. A shell hidden from the legend takes its
-            // stars and its links with it, and a count that quietly shrank
-            // would read as the library having lost something.
-            if !hiddenKinds.isEmpty {
-                let missing = max(0, snapshot.nodes.count - drawn.nodes.count)
-                text += "\n\(missing) hidden by the legend."
-            }
-            statusLabel.stringValue = text
+            statusLabel.stringValue = ""
         }
+        statusLabel.isHidden = statusLabel.stringValue.isEmpty
         statusLabel.setAccessibilityLabel(statusLabel.stringValue)
         updateSceneAccessibility()
     }
@@ -619,13 +678,24 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                              camera: camera, time: motionTime)
     }
 
+    /// Select this star as soon as the library has been read.
+    ///
+    /// The snapshot is built on a background queue, so arriving from a page
+    /// with a star to open means asking for one that does not exist yet.
+    /// Remembered rather than polled, and cleared once it lands so a later
+    /// reload does not drag the selection back.
+    func select(whenLoaded id: String) {
+        if snapshot.node(id) != nil { select(id); return }
+        pendingSelection = id
+    }
+
     /// Select a star by id, or nothing. Public so a verification script can
     /// drive what a click drives.
     func select(_ id: String?) {
         let wanted = id.flatMap { visible.node($0) }?.id
         selectedID = wanted
         hoveredID = nil
-        renderer?.update(snapshot: visible, selectionID: wanted)
+        renderer?.update(snapshot: visible, selectionID: wanted, highlight: matches)
         if let node = wanted.flatMap({ visible.node($0) }) {
             let position = GalaxyMotion.position(node.position, kind: node.kind, time: motionTime)
             let aspect = Float(view.bounds.width / max(view.bounds.height, 1))
@@ -903,8 +973,13 @@ private final class GalaxyLegendRow: NSButton {
 /// conversation's turns all live somewhere that already shows them properly,
 /// and Open is the whole point of the card.
 final class GalaxyInspector: NSView {
+    /// Stated once, because the title's width is computed from it.
+    static let closeSize: CGFloat = 28
+
     var onOpen: (() -> Void)?
     var onClear: (() -> Void)?
+    /// Follow one of the links to the star at its other end.
+    var onFollow: ((String) -> Void)?
 
     private let stack = NSStackView()
     private let title = NSTextField(wrappingLabelWithString: "")
@@ -971,10 +1046,17 @@ final class GalaxyInspector: NSView {
         stack.addArrangedSubview(links)
         stack.addArrangedSubview(row)
         // A wrapping label reports its whole string as one line's worth of
-        // width and is then clipped by the card. Only this makes it wrap.
-        for item in [title, detail] {
-            item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
-        }
+        // width and is then clipped by the card. Only a width makes it wrap.
+        //
+        // **The title's is narrower, and a trailing constraint is not the way
+        // to say so.** Constrained to the stack's full width *and* told to
+        // stop short of the close button, the two fought: the width is
+        // required and the stack is leading-aligned, so autolayout satisfied
+        // both by sliding the label out of the left edge of the card. One
+        // width, computed to clear the button, and nothing to argue with.
+        title.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                     constant: -(28 + Self.closeSize + 10)).isActive = true
+        detail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
         // **A cross in the corner, where every other page in this window puts
         // the way out.** It was a "Clear" button beside Open, which read as a
         // second verb on the thing being described rather than as dismissing
@@ -984,10 +1066,8 @@ final class GalaxyInspector: NSView {
         NSLayoutConstraint.activate([
             close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             close.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            close.widthAnchor.constraint(equalToConstant: 28),
-            close.heightAnchor.constraint(equalToConstant: 28),
-            // The title stops short of it, or a long name runs underneath.
-            title.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -10),
+            close.widthAnchor.constraint(equalToConstant: Self.closeSize),
+            close.heightAnchor.constraint(equalToConstant: Self.closeSize),
         ])
         setAccessibilityRole(.group)
     }
@@ -1000,7 +1080,7 @@ final class GalaxyInspector: NSView {
         glass.blendingMode = .withinWindow
         glass.state = .active
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 14
+        glass.layer?.cornerRadius = Self.closeSize / 2
         glass.layer?.masksToBounds = true
         // The material alone is nearly invisible against this ground, which is
         // most of the point of the ground. A little white over it gives the
@@ -1043,11 +1123,12 @@ final class GalaxyInspector: NSView {
         // the whole list belongs.
         for edge in edges.prefix(4) {
             let other = edge.source == node.id ? edge.target : edge.source
-            let line = NSTextField(labelWithString: "\(edge.phrase(from: node.id)) \(titles[other] ?? other)")
-            line.font = .systemFont(ofSize: 11)
-            line.textColor = NSColor.white.withAlphaComponent(0.55)
-            line.lineBreakMode = .byTruncatingTail
-            line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            // **A link that names a star should go to it.** These were static
+            // text: the card told you a recording was written up in a note and
+            // then made you find that note in the sphere yourself.
+            let line = GalaxyLinkButton(
+                phrase: edge.phrase(from: node.id), name: titles[other] ?? other,
+                id: other) { [weak self] id in self?.onFollow?(id) }
             // Added first. A constraint between two views with no common
             // ancestor yet throws `NSGenericException`, and this one is
             // reached the first time anybody clicks a star.
@@ -1069,6 +1150,67 @@ final class GalaxyInspector: NSView {
 
     @objc private func open() { onOpen?() }
     @objc private func clear() { onClear?() }
+}
+
+/// One line of the card's link list, which goes where it says.
+///
+/// A button rather than a text field with a gesture on it: it gets a name, a
+/// place in the key view loop and a pressed state for free, which is the same
+/// argument the legend rows make. The phrase stays quiet and the name is the
+/// part that lights up, because the name is the thing being offered.
+private final class GalaxyLinkButton: NSButton {
+    private let id: String
+    private let phrase: String
+    private let name: String
+    private let follow: (String) -> Void
+    private var hoverArea: NSTrackingArea?
+
+    init(phrase: String, name: String, id: String, follow: @escaping (String) -> Void) {
+        self.id = id
+        self.phrase = phrase
+        self.name = name
+        self.follow = follow
+        super.init(frame: .zero)
+        isBordered = false
+        alignment = .left
+        setButtonType(.momentaryChange)
+        target = self
+        action = #selector(go)
+        lineBreakMode = .byTruncatingTail
+        setAccessibilityTitle("\(phrase) \(name)")
+        setAccessibilityLabel("\(phrase) \(name)")
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        apply(hovered: false)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { apply(hovered: true); NSCursor.pointingHand.set() }
+    override func mouseExited(with event: NSEvent) { apply(hovered: false); NSCursor.arrow.set() }
+
+    private func apply(hovered: Bool) {
+        let text = NSMutableAttributedString(
+            string: phrase + " ",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.white.withAlphaComponent(0.45)])
+        var nameStyle: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.white.withAlphaComponent(hovered ? 0.95 : 0.7),
+        ]
+        if hovered { nameStyle[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        text.append(NSAttributedString(string: name, attributes: nameStyle))
+        attributedTitle = text
+    }
+
+    @objc private func go() { follow(id) }
 }
 
 /// The Metal view, and the gestures over it.

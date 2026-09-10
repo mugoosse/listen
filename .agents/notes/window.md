@@ -2622,3 +2622,45 @@ Speaker summaries have a separate mtime-and-size projection cache for
 overload. The People page presents recordings in batches of 24 so a person
 with a long history does not construct every recording row before its first
 frame.
+
+## The continuation offer is a row on the later half, not a menu item
+
+`Join` could have been reached only from the ellipsis, and that would have been
+the wrong shape. The person looking at an eight-minute recording of an
+twenty-minute call is already asking why it is short; a menu item they have to
+suspect exists answers nobody. So the offer is a row under the subtitle on the
+**later** recording's page, chained under `languageNotice` and collapsing the
+same way, so a page with neither offer lays out exactly as it did before either
+existed.
+
+**It states the evidence rather than asserting a match.** "This looks like the
+rest of *Oracle Opera Cloud integration (part 1)*: 1m 36s apart, both Google
+Chrome." is a sentence somebody can check. "These look related" is not, and the
+reader is the only one who knows whether they started the second recording on
+purpose. That is why `Join.Evidence` is the facts and not a `Bool`.
+
+Blue, not the orange `languageNotice` and `micWasSilent` use. Nothing went
+wrong with *this* recording, and one warning colour on a page means this is not
+it.
+
+**Working out whether there is an offer opens every recording's audio**, to ask
+how long each one is, which is a file open per recording and grows with the
+library. So `showContinuationNotice` hides the row, asks on a detached task and
+shows it when the answer arrives, with a guard on the way back that the page is
+still showing the recording that was asked about. Without that guard a page
+flashes an offer belonging to whatever was open before it.
+
+**The dismissal is a preference and never library data.** `Settings.dismissJoinOffer`
+writes to defaults keyed by the later recording's id. Putting it in
+`metadata.json` would replicate one person's answer, on one Mac, about one row
+on a screen, to every device including the phone, which has no such row to
+hide.
+
+**Joining deletes the recording the page is showing**, so the page cannot
+finish the job itself: `onJoined` hands the surviving id to the window, which
+reloads the sidebar and opens it. Without that the window sits on a folder that
+is now in the trash. Verified by pressing the button through
+`tools/axprobe press <pid> "Join them"` against a scratch library: the row
+reads back as `AXStaticText` with the two `AXButton`s beside it, and twelve
+seconds later the sidebar holds one recording at `14:15 · 21:16` with the
+player showing `00:00 / 21:17`.

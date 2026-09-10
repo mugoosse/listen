@@ -306,6 +306,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The galaxy, which is otherwise one menu item deep and is the screen
         // whose whole job is being looked at. `verify_galaxy.sh` is what drives
         // it, and a screen a script cannot open is a screen nobody checks.
+        // A recording's page, which is the only way a script gets one on
+        // screen. See `LibraryWindow.previewPage`.
+        case "page":
+            LibraryWindow.shared.previewPage()
         case let want where want.hasPrefix("galaxy"):
             LibraryWindow.shared.show()
             LibraryWindow.shared.showGalaxy()

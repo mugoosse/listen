@@ -342,6 +342,40 @@ every gesture in the Metal view, so the drag behaviour is untouched, and makes
 the word as clickable as the dot. The rects are rebuilt with the labels, so
 they cannot describe a frame that has moved on.
 
+### The globe carries the page, and the sidebar is what brings you back
+
+Every page in this window ends in the same pair, an ellipsis and a cross. The
+globe goes between them and opens the galaxy on *that page's* star, so a
+person's page becomes that person with their links lit rather than the whole
+library and a hunt. On the home page it takes the ellipsis's slot instead,
+because there that menu holds one row saying "No recording selected".
+
+**The way back needed no code**, and that is worth knowing before somebody adds
+some. The galaxy leaves the sidebar's selection alone, and the library branch
+of `enter` restores whichever pane that selection implies, so the cross lands
+back on the page it came from by itself. Picking a different star inside the
+galaxy does not change that, which is right: the cross means "leave this", not
+"open the thing I last looked at".
+
+### A script cannot click this app's sidebar
+
+Every row in that list is a `HoverRow`, a plain `NSView` with a target and an
+action, so it reaches neither `axprobe press` nor `selectrow`, and the status
+menu's Recent rows only cover the newest few. `LISTEN_PANEL=page` opens the
+first recording's page, which is the only way `verify_galaxy.sh` gets one on
+screen to check what its toolbar carries.
+
+### A search narrows the picture to its matches and their links
+
+The field that narrows the list beside it narrows this too. Matches are drawn
+lit and named; everything else in the sphere goes to context, and anything with
+no link to a match is dropped entirely. **Not the matches alone**: two stars in
+an empty sphere with no lines answers "is Herman in here" and nothing else,
+where the neighbours answer "and what about him".
+
+A selection outranks a search, because clicking a star while a search is up is
+the narrower question and two sets of lit stars would answer neither.
+
 ### A selection names itself and its links, and nothing else
 
 The label budget takes turns between the four shells only while nothing is
@@ -460,6 +494,10 @@ in a second place from the code that sets its uniforms.
   a note. Filters or a contextual highlight are the shape worth trying, and
   neither is designed yet.
 - **No editing.** Every verb is on the page the star opens.
+- **No status line restating the picture.** It said "159 of your library, on
+  four shells" on every galaxy, which is the shells saying it twice. It speaks
+  only for what a reader cannot see: a library still being read, an empty one,
+  and stars the cap dropped.
 - **No composer.** Ask is on every other screen in this window and not on
   this one: the field would be the only thing here that is not the picture, it
   competes with the inspector card for the same corner, and a question about a

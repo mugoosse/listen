@@ -331,7 +331,11 @@ final class GalaxyRenderer {
         guideBuffer = Self.buffer(device: device, values: Self.shellGuides())
     }
 
-    func update(snapshot: Galaxy.Snapshot, selectionID: String?, hoverID: String? = nil) {
+    /// `highlight` is the search's matches. **A selection outranks it**:
+    /// clicking a star while a search is up is a narrower question than the
+    /// search, and two sets of lit stars would answer neither.
+    func update(snapshot: Galaxy.Snapshot, selectionID: String?, hoverID: String? = nil,
+                highlight: Set<String> = []) {
         nodes = snapshot.nodes
         self.selectionID = selectionID
         self.hoverID = hoverID
@@ -339,7 +343,9 @@ final class GalaxyRenderer {
             Set(snapshot.edges.compactMap { $0.source == id ? $0.target : $0.target == id ? $0.source : nil })
         } ?? []
         stars = snapshot.nodes.map { node in
-            let lit = selectionID == nil || node.id == selectionID || neighbours.contains(node.id)
+            let lit = selectionID == nil
+                ? (highlight.isEmpty || highlight.contains(node.id))
+                : (node.id == selectionID || neighbours.contains(node.id))
             let base = Self.starColor(kind: node.kind)
             // Dimmed, not extinguished. At 0.28 the rest of the library went
             // black at the distance a selection flies to, and a star with two
@@ -360,9 +366,13 @@ final class GalaxyRenderer {
             // as "this line is a note" and made a pixel check unable to tell
             // them apart either. A link is a relationship between two
             // colours; it should be neither of them.
+            let searched = selectionID == nil && !highlight.isEmpty
+                && (highlight.contains(edge.source) || highlight.contains(edge.target))
             var color = SIMD4<Float>(0.62, 0.68, 0.80, 0.15)
-            if connected { color.w = 0.75 }
-            else if selectionID != nil { color = SIMD4(color.x * 0.24, color.y * 0.24, color.z * 0.24, 0.08) }
+            if connected || searched { color.w = 0.75 }
+            else if selectionID != nil || !highlight.isEmpty {
+                color = SIMD4(color.x * 0.24, color.y * 0.24, color.z * 0.24, 0.08)
+            }
             lines.append(GalaxyGPULine(position: source.position, color: color))
             lines.append(GalaxyGPULine(position: target.position, color: color))
         }

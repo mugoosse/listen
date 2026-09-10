@@ -34,6 +34,20 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  ok: $1"; }
 bad() { fail=$((fail+1)); echo "  FAIL: $1"; }
 check() { if [ "$1" = "0" ]; then ok "$2"; else bad "$2"; fi }
+# Wait for a string to appear in the tree, rather than sleeping a guess. The
+# page is opened after the library has been read off disk, which is fast on a
+# warm cache and not on a cold one, and a fixed sleep is the difference between
+# a suite that passes and one that passes today.
+await() {
+  local want="$1" tries=0
+  while [ $tries -lt 30 ]; do
+    dump=$("$PROBE" texts $APP 2>&1)
+    if field "$dump" "$want"; then return 0; fi
+    sleep 0.5; tries=$((tries + 1))
+  done
+  return 1
+}
+
 field() {
   echo "$1" | awk -F'\t' -v want="$2" \
     '{ for (i = 1; i <= NF; i++) if ($i == want) f = 1 } END { exit f ? 0 : 1 }'
@@ -283,8 +297,12 @@ check $? "and the recordings shell"
 # Matched on the bracket rather than the name, which is a preference.
 echo "$dump" | grep -q "(this Mac)"
 check $? "and says the centre is you, on this Mac"
-echo "$dump" | grep -q "on four shells"
-check $? "the status line says how much of the library is drawn"
+# **Silence is the pass here.** The status line used to restate the picture on
+# every galaxy ("159 of your library, on four shells"), which is true and is
+# the shells saying it twice. It speaks only when something is not drawn, so on
+# a library inside the cap there should be nothing to find.
+! echo "$dump" | grep -q "of your library, on four shells"
+check $? "the status line is silent when there is nothing it alone can say"
 field "$dump" "Pause motion"
 check $? "the motion switch is on the pane, named, and reachable"
 # 12 recordings + 4 notes + 3 people, because the fourth is the centre.
@@ -305,6 +323,20 @@ field "$dump" "Open recording"
 check $? "and offers to open it"
 echo "$dump" | grep -qE "[0-9]+ links?|Nothing links"
 check $? "and says what it is connected to, or that nothing is"
+# **A link goes where it says.** The card's link lines were static text: it
+# told you a recording was written up in a note and then left you to find that
+# note in the sphere yourself. Following one selects it, which changes the card
+# to that thing.
+link=$(echo "$dump" | awk -F'\t' '/AXButton/ && ($3 ~ /^Speaker / || $3 ~ /^Written up in /) { print $3; exit }')
+[ -n "$link" ]
+check $? "the card's links are buttons, not text ($link)"
+"$PROBE" press $APP "$link" >/dev/null 2>&1
+check $? "and one can be followed"
+sleep 3
+dump=$("$PROBE" texts $APP 2>&1)
+! echo "$dump" | grep -q "^AXStaticText.*Recording · 1 May"
+check $? "and the card is now about the thing at its other end"
+
 # The way out of the card, which is a cross in its corner rather than a second
 # verb beside Open. Pressed before Open, because Open leaves the galaxy.
 "$PROBE" press $APP "Clear selection" >/dev/null 2>&1
@@ -331,7 +363,44 @@ check $? "and lands in the library, on the recording"
 stop
 
 echo
-echo "9. motion stops when nobody can see it"
+echo "9. the globe on a page, and the way back"
+: > "$TRACE"
+launch ""
+dump=$("$PROBE" texts $APP 2>&1)
+# The home page: the globe takes the ellipsis's slot, where that menu has one
+# row in it saying nothing is selected.
+field "$dump" "Galaxy"
+check $? "the home page carries the globe"
+! field "$dump" "Actions"
+check $? "instead of an actions menu with nothing in it"
+stop
+# **`LISTEN_PANEL=page`, because the sidebar cannot be reached.** Every row in
+# that list is a `HoverRow`, a plain NSView with a target and an action, so
+# neither `press` nor `selectrow` finds one, and the status menu's Recent rows
+# only cover the newest few. See `LibraryWindow.previewPage`.
+launch page
+await "Actions"
+check $? "opening a recording brings the actions menu back"
+field "$dump" "Galaxy"
+check $? "with the globe beside it"
+# The globe carries the page: the galaxy opens on that star rather than on the
+# whole library and a hunt.
+"$PROBE" press $APP "Galaxy" >/dev/null 2>&1
+await "Open recording"
+check $? "the globe opens the galaxy with that page's star already picked"
+echo "$dump" | grep -q "LISTEN BRAIN"
+check $? "and it is the galaxy"
+# And the cross comes back to the page it came from, which the sidebar's
+# selection is what makes true.
+"$PROBE" press $APP "Close" >/dev/null 2>&1
+await "Actions"
+check $? "and the cross comes back to the page it came from"
+! echo "$dump" | grep -q "LISTEN BRAIN"
+check $? "with the galaxy gone"
+stop
+
+echo
+echo "10. motion stops when nobody can see it"
 : > "$TRACE"
 launch galaxy
 # The window is frontmost after launch, so ambient motion is permitted unless

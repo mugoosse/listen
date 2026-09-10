@@ -1743,7 +1743,8 @@ final class DevelopersPane: Pane {
         field.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         field.textColor = .textColor
         field.drawsBackground = true
-        field.backgroundColor = .textBackgroundColor
+        // See `Brand.raised`: a filled field is a card too.
+        field.backgroundColor = Brand.raised
         field.minSize = NSSize(width: 0, height: 0)
         field.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                height: CGFloat.greatestFiniteMagnitude)

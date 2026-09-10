@@ -175,6 +175,19 @@ import simd
             check(picked > hovered && hovered > plain, "and every shell still grows under the pointer")
         }
 
+        print("\nthe card")
+        // The title leads and the kind is folded into the line under it, so
+        // the top of the card is the name rather than the one word a reader
+        // can already tell from the star's colour.
+        let person = Galaxy.Node(id: "person:Ada", kind: Galaxy.Node.person, title: "Ada", detail: "4 recordings")
+        check(Galaxy.word(for: person) == "Person", "a person's card says Person")
+        let anchor = Galaxy.Node(id: Galaxy.deviceID, kind: Galaxy.Node.device, title: "This Mac")
+        check(Galaxy.word(for: anchor) == "This Mac",
+              "and a centre with nothing behind it says what it is")
+        let you = Galaxy.Node(id: "person:Me", kind: Galaxy.Node.device, title: "Me")
+        check(Galaxy.word(for: you) == "You",
+              "while a centre that is a real person says You")
+
         print("\nthe motion policy")
         var policy = GalaxyMotionPolicy()
         policy.visible = true

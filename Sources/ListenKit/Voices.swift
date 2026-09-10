@@ -429,6 +429,36 @@ public enum VoiceBankCore {
         return dot / (na.squareRoot() * nb.squareRoot())
     }
 
+    /// Combine whole voiceprints, each weighted by the speech behind it.
+    ///
+    /// `average` is the per-segment case and weights every segment equally,
+    /// which is right when the segments are what you have. This is the case
+    /// where two *centroids* have to become one, and there weighting matters:
+    /// `Join` puts two recordings of one conversation together, and a speaker
+    /// who said four words before the interruption and four minutes after it
+    /// must not count half. Weighting by seconds is what makes the result the
+    /// vector the pipeline would have produced from the whole conversation.
+    ///
+    /// Here rather than in the app target for the reason stated at the top of
+    /// this file: a second implementation of this arithmetic is how two devices
+    /// come to disagree about who is speaking.
+    public static func weighted(_ prints: [(embedding: [Float], speech: Double)]) -> [Float] {
+        let usable = prints.filter { !$0.embedding.isEmpty }
+        guard let width = usable.first?.embedding.count, width > 0 else { return [] }
+        // A print with no speech behind it still says something about direction,
+        // so it counts as a segment rather than as nothing. Falling to zero
+        // would let one malformed sidecar erase a speaker's identity.
+        let weights = usable.map { max($0.speech, 1) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return usable[0].embedding }
+        var out = [Float](repeating: 0, count: width)
+        for (print, weight) in zip(usable, weights) {
+            let scale = Float(weight / total)
+            for i in 0..<min(width, print.embedding.count) { out[i] += print.embedding[i] * scale }
+        }
+        return out
+    }
+
     /// Average per-segment embeddings into one per cluster, which is what a
     /// voiceprint is.
     ///

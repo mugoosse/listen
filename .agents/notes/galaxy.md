@@ -181,20 +181,27 @@ a reader is asking what the centre *is* rather than who it is; putting it in
 both made them disagree, because a promoted person kept their own name and the
 anchor carried the bracket.
 
-### The inspector card is the sidebar's material, and its way out is a cross
+### The inspector card is painted, not blended, and its way out is a cross
 
-It was a flat near-black panel with a hairline border, which is what a card
-over a scene looks like in a game and not what anything else in this window
-looks like. `NSVisualEffectView` with the `.sidebar` material and
-`.withinWindow` blending puts it in the same family as the list on the other
-side of the divider.
+**A `.sidebar` material is not how you match the sidebar.** It was the obvious
+move and it is wrong: vibrancy blends with what is behind it, and behind this
+card is the Metal view rather than the desktop, so the card rendered
+RGB(38,38,45) beside a sidebar rendering RGB(11,15,28). `Brand.canvas` is what
+the sidebar resolves to, so the card is simply painted that — which leaves it
+the same colour as the scene, and a border and a shadow are what make it a card
+rather than a hole. Measured after: both sides RGB(11,15,28).
+
+The title leads and is the largest thing on it. It was third, under a "PERSON"
+header in small caps, which spent the top line on the one word a reader can
+already tell from the star's colour; the kind moved into the line below, as
+"Recording · 1 May 2026 at 15:00 · 51:06".
 
 Its dismiss was a "Clear" button beside Open, which read as a second verb on
 the thing being described rather than as putting the card away, and gave the
 two the same weight. It is a round glass cross in the corner now, where every
-other page in this window puts the way out. The material alone is nearly
-invisible against `Brand.canvas`, which is most of the point of that ground, so
-the circle carries a little white over it.
+other page in this window puts the way out. The glass alone is nearly invisible
+against `Brand.canvas`, which is most of the point of that ground, so the
+circle carries a little white over it.
 
 ### The sky is the window's ground, and it is flat
 
@@ -321,6 +328,19 @@ with a floor so a star that links to nothing is not pressed against the lens.
 The rest of the library dims rather than going out; at the first dimming value
 it went black at that distance, and a recording with two links looked like a
 star alone in space.
+
+### A title is the star, and testing its rect is why dragging still works
+
+The labels sit beside the dot they name, and `GalaxyLabel` refuses hit testing
+so that a drag beginning on one still orbits the scene. The cost was that a
+click on a title fell through to the Metal view and picked whatever the ray
+found behind it, which is usually nothing: the word was inert, and it is the
+larger target and the one a reader aims at.
+
+`star(at:)` tests the laid-out label rects before it casts the ray. That keeps
+every gesture in the Metal view, so the drag behaviour is untouched, and makes
+the word as clickable as the dot. The rects are rebuilt with the labels, so
+they cannot describe a frame that has moved on.
 
 ### A selection names itself and its links, and nothing else
 

@@ -760,8 +760,24 @@ struct Recording {
     /// Everything in `recordings/` goes through `Library.delete`, which writes
     /// the tombstone that carries the deletion and keeps the folder in `Trash`
     /// for a fortnight. See `Deletions` for why an absence is no longer enough.
+    ///
+    /// **The two paths are compared resolved, never as URLs.** `URL ==` is
+    /// textual, and a library reached through a symlink is one directory under
+    /// two names: `/tmp/lib` and `/private/tmp/lib` are the same folder and
+    /// compare unequal. When they did, every delete fell to the staging branch
+    /// below, which removes the folder and writes no tombstone and no trash.
+    /// That is precisely the outcome `Deletions` exists to prevent: the other
+    /// Mac finds no record of the deletion, pushes its copy back, and there is
+    /// nothing in `Trash` to restore from either. Measured on 10 September 2026
+    /// with `LISTEN_LIBRARY=/tmp/…`: no `.deletions.json`, no `.trash`, and
+    /// nothing anywhere reporting it. The real library is not reached through a
+    /// symlink, so this never bit the default path, which is why it survived:
+    /// it only shows up under `LISTEN_LIBRARY`, which is every verify script
+    /// and anybody keeping a library on another volume.
     func delete() throws {
-        guard folder.deletingLastPathComponent() == Library.recordings else {
+        let parent = folder.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let recordings = Library.recordings.resolvingSymlinksInPath().standardizedFileURL
+        guard parent == recordings else {
             try FileManager.default.removeItem(at: folder)
             return
         }

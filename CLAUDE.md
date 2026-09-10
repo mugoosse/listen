@@ -119,6 +119,9 @@ How audio gets onto disk, and how it is shown while it happens. `Capture`,
 - A call on the built-in microphone turns it into three channels, and two was the most the recorder could take
 - Two libraries turn three channels into a well-formed file of nothing
 - A failure at the first attempt had no second attempt, and the screen said "Recording from"
+- A call cut in two is one meeting, and the earlier half is the one that survives
+- An install during a call is not a crash, and `install.sh` refuses one now
+- `AVAudioFile.read` throws at the end of a file rather than reporting it
 
 ### `.agents/notes/asr.md` (56k)
 
@@ -508,6 +511,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A blob is announced once, and one missed pull lasts for ever
 - What a person just did leaves first, not last
 - A per-device fact in one shared key is a fight, not a fact
+- A library reached through a symlink deleted without a tombstone
 
 ### `.agents/notes/agent.md` (172k)
 
@@ -651,7 +655,8 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Adjacent ids land in one band of the sphere without an avalanche mix
 - You are the centre, and that is one star rather than two
 - A selection names itself and its links, and nothing else
-- The inspector card is the sidebar's material, and its way out is a cross
+- A title is the star, and testing its rect is why dragging still works
+- The inspector card is painted, not blended, and its way out is a cross
 - The sky is the window's ground, and it is flat
 - A window colour is four things, not one
 - Every hue belongs to a shell, and everything else is grey
@@ -827,6 +832,14 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # and asserts sync refuses that library first
 ./verify_install_guard.sh  # launch from a scratch DMG raises the guard, and
                         # declining continues
+./verify_join.sh        # `listen join`, over synthesised audio whose three
+                        # lengths were chosen so the arithmetic is an
+                        # assertion: detection and its stated evidence, a dry
+                        # run changing nothing, the five refusals, and the
+                        # join itself down to the offset of the second half's
+                        # first turn, the summed cleanup counts, the merged
+                        # voiceprints, the dropped waveform, the tombstone and
+                        # the note repointed onto the survivor
 ./verify_search.sh      # a search result shows the sentence that matched and
                         # how many; a title-only match grows no excerpt; a note
                         # body is excerpted; conversations are offered by a

@@ -123,6 +123,8 @@ enum CLI {
             label(rest)
         case "title":
             title(rest)
+        case "join":
+            join(rest)
         case "people":
             people(rest)
         case "galaxy":
@@ -1824,6 +1826,11 @@ enum CLI {
       label <id> <speaker> ...   name, merge or discard a speaker
       title <id> [<text>]        what one recording is called. --clear un-names
                                  it. No text prints the current one.
+      join <id> [--into <id>]    fold one recording into the one it continues,
+                                 when a call was cut in two. Finds the earlier
+                                 one itself unless --into names it. Prints and
+                                 changes nothing without --apply, which deletes
+                                 the later recording once it is folded in.
       title backfill [--apply]   name every unnamed recording after the people
                                  in it. Prints and changes nothing without
                                  --apply.
@@ -3110,6 +3117,75 @@ enum CLI {
     /// counting rows to work out what happened to the rest, and the answer per
     /// recording is the useful half: waiting on a speaker is something they can
     /// act on, nobody to name it after is not.
+    /// `listen join <id> [--into <id>] [--apply]`
+    ///
+    /// Prints and changes nothing without `--apply`, which is the shape
+    /// `listen calendar backfill` and `listen dictionary backfill` already use.
+    /// It matters more here than in either of those: this one deletes a
+    /// recording, and the dry run is where somebody checks it named the right
+    /// pair before that happens.
+    private static func join(_ args: [String]) -> Never {
+        var apply = false, id: String?, into: String?
+        var rest = args[...]
+        while let arg = rest.first {
+            rest = rest.dropFirst()
+            switch arg {
+            case "--apply": apply = true
+            case "--into":
+                guard let value = rest.first else { fail("--into needs a recording id.") }
+                into = value; rest = rest.dropFirst()
+            default:
+                guard !arg.hasPrefix("-") else { fail("unknown option `\(arg)`.") }
+                guard id == nil else { fail("join takes one recording. Use --into for the other.") }
+                id = arg
+            }
+        }
+        guard let id else {
+            fail("join needs the later recording's id. `listen list` shows them.")
+        }
+        guard let later = Recording.find(id) else { fail("no recording `\(id)`.") }
+
+        let library = Recording.all()
+        var earlier: Recording
+        if let into {
+            guard let found = Recording.find(into) else { fail("no recording `\(into)`.") }
+            earlier = found
+        } else if let (found, evidence) = Join.predecessor(of: later, in: library) {
+            earlier = found
+            log("\(later.id) looks like a continuation of \(found.id): \(evidence.phrase).")
+        } else {
+            fail("""
+                nothing in the library looks like what \(later.id) continues. \
+                `listen join \(later.id) --into <id>` says so outright.
+                """)
+        }
+
+        let plan: Join.Plan
+        do { plan = try Join.plan(later, into: earlier) } catch { fail("\(error)") }
+
+        print("join  \(later.id)  \(later.displayTitle)")
+        print("into  \(plan.earlier.id)  \(plan.earlier.displayTitle)")
+        print("")
+        print("  second half starts at   \(Join.spell(plan.offset)) on the joined timeline")
+        print("  silence between them    \(Join.spell(plan.silence))")
+        print("  joined length           \(Join.spell(plan.duration))")
+        print("  speakers                \(plan.speakers.isEmpty ? "none yet" : plan.speakers.joined(separator: ", "))")
+        for warning in plan.warnings { log("note: \(warning)") }
+
+        guard apply else {
+            print("")
+            log("nothing changed. `--apply` joins them and deletes \(later.id).")
+            exit(0)
+        }
+
+        do { try Join.apply(plan) } catch { fail("could not join: \(error.localizedDescription)") }
+        print("")
+        print("joined. \(plan.earlier.id) is now \(Join.spell(plan.duration)) long; "
+            + "\(later.id) was deleted.")
+        log("the waveform is rebuilt the next time the recording is opened.")
+        exit(0)
+    }
+
     private static func titleBackfill(_ args: [String]) -> Never {
         var apply = false
         for arg in args {

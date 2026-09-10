@@ -1002,3 +1002,79 @@ Verified with it through `listen record` against a scratch library:
   microphone could not be opened` and the recording screen says `MacBook Pro
   Microphone could not be opened (…). Your voice is not being recorded. Listen
   keeps trying, or pick another microphone.` Both are `AXStaticText`.
+
+## A call cut in two is one meeting, and the earlier half is the one that survives
+
+On 10 September 2026 a call ran from 14:15:04 and stopped dead at 14:26:44,
+eleven minutes and forty seconds in. It was not a crash and there is no `.ips`
+report for it. `ditto` and `codesign` ran at 14:26:38, the app exited cleanly at
+14:26:45.76, and `/Applications/Listen.app` has an mtime of 14:26:46 with a new
+pid one second later: somebody ran `./install.sh` while the meeting was live,
+and `install.sh` quits the running copy before it copies. The user pressed
+Record again at 14:28:21, so the conversation is in two folders with 97 seconds
+missing between them, and the first folder says `"duration": 0` because the
+process was killed before anything wrote it.
+
+**Nothing in the library could say the two were one thing.** That is the gap
+`Join` fills, and it is worth having as a mechanism rather than as a script
+somebody writes twice: a crash, a forced quit, a Mac out of disk and an
+accidental Stop all leave exactly this shape.
+
+`install.sh` now refuses while a recording is in progress, and asks twice: once
+before the build so you are not made to wait for a refusal, and once
+immediately before the kill, which is the check that actually protects a call
+that started during the build. **The test is the audio on disk and not
+`metadata.state`.** A live recording rewrites its WAV header as it runs, so a
+track touched in the last 15 seconds is capture happening now; `state` is
+written as `unconfirmed` when the recording starts and outlives it, so it
+answers "maybe, at some point" where this needs "right now".
+`LISTEN_INSTALL_FORCE=1` overrides it.
+
+**The earlier recording is the one that survives, and the gap becomes silence.**
+Its id carries the start of the meeting and the calendar match was made against
+that instant, so folding the later one into it keeps the event, the notes and
+the conversations pointing where they already pointed. The later half's
+timestamps are shifted by the **wall clock** difference, not by the first
+half's audio length: the two agree when the first recording ended cleanly, and
+when it did not it is the audio that is short rather than the clock that is
+wrong. The hole between them is padded with silence through
+`WAVWriter.pad(to:)`, for the reason that function already gives about a track
+that lost time: closing a hole loses no word but moves every word after it
+earlier, which silently reattributes the rest of the meeting.
+
+Measured on the two halves above: 699.8 s + 97.2 s of silence + 479.9 s =
+1276.9 s, 164 segments where the halves had 70 and 94, 84 turns where they had
+36 and 48, the second half's first turn landing at 797.72 s where it had been
+at 0.72 s, and the voiceprints combined speech-weighted so `Me` reads 448.78 s
+where the halves held 259.98 and 188.80.
+
+`listen join <id> [--into <id>] [--apply]`. It finds the earlier half itself
+when one is within five minutes and shares an `app_bundle_id` or a
+`calendar_event_id`, and prints without changing anything until `--apply`,
+which matters more here than in the other backfills because this one deletes a
+recording. `verify_join.sh` is the whole thing as assertions over synthesised
+audio, where the arithmetic is checkable because all three lengths were chosen.
+
+**Five minutes is a judgement and not a measurement**, which is why it is
+`Join.window` with the reasoning on it rather than a bare literal. The only
+observation behind it is the 97 seconds above. It is deliberately far short of
+the ten minutes `MeetingCalendar` allows, because those are different
+questions: that one asks whether a recording belongs to an event, this one asks
+whether somebody was cut off and started again, and a wrong offer here invites
+a person to destroy a separate recording.
+
+## `AVAudioFile.read` throws at the end of a file rather than reporting it
+
+The obvious copy loop, reading blocks until one comes back with no frames, does
+not work: `read(into:frameCount:)` **throws** when the file is already at its
+end, and it throws a bare `_GenericObjCError error 0` that names nothing at
+all. The first version of `Join.copy` wrote all 699 seconds of a track, threw
+on the read after the last block, and reported that the join had failed while
+the finished audio sat in the staging file with an unwritten header, which
+reads exactly like an audio bug and is not one.
+
+Bound the loop by `file.framePosition < file.length` and clamp the block to
+what is left. The same trap is one step from the `-50` that
+`AVAudioFile.read(into:)` throws on a zero-capacity buffer, recorded above
+against the empty `mic.wav`: both are the file being asked for frames that are
+not there, and neither says so.

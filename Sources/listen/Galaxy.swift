@@ -110,6 +110,24 @@ enum Galaxy {
         return (kind, key)
     }
 
+    /// What to call one of these on screen.
+    ///
+    /// Here rather than on the card, because it is a rule about kinds and not
+    /// about a view: the CLI, the card and anything that comes next should all
+    /// call a note a note.
+    static func word(for node: Node) -> String {
+        switch node.kind {
+        case Node.person: return "Person"
+        case Node.note: return "Note"
+        case Node.chat: return "Chat"
+        case Node.recording: return "Recording"
+        // The centre is you when the library has heard you speak, and a bare
+        // anchor when it has not. Saying "This Mac" over your own name would
+        // be the card disagreeing with the star it is describing.
+        default: return subject(of: node.id) == nil ? "This Mac" : "You"
+        }
+    }
+
     /// A short, stable fingerprint of where everything ended up.
     ///
     /// For `listen galaxy --json`, so a script can assert that two reads of the

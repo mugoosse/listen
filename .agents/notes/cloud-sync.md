@@ -1269,3 +1269,48 @@ is exactly the state that must not be deliverable once.
 
 No CloudKit schema change: `CloudRecords.device` seals the whole blob into
 `payload`. The field is optional for the reason `keepsAudio` is.
+
+## A library reached through a symlink deleted without a tombstone
+
+`Recording.delete()` decided whether a recording was a real one or a staged one
+by comparing two URLs:
+
+```swift
+guard folder.deletingLastPathComponent() == Library.recordings else {
+    try FileManager.default.removeItem(at: folder)   // no tombstone, no trash
+    return
+}
+```
+
+`URL ==` is textual, and a library reached through a symlink is one directory
+under two names. `LISTEN_LIBRARY=/tmp/lib` gives `Library.recordings` as
+`/tmp/lib/recordings` while the folder arrives resolved as
+`/private/tmp/lib/recordings/<id>`, the two compare unequal, and **every delete
+took the staging branch**: the folder removed, no `.deletions.json`, no
+`.trash`, and nothing anywhere reporting it. Which is the one outcome this file
+exists to prevent, twice over. The other Mac finds no record of the deletion
+and pushes its copy back, exactly as under "A deletion is data, or a Mac that
+wakes up undoes it"; and unlike that case there is no trashed copy here to
+restore from, because the same branch skipped `Trash.accept` too.
+
+Measured on 10 September 2026 by joining the same pair of recordings twice, in
+two libraries differing only in their path:
+
+```
+LISTEN_LIBRARY=/tmp/probe          -> (nothing)
+LISTEN_LIBRARY=/private/tmp/probe2 -> .deletions.json .trash
+```
+
+**The default library is not reached through a symlink, which is why this
+survived.** `~/Library/Application Support/Listen` resolves to itself, so
+nothing in ordinary use ever hit it. It bites under `LISTEN_LIBRARY`, which is
+every verify script (`$TMPDIR` is `/var/folders/…` and `/var` is a symlink to
+`/private/var`) and anybody keeping a library on another volume. It was found
+by writing `verify_join.sh`, which asserted the tombstone and did not get one;
+the join itself was correct and the two failing assertions were the delete
+underneath it.
+
+Both sides are compared `resolvingSymlinksInPath().standardizedFileURL` now.
+The staging branch is still right and still there: nothing in `staging/` has
+ever been published, so a tombstone for one would name an id no other device
+has heard of.

@@ -89,6 +89,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
 
     private var metalView: GalaxyMetalView?
     private var labels: [NSTextField] = []
+    /// Where each title landed and what it names, so a click on the word is a
+    /// click on the star. Rebuilt with the labels.
+    private var labelTargets: [(rect: CGRect, id: String)] = []
     private let legend = NSStackView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let failureLabel = NSTextField(wrappingLabelWithString: "")
@@ -595,6 +598,16 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     }
 
     private func star(at point: CGPoint) -> String? {
+        // **A title is the star.** The labels sit beside the dot they name and
+        // used to swallow nothing and hit nothing: `GalaxyLabel` refuses hit
+        // testing so a drag that starts on one still orbits, which means a
+        // click on one used to fall through to the scene and pick whatever was
+        // behind it, usually nothing. Testing their rects here keeps the drag
+        // behaviour and makes the word as clickable as the dot, which is the
+        // larger target and the one a reader is actually aiming at.
+        //
+        // Before the ray, because a label is drawn over the scene.
+        for (rect, id) in labelTargets where rect.contains(point) { return id }
         guard let metalView, let renderer else { return nil }
         let scale = metalView.window?.backingScaleFactor ?? 1
         // The Metal view is unflipped and the drawable is not, so the y has to
@@ -708,6 +721,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         labelUpdateCount += 1
         labels.forEach { $0.removeFromSuperview() }
         labels.removeAll(keepingCapacity: true)
+        labelTargets.removeAll(keepingCapacity: true)
         let size = metalView.drawableSize
         let projection = GalaxyCamera.perspectiveMatrix(aspect: Float(size.width / max(size.height, 1)))
         let viewProjection = projection * camera.viewMatrix()
@@ -790,6 +804,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             label.frame = rect
             view.addSubview(label, positioned: .below, relativeTo: legend)
             labels.append(label)
+            labelTargets.append((rect, node.id))
         }
     }
 
@@ -887,31 +902,37 @@ private final class GalaxyLegendRow: NSButton {
 /// does not try to be the page: a recording's transcript, a note's text and a
 /// conversation's turns all live somewhere that already shows them properly,
 /// and Open is the whole point of the card.
-final class GalaxyInspector: NSVisualEffectView {
+final class GalaxyInspector: NSView {
     var onOpen: (() -> Void)?
     var onClear: (() -> Void)?
 
     private let stack = NSStackView()
     private let title = NSTextField(wrappingLabelWithString: "")
-    private let kind = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let links = NSStackView()
     private let openButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // **The sidebar's own material**, so the card reads as part of this
-        // window rather than as a tooltip drawn on top of it. It was a flat
-        // near-black with a hairline border, which is what a panel over a
-        // scene looks like in a game and not what anything else here looks
-        // like. `.withinWindow` because what is behind it is the scene.
-        material = .sidebar
-        blendingMode = .withinWindow
-        state = .active
+        // **The window's own ground, painted rather than blended.** A
+        // `.sidebar` material looked like the obvious way to match the
+        // sidebar and is not: vibrancy blends with what is behind it, and
+        // behind this is the Metal view rather than the desktop, so the card
+        // came out RGB(38,38,45) beside a sidebar rendering at RGB(11,15,28).
+        // `Brand.canvas` is what the sidebar resolves to, so this is that.
+        //
+        // Which leaves it the same colour as the scene, so a border and a
+        // shadow are what make it a card rather than a hole.
         wantsLayer = true
         layer?.cornerRadius = 10
+        layer?.backgroundColor = Brand.canvas.cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        layer?.masksToBounds = false
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.45
+        layer?.shadowRadius = 18
+        layer?.shadowOffset = CGSize(width: 0, height: -4)
 
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -926,11 +947,13 @@ final class GalaxyInspector: NSVisualEffectView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        // **The title is the first thing and the largest.** It was third,
+        // under a "PERSON" header in small caps, which spent the top line of
+        // the card on the one word the reader can already tell from the
+        // star's colour. The kind moved into the line below it.
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
         title.textColor = .white
         title.maximumNumberOfLines = 3
-        kind.font = .systemFont(ofSize: 10, weight: .semibold)
-        kind.textColor = NSColor.white.withAlphaComponent(0.5)
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = NSColor.white.withAlphaComponent(0.66)
         detail.maximumNumberOfLines = 2
@@ -944,7 +967,7 @@ final class GalaxyInspector: NSVisualEffectView {
         row.orientation = .horizontal
         row.spacing = 8
 
-        for item in [kind, title, detail] { stack.addArrangedSubview(item) }
+        for item in [title, detail] { stack.addArrangedSubview(item) }
         stack.addArrangedSubview(links)
         stack.addArrangedSubview(row)
         // A wrapping label reports its whole string as one line's worth of
@@ -959,13 +982,12 @@ final class GalaxyInspector: NSVisualEffectView {
         addSubview(close)
         close.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
-            close.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-            close.widthAnchor.constraint(equalToConstant: 22),
-            close.heightAnchor.constraint(equalToConstant: 22),
-            // The card's own text stops short of it, or a long kind word runs
-            // underneath the button.
-            kind.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -8),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            close.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            close.widthAnchor.constraint(equalToConstant: 28),
+            close.heightAnchor.constraint(equalToConstant: 28),
+            // The title stops short of it, or a long name runs underneath.
+            title.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -10),
         ])
         setAccessibilityRole(.group)
     }
@@ -978,7 +1000,7 @@ final class GalaxyInspector: NSVisualEffectView {
         glass.blendingMode = .withinWindow
         glass.state = .active
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 11
+        glass.layer?.cornerRadius = 14
         glass.layer?.masksToBounds = true
         // The material alone is nearly invisible against this ground, which is
         // most of the point of the ground. A little white over it gives the
@@ -990,7 +1012,7 @@ final class GalaxyInspector: NSVisualEffectView {
         button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.contentTintColor = NSColor.white.withAlphaComponent(0.9)
-        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
         button.setAccessibilityLabel("Clear selection")
         button.toolTip = "Clear selection"
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -1006,9 +1028,10 @@ final class GalaxyInspector: NSVisualEffectView {
 
     func show(node: Galaxy.Node, links edges: [Galaxy.Edge], titles: [String: String], openable: Bool) {
         title.stringValue = node.title
-        kind.stringValue = Self.word(for: node).uppercased()
-        detail.stringValue = node.detail
-        detail.isHidden = node.detail.isEmpty
+        // "Person · 4 recordings · 1h 15m", so the kind is still said and the
+        // top line is the name.
+        detail.stringValue = [Galaxy.word(for: node), node.detail]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
         links.arrangedSubviews.forEach { links.removeArrangedSubview($0); $0.removeFromSuperview() }
         let heading = NSTextField(labelWithString: edges.isEmpty
             ? "Nothing links to this yet"
@@ -1037,24 +1060,12 @@ final class GalaxyInspector: NSVisualEffectView {
             more.textColor = NSColor.white.withAlphaComponent(0.4)
             links.addArrangedSubview(more)
         }
-        openButton.title = "Open " + Self.word(for: node).lowercased()
+        openButton.title = "Open " + Galaxy.word(for: node).lowercased()
         openButton.isHidden = !openable
         openButton.setAccessibilityLabel(openButton.title)
-        setAccessibilityLabel("\(Self.word(for: node)): \(node.title)")
+        setAccessibilityLabel("\(Galaxy.word(for: node)): \(node.title)")
     }
 
-    static func word(for node: Galaxy.Node) -> String {
-        switch node.kind {
-        case Galaxy.Node.person: return "Person"
-        case Galaxy.Node.note: return "Note"
-        case Galaxy.Node.chat: return "Chat"
-        case Galaxy.Node.recording: return "Recording"
-        // The centre is you when the library has heard you speak, and a bare
-        // anchor when it has not. Saying "This Mac" over your own name would
-        // be the card disagreeing with the star it is describing.
-        default: return Galaxy.subject(of: node.id) == nil ? "This Mac" : "You"
-        }
-    }
 
     @objc private func open() { onOpen?() }
     @objc private func clear() { onClear?() }

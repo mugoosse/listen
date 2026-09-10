@@ -510,6 +510,30 @@ enum Notes {
                       modified: modified ?? nil)
     }
 
+    /// Point every note about `from` at `id` instead.
+    ///
+    /// `Join` calls this just before the recording it names is deleted. A note
+    /// naming an id that no longer exists is a note about nothing: the sidebar
+    /// cannot file it, `listen notes list <id>` cannot find it, and the note
+    /// itself still reads as though the meeting were there.
+    ///
+    /// A note that already names both halves collapses to one entry rather than
+    /// naming the survivor twice, which is the ordinary case for a note written
+    /// across a split meeting.
+    @discardableResult
+    static func repoint(_ from: String, to id: String) -> [Note] {
+        var moved: [Note] = []
+        for var note in all() where note.isAbout(from) {
+            var seen = Set<String>()
+            note.recordings = note.recordings
+                .map { $0 == from ? id : $0 }
+                .filter { seen.insert($0).inserted }
+            guard (try? save(note)) != nil else { continue }
+            moved.append(note)
+        }
+        return moved
+    }
+
     private static func save(_ note: Note) throws {
         let fm = FileManager.default
         do {

@@ -297,8 +297,10 @@ echo "8. a selected star offers the page it stands for"
 : > "$TRACE"
 launch galaxy:selected
 dump=$("$PROBE" texts $APP 2>&1)
-field "$dump" "RECORDING"
-check $? "the card says what kind of thing is selected"
+# The kind is in the line under the title now, not a header above it: the top
+# of the card is the name.
+echo "$dump" | grep -q "^AXStaticText.*Recording · "
+check $? "the card says what kind of thing is selected, under its name"
 field "$dump" "Open recording"
 check $? "and offers to open it"
 echo "$dump" | grep -qE "[0-9]+ links?|Nothing links"

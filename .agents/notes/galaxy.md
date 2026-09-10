@@ -181,6 +181,27 @@ a reader is asking what the centre *is* rather than who it is; putting it in
 both made them disagree, because a promoted person kept their own name and the
 anchor carried the bracket.
 
+### The sky is the window's ground, and it is flat
+
+The scene is not a picture in a frame: it fills one pane of a window whose
+other panes are `Brand.canvas`, so a sky a shade off that ground reads as a
+seam down the middle rather than as depth. `GalaxyRenderer.sky` is that colour
+in the shader's units, and `verify_galaxy.sh` reads a corner pixel of an
+offscreen render and asserts the bytes, so the two cannot come apart quietly.
+
+**The vignette is gone rather than reduced**, and it took three goes to accept
+that. It was 0.42, then 0.10, then 0.05, and every one of them was a gradient
+against a sidebar that is one flat colour: the seam simply moved to wherever
+the fade had got to by the divider. A sky that *is* the ground has nothing to
+be darker than.
+
+That change also broke the pixel check, which is worth knowing before touching
+either: stars are blended **additively** onto the sky, so a yellow star over a
+blue-black ground is a yellow-plus-blue pixel, and its hue drifts towards the
+sky as the sky gets lighter. Moving from RGB(2,4,9) to RGB(10,15,29) dropped
+the measured people count from 63 to 9 with nothing about the stars changed.
+`tools/pngstats.py` subtracts a corner pixel before classifying.
+
 ### Every hue belongs to a shell, and everything else is grey
 
 Four shells, four colours, and the two rules that took three passes to find.
@@ -353,6 +374,13 @@ in a second place from the code that sets its uniforms.
   a note. Filters or a contextual highlight are the shape worth trying, and
   neither is designed yet.
 - **No editing.** Every verb is on the page the star opens.
+- **No composer.** Ask is on every other screen in this window and not on
+  this one: the field would be the only thing here that is not the picture, it
+  competes with the inspector card for the same corner, and a question about a
+  star has a page of its own to be asked from. This reverses the first version,
+  which argued that "Ask about your library" over a picture of the library was
+  exactly right; what it actually produced was a bar over a scene, and a
+  bottom inset to plumb so the controls could dodge it.
 - **No filter that outlives the window.** Striking a shell out of the legend is
   a lens over the snapshot, not a narrower read of the library, and it reaches
   no preference: a filter somebody finds still applied a week later is one they

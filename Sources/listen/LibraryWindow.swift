@@ -1072,16 +1072,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // list down the side of the galaxy.
             sidebarHost.show(sidebar)
             paintSidebarSky(true)
-            // **And the composer is about the library again.** It is scoped by
-            // the three sidebar handlers and by `closeSelected`, none of which
-            // runs on the way in here, so "Ask about this meeting…" was left
-            // under a picture of the whole library and a question asked there
-            // was filed against whatever page had been open. The galaxy then
-            // drew that as an "Asked about" line, which is the one thing this
-            // screen promises never to invent.
+            // **The composer is put away here** (see `updateComposer`), and
+            // still un-scoped on the way in: it is scoped by the three sidebar
+            // handlers and by `closeSelected`, none of which runs on this path,
+            // so leaving it pointed at the last page would mean a question
+            // asked straight after leaving the galaxy was filed against a
+            // meeting nobody had open. The galaxy would then draw that as an
+            // "Asked about" line, which is the one thing it promises never to
+            // invent.
             askBar.show(nil)
+            galaxyPane.setBottomInset(0)
             detailHost.show(galaxyPane)
-            galaxyPane.setBottomInset(drawerHeight)
             // Explicitly rather than through `viewDidAppear`: a pane that is
             // added to an already-visible window does get the callback, and a
             // motion policy that silently depends on that is a galaxy that
@@ -1217,8 +1218,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // being recorded anyway, because that screen has no composer to grow and
         // no History to open, but a rule that depends on a screen being
         // unreachable is a rule waiting to be broken.
+        // **And not on the galaxy**, which is the third screen about the app's
+        // own shape rather than about a recording. The field would be the only
+        // thing on it that is not the picture, it competes with the inspector
+        // card for the bottom-right corner, and a question asked from here has
+        // a page of its own to be asked from: the star you were looking at.
         composerHost?.showsComposer = mode == .chat
-            || (mode != .settings && !live && !reviewingSpeaker)
+            || (mode != .settings && mode != .galaxy && !live && !reviewingSpeaker)
     }
 
     /// Put the list's highlight on the conversation the page is showing.

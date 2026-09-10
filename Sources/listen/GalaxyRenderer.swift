@@ -229,7 +229,16 @@ final class GalaxyRenderer {
     /// to use it: the pane under the Metal view before the first frame, the
     /// clear colour, the shader, and the window's sidebar while the galaxy is
     /// up. `GalaxyPane.sky` is this as an `NSColor`.
-    static let sky = SIMD3<Float>(0.008, 0.014, 0.036)
+    /// `Brand.canvas` in its dark appearance, as the shader's own units. The
+    /// scene is not a picture in a frame: it fills a pane of a window whose
+    /// other panes are this colour, and a sky a shade off the ground beside it
+    /// reads as a seam down the middle rather than as depth.
+    ///
+    /// A literal rather than a read of `Brand.canvas`, because this is what the
+    /// GPU is handed and `NSColor`'s dynamic value depends on an appearance
+    /// that a render pass does not have. `verify_galaxy.sh` measures the two
+    /// against each other, so they cannot come apart quietly.
+    static let sky = SIMD3<Float>(10.0 / 255, 15.0 / 255, 29.0 / 255)
 
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
@@ -518,11 +527,12 @@ final class GalaxyRenderer {
     // are a depth cue, and a viewer must never be able to click one.
     fragment float4 galaxyBackgroundFragment(Out in [[stage_in]], constant Uniforms &u [[buffer(2)]]) {
         float2 uv = (in.local + 1.0) * .5;
-        // A gentle vignette. It was 0.42, which darkened the edges to a third
-        // of the middle: pleasant on its own and impossible to match with a
-        // flat colour beside it, which is what the sidebar is.
-        float vignette = 1.0 - 0.10 * dot(in.local, in.local);
-        float3 space = u.sky * max(vignette, .3);
+        // **Flat, and the vignette is gone rather than reduced.** It was 0.42,
+        // then 0.10, then 0.05, and every one of them was a gradient against a
+        // sidebar that is one flat colour: the seam simply moved to wherever
+        // the fade had got to by the divider. A sky that *is* the window's
+        // ground has nothing to be darker than.
+        float3 space = u.sky;
         float2 grid = uv * float2(138., 86.);
         float2 cell = floor(grid);
         float2 local = fract(grid) - float2(.2 + .6 * galaxyHash(cell + 13.), .2 + .6 * galaxyHash(cell + 31.));

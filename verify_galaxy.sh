@@ -208,6 +208,14 @@ check $? "the people shell is drawn ($people px)"
 [ "$chats" -lt 40 ] 2>/dev/null
 check $? "and the chats shell is empty, because this library has no chats ($chats px)"
 
+# **The sky is the window's own ground.** Two constants, one in Swift for the
+# sidebar and one handed to the GPU, and a shade between them is a seam down
+# the middle of the window rather than depth. Measured off the corner of the
+# render, where nothing is drawn but the sky.
+sky=$(python3 "$ROOT/tools/pngstats.py" "$SHOT" pixel 40 40)
+[ "$sky" = "10 15 29" ]
+check $? "the galaxy's sky is Brand.canvas, byte for byte (got $sky)"
+
 EMPTYSHOT="$DIR/empty.png"
 LISTEN_LIBRARY="$DIR/empty" "$APP_BIN" galaxy --image "$EMPTYSHOT" >/dev/null 2>&1
 emptyBright=$(python3 "$ROOT/tools/pngstats.py" "$EMPTYSHOT" bright)

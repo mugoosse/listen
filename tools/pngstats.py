@@ -95,13 +95,22 @@ if __name__ == '__main__':
             # every hue in this scene belongs to a shell.
             ('sky',        (0.58, 0.62, 0.70)),
         ]
+        # **The sky comes off first.** Stars are blended additively onto it, so
+        # a yellow star over a blue-black ground is a yellow-plus-blue pixel,
+        # and its hue drifts towards the sky as the sky gets lighter. Measured
+        # when the sky moved from RGB(2,4,9) to the window's own RGB(10,15,29):
+        # the people count fell from 63 to 9 with nothing about the stars
+        # changed. A corner pixel is the sky, because nothing is drawn there.
+        sky = (px[0], px[1], px[2])
         def chroma(c):
             total = sum(c) or 1.0
             return tuple(v / total for v in c)
         normed = [(name, chroma(rgb)) for name, rgb in targets]
         counts = {name: 0 for name, _ in targets}
         for i in range(0, len(px), 4):
-            r, g, b = px[i], px[i+1], px[i+2]
+            r = max(0, px[i] - sky[0])
+            g = max(0, px[i+1] - sky[1])
+            b = max(0, px[i+2] - sky[2])
             # Above the sky, and not so grey that the hue is noise.
             if r + g + b < 150 or max(r, g, b) - min(r, g, b) < 25:
                 continue

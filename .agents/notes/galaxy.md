@@ -202,6 +202,27 @@ sky as the sky gets lighter. Moving from RGB(2,4,9) to RGB(10,15,29) dropped
 the measured people count from 63 to 9 with nothing about the stars changed.
 `tools/pngstats.py` subtracts a corner pixel before classifying.
 
+### A window colour is four things, not one
+
+`Brand.canvas` is the app's ground and `w.backgroundColor` carries it to every
+pane that draws none of its own. Three kinds of surface do not inherit it, and
+only one of them was a bug:
+
+- **The titlebar.** A window without `titlebarAppearsTransparent` draws the
+  system's material there whatever its background is, so the release notes
+  opened as a navy page under a grey RGB(33,34,38) strip. Setting it changes no
+  layout without `fullSizeContentView`: the content still starts below the
+  titlebar and only its colour comes from the window. Every window in this app
+  sets it now.
+- **Cards and fields, on purpose.** A text field is `.textBackgroundColor` and
+  the player card and the speaker-review card are `.controlBackgroundColor`,
+  because a control that is the same colour as the page it sits on is not a
+  control. Leave those alone.
+- **Floating panels, also on purpose.** The recording indicator and the
+  dictation pill are `NSVisualEffectView`s over whatever app is in front, not
+  over Listen. A solid Listen-coloured box floating over somebody's editor is a
+  worse thing than a slightly different dark.
+
 ### Every hue belongs to a shell, and everything else is grey
 
 Four shells, four colours, and the two rules that took three passes to find.

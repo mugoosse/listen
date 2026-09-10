@@ -2471,7 +2471,9 @@ final class DetailWithComposer: NSViewController {
         // **Except at full, where there is nothing underneath any more.** See
         // `pageBackground`, which is what the glass gives way to.
         pageBackground.boxType = .custom
-        pageBackground.fillColor = .windowBackgroundColor
+        // The conversation page's own ground, which has to be the window's or
+        // the page reads as a panel laid over it rather than as the screen.
+        pageBackground.fillColor = Brand.canvas
         pageBackground.borderWidth = 0
         pageBackground.cornerRadius = 0
         pageBackground.titlePosition = .noTitle

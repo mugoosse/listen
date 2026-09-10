@@ -651,6 +651,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Adjacent ids land in one band of the sphere without an avalanche mix
 - You are the centre, and that is one star rather than two
 - The sky is the window's ground, and it is flat
+- A window colour is four things, not one
 - Every hue belongs to a shell, and everything else is grey
 - The scene follows the pointer, and one axis shipped the other way
 - Framing a selection is framing its neighbourhood

@@ -68,6 +68,9 @@ final class AboutWindow: NSObject, NSWindowDelegate {
             contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 520),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false)
+        // See `Brand.canvas`: every window in this app takes the same cooler
+        // ground, or the one that does not reads as a different app.
+        w.backgroundColor = Brand.canvas
         // Titled and hidden, rather than titled with an empty string. Nothing
         // should draw: the window says "Listen" in 22 point immediately below
         // the title bar, and two names one line apart read as a mistake rather

@@ -52,6 +52,14 @@ final class ChangelogWindow: NSObject, NSWindowDelegate {
             contentRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.height),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
+        // See `Brand.canvas`: every window in this app takes the same cooler
+        // ground, or the one that does not reads as a different app.
+        w.backgroundColor = Brand.canvas
+        // Transparent so the strip at the top is the window's own ground
+        // rather than the system's material. Without `fullSizeContentView`
+        // this changes no layout: the content still starts below the titlebar,
+        // and only its colour comes from the window. See `Brand.canvas`.
+        w.titlebarAppearsTransparent = true
         w.title = "Release Notes"
         w.isReleasedWhenClosed = false
         w.delegate = self

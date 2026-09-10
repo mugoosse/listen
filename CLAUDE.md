@@ -649,6 +649,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Rank the labels on the position the star is drawn at
 - `turns.json` is a bare array
 - Adjacent ids land in one band of the sphere without an avalanche mix
+- The label pass returns when nothing it depends on has moved
 - Attraction is towards the average neighbour, never the sum of them
 - Repulsion acts across shells, on purpose
 - A failed command buffer used to be a silent return

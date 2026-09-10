@@ -579,14 +579,19 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     /// what keeps that affordable: the stars and lines stay GPU-instanced.
     private func updateLabels() {
         guard let metalView, metalView.bounds.width > 0, metalView.bounds.height > 0 else { return }
-        // **Nothing to do is a return, and it has to be, because adding a
-        // subview is a layout.** These labels have autoresizing frames in an
-        // Auto-Layout superview, so removing and re-adding them marks the pane
-        // as needing layout, which calls `viewDidLayout`, which calls
-        // `invalidate`, which lands back here. Without this the pane rebuilt
-        // two dozen text fields and asked for a frame for ever, on an idle
-        // galaxy with the motion paused and nothing selected, which is exactly
-        // the cost `GalaxyMotionPolicy` exists to prevent.
+        // **Nothing to do is a return.** Rebuilding two dozen text fields is
+        // the one part of this pane that is not on the GPU, and `invalidate`
+        // reaches here from the camera, the selection, a layout and a reload
+        // alike, most of which change nothing a label depends on.
+        //
+        // It also closes a loop that review argued for and measurement has not
+        // shown: these labels have autoresizing frames in an Auto-Layout
+        // superview, so removing and re-adding them could mark the pane as
+        // needing layout, which calls `viewDidLayout`, which calls
+        // `invalidate`, which lands back here. Against that, the prototype's
+        // smoke test measured exactly 0 frames over half a second with the
+        // motion paused, five runs, which a live loop would not allow. So the
+        // saving is the reason and the loop is insurance.
         // The corners the chrome occupies, so a title never lands under the
         // legend or behind the inspector card.
         let reserved = [legend.frame, statusLabel.frame, controls.frame,

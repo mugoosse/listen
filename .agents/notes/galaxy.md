@@ -158,6 +158,30 @@ their last character returns values that differ only in their low bits, so
 taking `z` from those put a whole library into one latitude band. Two
 avalanche-mixed draws per id, one for `z` and one for the angle.
 
+### The label pass returns when nothing it depends on has moved
+
+Rebuilding two dozen `NSTextField`s is the one part of this pane that is not on
+the GPU, and `invalidate` reaches the label pass from the camera, the
+selection, a layout and a reload alike, most of which change nothing a label
+depends on. So it compares its inputs first.
+
+**Which inputs is where the bug was.** Keyed on the camera, the time, the
+selection and the view's size, it skipped the corrective pass after the
+inspector card resized itself: `select` fills the card and asks for a redraw in
+the same turn, so the pass reads the card's frame before Auto Layout has
+resized it, and the layout that follows presents an identical key. With the
+motion paused, under Reduce Motion or in Low Power Mode nothing ever ran it
+again, and the titles stayed underneath. The four rects the pass keeps clear of
+are part of the key now, and `setBottomInset` asks for the redraw it never
+asked for.
+
+A review also argued that the pass could sustain a layout loop, because adding
+an autoresizing subview to an Auto-Layout superview marks it as needing layout,
+which reaches `viewDidLayout` and comes back. **That was not observed**: the
+prototype's smoke test measured exactly 0 frames over half a second with the
+motion paused, five consecutive runs, which a live loop would not allow. The
+guard closes it either way, and the saving above is the reason it is there.
+
 ### Attraction is towards the average neighbour, never the sum of them
 
 Summing the edge force pulls a star with forty edges forty times as hard as one

@@ -649,6 +649,8 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Rank the labels on the position the star is drawn at
 - `turns.json` is a bare array
 - Adjacent ids land in one band of the sphere without an avalanche mix
+- The scene follows the pointer, and one axis shipped the other way
+- Framing a selection is framing its neighbourhood
 - The label pass returns when nothing it depends on has moved
 - Attraction is towards the average neighbour, never the sum of them
 - Repulsion acts across shells, on purpose
@@ -788,7 +790,12 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # which pressed the cross on the card this deleted.
                         # `LISTEN_APP=` points it at a released build (uitest
                         # copy)
-./verify_galaxy.sh      # the galaxy. The first half is `listen galaxy --json`
+./verify_galaxy.sh      # the galaxy. It opens with the geometry compiled out
+                        # of `Galaxy.swift` and `GalaxyRenderer.swift` alone
+                        # (`tools/galaxy_geometry.swift`), which is what
+                        # catches a sign: the orbit shipped inverted on the
+                        # horizontal axis and no count or screenshot could see
+                        # it. Then `listen galaxy --json`
                         # over a scratch library and needs no screen: the four
                         # shells, one centre with no edges, only the three
                         # relationships the library writes down, the same

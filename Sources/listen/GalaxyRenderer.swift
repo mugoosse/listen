@@ -29,11 +29,37 @@ struct GalaxyCamera: Equatable {
         return target + SIMD3<Float>(sin(yaw) * horizontal, sin(pitch) * distance, cos(yaw) * horizontal)
     }
 
-    mutating func orbit(deltaX: Float, deltaY: Float) {
-        yaw += deltaX * 0.008
+    /// How far a drag of one viewport height turns the scene, as a fraction of
+    /// a full turn. Three.js `OrbitControls` at `rotateSpeed` 0.45, which is
+    /// what the reference this was ported from uses.
+    static let rotateSpeed: Float = 0.45
+
+    /// Orbit from a drag, in this view's own coordinates: x to the right, y up.
+    ///
+    /// **The scene follows the pointer on both axes**, which is what every 3D
+    /// viewer does and what the reference does: drag right and the galaxy comes
+    /// with you. That means the *camera* goes the other way, so both terms are
+    /// subtracted, and getting the sign wrong on one axis alone is the failure
+    /// this comment exists for. It shipped that way: yaw was added, so dragging
+    /// right sent the scene left while dragging up brought it up, and one axis
+    /// disagreeing with the other reads as the picture being broken.
+    ///
+    /// Derivation against Three.js, whose `clientY` runs downwards where
+    /// AppKit's runs up. `rotateLeft(+dx)` does `theta -= dx`, and its
+    /// `setFromSphericalCoords` is this `eye`: x = r·sinφ·sinθ, z = r·sinφ·cosθ.
+    /// So a rightward drag lowers theta, the camera moves to −x, and the scene
+    /// appears to move right. `rotateUp(+dy_down)` does `phi -= dy_down`, which
+    /// raises the camera, so a downward drag moves the scene down. Negating
+    /// AppKit's upward y turns the second into the same subtraction.
+    ///
+    /// Per point of viewport height rather than a fixed constant, so a drag
+    /// across the pane is the same turn whatever size the window is.
+    mutating func orbit(deltaX: Float, deltaY: Float, viewportHeight: Float) {
+        let radiansPerPoint = 2 * .pi * Self.rotateSpeed / max(viewportHeight, 1)
+        yaw -= deltaX * radiansPerPoint
         // Stopped short of straight up. At the pole the up vector and the view
         // direction are parallel and `lookAt` produces a matrix full of NaN.
-        pitch = min(max(pitch + deltaY * 0.008, -1.45), 1.45)
+        pitch = min(max(pitch - deltaY * radiansPerPoint, -1.45), 1.45)
     }
     mutating func zoom(delta: Float) {
         distance = min(max(distance * exp(delta * 0.0015), Self.minimumDistance), Self.maximumDistance)
@@ -81,6 +107,26 @@ struct GalaxyCamera: Equatable {
         var next = self
         next.target = position
         next.distance = min(Self.maximumDistance, max(Self.minimumDistance, desired))
+        return next
+    }
+
+    /// Look at one star with everything it links to still in frame.
+    ///
+    /// **A fixed distance was the obvious version and it was wrong.** Flying to
+    /// 14 units from a star on the outer shell put the camera inside a sphere
+    /// of radius 17 looking outwards: the star filled the middle of the screen
+    /// and the things it connects to, which is the entire reason anybody
+    /// clicked it, were off the edges. The neighbours decide the distance now,
+    /// and `nearest` is the floor so a star with one close neighbour, or none
+    /// at all, does not end up pressed against the lens.
+    func focused(on position: SIMD3<Float>, including neighbours: [SIMD3<Float>],
+                 aspect: Float, nearest: Float = 11) -> GalaxyCamera {
+        var next = self
+        next.target = position
+        let reach = neighbours.map { simd_distance($0, position) }.max() ?? 0
+        let halfAngle = atan(tan(Self.halfFieldOfView) * min(max(aspect, 0.1), 1))
+        let wanted = (reach + 1.2) / sin(halfAngle) * 1.06
+        next.distance = min(Self.maximumDistance, max(nearest, wanted))
         return next
     }
 
@@ -235,7 +281,10 @@ final class GalaxyRenderer {
         stars = snapshot.nodes.map { node in
             let lit = selectionID == nil || node.id == selectionID || neighbours.contains(node.id)
             let base = Self.starColor(kind: node.kind)
-            let dimmed = SIMD4<Float>(base.x * 0.28, base.y * 0.28, base.z * 0.28, 0.32)
+            // Dimmed, not extinguished. At 0.28 the rest of the library went
+            // black at the distance a selection flies to, and a star with two
+            // links looked like a star alone in space.
+            let dimmed = SIMD4<Float>(base.x * 0.42, base.y * 0.42, base.z * 0.42, 0.5)
             return GalaxyGPUStar(position: node.position,
                                  radius: Self.starRadius(id: node.id, kind: node.kind,
                                                          selectionID: selectionID, hoverID: hoverID),

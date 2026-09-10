@@ -85,6 +85,24 @@ for i in range(1300):
               open(os.path.join(folder, "metadata.json"), "w"))
 PY
 
+echo "0. the geometry, with no library and no window"
+# Compiled straight out of the app's own sources: `Galaxy.swift` and
+# `GalaxyRenderer.swift` depend on nothing but Foundation, simd and Metal,
+# which is the whole reason `GalaxyLibrary.swift` is a separate file. It buys
+# the one class of bug here that a screenshot cannot show and a count cannot
+# catch, which is a sign: the orbit shipped inverted on the horizontal axis
+# alone, so dragging right sent the scene left while dragging up brought it up.
+GEOM="$DIR/geometry"
+if swiftc -O -parse-as-library "$ROOT/Sources/listen/Galaxy.swift" \
+        "$ROOT/Sources/listen/GalaxyRenderer.swift" \
+        "$ROOT/tools/galaxy_geometry.swift" -o "$GEOM" 2>"$DIR/geom-build.log"; then
+  "$GEOM" | sed 's/^/  /'
+  if [ "${PIPESTATUS[0]}" = "0" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
+else
+  bad "the geometry checks did not compile; see $DIR/geom-build.log"
+fi
+
+echo
 echo "1. the shells, out of a real library read"
 out=$(LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --json 2>/dev/null)
 [ -n "$out" ]

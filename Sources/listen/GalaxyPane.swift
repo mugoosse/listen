@@ -186,7 +186,10 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                 if active { self?.focusFlight = nil }
                 self?.refreshMotionPolicy()
             }
-            metal.onOrbit = { [weak self] x, y in self?.moveCamera { $0.orbit(deltaX: Float(x), deltaY: Float(-y)) } }
+            metal.onOrbit = { [weak self] x, y in
+                guard let height = self?.metalView?.bounds.height else { return }
+                self?.moveCamera { $0.orbit(deltaX: Float(x), deltaY: Float(y), viewportHeight: Float(height)) }
+            }
             metal.onPan = { [weak self] x, y in
                 guard let size = self?.metalView?.bounds else { return }
                 self?.moveCamera { $0.pan(deltaX: Float(x), deltaY: Float(y),
@@ -530,9 +533,25 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         renderer?.update(snapshot: snapshot, selectionID: wanted)
         if let node = wanted.flatMap({ snapshot.node($0) }) {
             let position = GalaxyMotion.position(node.position, kind: node.kind, time: motionTime)
-            // The centre is framed from further out, because flying to within
-            // 14 of it puts the camera inside the people shell.
-            let goal = camera.focused(on: position, distance: node.kind == Galaxy.Node.device ? 48 : 14)
+            let aspect = Float(view.bounds.width / max(view.bounds.height, 1))
+            let goal: GalaxyCamera
+            if node.kind == Galaxy.Node.device {
+                // The centre links to nothing, so there is no neighbourhood to
+                // frame: this is "show me the whole thing" and it is framed as
+                // the opening view is.
+                var whole = camera
+                whole.frameGalaxy(aspect: aspect)
+                goal = whole
+            } else {
+                // Everything this star links to, so the answer to "what is this
+                // connected to" is on screen rather than off the edges.
+                let linked = Set(snapshot.edges.compactMap { edge -> String? in
+                    edge.source == node.id ? edge.target : edge.target == node.id ? edge.source : nil
+                })
+                let positions = snapshot.nodes.filter { linked.contains($0.id) }
+                    .map { GalaxyMotion.position($0.position, kind: $0.kind, time: motionTime) }
+                goal = camera.focused(on: position, including: positions, aspect: aspect)
+            }
             if policy.flights { focusFlight = (camera, goal, 0) } else { camera = goal; focusFlight = nil }
         } else {
             focusFlight = nil
@@ -627,7 +646,25 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                                             y: CGFloat((ndc.y + 1) * 0.5) * metalView.bounds.height),
                              depth: simd_length_squared(position - camera.eye), priority: priority)
         }
-        let ranked = candidates.sorted { $0.priority == $1.priority ? $0.depth < $1.depth : $0.priority > $1.priority }
+        // **A turn each, by shell.** Sorted by depth alone, the whole budget of
+        // 24 went to the outer shell: the near face of the recordings sphere is
+        // always the nearest thing to the camera, so on a real library not one
+        // person was ever named, on a screen whose legend says People. So the
+        // stars the reader asked for go first, and then the four shells take
+        // turns. A person is the most nameable thing here and a recording the
+        // least: it already has a title and a date in the list beside this.
+        let asked = candidates.filter { $0.priority > 0 }
+            .sorted { $0.priority == $1.priority ? $0.depth < $1.depth : $0.priority > $1.priority }
+        var queues: [[Candidate]] = [Galaxy.Node.person, Galaxy.Node.note,
+                                     Galaxy.Node.chat, Galaxy.Node.recording].map { kind in
+            candidates.filter { $0.priority == 0 && $0.node.kind == kind }.sorted { $0.depth < $1.depth }
+        }
+        var ranked = asked
+        while queues.contains(where: { !$0.isEmpty }) {
+            for index in queues.indices where !queues[index].isEmpty {
+                ranked.append(queues[index].removeFirst())
+            }
+        }
         var occupied: [CGRect] = []
         for candidate in ranked {
             if labels.count >= 24 { break }
@@ -802,13 +839,16 @@ final class GalaxyInspector: NSView {
         // the whole list belongs.
         for edge in edges.prefix(4) {
             let other = edge.source == node.id ? edge.target : edge.source
-            let line = NSTextField(labelWithString: "\(edge.label) \(titles[other] ?? other)")
+            let line = NSTextField(labelWithString: "\(edge.phrase(from: node.id)) \(titles[other] ?? other)")
             line.font = .systemFont(ofSize: 11)
             line.textColor = NSColor.white.withAlphaComponent(0.55)
             line.lineBreakMode = .byTruncatingTail
             line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            line.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -28).isActive = true
+            // Added first. A constraint between two views with no common
+            // ancestor yet throws `NSGenericException`, and this one is
+            // reached the first time anybody clicks a star.
             links.addArrangedSubview(line)
+            line.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -28).isActive = true
         }
         if edges.count > 4 {
             let more = NSTextField(labelWithString: "and \(edges.count - 4) more")

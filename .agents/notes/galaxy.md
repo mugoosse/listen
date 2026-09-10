@@ -158,6 +158,43 @@ their last character returns values that differ only in their low bits, so
 taking `z` from those put a whole library into one latitude band. Two
 avalanche-mixed draws per id, one for `z` and one for the angle.
 
+### The scene follows the pointer, and one axis shipped the other way
+
+Drag right and the galaxy comes with you; drag up and it comes up. That is what
+every 3D viewer does and what the reference does, and it means the *camera*
+moves the opposite way on both axes, so both terms in `GalaxyCamera.orbit` are
+subtracted.
+
+The horizontal was added. Dragging right sent the scene left while dragging up
+brought it up, and **one axis disagreeing with the other reads as the picture
+being broken rather than as a minus sign** — which is how it was reported. It
+survived every check in the suite, because a sign is invisible to a count and
+to a screenshot alike.
+
+Two things to know before changing it. The reference is Three.js
+`OrbitControls`, whose `clientY` runs downwards where AppKit's runs up, so its
+two subtractions become one subtraction and one negation-then-subtraction here;
+the derivation is written out above `orbit`. And **a drag is a rotation about
+the target, so the far side of the galaxy moves the opposite way from the near
+side** — a claim about "the scene" is a claim about the near face, and a check
+that picks a marker beyond the target measures the right thing backwards. That
+cost a wrong red the first time this was tested.
+
+The rate is per point of viewport height rather than a fixed constant, at
+Three's `rotateSpeed` of 0.45, so a drag across the pane is the same turn
+whatever size the window is.
+
+### Framing a selection is framing its neighbourhood
+
+A fixed 14 units from the selected star was the obvious version and it put the
+camera *inside* a sphere of radius 17 looking outwards: the star filled the
+middle of the screen and the things it links to, which is the entire reason
+anybody clicked it, were off the edges. The neighbours decide the distance now,
+with a floor so a star that links to nothing is not pressed against the lens.
+The rest of the library dims rather than going out; at the first dimming value
+it went black at that distance, and a recording with two links looked like a
+star alone in space.
+
 ### The label pass returns when nothing it depends on has moved
 
 Rebuilding two dozen `NSTextField`s is the one part of this pane that is not on
@@ -267,6 +304,10 @@ in a second place from the code that sets its uniforms.
   a note. Filters or a contextual highlight are the shape worth trying, and
   neither is designed yet.
 - **No editing.** Every verb is on the page the star opens.
+- **No panning.** The reference disables it too. With the target pinned to the
+  centre the camera is two angles and a distance, which is what makes Reset a
+  guarantee rather than a best effort; a panned target can leave the galaxy off
+  screen with no cue about which way to drag back.
 - **No keyboard navigation of the stars, and no accessible element per star.**
   They are pixels the GPU drew inside one `MTKView`, not views, so there is
   nothing to focus and nothing to read. Building an accessible element per star

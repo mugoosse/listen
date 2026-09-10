@@ -29,7 +29,16 @@ final class RecordingView: NSView {
     private let notesScroll = NSScrollView()
     private let placeholder = NSTextField(labelWithString: "Write notes here\u{2026}")
 
-    private let bar = NSVisualEffectView()
+    /// The strip along the bottom: two lanes, the microphone's name and one line
+    /// about it. Deliberately **not** an `NSVisualEffectView`.
+    ///
+    /// `.headerView` painted it a shade lighter than the page above it, which
+    /// read as a separate panel bolted to the bottom of the meeting rather than
+    /// the foot of the page you are writing on. There is nothing behind this
+    /// view to see through, so the blur bought a tint and nothing else. A plain
+    /// view draws no background at all and the page's own shows through, which
+    /// is the whole point.
+    private let bar = NSView()
     private let dot = NSView()
     private let you = TrackMeter(name: "You", tint: .systemRed)
     private let them = TrackMeter(name: "Them", tint: .systemTeal)
@@ -110,9 +119,6 @@ final class RecordingView: NSView {
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholder)
 
-        bar.material = .headerView
-        bar.blendingMode = .withinWindow
-        bar.state = .active
         bar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bar)
 

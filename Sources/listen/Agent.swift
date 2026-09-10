@@ -2012,6 +2012,19 @@ struct Chat: Codable {
     /// card. A name rather than an id, because a person *is* a name in this
     /// app and there is nothing else to key on.
     var person: String?
+    /// The calendar event this conversation was asked ahead of, when it was
+    /// asked from an upcoming meeting.
+    ///
+    /// The iCal UID, which is what `Metadata.calendar_event_id` holds, and that
+    /// is the whole point of storing it: when the meeting is finally recorded,
+    /// `MeetingCalendar.attach` files the recording under the same id and
+    /// `adopt` hands this conversation to it. Preparation that cannot be found
+    /// afterwards is preparation nobody does twice.
+    var event: String?
+    /// What the invitation was called, so History can name a conversation about
+    /// a meeting that has not happened. There is no recording to take a title
+    /// from, and the event itself may be gone by the time anybody looks.
+    var event_title: String?
 
     static let you = "you", agent = "agent"
 
@@ -2084,6 +2097,38 @@ extension Chat {
             .filter { $0.pathExtension.lowercased() == "json" }
             .compactMap { load(id: $0.deletingPathExtension().lastPathComponent) }
             .sorted { ($0.updated ?? "") > ($1.updated ?? "") }
+    }
+
+    /// The conversations asked ahead of one meeting, by the invitation's id.
+    static func before(_ eventID: String) -> [Chat] {
+        all().filter { $0.event == eventID }
+    }
+
+    /// Hand every conversation asked ahead of this meeting to the recording of
+    /// it.
+    ///
+    /// Called from `MeetingCalendar.attach`, which is the one moment anything
+    /// knows that a folder and an invitation are the same meeting. The
+    /// recording id is appended to `recordings`, so nothing downstream needs a
+    /// second query: the back links on the meeting page, the Chats tab's count
+    /// and `Chat.about` all work exactly as they did.
+    ///
+    /// Idempotent, because `attach` can run twice for one recording (at
+    /// `start`, and again at `stop` for a meeting put in the calendar after it
+    /// began) and because `--refresh` runs it again by hand.
+    ///
+    /// `touch: false`, so adopting does not reorder History. The conversation
+    /// was last spoken to before the meeting, and that is when it was last
+    /// spoken to.
+    @discardableResult
+    static func adopt(eventID: String, into recordingID: String) -> Int {
+        var adopted = 0
+        for var chat in before(eventID) where !chat.sources.contains(recordingID) {
+            chat.recordings = chat.sources + [recordingID]
+            chat.save(touch: false)
+            adopted += 1
+        }
+        return adopted
     }
 
     /// The conversations about one recording, which is its back links.

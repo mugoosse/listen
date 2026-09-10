@@ -521,6 +521,7 @@ enum CLI {
         switch args.first ?? "status" {
         case "status":   calendarStatus()
         case "events":   calendarEvents(rest)
+        case "next":     calendarNext(rest)
         case "match":    calendarMatch(rest)
         case "backfill": calendarBackfill(rest)
         default:
@@ -593,6 +594,124 @@ enum CLI {
             print("  " + line(for: e))
         }
         exit(0)
+    }
+
+    /// `listen calendar next`: the section at the top of the library, and every
+    /// meeting it left out.
+    ///
+    /// The exclusions are the point, and they are the same argument
+    /// `listen calendar match` makes: three rules quietly drop meetings from
+    /// that list, and "why is my 3pm not there?" is otherwise unanswerable
+    /// because nothing is left behind. Each dropped event says which rule
+    /// dropped it.
+    ///
+    /// `--prompt` prints what pressing Prepare would send, which is the seam
+    /// the window and `listen ask` share:
+    ///
+    ///     listen ask "$(listen calendar next --prompt)"
+    private static func calendarNext(_ args: [String]) -> Never {
+        guard MeetingCalendar.isAuthorized else { fail("no calendar access.") }
+        var wantsPrompt = false
+        var limit = 3
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--prompt": wantsPrompt = true
+            case "--limit":
+                i += 1
+                guard i < args.count, let n = Int(args[i]), n > 0 else {
+                    fail("--limit needs a positive number.")
+                }
+                limit = n
+            default: fail("unknown option `\(args[i])`.")
+            }
+            i += 1
+        }
+
+        let listed = MeetingCalendar.upcoming(limit: limit)
+        if wantsPrompt {
+            guard let event = listed.first else {
+                fail("nothing coming up in the next \(Int(MeetingCalendar.horizon / 3600)) hours.")
+            }
+            guard let question = MeetingBrief.starters(for: event).first?.1 else {
+                fail("no prompt for this meeting.")
+            }
+            print(MeetingBrief.invitation(event) + " " + question)
+            exit(0)
+        }
+
+        let now = Date()
+        if listed.isEmpty {
+            log("nothing coming up in the next "
+                + "\(Int(MeetingCalendar.horizon / 3600)) hours.")
+        } else {
+            print("up next:")
+            for event in listed {
+                print("  " + column(EventTime.relative(event.start, now: now)) + event.title
+                    + (event.guestNames.isEmpty ? ""
+                       : "  (" + event.guestNames.joined(separator: ", ") + ")")
+                    + (event.link == nil ? "" : "  [link]"))
+            }
+        }
+
+        // Everything nearby that did not make the list, and which rule dropped
+        // it.
+        //
+        // **Two hours back rather than `lateness`**, which is the window the
+        // list itself uses. A meeting that began twenty minutes ago has just
+        // fallen off, and it is the single most likely thing somebody is
+        // running this command to ask about; reading the same window the list
+        // reads means never seeing it, so the answer to "where is my three
+        // o'clock" was silence. Measured by `verify_upcoming.sh`, which is what
+        // it was written for.
+        let all = MeetingCalendar.events(from: now.addingTimeInterval(-2 * 3600),
+                                         to: now.addingTimeInterval(MeetingCalendar.horizon))
+        let shown = Set(listed.map(\.id))
+        var dropped: [(CalendarEvent, String)] = []
+        for event in all where !shown.contains(event.id) {
+            // Ordered from the most specific rule to the least. An all-day
+            // event "began" at midnight, so asking about lateness first would
+            // file every one of them under the wrong reason.
+            let late = Int(now.timeIntervalSince(event.start) / 60)
+            if event.isAllDay { dropped.append((event, "all-day")) }
+            else if event.declined { dropped.append((event, "you declined")) }
+            else if event.title.isEmpty { dropped.append((event, "no title")) }
+            // No "nobody else invited" here any more, and its absence is the
+            // rule: a block with nobody in it is listed like everything else.
+            // See `MeetingKind`.
+            else if event.start < now.addingTimeInterval(-MeetingCalendar.lateness) {
+                dropped.append((event, "started \(late) minutes ago"))
+            }
+            else { dropped.append((event, "past the cap of \(limit)")) }
+        }
+        guard !dropped.isEmpty else { exit(0) }
+        print("\nnot listed:")
+        for (event, why) in dropped {
+            // **The clock, not "now", for anything already past.**
+            // `EventTime.relative` answers "now" for every start behind the
+            // present, which is right on a row that is only ever up while a
+            // meeting is `lateness` late. This sweep reaches two hours back, so
+            // it printed "now" beside "started 91 minutes ago" and the two
+            // columns contradicted each other. Measured on a real event the
+            // evening this shipped.
+            let when = event.start < now
+                ? EventTime.day(event.start) + " " + EventTime.stamp(event.start)
+                : EventTime.relative(event.start, now: now)
+            print("  " + column(when, width: 20)
+                + (event.title.isEmpty ? "(untitled)" : event.title) + "  [" + why + "]")
+        }
+        exit(0)
+    }
+
+    /// One column, padded rather than formatted.
+    ///
+    /// `String(format: "%-12@")` does not pad an object argument at all on
+    /// macOS: measured on this command's own output, where "in 12 min" and
+    /// "Tomorrow 01:36" both came out followed by a single space. And
+    /// `padding(toLength:)` truncates, which is the trap `.agents/notes/agent.md`
+    /// records against it, so this pads and never cuts.
+    private static func column(_ text: String, width: Int = 15) -> String {
+        text + String(repeating: " ", count: max(1, width - text.count))
     }
 
     /// One line of an event, wherever it is printed.

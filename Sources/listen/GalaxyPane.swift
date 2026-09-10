@@ -146,7 +146,15 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let failureLabel = NSTextField(wrappingLabelWithString: "")
     private let controls = NSStackView()
-    private let motionButton = NSButton()
+    /// Where the camera opens, so "has this been moved" is a comparison rather
+    /// than a flag somebody has to remember to set.
+    ///
+    /// A flag was the obvious version: set it in `moveCamera`, clear it in
+    /// `resetView`. It would be wrong in both directions, because a drag that
+    /// ends where it started has moved nothing, and a flight to a selected star
+    /// moves the camera without anybody dragging. The camera is four numbers;
+    /// comparing them answers exactly the question the button is about.
+    private var home = GalaxyCamera()
     private let inspector = GalaxyInspector()
     private var controlsBottom: NSLayoutConstraint!
     private var inspectorBottom: NSLayoutConstraint!
@@ -232,7 +240,12 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // reader's own orbit and zoom the moment they resized the window.
         if !hasFramedForRealSize, view.bounds.width > 1, view.bounds.height > 1 {
             hasFramedForRealSize = true
-            camera.frameGalaxy(aspect: Float(view.bounds.width / view.bounds.height))
+            // `frameHome`, not `frameGalaxy`: this is the framing the picture
+            // actually opens at, so it is the one Reset has to return to. The
+            // first version framed here and remembered somewhere else, which is
+            // how a Reset button that moves the picture somewhere nobody has
+            // been gets shipped.
+            frameHome()
         }
         updateTitlebarInset()
         invalidate()
@@ -287,7 +300,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             renderer.onError = { [weak self] message in
                 DispatchQueue.main.async { self?.setMotionEnabled(false); self?.showFailure(message) }
             }
-            camera.frameGalaxy()
+            frameHome()
             renderer.update(snapshot: visible, selectionID: nil)
             let metal = GalaxyMetalView(frame: .zero, device: device)
             metal.translatesAutoresizingMaskIntoConstraints = false
@@ -364,15 +377,19 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         controls.orientation = .horizontal
         controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
-        let reset = NSButton(title: "Reset view", target: self, action: #selector(resetView))
-        reset.bezelStyle = .rounded
-        reset.setAccessibilityLabel("Reset view")
-        motionButton.target = self
-        motionButton.action = #selector(toggleMotion)
-        motionButton.bezelStyle = .rounded
-        motionButton.title = "Pause motion"
-        controls.addArrangedSubview(reset)
-        controls.addArrangedSubview(motionButton)
+        // **Nothing is left in this row, and it stays for what it reserves.**
+        //
+        // Both controls moved into the title bar, beside the way out, where the
+        // rest of this window's verbs are: two worded buttons under the picture
+        // read as a caption on it rather than as its controls, and both are
+        // states rather than sentences, so they are glyphs there. See
+        // `LibraryWindow.galaxyControlsItem`.
+        //
+        // The empty stack is not swept away with them: `layoutLabels` reserves
+        // `controls.frame` so no star title is drawn under it, and an empty
+        // view has an empty frame, which is the honest answer now that there is
+        // nothing there. Deleting it would mean editing that list too, and the
+        // next control to land down here would have to put it back.
         view.addSubview(controls)
 
         inspector.translatesAutoresizingMaskIntoConstraints = false
@@ -595,10 +612,14 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         applyMotionPolicy()
     }
 
+    /// Whether the picture is drifting, for the control that says so.
+    var isMotionOn: Bool { policy.enabled }
+    var onMotionChanged: ((Bool) -> Void)?
+
+    func toggleMotion() { setMotionEnabled(!policy.enabled) }
+
     func setMotionEnabled(_ enabled: Bool) {
         policy.enabled = enabled
-        motionButton.title = enabled ? "Pause motion" : "Resume motion"
-        motionButton.setAccessibilityLabel(enabled ? "Pause motion" : "Resume motion")
         applyMotionPolicy()
     }
 
@@ -631,7 +652,10 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // first frame after a pause advances the world by the length of the pause.
         if metalView?.isPaused == continuous { lastFrameTime = nil }
         metalView?.isPaused = !continuous
-        motionButton.title = policy.enabled ? "Pause motion" : "Resume motion"
+        // The picture can stop drifting without anybody pressing anything:
+        // Reduce Motion, Low Power Mode, the window being covered. The control
+        // that reports it lives in the toolbar now, so it is told.
+        onMotionChanged?(policy.enabled)
         if snapped { invalidate() }
     }
 
@@ -650,7 +674,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             flight.elapsed += delta
             camera = flight.start.interpolated(to: flight.goal, progress: Float(flight.elapsed / 0.65))
             focusFlight = flight.elapsed >= 0.65 ? nil : flight
-            if focusFlight == nil { refreshMotionPolicy() }
+            if focusFlight == nil { refreshMotionPolicy(); updateResetButton() }
         }
         // Ten times a second, not thirty: rebuilding two dozen NSTextFields on
         // every frame is the one part of this that is not on the GPU.
@@ -679,6 +703,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         focusFlight = nil
         body(&camera)
         refreshMotionPolicy()
+        // Every drag frame passes through here, and this answers on the edge
+        // alone: see `updateResetButton`.
+        updateResetButton()
         invalidate()
     }
 
@@ -782,6 +809,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             if !policy.flights { focusFlight = nil }
         }
         refreshMotionPolicy()
+        // A flight to a star moves the camera as surely as a drag does, and it
+        // is the move somebody is most likely to want undone.
+        updateResetButton()
         updateInspector()
         invalidate()
     }
@@ -800,16 +830,65 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         inspector.isHidden = false
     }
 
-    @objc private func toggleMotion() { setMotionEnabled(!policy.enabled) }
-
     @objc private func resetView() {
         select(nil)
         hoveredID = nil
         motionTime = 0
-        camera.reset()
-        camera.frameGalaxy(aspect: Float(view.bounds.width / max(view.bounds.height, 1)))
+        frameHome()
         invalidate()
     }
+
+    /// Open on the whole galaxy, and remember that this is where open is.
+    ///
+    /// Both halves in one place, because they are one fact: every path that
+    /// frames the picture is also the path that decides what Reset goes back
+    /// to, and two of them setting only one half is how a Reset button that
+    /// does nothing gets shipped.
+    private func frameHome() {
+        // **Any flight in progress is cancelled first, and Reset is why this
+        // line exists.** `resetView` clears the selection, and clearing starts
+        // a flight back to the centre; setting the camera underneath a running
+        // flight is undone by its very next tick, which interpolates from where
+        // it started towards where it was going. Nothing noticed while the only
+        // evidence was a picture that settled a fraction off; the control that
+        // appears when the camera has moved noticed immediately, because it
+        // came back a moment after being used.
+        focusFlight = nil
+        camera.reset()
+        camera.frameGalaxy(aspect: Float(view.bounds.width / max(view.bounds.height, 1)))
+        home = camera
+        updateResetButton()
+    }
+
+    /// Has the reader moved the camera from where the picture opened?
+    ///
+    /// The tolerances are the smallest movement worth offering to undo: a
+    /// hundredth of a radian is about half a degree of orbit, and a twentieth
+    /// of a unit is far less than one scroll notch of zoom. Below them a
+    /// rounding difference would put a control in the title bar over a picture
+    /// nobody has touched.
+    var canReset: Bool {
+        abs(camera.yaw - home.yaw) > 0.01
+            || abs(camera.pitch - home.pitch) > 0.01
+            || abs(camera.distance - home.distance) > 0.05
+            || simd_length(camera.target - home.target) > 0.05
+    }
+
+    /// Told, rather than polled: the camera moves once per frame of a drag and
+    /// the control it decides is in the toolbar, which is expensive to touch.
+    /// This fires on the edge alone.
+    var onCanResetChanged: ((Bool) -> Void)?
+    private var reportedCanReset = false
+
+    private func updateResetButton() {
+        let now = canReset
+        guard now != reportedCanReset else { return }
+        reportedCanReset = now
+        onCanResetChanged?(now)
+    }
+
+    /// The way back, for the toolbar's control.
+    func resetCamera() { resetView() }
 
     // -----------------------------------------------------------------------
     // Labels

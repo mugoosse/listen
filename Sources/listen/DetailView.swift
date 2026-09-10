@@ -1825,6 +1825,11 @@ private var continuationHeight: NSLayoutConstraint!
     /// never set gets the question without a name rather than a placeholder
     /// standing in for one.
     ///
+    /// True while the home page is drawing its own Start recording button,
+    /// which it does only for a library with no recordings in it yet. Read by
+    /// `LibraryWindow` to decide whether the toolbar needs one as well.
+    private(set) var showsHomeRecordButton = false
+
     /// Rebuild the library home from the newest things of each kind.
     ///
     /// This deliberately is not one mixed activity feed. A first-time user can
@@ -1887,6 +1892,15 @@ private var continuationHeight: NSLayoutConstraint!
         ])
         homeColumn.setCustomSpacing(recordings.isEmpty ? 16 : 30, after: header)
 
+        // **The one screen with a record button of its own, and the toolbar
+        // gives way to it.** A library with nothing in it needs a call to
+        // action rather than a 28 point capsule in the corner, and two controls
+        // that start the same recording on one screen is one too many:
+        // reported, on the empty state. `LibraryWindow.contentShape` reads this
+        // and drops the toolbar's item while it is true, which is the rule the
+        // record button already follows in the other direction on the recording
+        // screen.
+        showsHomeRecordButton = recordings.isEmpty
         if recordings.isEmpty {
             let record = NSButton(title: "Start recording", target: self,
                                   action: #selector(recordFromHome))
@@ -2739,8 +2753,24 @@ private var continuationHeight: NSLayoutConstraint!
             button.translatesAutoresizingMaskIntoConstraints = false
             continuationNotice.addSubview(button)
         }
-        continuationJoin.title = "Join them"
+        // "Merge recordings", not "Join them". Two words about two rows: what
+        // the button does is put one recording into another, and "join" is also
+        // what you do to a meeting, which is the other verb on this very
+        // screen when an invitation has a link.
+        continuationJoin.title = "Merge recordings"
         continuationDismiss.title = "Not now"
+        // **Two buttons in this window said only "Not now", and one of them is
+        // the setup card's.** On screen they are never confusable, because each
+        // sits under the sentence it answers; announced, they were the same two
+        // words twice, and a script pressing by name got whichever came first
+        // in the tree, which is this one and which does nothing at all unless a
+        // join is being offered. `verify_ask_toggle.sh` spent three assertions
+        // on that for several builds.
+        //
+        // The label carries the verb; the title stays the two words that fit
+        // the row. See `SpeakerPill` for the case where a label replacing a
+        // title lost information: here the title is what says nothing.
+        continuationDismiss.setAccessibilityLabel("Not now, keep these two recordings separate")
 
         NSLayoutConstraint.activate([
             continuationLabel.leadingAnchor.constraint(
@@ -3146,6 +3176,11 @@ private var continuationHeight: NSLayoutConstraint!
         // Which recording is on screen *now*, because two things below depend
         // on whether this is a different one or the same one again.
         let previous = self.recording?.id
+        // Cleared here rather than in the branch below, so every path that
+        // leaves the home page takes the claim with it. A stale true would hide
+        // the toolbar's record button on a meeting page, which is the one place
+        // it cannot be missing.
+        if recording != nil { showsHomeRecordButton = false }
         // Stop the player when the selection changes. Leaving one meeting
         // playing while reading another is never what anyone meant.
         stopPlayback()
@@ -6002,6 +6037,12 @@ final class DetailViewController: NSViewController {
         guard isViewLoaded else { return }
         detail.chatsChanged()
     }
+
+    /// See `DetailView.showsHomeRecordButton`. Guarded on the view being
+    /// loaded, because the toolbar is built before the pane is: unguarded, this
+    /// is what builds it, and asking a question about the title bar should not
+    /// construct the content pane.
+    var showsHomeRecordButton: Bool { isViewLoaded && detail.showsHomeRecordButton }
 
     var isFinding: Bool { detail.isFinding }
     func openFind() { detail.openFind() }

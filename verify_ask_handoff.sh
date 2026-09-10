@@ -133,6 +133,13 @@ FIXTURE
 
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1
 defaults write com.mgo.listen-uitest onboarded -bool true
+  # **Detection off, or the copy records the room in the middle of the test.**
+  # Meeting detection is on by default and a copy inherits it, so a call
+  # anywhere on this Mac puts the window on the recording screen with "Are you
+  # in a meeting?" over it. Measured: it is what made three assertions in
+  # `verify_ask_states.sh` fail for several builds against an app that was
+  # working, and a run that does this captures the microphone unasked.
+  defaults write com.mgo.listen-uitest autoDetectMeetings -bool false
 defaults write com.mgo.listen-uitest askEnabled -bool true
 defaults write com.mgo.listen-uitest agentPath_claude -string "$DIR/bin/claude"
 defaults write com.mgo.listen-uitest agentPath_codex -string "/nonexistent/codex"
@@ -191,8 +198,13 @@ check $? "and so is the record capsule"
 # width and pressing Back.
 ! echo "$dump" | grep -q "Your name"
 check $? "and it is the library, not Settings > General"
-echo "$dump" | grep -q "Select something from the list"
-check $? "which is the home page, with its own sentence back"
+# **The greeting, because the sentence this used to look for is gone.** The
+# home page said "Select something from the list." when it was a holding
+# screen; it is a page in its own right now, with a greeting, the newest of
+# each kind and a composer, and nothing says that sentence anywhere. The
+# assertion was reading an app that had been right for months.
+echo "$dump" | grep -q "What.s cooking"
+check $? "which is the home page, with its greeting back"
 
 echo "3. asking again takes the page again"
 "$PROBE" focus $APP "Ask about" >/dev/null 2>&1

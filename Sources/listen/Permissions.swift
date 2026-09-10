@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import CoreAudio
 import EventKit
+import ListenKit
 
 /// The permissions Listen needs, and how to ask for them.
 ///

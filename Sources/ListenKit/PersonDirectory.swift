@@ -177,4 +177,32 @@ public enum PersonDirectory {
         if let date = fractional.date(from: value) { return date }
         return ISO8601DateFormatter().date(from: value)
     }
+
+/// them for real speakers.
+    public static func suggestedName(from email: String) -> String? {
+        let address = PersonDirectory.normalize(email)
+        guard let at = address.firstIndex(of: "@") else { return nil }
+        // Everything from a plus is a tag the sender chose, not part of who
+        // they are: `emily+lists@` is still Emily.
+        var local = String(address[address.startIndex..<at])
+        if let plus = local.firstIndex(of: "+") { local = String(local[local.startIndex..<plus]) }
+        guard !roleAddresses.contains(local) else { return nil }
+
+        let words = local
+            .split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" })
+            // A run of digits is a disambiguator somebody's mail provider added,
+            // never a name.
+            .filter { !$0.allSatisfy(\.isNumber) }
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+
+        let name = words.joined(separator: " ")
+        return name.isEmpty ? nil : name
+    }
+
+    /// Addresses that are a function rather than a person.
+    private static let roleAddresses: Set<String> = [
+        "noreply", "no-reply", "donotreply", "do-not-reply", "info", "hello",
+        "support", "admin", "team", "contact", "sales", "billing", "help",
+        "notifications", "updates", "invites", "calendar", "meetings",
+    ]
 }

@@ -116,6 +116,18 @@ public struct Metadata: Codable, Sendable, Equatable {
     /// literals, one value, and the comment on each names the other.
     public static let deviceTitleSource = "device"
 
+    /// And the value for a title taken from a calendar invitation.
+    ///
+    /// **The same string is `Metadata.TitleSource.calendar` on the Mac**, where
+    /// it sits at the top of the ladder: a calendar title replaces one derived
+    /// from the speakers and is never replaced by one. The phone writes it when
+    /// a recording was started from an upcoming meeting and nobody typed over
+    /// the name, which is the one case where this device knows as much about
+    /// the title as the Mac would.
+    ///
+    /// Two literals, one value, and the comment on each names the other.
+    public static let calendarTitleSource = "calendar"
+
     /// - Parameter titled: whether a person typed `title`. `false` stamps
     ///   `title_source`, which is what lets the Mac name the recording after
     ///   its speakers once it has some. Passing the wrong answer here freezes

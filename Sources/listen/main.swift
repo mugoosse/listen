@@ -1,4 +1,13 @@
 import AppKit
+import ListenKit
+
+// The contact book is this app's and the calendar is shared, so the two are
+// joined here, once, before either the CLI or the window reads an event. See
+// `MeetingCalendar.knownName`: without it a guest whose invitation carries only
+// an address is named after the address rather than after whoever the user has
+// said that address is, which is a name that has been correct everywhere else
+// for days.
+MeetingCalendar.knownName = { ContactBook.name(for: $0) }
 
 // The CLI and the app are the same binary. Argument dispatch happens before
 // anything AppKit-shaped is created, so `listen transcribe` needs no

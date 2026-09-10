@@ -75,6 +75,13 @@ settle() { sleep 2; }
 configure() {  # configure <claude-path> <codex-path>
   defaults delete com.mgo.listen-uitest >/dev/null 2>&1
   defaults write com.mgo.listen-uitest onboarded -bool true
+  # **Detection off, or the copy records the room in the middle of the test.**
+  # Meeting detection is on by default and a copy inherits it, so a call
+  # anywhere on this Mac puts the window on the recording screen with "Are you
+  # in a meeting?" over it. Measured: it is what made three assertions in
+  # `verify_ask_states.sh` fail for several builds against an app that was
+  # working, and a run that does this captures the microphone unasked.
+  defaults write com.mgo.listen-uitest autoDetectMeetings -bool false
   # Ask is off until somebody turns it on, and every state below is a state of
   # a surface that does not exist until then. See `Settings.askEnabled` and
   # `verify_ask_toggle.sh`, which is the script that checks the switch itself.
@@ -125,8 +132,12 @@ check $? "and stored no backend choice"
 
 echo "2. the settings row for a signed-out CLI says sign in, not install"
 "$PROBE" press $APP "Settings" >/dev/null 2>&1; sleep 1
-# The second "Ask" row: the first is the section heading with the same word.
-"$PROBE" selectrow $APP "Ask" 2 >/dev/null 2>&1; sleep 3
+# **The only "Ask" row, and it used to be the second.** The section heading
+# above it carried the same word when this was written; it is called "AI" now,
+# so asking for the second match found nothing and the three assertions below
+# read a library window that had never left the home page. The pane was fine
+# throughout.
+"$PROBE" selectrow $APP "Ask" >/dev/null 2>&1; sleep 3
 dump=$("$PROBE" texts $APP 2>&1)
 echo "$dump" | grep -q "Installed. Run "
 check $? "the claude row leads with Installed"

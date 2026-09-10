@@ -223,10 +223,11 @@ Who said what, and how a human corrects it. `People`, `TranscriptEditor`,
 - A renamed speaker can leave their voice behind, and nothing said so
 - `Me` was excluded from the orphan search, and a swap has no orphan at all
 
-### `.agents/notes/calendar.md` (15k)
+### `.agents/notes/calendar.md` (33k)
 
-How a recording gets a name and a guest list. `MeetingCalendar`,
-`CalendarEvent`, `ContactBook`, `MeetingLink`.
+How a recording gets a name and a guest list, and what is about to happen.
+`MeetingCalendar`, `CalendarEvent`, `ContactBook`, `MeetingLink`,
+`UpcomingPane`, `MeetingBrief`.
 
 - The calendar needs no account, because macOS already has one
 - Ten minutes, and the measurement that fixed it there
@@ -241,6 +242,20 @@ How a recording gets a name and a guest list. `MeetingCalendar`,
 - Optional fields do not need a hand-written `init(from:)`
 - Onboarding has to ask, because nothing else will
 - `listen calendar` exists because matching leaves nothing behind
+- The list is a timeline, and the section above it is the end that is still ahead
+- One filter, a vocabulary, and a cap: `MeetingKind` replaced the guest test
+- The phone lists the same meetings, and the contact book is a function
+- Twelve hours forward and fifteen minutes back, and why neither is "today"
+- Faces rather than a comma list, and they are at the trailing edge
+- The meeting being recorded must not be in both halves of the list
+- A calendar list is the first thing here that goes stale on its own
+- The agent has no calendar, so the invitation travels in the question
+- The agenda is one or two lines followed by twelve of dial-in
+- Prepare is a button, because a chip that waits for the caret is not enough
+- Preparation that cannot be found afterwards is preparation nobody does twice
+- `LISTEN_FAKE_EVENTS`, because nobody will hold a meeting to test a list
+- `listen calendar next` reads two hours back, and the list reads fifteen minutes
+- A store kept for hours answers from the cache the notification invalidated
 
 ### `.agents/notes/titles.md` (16k)
 
@@ -302,7 +317,7 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 - The tags are text in the note row, and pills everywhere else
 - An agent may tag the user's own note, and still may not rewrite it
 
-### `.agents/notes/window.md` (141k)
+### `.agents/notes/window.md` (159k)
 
 Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 `NotePane`, `WaveformView`, the settings mode.
@@ -381,6 +396,8 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - Every page has a cross, and on a conversation it is not Back
 - The gap under the tab bar belongs to the column, not to the first line in it
 - The continuation offer is a row on the later half, not a menu item
+- One record control per screen, and the empty home page has its own
+- Two buttons said only "Not now", and a script pressed the wrong one
 
 ### `.agents/notes/appkit.md` (35k)
 
@@ -638,6 +655,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - History is the card's title menu, from the bar that has no title (superseded)
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
+- The fourth subject is a meeting that has not happened (see `calendar.md`)
 
 ### `.agents/notes/galaxy.md`
 
@@ -678,6 +696,9 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - `mouseUp` must compare against where the press started
 - The sidebar stays live, so a row picked there has to leave the mode
 - The shader is compiled from source, not added to the build
+- The two controls are in the title bar, and one of them is not always there
+- Reset is absent until there is something to undo, and it is a comparison
+- Reset was undone by the flight it started
 - What is deliberately not here: no inferred edges, no importance in the radius, no accessible element per star
 
 ### `.agents/notes/person-context.md`
@@ -857,6 +878,15 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # of the transcript (that last one is read from the
                         # `LISTEN_DEBUG` trace, because where a page scrolled to
                         # is invisible to the AX tree)
+./verify_upcoming.sh    # what is coming up: which meetings are listed and
+                        # which are dropped by which rule, the twelve hour
+                        # horizon and the fifteen minute lateness, what the
+                        # agent is told about a meeting that has not happened,
+                        # and a conversation asked beforehand being adopted by
+                        # the recording of it. Runs off `LISTEN_FAKE_EVENTS`,
+                        # whose starts are minutes from now, so it needs no
+                        # calendar and no invitation. `--ui` adds the section,
+                        # the page and the Actions menu (uitest copy)
 ./verify_capture.sh     # the microphone track in the states that have lost
                         # it: the three-channel state a call leaves the
                         # built-in microphone in (reproduced with tools/vpio,
@@ -880,15 +910,24 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
 ```
 
 The AX-driven ones share `tools/axprobe.swift`, compiled on demand into
-`.xcbuild/tools/axprobe`: texts, press, showmenu, focus, settext, selectrow, frame,
-hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
+`.xcbuild/tools/axprobe`: texts, press, showmenu, activate, focus, settext, selectrow,
+frame, hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
 **`showmenu` is not a nicety.** The toolbar's ellipsis is an
 `NSMenuToolbarItem` and the recording screen's two pull-downs are
 `NSPopUpButton`s, and none of them opens on `AXPress`: the call returns
 success, nothing happens, and the items read as missing from the tree
 afterwards, which is indistinguishable from a menu that was never built. A
 menu's items are in the tree **only while it is open**, so the order is always
-showmenu, read, press. **`frame` answers where.** A `texts` dump reads every
+showmenu, read, press.
+**`activate` before `showmenu`, every time.** `AXShowMenu` on a toolbar item in
+a window that is not key also succeeds and does nothing, and a script that has
+launched and killed a few apps has focus wherever the last one left it: this
+reads exactly like a wait that is too short, and it is not, because the same
+command by hand works every time. Retrying the command is worse than useless,
+since `AXShowMenu` on an open menu closes it: activate, open once, then poll
+the tree, which is the only one of the three that is safe to repeat. One run in
+three failed on `verify_upcoming.sh` before this, at one, two and three second
+waits alike. **`frame` answers where.** A `texts` dump reads every
 string on a window and can say nothing about what landed on top of what, so a
 control sitting under the traffic lights passes every assertion in it; `frame`
 prints an element's screen rect, and the galaxy's legend moving out from under

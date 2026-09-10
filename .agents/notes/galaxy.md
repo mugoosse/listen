@@ -599,3 +599,53 @@ in a second place from the code that sets its uniforms.
   background queue and coalesces requests: the window reloads on activation, on
   a recording arriving and on the queue advancing, and three passes for one
   visible change is three passes nobody asked for.
+
+## The two controls are in the title bar, and one of them is not always there
+
+They were worded buttons at the foot of the picture, "Reset view" and "Pause
+motion", and the pair read as a caption on the galaxy rather than as its
+controls. They are toolbar items now, beside the way out, where every other verb
+in this window is, and they are glyphs because both are states rather than
+sentences: a pause bar while it drifts and a triangle while it is still, which
+is the player's grammar on a meeting page.
+
+**Two items, not one item holding two buttons**, which is what this was first
+and the difference is the whole look of it. macOS draws adjacent toolbar items
+as one glass group with its own spacing, which is what makes the ellipsis, the
+globe and the cross on a meeting page read as a set; a custom view holding two
+buttons is *one* item, so it got one item's worth of glass and whatever spacing
+was invented inside it, next to a group that had the system's.
+
+The cost is that Reset comes and goes, and a toolbar cannot hide an item in
+place: it is in the list or it is not, so the list is rebuilt. That is affordable
+because the pane reports the **edge** rather than the camera:
+`GalaxyPane.onCanResetChanged` fires when the answer changes, which is once per
+gesture, and never on the thirty times a second a drag moves the camera.
+
+### Reset is absent until there is something to undo
+
+`canReset` compares the camera with `home`, which is the framing the picture
+opened at. A flag was the obvious version, set in `moveCamera` and cleared in
+`resetView`, and it is wrong in both directions: a drag that ends where it
+started has moved nothing, and a flight to a selected star moves the camera with
+nobody dragging. The camera is four numbers, and comparing them answers exactly
+the question the control is about.
+
+The tolerances are the smallest movement worth offering to undo: 0.01 radians is
+about half a degree of orbit, and 0.05 units is far less than one scroll notch.
+Below them a rounding difference would put a control in the title bar over a
+picture nobody has touched.
+
+`frameHome` is the one place that frames *and* remembers, because they are one
+fact. Both callers used to do only the first, which is how a Reset that goes
+somewhere nobody has been gets shipped.
+
+### Reset was undone by the flight it started
+
+`resetView` clears the selection, and clearing starts a flight back to the
+centre. Setting the camera underneath a running flight is undone by its next
+tick, which interpolates from where it started towards where it was going, so
+the picture settled a fraction off home. Nothing noticed while the only evidence
+was a slightly wrong camera; the control that appears when the camera has moved
+noticed immediately, because it came back a moment after being used.
+`frameHome` cancels the flight first.

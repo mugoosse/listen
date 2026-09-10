@@ -255,6 +255,12 @@ final class AskView: NSView {
     /// alternatives: a question is about a meeting, about somebody, or about
     /// the library, and never about two of those at once.
     private var person: String?
+    /// Set instead of both when the page is a meeting that has not happened.
+    ///
+    /// The fourth subject, and the only one with nothing on disk behind it.
+    /// Everything the agent can be told about it travels in the question: see
+    /// `MeetingBrief.invitation`, and `start` for where it is prefixed.
+    private var event: CalendarEvent?
     private var chat = Chat()
     /// The conversation on screen, when it has been saved and so has an id.
     /// The galaxy's globe carries it: a chat star is keyed on this.
@@ -906,8 +912,14 @@ final class AskView: NSView {
     /// screen. "Ask about this meeting" over an empty library is a promise about
     /// a meeting that is not open, and it was the placeholder on every screen
     /// the moment the composer moved to the window.
-    static func prompt(for recording: Recording?, person: String? = nil) -> String {
+    static func prompt(for recording: Recording?, person: String? = nil,
+                       event: CalendarEvent? = nil) -> String {
         if let person { return "Ask about \(person)…" }
+        // "Prepare for", not "Ask about". The field is under a page for a
+        // meeting that has not happened, and "ask about this meeting" over an
+        // invitation promises an answer out of a transcript that does not
+        // exist, which is the same promise `start` spends a clause undoing.
+        if event != nil { return "Prepare for this meeting…" }
         return recording == nil ? "Ask about your library…" : "Ask about this meeting…"
     }
 
@@ -918,13 +930,15 @@ final class AskView: NSView {
     /// left that can say it *before* somebody finds out by pressing it.
     static let waitingPrompt = "Ask a follow-up. It goes when this answer finishes…"
 
-    private func placeholder(for recording: Recording?, person: String? = nil) -> String {
-        isRunning ? Self.waitingPrompt : Self.prompt(for: recording, person: person)
+    private func placeholder(for recording: Recording?, person: String? = nil,
+                             event: CalendarEvent? = nil) -> String {
+        isRunning ? Self.waitingPrompt
+            : Self.prompt(for: recording, person: person, event: event)
     }
 
     /// The same, for the places that already know what the pane is about.
     private func refreshPlaceholder() {
-        field.placeholderString = placeholder(for: recording, person: person)
+        field.placeholderString = placeholder(for: recording, person: person, event: event)
     }
 
     func show(_ recording: Recording?) {
@@ -932,6 +946,7 @@ final class AskView: NSView {
         if pinned {
             self.recording = recording
             person = nil
+            event = nil
             field.placeholderString = placeholder(for: recording)
             updateStatus()
             return
@@ -946,6 +961,7 @@ final class AskView: NSView {
         stop()
         self.recording = recording
         person = nil
+        event = nil
         // **Always a fresh conversation, and resuming is History's job.**
         //
         // This used to load the newest conversation in whatever context you had
@@ -974,6 +990,7 @@ final class AskView: NSView {
         if pinned {
             recording = nil
             person = name
+            event = nil
             field.placeholderString = placeholder(for: nil, person: name)
             updateStatus()
             return
@@ -982,6 +999,7 @@ final class AskView: NSView {
         loaded = true
         recording = nil
         person = name
+        event = nil
         field.placeholderString = placeholder(for: nil, person: name)
         // Fresh, for the reason `show(_:)` records. Their conversations are in
         // History like everybody else's.
@@ -989,6 +1007,51 @@ final class AskView: NSView {
         historyLimit = 40
         redraw()
     }
+
+    /// A meeting that has not happened is a context like any other, and it is
+    /// the only one with no folder behind it.
+    ///
+    /// The guard is on the event's id rather than on identity, so the minute
+    /// tick that rebuilds the row does not throw away a question half typed
+    /// underneath it.
+    func show(event: CalendarEvent) {
+        guard event.id != self.event?.id else { return }
+        if pinned {
+            recording = nil
+            person = nil
+            self.event = event
+            field.placeholderString = placeholder(for: nil, event: event)
+            updateStatus()
+            return
+        }
+        stop()
+        loaded = true
+        recording = nil
+        person = nil
+        self.event = event
+        field.placeholderString = placeholder(for: nil, event: event)
+        // Fresh, for the reason `show(_:)` records. Anything asked ahead of
+        // this meeting before is in History, and once it is recorded
+        // `Chat.adopt` puts it on the meeting's own page.
+        chat = Chat()
+        historyLimit = 40
+        redraw()
+    }
+
+    /// Ask something from outside the field.
+    ///
+    /// The Prepare button on an upcoming meeting's page, which is the one
+    /// screen whose whole reason to exist is the question: see
+    /// `UpcomingPane.render` for why a chip that waits for the caret is not
+    /// enough there. It runs the same path a chip does, guards included, so a
+    /// press with no agent configured puts the setup card up rather than
+    /// silently doing nothing.
+    ///
+    /// Named `question:` rather than overloading `send`, which is the field's
+    /// own `@objc` action: two of those makes `#selector(send)` ambiguous, and
+    /// the compiler says so at the line that builds the composer.
+    @discardableResult
+    func ask(question prompt: String) -> Bool { ask(prompt) }
 
     /// Open a conversation from the history, whatever it is about.
     ///
@@ -1003,6 +1066,12 @@ final class AskView: NSView {
         historyLimit = 40
         recording = chat.sources.first.flatMap { Recording.find($0) }
         person = chat.person
+        // Not restored, and it cannot be: the invitation may have been edited,
+        // deleted or simply be in the past by now, and `chat.event` is an id
+        // rather than a copy. `persist` only ever fills the field in when it is
+        // empty, so a follow-up on a resumed preparation keeps the meeting it
+        // was asked ahead of.
+        event = nil
         field.placeholderString = placeholder(for: recording, person: person)
         loaded = true
         // Picked out on purpose, so it deserves to survive whatever selection
@@ -1253,7 +1322,12 @@ final class AskView: NSView {
         // them. The chips are redrawn on every context change, so this runs
         // when the context does: `show(person:)` ends in `redraw`.
         var offered: [(String, String)]
-        if let person {
+        if let event {
+            // Before the recording case, and they cannot both be set: an
+            // invitation and a folder are alternatives, and `show(event:)`
+            // clears the other two the way each of them clears the rest.
+            offered = MeetingBrief.starters(for: event)
+        } else if let person {
             offered = Array(Self.personStarters(for: person).prefix(3))
         } else if let recording {
             offered = Self.starters
@@ -1791,7 +1865,16 @@ final class AskView: NSView {
         // thing we said last week" is a reasonable follow-up and a hard filter
         // would make it unanswerable.
         var scoped = text
-        if opening, let recording {
+        if opening, let event {
+            // **The invitation, and the fact that it has not happened.** The
+            // agent has no calendar tool: an event it is not told about does
+            // not exist. Without the second half the first move is a search for
+            // a transcript of this meeting, which cannot be there, and the
+            // honest report of that search is "I cannot find this meeting".
+            scoped = MeetingBrief.invitation(event)
+                + " Answer from what my library already holds about the people "
+                + "invited, and say plainly when it holds nothing. " + text
+        } else if opening, let recording {
             scoped = "About the recording `\(recording.id)` (\(recording.metadata.title)): \(text)"
         } else if opening, let person {
             // Named, not filtered, for the reason above. The instruction points
@@ -2015,6 +2098,14 @@ final class AskView: NSView {
             chat.recordings = chat.sources + [id]
         }
         if chat.person == nil { chat.person = person }
+        // The invitation this was asked ahead of, so `MeetingCalendar.attach`
+        // can hand the conversation to the recording when the meeting finally
+        // happens. Written once, like the person above: a follow-up asked after
+        // the page has moved on is still part of the same preparation.
+        if chat.event == nil, let event {
+            chat.event = event.id
+            chat.event_title = event.title
+        }
         chat.save()
         // The list of conversations is a table in the sidebar now, not a menu
         // built each time it is opened, so it has to be told. Every write comes
@@ -2586,6 +2677,9 @@ private final class SetupNotice: NSView {
         settings.action = #selector(openSettings)
         dismiss.target = self
         dismiss.action = #selector(notNow)
+        // What "not now" is declining, because the two words on their own are
+        // the same two words the join offer uses. See the note there.
+        dismiss.setAccessibilityLabel("Not now, put Ask away")
 
         let buttons = NSStackView(views: [settings, dismiss])
         buttons.orientation = .horizontal

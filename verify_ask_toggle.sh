@@ -51,6 +51,20 @@ field() {
     '{ for (i = 1; i <= NF; i++) if ($i == want) f = 1 } END { exit f ? 0 : 1 }'
 }
 
+# Is there a way to start a recording on screen?
+#
+# **Two controls answer this, and which one depends on the library.** The
+# toolbar carries the Record capsule, except on the home page of a library with
+# nothing in it: that page draws its own "Start recording" button and the
+# toolbar gives way to it, because two controls for one verb on one screen is
+# one too many. These scratch libraries are always empty, so this file was
+# asserting the toolbar's presence on the one screen that does not have it.
+# What it means to test is that turning Ask off does not take recording away,
+# and that is true of whichever control is up.
+record_control() {
+  field "$1" "Record" || grep -q "Start recording" <<<"$1"
+}
+
 rm -rf "$DIR"; mkdir -p "$DIR/library"
 cp -R "$ROOT/Listen.app" "$COPY"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.mgo.listen-uitest" \
@@ -72,6 +86,13 @@ launch() {
 base() {
   defaults delete com.mgo.listen-uitest >/dev/null 2>&1
   defaults write com.mgo.listen-uitest onboarded -bool true
+  # **Detection off, or the copy records the room in the middle of the test.**
+  # Meeting detection is on by default and a copy inherits it, so a call
+  # anywhere on this Mac puts the window on the recording screen with "Are you
+  # in a meeting?" over it. Measured: it is what made three assertions in
+  # `verify_ask_states.sh` fail for several builds against an app that was
+  # working, and a run that does this captures the microphone unasked.
+  defaults write com.mgo.listen-uitest autoDetectMeetings -bool false
   defaults write com.mgo.listen-uitest agentPath_claude -string "/nonexistent/claude"
   defaults write com.mgo.listen-uitest agentPath_codex -string "/nonexistent/codex"
   defaults write com.mgo.listen-uitest agentProviders -data 5b5d
@@ -84,7 +105,7 @@ dump=$("$PROBE" texts $APP 2>&1)
 case $? in 3) echo "  SKIP: no Accessibility permission" >&2; exit 2;; esac
 # The empty tree a sleeping display gives back would pass every negative
 # assertion below, so the window has to prove it is there first.
-field "$dump" "Record"
+record_control "$dump"
 check $? "the window is up and readable (guard against an empty AX tree)"
 ! field "$dump" "Ask"
 check $? "no composer: its send button is not in the window"
@@ -118,11 +139,16 @@ check $? "the card says what its way out does"
 # setting it up ever sees, so the way out has to be on it rather than back in
 # Settings. Pressing it turns the whole surface off, which is the same
 # assertion as case 1 taken from the other direction.
-"$PROBE" press $APP "Not now" >/dev/null 2>&1
+# **By what it declines, not by its two words.** The join offer on a meeting
+# page has a "Not now" too, it is earlier in the tree, and it does nothing at
+# all when no join is being offered: pressing by name got that one, and the
+# three assertions below failed for several builds against an app that was
+# working. Both buttons say what they decline to accessibility now.
+"$PROBE" press $APP "put Ask away" >/dev/null 2>&1
 check $? "Not now is pressable"
 sleep 2
 dump=$("$PROBE" texts $APP 2>&1)
-field "$dump" "Record"
+record_control "$dump"
 check $? "the window is still there afterwards"
 ! echo "$dump" | grep -q "Pick what answers your questions"
 check $? "the card is gone"
@@ -136,8 +162,8 @@ echo "3. recording and transcribing never mention it either way"
 base
 launch
 dump=$("$PROBE" texts $APP 2>&1)
-field "$dump" "Record"
-check $? "the record button is on the toolbar with Ask off"
+record_control "$dump"
+check $? "there is a way to record with Ask off"
 stop
 
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1

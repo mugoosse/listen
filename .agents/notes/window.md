@@ -2709,7 +2709,80 @@ hide.
 finish the job itself: `onJoined` hands the surviving id to the window, which
 reloads the sidebar and opens it. Without that the window sits on a folder that
 is now in the trash. Verified by pressing the button through
-`tools/axprobe press <pid> "Join them"` against a scratch library: the row
+`tools/axprobe press <pid> "Merge recordings"` against a scratch library: the row
 reads back as `AXStaticText` with the two `AXButton`s beside it, and twelve
 seconds later the sidebar holds one recording at `14:15 · 21:16` with the
 player showing `00:00 / 21:17`.
+
+## One record control per screen, and the empty home page has its own
+
+The toolbar's Record capsule is in every library-mode item list. The home page
+of a library with **no recordings in it** draws its own "Start recording"
+button, because a first run needs a call to action rather than a 28 point
+capsule in the corner, and for as long as both existed that one screen offered
+two controls for one verb. Reported from a screenshot of the empty state.
+
+`DetailView.showsHomeRecordButton` says which case the home is in, and
+`LibraryWindow.showsOwnRecordButton` adds the two conditions the window knows:
+this has to be the home page, and capture must not be running. The second one
+matters more than it looks. The toolbar item is the **Stop** control while a
+recording runs, and Stop is the one thing in this window that must never be
+somewhere else, so it is never the control that gives way.
+
+It is a third bit on `ContentShape`, not a question asked at build time. The
+button appears and disappears exactly once in a library's life, on the first
+recording somebody makes, and that moment has to rebuild the toolbar;
+`detail.onShowingChanged` is the callback that reports it, which is why
+`syncToolbarWithHome` was added there beside `updateRecordFAB`.
+
+The flexible space in front of the item stays whichever way this goes. It is
+what holds the items after it against the right edge, and removing the pair
+left the galaxy and the gear in the middle of the title bar.
+
+`updateRecordFAB` still says the control "is never hidden any more", and that
+sentence is about the two rules that went with the floating button (a mode
+other than the library, and the Ask pane's own control in the same corner).
+This is a third rule with a different reason, and it hides the *item* rather
+than the button.
+
+**Two verify scripts asserted the toolbar's capsule as a proxy for "you can
+still record".** Every scratch library is empty, so they were testing the one
+screen that does not have it: `verify_ask_toggle.sh` now asks
+`record_control`, which accepts either control, because the claim it is making
+is about Ask being off and not about which button is up.
+
+## Two buttons said only "Not now", and a script pressed the wrong one
+
+The setup card's dismissal and the join offer's both had the title "Not now",
+and nothing else. On screen they are never confusable, because each sits under
+the sentence it answers; announced, they were the same two words twice, and
+anything pressing by name got whichever came first in the tree. That is the join
+offer's, and with no join being offered it does nothing at all.
+
+`verify_ask_toggle.sh` spent three assertions on that for several builds, all
+failing against an app that was working, and it reproduced on the released build
+too, which is what made it look environmental. Both buttons carry an
+accessibility label saying what they decline now: "Not now, put Ask away" and
+"Not now, keep these two recordings separate". The titles stay the two words
+that fit the row.
+
+**Three more assertions in that family were stale rather than wrong**, and each
+was reading an app that had changed underneath the test:
+
+- `verify_ask_states.sh` selected "the second Ask row, because the first is the
+  section heading with the same word". The heading is called **AI** now, so
+  there is one Ask row and the second match was nothing at all: the three
+  assertions after it were reading a library window that had never left the
+  home page.
+- `verify_ask_handoff.sh` looked for "Select something from the list." after
+  Back. The home page said that when it was a holding screen; it is a page in
+  its own right now, with a greeting, the newest of each kind and a composer.
+- `verify_ask_toggle.sh` used the toolbar's record capsule as proof the window
+  was up. That capsule is absent on the home page of a library with nothing in
+  it, which is every scratch library, once the home page gained its own record
+  button.
+
+The shape of all four is the same: an assertion pinned to a string or a position
+rather than to the claim it was making, on a screen that was later redesigned.
+A negative assertion is the dangerous half, because it passes on a window that
+never opened.

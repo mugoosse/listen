@@ -596,6 +596,14 @@ final class MeetingsPane: Pane {
         heading("Calendar")
         checkbox("Name a recording after the meeting it lines up with",
                  Settings.nameFromCalendar) { Settings.nameFromCalendar = $0 }
+        checkbox("Show what is coming up at the top of the library",
+                 Settings.upcomingInSidebar) {
+            Settings.upcomingInSidebar = $0
+            LibraryWindow.shared.reload()
+        }
+        note("The next few meetings with somebody else invited, twelve hours ahead, three "
+             + "at most. A block in your own calendar is never listed. Off, the section "
+             + "does not exist and the library reads exactly as it did before.")
         calendarNote = note("")
         note("A meeting counts as the same one when it starts within ten minutes of the "
              + "recording. Measured over this library: at ten minutes, fourteen of "

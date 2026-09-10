@@ -364,6 +364,26 @@ final class MeetingDetector {
         if let i = parts.firstIndex(of: "helper"), i > 1 {
             return parts[..<i].joined(separator: ".")
         }
+        // **A dash suffix is the same app too, and this is how the guard was
+        // walked through anyway.** Every UI test in this repository runs a copy
+        // of Listen under `com.mgo.listen-uitest`, because a second bundle
+        // identifier is the only way to drive first-run setup without spending
+        // the real preferences. That copy opens the microphone, which is what
+        // makes any Listen match this rule, and the identifier the guard
+        // compared was `com.mgo.listen-uitest` against `com.mgo.listen`: not
+        // equal, so the real app on this Mac recorded the test copy as a
+        // meeting. Measured on 10 September 2026: two recordings in the real
+        // library, six and ten seconds, stamped `app_bundle_id:
+        // com.mgo.listen-uitest`, one of them offered as the continuation of a
+        // meeting it had nothing to do with.
+        //
+        // The last component only, so `com.mgo.listen-uitest` folds to
+        // `com.mgo.listen` and an unrelated `com.other.listen-something` is
+        // untouched: this asks whether an identifier is a variant of one app,
+        // not whether two identifiers look alike.
+        if let last = parts.last, let dash = last.firstIndex(of: "-"), parts.count > 1 {
+            return (parts.dropLast() + [last[..<dash]]).joined(separator: ".")
+        }
         return id
     }
 }

@@ -242,6 +242,13 @@ cp -R "$ROOT/Listen.app" "$COPY"
 codesign --force --sign - --deep "$COPY" 2>/dev/null
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1
 defaults write com.mgo.listen-uitest onboarded -bool true
+  # **Detection off, or the copy records the room in the middle of the test.**
+  # Meeting detection is on by default and a copy inherits it, so a call
+  # anywhere on this Mac puts the window on the recording screen with "Are you
+  # in a meeting?" over it. Measured: it is what made three assertions in
+  # `verify_ask_states.sh` fail for several builds against an app that was
+  # working, and a run that does this captures the microphone unasked.
+  defaults write com.mgo.listen-uitest autoDetectMeetings -bool false
 
 LISTEN_PANEL=settings:dictionary "$COPY/Contents/MacOS/Listen" >/dev/null 2>&1 &
 APP=$!

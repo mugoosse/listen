@@ -47,6 +47,10 @@ roots that remains clear at 16 points.
   you name a speaker. Google and Microsoft calendars come through whatever you
   have already added in System Settings, so there is no sign-in, no
   subscription and no server in the middle.
+- **Shows what is coming up, and prepares you for it.** The next few meetings
+  sit at the top of the library with a link to join. Open one and Listen shows
+  who is coming and every recording you already have with them, and Prepare asks
+  your agent what you should know before it starts.
 - **Dictates, anywhere on the Mac.** Press a shortcut in any app, talk, press
   it again, and what you said is typed in. The same speech model, still on this
   machine, and the same custom vocabulary the meetings use.
@@ -318,9 +322,9 @@ Settings, Internet Accounts. **There is no account to make and nothing to sign
 in to**, because macOS has already done that part. It only reads, and never
 writes anything back.
 
-Two things come of it. A recording is named after the meeting whose start is
-within ten minutes of it, and the people on the invitation are offered when you
-name a speaker.
+Three things come of it. A recording is named after the meeting whose start is
+within ten minutes of it, the people on the invitation are offered when you name
+a speaker, and the next few meetings are listed at the top of the library.
 
 Ten minutes is measured rather than picked. Across a real library of 47
 recordings, ten, fifteen and twenty minutes all matched the same fourteen, and
@@ -333,7 +337,28 @@ against the name you chose, and it is offered directly the next time. One person
 can have as many addresses as they use. Nothing is written unless you pick
 somebody, and typing a name from scratch files nothing.
 
-This is optional, and refusing costs exactly those two things. Recording,
+### What is coming up
+
+The library opens on **Up next**: the meetings in the next twelve hours that
+somebody else is invited to, three at most, with the time counting down and a
+camera on the ones you can join. A block you put in your own calendar is never
+listed, and neither is an all-day event or an invitation you declined. When
+there is nothing, the section is not there at all.
+
+Open one and you get the invitation: who is coming, what the library already
+holds about each of them, the agenda if the invitation has one, and every
+recording you have with those people. **Prepare** asks your agent what you
+should know before it starts, out of your own meetings, which is the part only
+this app can answer.
+
+That conversation is not thrown away when the meeting begins. Once the recording
+is matched to the invitation, the preparation is listed on the meeting's own
+page beside everything else you have asked about it.
+
+Settings, Meetings has a switch for the section if you would rather the library
+opened on your recordings.
+
+This is optional, and refusing costs exactly those three things. Recording,
 transcription and speaker labelling are unaffected.
 
 
@@ -655,6 +680,27 @@ started 3 Aug 2026 at 16:00
 
 `listen calendar backfill` does the same over your whole library and changes
 nothing without `--apply`.
+
+`listen calendar next` prints what the library's own "Up next" section is
+showing, and then every meeting nearby that it left out with the reason:
+
+```
+$ listen calendar next
+up next:
+  in 12 min      Standup  (Ryan Mitchell, Emily Chen)  [link]
+  15:30          Design review  (Sam Okafor)
+
+not listed:
+  now            Reading time  [nobody else invited]
+  Tomorrow 00:00 Kate's birthday  [all-day]
+```
+
+`listen calendar next --prompt` prints the question the Prepare button sends,
+so the window and the command are provably asking the same thing:
+
+```sh
+listen ask "$(listen calendar next --prompt)"
+```
 
 `listen transcribe some.wav` needs no permissions at all, which makes it the
 fastest way to tell a model problem apart from a recording problem. It prints

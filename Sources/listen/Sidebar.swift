@@ -42,6 +42,14 @@ final class SidebarViewController: NSViewController {
         case recording(Recording)
         case note(Note)
         case person(Person)
+        /// A meeting that has not happened yet, at the top of the list.
+        ///
+        /// **The list is a timeline and this is the end of it that is still
+        /// ahead.** It is not a fourth collection: there is no `kind:` for it,
+        /// nothing searches it, and it is absent the moment anything is typed,
+        /// because a search is a question about what was said and none of this
+        /// has been said. See `appendUpcoming`.
+        case event(CalendarEvent)
         /// A name searched for inside the People lens that does not exist yet.
         /// It opens the same Add Person sheet as the landing page.
         case addPerson(String)
@@ -207,6 +215,8 @@ final class SidebarViewController: NSViewController {
     /// A person picked out of the search results, which is the only route to
     /// the card now that the roster is not a collection you can navigate to.
     var onSelectPerson: ((Person) -> Void)?
+    /// An upcoming meeting picked out of the section above the library.
+    var onSelectEvent: ((CalendarEvent) -> Void)?
     /// The free-text part of the search, whenever it changes.
     ///
     /// Fired from `reload` rather than from the field, because the query moves
@@ -223,6 +233,10 @@ final class SidebarViewController: NSViewController {
     private(set) var selectedRecording: Recording?
     private(set) var selectedNote: Note?
     private(set) var selectedPerson: Person?
+    /// The upcoming meeting whose page is open. Keyed on the event's id in
+    /// `finishReload` for the reason the other three are: the row is rebuilt
+    /// every minute as the clock on it changes.
+    private(set) var selectedEvent: CalendarEvent?
     private var hover: TableHover!
 
     /// True while `reload` is rebuilding the list, so its own re-selection is
@@ -363,11 +377,89 @@ final class SidebarViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         hover.start()
+        watchCalendar()
+        startUpcomingTick()
     }
 
     override func viewDidDisappear() {
         super.viewDidDisappear()
         hover.stop()
+        upcomingTick?.invalidate()
+        upcomingTick = nil
+    }
+
+    // MARK: - What is coming up
+
+    private var upcomingTick: Timer?
+    private var watchingCalendar = false
+
+    /// The calendar changed somewhere else.
+    ///
+    /// **Nothing in this app observed this before**, because everything that
+    /// read the calendar read it once, at the moment a recording started, and
+    /// answered a question about that instant. A list of what is coming up is
+    /// the first thing here that is wrong the moment somebody moves a meeting
+    /// in Calendar, and there is no polling interval short enough to hide that
+    /// without being a polling interval nobody would defend.
+    ///
+    /// Registered once and never removed: this controller lives as long as the
+    /// window does. `tickUpcoming` is what decides whether anything actually
+    /// changed, so a burst of notifications, which is what a sync produces,
+    /// costs one comparison each.
+    private func watchCalendar() {
+        guard !watchingCalendar, MeetingCalendar.isAuthorized else { return }
+        watchingCalendar = true
+        MeetingCalendar.onChange { [weak self] in self?.tickUpcoming() }
+    }
+
+    /// Once a minute, which is the unit the row is written in.
+    ///
+    /// So a row can be up to a minute stale, and reads "in 12 min" for the last
+    /// few seconds of the thirteenth. That is the trade for one EventKit read a
+    /// minute rather than one every few seconds, and the row that matters most
+    /// is the one saying "now", which is right either way.
+    private func startUpcomingTick() {
+        upcomingTick?.invalidate()
+        upcomingTick = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) {
+            [weak self] _ in
+            Task { @MainActor in self?.tickUpcoming() }
+        }
+    }
+
+    /// Redraw the clocks, or rebuild the list when it is a different list.
+    ///
+    /// Two answers rather than one, for `tickRow`'s reason: a reload every
+    /// minute would cancel a drag, fight the scroller and rebuild every cell in
+    /// the library to advance one number. A meeting arriving, moving or falling
+    /// past `MeetingCalendar.lateness` really is a different list, and that one
+    /// is worth a reload.
+    private func tickUpcoming() {
+        // **`view.window`, not `isViewLoaded`.** The change notification is
+        // never unregistered, so a calendar sync landing while the window is
+        // closed would otherwise re-read the whole library once per
+        // notification, in bursts, for a list nobody can see. Nothing is
+        // missed: opening the window is an activation, and that reloads.
+        guard isViewLoaded, view.window != nil, Settings.upcomingInSidebar
+        else { return }
+        // Only while the section is allowed on screen at all. Ticking under a
+        // search would compare a live calendar against a list this function
+        // deliberately empties, and reload the library once a minute for it.
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty, lenses.isEmpty
+        else { return }
+        let live = Capture.shared.current
+            .map { Recording.load($0.folder) ?? $0 }?.metadata.calendar_event_id
+        let fresh = MeetingCalendar.upcoming().filter { $0.id != live }
+        guard fresh.map(\.id) == upcoming.map(\.id) else {
+            trace("sidebar: upcoming changed, \(upcoming.count) to \(fresh.count)")
+            reload()
+            return
+        }
+        for (index, row) in rows.enumerated() {
+            guard case .event(let event) = row,
+                  let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false)
+                      as? EventCell else { continue }
+            cell.configure(event)
+        }
     }
 
     // MARK: - Data
@@ -539,6 +631,9 @@ final class SidebarViewController: NSViewController {
 
         rows = []
 
+        // What is about to happen, above everything that already has.
+        appendUpcoming(filter, live: live)
+
         // People first, under their own heading, and never mixed into the days.
         //
         // A person has no date, so there is no honest place for them in a
@@ -599,6 +694,43 @@ final class SidebarViewController: NSViewController {
 
         finishReload(keepID: keepID)
     }
+
+    /// The next few meetings, above the library.
+    ///
+    /// **Only over the unfiltered list.** Every lens and every query is a
+    /// question about what the library holds, and none of this is in the
+    /// library: a section that survived `tag:kinsight` would be three rows the
+    /// filter had not considered sitting above the rows it had. `sectionsByKind`
+    /// is the same statement made by the headings, which name kinds while
+    /// something is typed and days while nothing is.
+    ///
+    /// **And never the meeting being recorded.** Capture attaches the recording
+    /// to its event at `start`, so from that moment the same meeting is both the
+    /// live row pinned at the top of the library and an event that has just
+    /// begun. One of those is a recording somebody can stop and the other is an
+    /// invitation, and the second is not worth a row.
+    private func appendUpcoming(_ filter: RecordingFilter, live: Recording?) {
+        // Cleared before the guard, not after it: `tickUpcoming` compares
+        // against this to tell a clock that has moved from a list that has
+        // changed, and a stale copy left behind by a search would have it
+        // rebuilding a section that is not on screen.
+        upcoming = []
+        guard Settings.upcomingInSidebar,
+              filter.query.trimmingCharacters(in: .whitespaces).isEmpty,
+              lenses.isEmpty, !filter.needsSpeakers, filter.tags.isEmpty,
+              filter.kind == nil else { return }
+        let recordingNow = live?.metadata.calendar_event_id
+        upcoming = MeetingCalendar.upcoming().filter { $0.id != recordingNow }
+        guard !upcoming.isEmpty else { return }
+        // "Up next" rather than "Calendar": the heading names the moment rather
+        // than the source, which is what every other heading in this list does.
+        rows.append(.header("Up next"))
+        rows.append(contentsOf: upcoming.map { Row.event($0) })
+    }
+
+    /// What `appendUpcoming` last put in the list, so the minute tick can tell
+    /// a clock that has moved from a list that has changed.
+    private var upcoming: [CalendarEvent] = []
 
     private var contextSearchKey = ""
     private var contextSearchTask: Task<Void, Never>?
@@ -693,6 +825,23 @@ final class SidebarViewController: NSViewController {
     private func finishReload(keepID: String?) {
         reloading = true
         table.reloadData()
+
+        // The open invitation, first and for the same reason the person is:
+        // whichever of the four is set is the one the pane is showing. Its row
+        // is rebuilt every minute by `tickUpcoming`, and it stops existing
+        // altogether once the meeting has been under way for
+        // `MeetingCalendar.lateness`. The page stays up either way: it is what
+        // somebody is reading, and taking it away because a clock passed would
+        // be the window closing itself.
+        if let keepEvent = selectedEvent?.id, let row = rows.firstIndex(where: {
+            if case .event(let e) = $0 { return e.id == keepEvent }
+            return false
+        }) {
+            table.selectRowIndexes([row], byExtendingSelection: false)
+            if case .event(let fresh) = rows[row] { selectedEvent = fresh }
+            reloading = false
+            return
+        }
 
         // A selected person is kept the same way, and first for the same
         // reason: whichever of the three is set is the one the pane is showing.
@@ -1185,6 +1334,7 @@ final class SidebarViewController: NSViewController {
     /// Is anything open, whatever kind it is?
     var hasSelection: Bool {
         selectedRecording != nil || selectedNote != nil || selectedPerson != nil
+            || selectedEvent != nil
     }
 
     /// Put the open page away and give the pane back to the composer.
@@ -1207,6 +1357,7 @@ final class SidebarViewController: NSViewController {
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
+            selectedEvent = nil
             onSelect?(nil)
             return
         }
@@ -1496,6 +1647,10 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         if case .header = rows[row] { return 30 }
         if case .chats = rows[row] { return ChatsRow.height }
         if case .addPerson = rows[row] { return AddPersonRow.height }
+        // The recording row's two lines and its air, because it is the same
+        // two lines: a title and a fact about it. Nothing here can grow an
+        // excerpt or an activity bar, so it is the one height rather than three.
+        if case .event = rows[row] { return 52 }
         let base: CGFloat = match(at: row)?.excerpt == nil ? 52 : 86
         guard case .recording(let recording) = rows[row],
               RecordingCell.drawsBar(RecordingCell.activity(for: recording))
@@ -1509,7 +1664,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch rows[row] {
         case .recording(let recording): return rowMatches[recording.id]
         case .note(let note): return rowMatches[note.slug]
-        case .header, .chats, .person, .addPerson: return nil
+        case .header, .chats, .person, .addPerson, .event: return nil
         }
     }
 
@@ -1518,7 +1673,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         // A heading is a lens, and the handoff row is a way out of this list.
         // Neither is a document, so neither is a selection.
         case .header, .chats, .addPerson: return false
-        case .recording, .note, .person: return true
+        case .recording, .note, .person, .event: return true
         }
     }
 
@@ -1585,6 +1740,11 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = PersonCell()
             cell.configure(person)
             return cell
+
+        case .event(let event):
+            let cell = EventCell()
+            cell.configure(event)
+            return cell
         }
     }
 
@@ -1598,6 +1758,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
+            selectedEvent = nil
             onSelect?(nil)
             return
         }
@@ -1605,13 +1766,25 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         case .recording(let recording):
             selectedNote = nil
             selectedPerson = nil
+            selectedEvent = nil
             selectedRecording = recording
             onSelect?(recording)
         case .person(let person):
             selectedRecording = nil
             selectedNote = nil
+            selectedEvent = nil
             selectedPerson = person
             onSelectPerson?(person)
+        case .event(let event):
+            // Everything else cleared first, for the reason the note case
+            // records: the menu and the toolbar ask `selectedRecording`, and an
+            // upcoming meeting open over a stale one would leave Export and
+            // Transcribe Again enabled over a recording nobody can see.
+            selectedRecording = nil
+            selectedNote = nil
+            selectedPerson = nil
+            selectedEvent = event
+            onSelectEvent?(event)
         case .note(let note):
             // The recording goes first. Everything that validates a menu item
             // or a toolbar button asks `selectedRecording`, and a note selected
@@ -1619,6 +1792,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             // Transcribe Again enabled over something they cannot act on.
             selectedRecording = nil
             selectedPerson = nil
+            selectedEvent = nil
             selectedNote = note
             onSelectNote?(note)
         // Neither is selectable, so neither can arrive here; both are listed
@@ -1627,6 +1801,7 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             selectedRecording = nil
             selectedNote = nil
             selectedPerson = nil
+            selectedEvent = nil
             onSelect?(nil)
         }
     }

@@ -753,6 +753,7 @@ extension Settings {
     private static let skippedKey = "skippedBundleIDs"
     private static let onboardedKey = "onboarded"
     private static let nameFromCalendarKey = "nameFromCalendar"
+    private static let upcomingKey = "upcomingInSidebar"
 
     static var startAtLoginDefaultApplied: Bool {
         get { defaults.bool(forKey: startAtLoginAppliedKey) }
@@ -818,6 +819,24 @@ extension Settings {
     static var nameFromCalendar: Bool {
         get { defaults.object(forKey: nameFromCalendarKey) as? Bool ?? true }
         set { defaults.set(newValue, forKey: nameFromCalendarKey) }
+    }
+
+    /// Put the next few meetings at the top of the library.
+    ///
+    /// A second consent rather than a second reading of `nameFromCalendar`.
+    /// Naming a recording after the fact spends the calendar on one field in
+    /// one file; this puts somebody's day on screen, where anybody standing
+    /// behind them can read it. Those are different questions and only one of
+    /// them is answered by granting access.
+    ///
+    /// On by default, because the permission has already been asked for by the
+    /// time it can do anything, and off it is invisible: the section simply
+    /// does not exist and the library looks exactly as it did before.
+    ///
+    /// The presence of the key is the answer, for `nameFromCalendar`'s reason.
+    static var upcomingInSidebar: Bool {
+        get { defaults.object(forKey: upcomingKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: upcomingKey) }
     }
 
     static func skip(_ bundleID: String) {

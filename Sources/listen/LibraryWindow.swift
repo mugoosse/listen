@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import ListenKit
 
 /// The main window: recordings on the left, the selected one on the right.
 ///
@@ -82,6 +83,11 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// is a roster and a page, both of which want the whole window, and neither
     /// of which is a recording.
     private let personPane = PersonPane()
+    /// The page a meeting that has not happened opens. Held like the other two
+    /// rather than built on demand: it is swapped into `detailHost` the same
+    /// way, and a pane rebuilt per click would lose its scroll position on the
+    /// minute tick that rebuilds the row behind it.
+    private let upcomingPane = UpcomingPane()
     /// Notes are a fourth collection for the reason People is a third: a note
     /// can name four recordings, so a recording-centric list cannot show one.
     private let notePane = NotePane()
@@ -93,6 +99,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private lazy var galaxyPane: GalaxyPane = {
         let pane = GalaxyPane()
         pane.onOpen = { [weak self] id in self?.openGalaxySubject(id) }
+        // Both controls are in the title bar, so the pane reports rather than
+        // draws. On the edge only: `canReset` changes once per gesture and the
+        // drift stops for reasons nobody pressed.
+        // Reset is in the item list or it is not, so this is a rebuild. On the
+        // edge only, which is once per gesture.
+        pane.onCanResetChanged = { [weak self] _ in
+            guard let self, self.mode == .galaxy else { return }
+            self.rebuildToolbar()
+        }
+        pane.onMotionChanged = { [weak self] _ in self?.syncGalaxyControls() }
         return pane
     }()
     /// The conversations, in the sidebar's slot while one is being read. See
@@ -150,6 +166,29 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// a note, a person and a conversation. `closePage` is what it runs, and it
     /// is the menu's verb plus the one step a conversation needs.
     private static let closeItem = NSToolbarItem.Identifier("closePage")
+    /// The galaxy's two verbs, in the title bar beside the way out.
+    ///
+    /// **They were worded buttons at the foot of the picture**, and the pair
+    /// read as a caption on the galaxy rather than as its controls. Up here
+    /// they are where every other verb in this window is, and they are glyphs
+    /// because both are states rather than sentences: a pause bar while it
+    /// drifts and a triangle while it is still, which is the player's grammar
+    /// on a meeting page.
+    ///
+    /// **Two items rather than one holding two buttons**, which is what this
+    /// was first, and the difference is the whole look of it. Adjacent toolbar
+    /// items are drawn by macOS as one glass group, evenly spaced: that is what
+    /// makes the ellipsis, the globe and the cross on a meeting page read as a
+    /// set. A custom view holding two buttons is one item, so it got one item's
+    /// worth of glass and its own invented spacing beside a group that had the
+    /// system's.
+    ///
+    /// The cost is that Reset comes and goes, and a toolbar cannot hide an item
+    /// in place: it is in the list or it is not, so the list is rebuilt. That is
+    /// once per gesture rather than once per frame, because the pane reports the
+    /// edge (`onCanResetChanged`) rather than the camera.
+    private static let galaxyMotionItem = NSToolbarItem.Identifier("galaxyMotion")
+    private static let galaxyResetItem = NSToolbarItem.Identifier("galaxyReset")
 
     /// The drawer, so the History toolbar item can borrow its menu.
     private weak var composerHost: DetailWithComposer?
@@ -157,6 +196,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// What the library looked like when this window last read it. See
     /// `appBecameActive`.
     private var libraryStamps: [String: TimeInterval] = [:]
+
+    /// The galaxy's motion control, kept so its glyph can follow the pane.
+    private weak var motionToolbarItem: NSToolbarItem?
 
     private var recordTick: Timer?
     /// Notices a recording arriving from an iPhone while this window is open.
@@ -677,7 +719,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // under it, and it covered the corner the Ask pane and the recording
         // screen both use. On the recording screen it sat on top of the strip
         // that shows whether your own voice is arriving.
-        detail.onShowingChanged = { [weak self] in self?.updateRecordFAB() }
+        detail.onShowingChanged = { [weak self] in
+            self?.updateRecordFAB()
+            // The home page gaining or losing its own record button is a change
+            // in which items belong, and this is the callback that reports it:
+            // the first recording somebody makes turns that button into a list
+            // and the toolbar's capsule has to come back with it.
+            self?.syncToolbarWithHome()
+        }
 
         let w = NSWindow(contentViewController: controller)
         w.title = "Listen"
@@ -811,6 +860,35 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.updateComposer()
             self.syncToolbarWithHome()
             self.window?.toolbar?.validateVisibleItems()
+        }
+        // An upcoming meeting opens its own page, in the pane a person's card
+        // uses. The composer under it follows, which is the whole point: the
+        // bar belongs to the window, so a page for a meeting that has not
+        // happened arrives with somewhere to ask about it already on screen.
+        sidebar.onSelectEvent = { [weak self] event in
+            guard let self else { return }
+            self.enter(.library)
+            self.detail.saveYours()
+            self.detail.stopPlayback()
+            self.upcomingPane.show(event)
+            self.detailHost.show(self.upcomingPane)
+            self.askBar.show(event: event)
+            self.updateComposer()
+            self.syncToolbarWithHome()
+            self.window?.toolbar?.validateVisibleItems()
+        }
+        // Prepare, from the button on that page rather than from a chip that
+        // waits for the caret. It is the same prompt and the same path.
+        upcomingPane.onAsk = { [weak self] prompt in
+            self?.askBar.ask(question: prompt)
+        }
+        // The meetings with these people, which is the half of that page only
+        // this app has. They open the way a note's sources do.
+        upcomingPane.onOpenRecording = { [weak self] id in
+            self?.open(recording: id, note: nil)
+        }
+        upcomingPane.onOpenPerson = { [weak self] person in
+            self?.sidebar.reveal(person: person)
         }
         // The one route into a conversation from the list that has replaced the
         // library while one is being read. It is already the mode by the time a
@@ -1170,6 +1248,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             if was != .chat {
                 if sidebar.selectedNote != nil { detailHost.show(notePane) }
                 else if sidebar.selectedPerson != nil { detailHost.show(personPane) }
+                else if sidebar.selectedEvent != nil { detailHost.show(upcomingPane) }
                 else { detailHost.show(detail) }
             }
             // Whatever the galaxy had selected goes with it. Coming back to a
@@ -1523,8 +1602,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // finished appears without anyone clicking away and back.
         if let id = sidebar.selectedRecording?.id, let fresh = Recording.find(id) {
             detail.show(fresh)
-        } else if sidebar.selectedRecording == nil,
-                  sidebar.selectedPerson == nil, sidebar.selectedNote == nil {
+        } else if sidebar.selectedRecording == nil, sidebar.selectedPerson == nil,
+                  sidebar.selectedNote == nil, sidebar.selectedEvent == nil {
             detail.show(nil)
         }
         // After the pane has been re-shown, because what it is showing is half
@@ -1802,7 +1881,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // The galaxy takes the ellipsis's slot on the home page, where the
             // menu has nothing in it but the sentence saying so. See
             // `galaxyToolbarItem`.
-            items += [.flexibleSpace, Self.recordItem, .space]
+            // The flexible space stays whether or not the button does: it is
+            // what holds the items after it against the right edge, and without
+            // it a home page with its own record button drew the galaxy and the
+            // gear in the middle of the title bar.
+            items.append(.flexibleSpace)
+            if !showsOwnRecordButton { items += [Self.recordItem, .space] }
             // On the home page the globe takes the ellipsis's slot, where that
             // menu has one row saying "No recording selected". On a page the
             // ellipsis has verbs, so the globe goes between it and the cross:
@@ -1851,6 +1935,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                  .sidebarTrackingSeparator, .flexibleSpace]
             // Stop outranks the page, the same rule chat mode states.
             if Capture.shared.isRecording { items += [Self.recordItem, .space] }
+            // Beside the cross, in the group the window's own verbs live in.
+            // Reset only once there is something to undo: see
+            // `GalaxyPane.canReset`.
+            if galaxyPane.isViewLoaded, galaxyPane.canReset {
+                items.append(Self.galaxyResetItem)
+            }
+            items.append(Self.galaxyMotionItem)
             items.append(Self.closeItem)
             return items
         case .chat:
@@ -2013,14 +2104,30 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private struct ContentShape: Equatable {
         var home: Bool
         var live: Bool
+        /// The home page is drawing its own record button, so the toolbar's is
+        /// a second control for the same verb on the same screen. Part of the
+        /// shape rather than read at build time, because it changes on the
+        /// first recording somebody makes and the toolbar has to be rebuilt
+        /// exactly then.
+        var ownRecord: Bool
     }
 
     private var contentShape: ContentShape {
-        ContentShape(home: isHome, live: isShowingLiveMeeting)
+        ContentShape(home: isHome, live: isShowingLiveMeeting,
+                     ownRecord: showsOwnRecordButton)
+    }
+
+    /// The screen has a record control of its own.
+    ///
+    /// Only the empty home page does, and never while capture is running: the
+    /// toolbar item is the Stop control then, and Stop is the one thing in this
+    /// window that must never be somewhere else.
+    private var showsOwnRecordButton: Bool {
+        isHome && detail.showsHomeRecordButton && !Capture.shared.isRecording
     }
 
     /// What it was when the items were last built.
-    private var builtFor = ContentShape(home: false, live: false)
+    private var builtFor = ContentShape(home: false, live: false, ownRecord: false)
 
     /// Rebuild, but only if what is open changed which items belong.
     ///
@@ -2177,6 +2284,31 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                                  accessibilityDescription: "Galaxy")
             return item
 
+        case Self.galaxyMotionItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Motion"
+            item.target = self
+            item.action = #selector(toggleGalaxyMotion)
+            // Built by the same route the cross and the globe are, so it wears
+            // the same glass and takes the same spacing. Held only so the glyph
+            // can follow a drift that stopped for reasons nobody pressed.
+            motionToolbarItem = item
+            syncGalaxyControls()
+            return item
+
+        case Self.galaxyResetItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            // The name it had as a button under the picture, kept: the label is
+            // what accessibility reads for a glyph, and "Reset" alone does not
+            // say what of.
+            item.label = "Reset view"
+            item.toolTip = "Put the picture back where it opened"
+            item.image = NSImage(systemSymbolName: "arrow.counterclockwise",
+                                 accessibilityDescription: "Reset view")
+            item.target = self
+            item.action = #selector(resetGalaxyView)
+            return item
+
         case Self.closeItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Close"
@@ -2212,6 +2344,39 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// menu bar, which carry no dot and so make no promise.
     @objc private func openSettings() {
         showSettings(Updater.shared.isPending ? .updates : nil)
+    }
+
+    @objc private func toggleGalaxyMotion() {
+        guard mode == .galaxy else { return }
+        galaxyPane.toggleMotion()
+        syncGalaxyControls()
+    }
+
+    @objc private func resetGalaxyView() {
+        guard mode == .galaxy else { return }
+        galaxyPane.resetCamera()
+    }
+
+    /// Put the glyphs into the state the picture is actually in.
+    ///
+    /// Called when the item is built, when either button is pressed, and by the
+    /// pane when something else changed the answer: Reduce Motion and Low Power
+    /// Mode both stop the drift with nobody pressing anything, and a button
+    /// still showing a pause bar over a still picture is the control lying
+    /// about the state it exists to report.
+    func syncGalaxyControls() {
+        guard let item = motionToolbarItem else { return }
+        // `isViewLoaded` first: this runs while the toolbar is being built, and
+        // the pane is lazy for the reason `drawerHeight` records, which is that
+        // touching it constructs a Metal device and a shader.
+        let moving = galaxyPane.isViewLoaded && galaxyPane.isMotionOn
+        item.image = NSImage(systemSymbolName: moving ? "pause.fill" : "play.fill",
+                             accessibilityDescription: moving ? "Pause motion" : "Resume motion")
+        item.toolTip = moving ? "Stop the galaxy drifting" : "Let the galaxy drift again"
+        // The item's own label is what accessibility reads for a glyph, and it
+        // has to say the state rather than the subject: "Motion" is what the
+        // control is about, "Pause motion" is what pressing it does now.
+        item.label = moving ? "Pause motion" : "Resume motion"
     }
 
     @objc func newRecording() {
@@ -3416,6 +3581,14 @@ extension LibraryWindow: NSMenuDelegate {
             personPane.appendActions(to: menu)
             return
         }
+        // A meeting that has not happened, which has no recording and must not
+        // be told it is missing one. This is the same trap the note branch
+        // above records: the ellipsis said "No recording selected" over a note,
+        // because the menu was the recording's.
+        if let event = sidebar.selectedEvent {
+            appendEventActions(to: menu, for: event)
+            return
+        }
         guard let recording = selected else {
             menu.addItem(withTitle: "No recording selected", action: nil, keyEquivalent: "")
                 .isEnabled = false
@@ -3572,6 +3745,45 @@ extension LibraryWindow: NSMenuDelegate {
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         menu.addItem(item)
         return item
+    }
+
+    /// What can be done with a meeting that has not happened.
+    ///
+    /// Three items, and none of them touches the calendar: `MeetingCalendar` is
+    /// read-only and has no write path at all, deliberately, because the one
+    /// thing worse than not naming a recording is editing somebody's calendar.
+    /// So the verbs here are Listen's own: join it, prepare for it, take the
+    /// link away with you.
+    private func appendEventActions(to menu: NSMenu, for event: CalendarEvent) {
+        if event.link != nil {
+            add(menu, "Join Meeting", #selector(joinSelectedEvent), "video")
+            add(menu, "Copy Link", #selector(copySelectedEventLink), "link")
+            menu.addItem(.separator())
+        }
+        let prepare = add(menu, "Prepare for This Meeting",
+                          #selector(prepareSelectedEvent), "sparkles")
+        // Greyed rather than absent when there is nobody to answer, because the
+        // item is what says the app can do this at all. `AskView.ask(question:)` puts the
+        // setup card up if it is pressed anyway, so the two disagree in the
+        // harmless direction.
+        prepare.isEnabled = Settings.askEnabled
+    }
+
+    @objc private func joinSelectedEvent() {
+        guard let link = sidebar.selectedEvent?.link else { return }
+        NSWorkspace.shared.open(link)
+    }
+
+    @objc private func copySelectedEventLink() {
+        guard let link = sidebar.selectedEvent?.link else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link.absoluteString, forType: .string)
+    }
+
+    @objc private func prepareSelectedEvent() {
+        guard let event = sidebar.selectedEvent,
+              let prompt = MeetingBrief.starters(for: event).first?.1 else { return }
+        askBar.ask(question: prompt)
     }
 
     /// What can be done with the note on screen.

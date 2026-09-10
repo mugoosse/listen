@@ -22,6 +22,10 @@
 //                                    otherwise invisible to a script
 //   axprobe hasclose <pid> <title>   "yes"/"no": does the window whose title
 //                                    contains <title> expose a close button
+//   axprobe activate <pid>           bring the app to the front and wait for
+//                                    it, because AXShowMenu on a toolbar item
+//                                    in a window that is not key succeeds and
+//                                    does nothing
 //
 // Exit 3 means this terminal has no Accessibility permission, which is a fact
 // about the harness and not about the build.
@@ -267,6 +271,30 @@ case "selectrow":
     }
     print(selected ? "selected" : "not found")
     exit(selected ? 0 : 1)
+
+case "activate":
+    // Bring the app to the front and wait until it is there.
+    //
+    // **`AXShowMenu` on a toolbar item in a window that is not key is a
+    // no-op that reports success**, and the menu's items are then missing
+    // from the tree, which is indistinguishable from a menu that was never
+    // built. It bites in a script that has launched and killed several apps,
+    // where focus can be anywhere; the same command run by hand always
+    // worked, which is what made it look like a timing problem.
+    //
+    // By pid, never through System Events, for the reason CLAUDE.md gives:
+    // several copies of this app run on this machine at once.
+    guard let running = NSRunningApplication(processIdentifier: pid) else {
+        print("no such process")
+        exit(1)
+    }
+    running.activate()
+    for _ in 0..<20 {
+        if running.isActive { print("active"); exit(0) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    print("not active")
+    exit(1)
 
 case "hasclose":
     guard arguments.count >= 4 else { exit(2) }

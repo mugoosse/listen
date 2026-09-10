@@ -274,6 +274,13 @@ stop() { [ -n "$APP" ] && kill "$APP" 2>/dev/null; sleep 1; }
 launch() {
   defaults delete com.mgo.listen-uitest >/dev/null 2>&1
   defaults write com.mgo.listen-uitest onboarded -bool true
+  # **Detection off, or the copy records the room in the middle of the test.**
+  # Meeting detection is on by default and a copy inherits it, so a call
+  # anywhere on this Mac puts the window on the recording screen with "Are you
+  # in a meeting?" over it. Measured: it is what made three assertions in
+  # `verify_ask_states.sh` fail for several builds against an app that was
+  # working, and a run that does this captures the microphone unasked.
+  defaults write com.mgo.listen-uitest autoDetectMeetings -bool false
   LISTEN_LIBRARY="$LIB" LISTEN_DEBUG=1 LISTEN_PANEL="$1" \
       "$COPY/Contents/MacOS/Listen" >>"$TRACE" 2>&1 &
   APP=$!
@@ -287,7 +294,12 @@ case $? in 3) echo "  SKIP: no Accessibility permission" >&2; stop; exit 2;; esa
 # A locked screen or a sleeping display empties every window's subtree, and an
 # empty tree passes every negative assertion below. So the window proves it is
 # there before anything else is asked of it.
-field "$dump" "Reset view"
+# The legend's first line, which is on the picture from the first frame.
+# **Not "Reset view", which is what this used to be.** That control moved into
+# the title bar and it is only there once the camera has been moved, so a guard
+# on it would fail on a galaxy nobody had touched, which is the state every
+# assertion below is about.
+echo "$dump" | grep -q "(this Mac)"
 check $? "the window is up and readable (guard against an empty AX tree)"
 field "$dump" "People"
 check $? "the legend names the people shell"
@@ -303,8 +315,15 @@ check $? "and says the centre is you, on this Mac"
 # a library inside the cap there should be nothing to find.
 ! echo "$dump" | grep -q "of your library, on four shells"
 check $? "the status line is silent when there is nothing it alone can say"
+# **In the title bar now, beside the way out**, where the rest of this window's
+# verbs are, and a glyph rather than two words: the item's own label is what
+# accessibility reads, and it says what pressing it does rather than what it is
+# about. The reset control is not asserted here because it is absent until the
+# camera has been moved; `--ui` moves it below and checks it appears.
 field "$dump" "Pause motion"
-check $? "the motion switch is on the pane, named, and reachable"
+check $? "the motion control is in the title bar, named for what it does"
+! echo "$dump" | grep -q "Reset view"
+check $? "and nothing offers to reset a picture nobody has moved"
 # 12 recordings + 4 notes + 3 people, because the fourth is the centre.
 grep -q "galaxy snapshot 20 stars" "$TRACE"
 check $? "the snapshot it drew is the library, read on a background queue"
@@ -390,6 +409,17 @@ await "Open recording"
 check $? "the globe opens the galaxy with that page's star already picked"
 echo "$dump" | grep -q "LISTEN BRAIN"
 check $? "and it is the galaxy"
+# **The camera flew to that star, so there is now a way back.** The control is
+# absent over a picture nobody has moved and appears when one has, which is the
+# whole of what it is for. The flight takes 0.65 s, so this is awaited rather
+# than read.
+await "Reset view"
+check $? "the way back appears once the camera has moved"
+"$PROBE" press $APP "Reset view" >/dev/null 2>&1
+sleep 2
+dump=$("$PROBE" texts $APP 2>&1)
+! echo "$dump" | grep -q "Reset view"
+check $? "and goes again once it has been used"
 # And the cross comes back to the page it came from, which the sidebar's
 # selection is what makes true.
 "$PROBE" press $APP "Close" >/dev/null 2>&1

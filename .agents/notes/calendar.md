@@ -292,3 +292,359 @@ knowing about rather than discovering through a title.
 CLI passes it. The automatic path must not: a guest list that has already been
 picked from is a decision, and replacing it with whatever the invitation says
 today would quietly undo one.
+
+## What is about to happen
+
+The section at the top of the library, the page it opens, and the preparation
+that outlives it. `MeetingCalendar.upcoming`, `EventTime`, `MeetingBrief`,
+`EventCell`, `UpcomingPane`, `Sidebar.appendUpcoming`, `Chat.adopt`,
+`listen calendar next`.
+
+**Most of this lives in `ListenKit/Calendar.swift` now**, because the iPhone
+grew the same feature and a rule with a measurement behind it is written once.
+What stayed in `Sources/listen/MeetingCalendar.swift` is everything about a
+*recording*: the ten minute window, the rule for a meeting that began while
+capture ran, and the guarded write of a title and a guest list into
+`metadata.json`. The phone does none of that. See "The phone lists the same
+meetings" below.
+
+Everything above this heading is about a meeting that has already happened.
+This is the one part of the app that is not, and almost every rule here follows
+from that: there is no folder, so nothing can be saved, corrected or deleted,
+and the only durable thing anybody can do from the page is ask a question. That
+is also why the conversation carries `Chat.event`.
+
+### The list is a timeline, and this is the end of it that is still ahead
+
+Not a fourth collection. There is no `kind:` for it, nothing searches it, and
+it is gone the moment anything is typed in the field, because a search is a
+question about what was said and none of this has been said yet. The same is
+true of every lens: a section that survived `tag:kinsight` would be three rows
+the filter had not considered sitting above the rows it had.
+
+`sectionsByKind` already makes the same statement with its headings, which name
+kinds while something is typed and days while nothing is, so `appendUpcoming`
+tests the query, the lenses and the kind and returns on any of them.
+
+### One filter, a vocabulary, and a cap
+
+`couldBeAMeeting` is what keeps Birthdays, Holidays and every subscribed feed
+out without anybody configuring a calendar, because they are all all-day. It
+already existed for matching.
+
+**The guest test was the second filter, and it was wrong here.** It was
+`beganDuring`'s, hoisted as `hasGuests`: somebody other than you had to be
+invited, on the evidence of the one wrong match this app has ever measured, a
+solo block called "Review the Q3 launch Reel" that a thirty minute window
+matched to a WhatsApp call.
+
+That evidence is about **naming a recording**, which `attach` does without
+asking, and it still holds there and is untouched. A row in a list is not a
+title: nothing is renamed by showing one. Reported the first evening this
+shipped, on a real event, "Test with Dani" at 22:00 typed into the user's own
+calendar with nobody invited, which is how most in-person meetings and every
+held hour are entered. Hiding those was the expensive direction.
+
+So `MeetingKind` replaced the yes-or-no: a `call` has guests and a link, an
+`inPerson` has guests and nowhere to click, a `blocked` has nobody else in it.
+Both apps list all three; the type is what lets a row say which it is, and what
+lets either app change its mind without the other one guessing.
+
+The cap is the third rule and the point of it is not performance. This sits
+above the library, and a nine-meeting day would push every recording somebody
+owns off the screen to say what is coming instead.
+
+### Twelve hours forward and fifteen minutes back
+
+`horizon` is 12 hours, not "the rest of today", which is the obvious rule and is
+wrong twice a day: at 18:00 it says the calendar is empty when tomorrow starts
+at 09:00, and by 23:00 it has been saying so for five hours. Twelve covers an
+evening from the morning it belongs to and never reaches the day after
+tomorrow.
+
+`lateness` is 15 minutes, and it is not the length of the event. A meeting you
+are five minutes late for is the one you most want the row for, because the
+link is on it; a two hour block that began at nine would otherwise sit at the
+top of the library until eleven, which is a calendar rather than a heads-up.
+The row says "now" for the whole of that window: counting upwards ("12 min ago")
+is a reproach rather than a fact.
+
+### Faces rather than a comma list, and they are at the trailing edge
+
+The row's second line was `in 12 min · Ryan Mitchell, Emily Chen`, which
+truncates at the second name in a 280 point sidebar: the row spent its whole
+subtitle saying half of something. It carries `InitialsDisc`es now, up to three
+with a `+N` after them, and the second line is the countdown alone.
+
+**The same disc, not a second one drawn to match.** `SpeakerColour` is a
+function of the name, so a guest who has never been recorded already has the
+colour they will have the moment they are: the face on an invitation and the
+chip on the transcript of that meeting are the same mark. It also costs nothing
+to build, which is what makes it affordable on a table cell: no roster, no
+library read, one hash per name.
+
+**Trailing, which is not where a face wants to go.** The leading column is 16
+points at an inset of 8 and every title in this list starts after it;
+`RecordingCell.icon` records that a cell inventing its own width there lands two
+points off every other label, which reads as a mistake rather than as a margin.
+Faces are wider than a glyph at any legible size (initials are drawn at 0.4 of
+the diameter, so a 16 point disc puts two letters in six points and becomes a
+coloured dot), so they went to the other end, which is where a calendar puts
+them anyway.
+
+Nothing is lost by dropping the names: they are in the tool tip, on the page,
+and in the cell's accessibility label, which is what a reader who cannot see a
+coloured circle gets and what `verify_upcoming.sh` asserts on.
+
+### The meeting being recorded must not be in both halves of the list
+
+`Capture` attaches the recording to its event at `start`, so from that moment
+the same meeting is the live row pinned at the top of the library *and* an event
+that has just begun. One of those is a recording somebody can stop and the other
+is an invitation.
+
+The exclusion is the sidebar's rather than `MeetingCalendar`'s, deliberately:
+the event is still upcoming by every rule in that file, and the row is only a
+duplicate because of what is drawn beside it. `upcoming()` therefore does not
+consult `Capture` at all, and `listen calendar next` shows the same list the
+sidebar would.
+
+### A calendar list is the first thing here that goes stale on its own
+
+Nothing in this app observed `EKEventStoreChangedNotification` before, because
+everything that read the calendar read it once, when a recording started, and
+answered a question about that instant. A list of what is coming up is wrong the
+second somebody moves a meeting in Calendar, and there is no polling interval
+short enough to hide that which anybody would defend.
+
+So `MeetingCalendar.onChange` exists, and the sidebar also ticks once a minute,
+which is the unit the row is written in. A row can therefore be up to a minute
+stale and read "in 12 min" through the last seconds of the thirteenth; the row
+that matters most is the one saying "now", and that one is right either way.
+
+`tickUpcoming` answers in two ways for `tickRow`'s reason: a reload every minute
+would cancel a drag, fight the scroller and rebuild every cell in the library to
+advance one number. Same ids means redraw those cells in place. A different list
+means reload.
+
+### The agent has no calendar, so the invitation travels in the question
+
+It reaches the library through `listen mcp` and that is all. There is no
+calendar tool and there should not be one: an upcoming meeting is a handful of
+strings, and a tool that returns them is a tool the model has to be told to call
+before it can answer the only question this page asks.
+
+`MeetingBrief.invitation` is that paragraph. Two things in it are load-bearing:
+
+1. **It says the meeting has not happened.** Without that clause the first move
+   is a search for a transcript of this meeting, which cannot be there, and the
+   honest report of that search is "I cannot find this meeting". One clause
+   buys back a round trip and a wrong answer.
+2. **The guests are named by `bestName`, with their addresses.** That asks the
+   contact book first, so a guest whose invitation says
+   `justadecisionpod@gmail.com` is named as whoever the user has said that
+   address is, which is the string `list_people` and `get_person_context`
+   actually answer to. The address goes too, because it is the reliable half.
+
+### The agenda is one or two lines followed by twelve of dial-in
+
+Measured on this machine's own calendar, which is the same measurement that put
+the meeting link in the notes rather than in `event.url`: a Google invitation's
+body is the agenda, then the join instructions, a phone number, a PIN and a
+help link. `MeetingBrief.trimmedAgenda` cuts at the first boilerplate line and
+caps what is left at 600 characters.
+
+Prefixes rather than a regular expression, because the strings are fixed and
+each provider writes the same opener every time. The one thing that must not
+happen is a heuristic eating somebody's actual agenda.
+
+`CalendarEvent.agenda` is read into memory and **never** snapshotted into
+`metadata.json`, unlike `calendar_people`. The guest list is stored beside the
+recording because the library has to keep answering after the event is edited or
+deleted; the agenda is only useful before, and by the time there is a recording
+the transcript is a better copy of what was discussed. It also keeps somebody
+else's invitation body out of a file this app syncs.
+
+### Prepare is a button, because a chip that waits for the caret is not enough
+
+`AskView.drawStarters` only draws the chips once the field has focus, and that
+rule is right where it was written: on a meeting page four unbacked chips lay on
+the transcript with its text running through them, because the drawer draws no
+panel until it has something to hold.
+
+An upcoming meeting's page is the one screen whose entire reason to exist is the
+question, so the first chip's prompt is also a button in its header, and the same
+prompt is in the Actions menu. All three go through `AskView.ask(question:)`, so
+a press with no agent configured raises the setup card rather than silently
+doing nothing.
+
+The composer needed nothing else: it belongs to the window, so it is already
+under the page. What it needed was a fourth subject beside `recording`, `person`
+and the library.
+
+### Preparation that cannot be found afterwards is preparation nobody does twice
+
+`Chat.event` holds the iCal UID, which is what `Metadata.calendar_event_id`
+holds. `MeetingCalendar.attach` is the one moment anything knows a folder and an
+invitation are the same meeting, and `Chat.adopt` is what it spends that on: the
+recording id is appended to the conversation's `recordings`, so the back links
+on the meeting page, the Chats tab's count and `Chat.about` all work with no new
+query and no second index.
+
+`touch: false`, so adopting does not reorder History. The conversation was last
+spoken to before the meeting, and that is when it was last spoken to.
+
+Idempotent, because `attach` runs twice for one recording (at `start`, and again
+at `stop` for a meeting put in the calendar after it began) and because
+`backfill --refresh` runs it again by hand.
+
+### `LISTEN_FAKE_EVENTS`, because nobody will hold a meeting to test a list
+
+Same argument as `LISTEN_FAKE_CALLERS` and `LISTEN_TAP_TEAR`. It stands in for
+the calendar entirely, permission included, because a fixture is only useful if
+it answers the question the real store would on a machine that has never been
+asked for access.
+
+Starts are written as **minutes from now** rather than as dates. Every claim
+worth asserting here is relative ("in 12 min", listed at five minutes late and
+gone at twenty), and a fixture with wall-clock times in it is one that passes
+until midnight. `verify_upcoming.sh` is what uses it.
+
+### `listen calendar next` reads two hours back, and the list reads fifteen minutes
+
+The command prints the section and then everything nearby that did not make it,
+with the rule that dropped each one, for the reason `listen calendar match`
+exists: three rules quietly remove meetings and "where is my three o'clock?" is
+otherwise unanswerable.
+
+It sweeps two hours back rather than `lateness`, and the first version did not.
+A meeting that began twenty minutes ago has just fallen off the list and is the
+single most likely thing somebody is running this command to ask about; reading
+the same window the list reads meant never seeing it, so the answer to that
+question was silence. Found by `verify_upcoming.sh`, which is what it was
+written for.
+
+`--prompt` prints what pressing Prepare would send, which makes the window and
+the CLI provably the same question:
+
+```sh
+listen ask "$(listen calendar next --prompt)"
+```
+
+### A store kept for hours answers from the cache the notification invalidated
+
+`EKEventStoreChanged` says the store's cached objects are no longer valid, and
+Apple's guidance is to reset the store when it arrives. Nothing here had ever
+needed that: every previous read was one shot, in a process that had just
+started, so a store that goes stale cost nothing. A library window left open
+all day is the first thing in this app that keeps one for hours.
+
+Without the reset the failure is silent and reads as the feature not working:
+add a meeting in Calendar, the notification arrives, the sidebar re-reads, and
+the answer is the list from before the meeting existed. `onChange` calls
+`store.reset()` behind the same lock every read uses, because a reset racing a
+read is the shape that returns zero calendars and reports nothing.
+
+The minute poll deliberately does **not** reset. It is there for the clock on
+the row, not to discover anything: EventKit posts this notification for
+external changes including CalDAV syncs, so a poll that resets would be
+throwing the cache away sixty times an hour to learn what it is told.
+
+**Which is also the first thing to check when a new event does not appear, and
+it is usually not this.** `listen calendar events --days 1` runs in a fresh
+process with a fresh store, so it is the control: if the event is missing there
+too, it is not in this Mac's store at all and no amount of refreshing in Listen
+will find it. An event added on a phone or in a browser reaches the Mac when
+macOS syncs the account, not when it is saved.
+
+## The phone lists the same meetings
+
+`ListenKit/Calendar.swift` is the shared half: `CalendarEvent`, `CalendarPerson`,
+`MeetingLink`, `MeetingKind`, `EventTime`, `MeetingBrief`, and the reading half
+of `MeetingCalendar` (the store, the lock, `events`, `upcoming`, `onChange`, the
+fixtures). EventKit is the same framework on both platforms, so this is a move
+rather than a port.
+
+### The contact book is each app's, and it is a function
+
+`CalendarPerson.bestName` has to ask the book first: `calendar_people` is a
+snapshot frozen when a recording was matched, and the book is the one place a
+human has said who an address belongs to. That is a rule with a bug behind it,
+recorded above.
+
+But the two books are not the same object. On the Mac it is `ContactBook`,
+keyed on the transcript label and living beside the library; on the phone it is
+`PersonDirectory` read against that device's own root. So the shared type asks a
+function, `MeetingCalendar.knownName`, installed once at launch: `main.swift` on
+the Mac, `AppModel.init` on the phone. Unset, `bestName` falls through to the
+invitation's own name field and then to `PersonDirectory.suggestedName`, which
+moved out of `ContactBook` for the same reason and is the only one of the three
+that cannot be wrong about a person, because it derives a word from an address
+rather than claiming to know somebody.
+
+### The phone records a meeting; the Mac names a recording afterwards
+
+Tapping a row on the phone arms `Recorder.meeting` and switches to the record
+tab, which is what starts capture. Arming rather than writing afterwards is
+deliberate: `stop()` builds `metadata.json` once and publishing it is the last
+thing it does, so the name and `calendar_event_id` go in that same pass. Written
+afterwards there would be a window in which a recording of a meeting is on disk
+claiming to be a memo, which is exactly what every reader on both devices would
+see if the app died in between.
+
+The title carries `title_source: calendar` rather than `device`, which is the
+top of the Mac's ladder: it will not be renamed after its speakers, and a
+calendar backfill that finds the same invitation later agrees with it rather
+than fighting it. A name typed over the invitation is a person's title and
+freezes as one, as everywhere else.
+
+**The arming is on disk before the audio is.** `Recorder.meeting` is process
+state and `AGENTS.md` opens with the rule that the process does not last: iOS
+evicts an app that has been switched away from, and coming back is a cold
+launch. `adoptUnfinished` is what publishes a capture that never reached its own
+`stop()`, and with the meeting only in memory it could call that recording
+nothing but `Memo, 8 August, 12:08`, which is exactly the meeting somebody most
+wanted named: the long one they walked away from. So `start()` writes a
+`meeting.json` beside the audio, `adoptUnfinished` reads it, and both `stop()`
+and the adoption take it away again, because a file no device knows how to read
+should not be in a recording that is about to sync. It is a sidecar of its own
+rather than a field in `metadata.json` for the reason that file exists: writing
+it is what publishes a recording, and a folder is not a recording until its
+audio has stopped arriving.
+
+**`calendar_people` is deliberately not written by the phone.** The shared
+`Metadata` does not declare it, and the comment there says why: it was declared
+`[String]?` once, it is a list of objects on disk, and every meeting matched to a
+calendar event silently disappeared from the phone. The phone writes the event
+id, which is the field that exists; `listen calendar backfill --refresh` on the
+Mac is what fills in the guest list for those recordings.
+
+### The row is words and two buttons, and the words open the invitation
+
+The row was one big button that started a recording, which is the one control in
+this app that costs something to press by mistake and, on a phone, the easiest
+thing on screen to press by mistake. It is three targets now: the words, a
+sparkles button and a record button.
+
+**The words open a sheet**, which is the phone's answer to the Mac's brief page.
+Everything the two lines have no room for is in it: who is coming and what this
+library already holds about each of them, the agenda with the dial-in cut off,
+the meetings with those people, and the three verbs as equal capsules. It costs
+nothing until somebody wants it, and the tap that opens it is the cheap,
+reversible one.
+
+**Sparkles is absent on a block**, because every question `MeetingBrief` sends
+is about the people invited and a block has none. The same test hides Join and
+the Invited section in the sheet, which says what a block is instead.
+
+**Words, not `Label`s, on the sheet's three buttons.** Three sharing 402 points
+is about 110 each and a symbol eats a third of that: measured, it wrapped
+"Prepare" to "Pre-pare" and "Record" to "Reco rd". The width goes on the label
+rather than outside the button, or the capsules are three different sizes
+floating in equal spaces.
+
+### What the phone still does not have
+
+No matching: a recording made on the phone knows which meeting it is because
+somebody tapped it, so there is nothing to infer. And no `calendar_people`, for
+the reason above.

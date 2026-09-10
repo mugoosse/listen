@@ -3203,3 +3203,33 @@ earlier messages” row sits above them and grows the visible window in batches.
 Loading that batch stays at the top rather than first jumping to the newest
 answer. New chats and changed Ask contexts reset the visible window, so an old
 conversation cannot make the next one pay its rendering cost.
+
+## The fourth subject is a meeting that has not happened
+
+`AskView` had three: a recording, a person, and nil for the library. Each one
+has its own chip set and its own sentence in `start`, and each clears the other
+two, because a question is about one of them and never two at once.
+
+`event` is the fourth, and it is the only one with nothing on disk behind it.
+Three things follow, all of them recorded in full under "What is about to
+happen" in `.agents/notes/calendar.md`:
+
+- **The invitation travels in the question.** The agent reaches the library
+  through `listen mcp` and there is no calendar tool, so a meeting it is not
+  told about does not exist. `MeetingBrief.invitation` is the paragraph, and it
+  says out loud that the meeting has not happened: without that the first move
+  is a search for a transcript that cannot be there, and the honest report of
+  that search is "I cannot find this meeting".
+- **Prepare is a button as well as a chip.** `drawStarters` waits for the caret
+  for a good reason, and that reason does not hold on the one page whose whole
+  purpose is the question. Both routes call `AskView.ask(question:)`, which is
+  `ask` under a label that does not collide with the field's own `@objc send`.
+- **`Chat.event` outlives the invitation.** When the meeting is finally
+  recorded, `MeetingCalendar.attach` calls `Chat.adopt` and the conversation
+  gains the recording's id, so every back link that already existed finds it.
+
+`open(_ chat:)` deliberately does not restore `event`: it is an id rather than a
+copy, and the invitation may have been edited, deleted, or simply be in the past
+by the time somebody resumes. `persist` only fills the field in when it is
+empty, so a follow-up on a resumed preparation keeps the meeting it was asked
+ahead of.

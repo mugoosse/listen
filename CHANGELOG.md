@@ -8,31 +8,35 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
-## 0.38.0 (2026-09-10)
+## 0.39.0 (2026-09-10)
 
-Summaries about people now reach your iPhone reliably, two Macs no longer
-overwrite each other's setting to get there, and the library can be looked at
-as one picture.
+The whole library can be looked at as one picture, a call that was cut in two
+can be put back together, and searching a library of long meetings is several
+times faster.
 
 ### The galaxy
 
-**View → Galaxy** draws the whole library at once: your
-recordings, notes, people and Ask conversations on four shells around this Mac,
-with a line wherever the library already records a relationship between two of
-them. A note that names a meeting is a line. Somebody speaking in one is a
-line. A conversation asked about one is a line. Nothing is inferred: there is
-no similarity edge and no "these happened the same week" edge, so every line is
-a row you can go and read.
+**View → Galaxy** draws the whole library at once: your recordings, notes,
+people and Ask conversations on four shells around this Mac, with a line
+wherever the library already records a relationship between two of them. A note
+that names a meeting is a line. Somebody speaking in one is a line. A
+conversation asked about one is a line. Nothing is inferred: there is no
+similarity edge and no "these happened the same week" edge, so every line is a
+row you can go and read.
 
 Distance from the centre is the kind of a thing and nothing else, not how
 important it is or how recent. Click a star to see what it is connected to and
-open it; double-click to go straight there. The picture is drawn from what is
-already on this disk and reaches no network.
+open it; double-click to go straight there. The card names the star's links as
+links, so following one is a click. The picture is drawn from what is already on
+this disk and reaches no network.
 
-You are the centre, once the library has heard you speak: one star rather than
-a hub on the people shell and an empty planet in the middle. Click a shell in
-the legend to strike it out and take it off the picture. The globe in the title
-bar opens it, and **Settings → General** turns the whole thing off.
+You are the centre, once the library has heard you speak: one star rather than a
+hub on the people shell and an empty planet in the middle. Click a shell in the
+legend to strike it out and take it off the picture, and **searching in the
+sidebar narrows the picture to what matches and what that connects to**. The
+globe in the title bar opens the galaxy, the globe on a page opens that page's
+own star and the cross brings you back to where you were, and **Settings →
+General** turns the whole thing off.
 
 It runs the GPU while it is open and stops on its own when the window is hidden
 or covered, under Reduce Motion and in Low Power Mode.
@@ -42,7 +46,67 @@ or covered, under Reduce Motion and in Low Power Mode.
 The window takes a deep blue-black rather than the system grey, so the galaxy
 sits in the same temperature as everything around it instead of against a seam.
 
+### A call that was cut in two is one meeting again
 
+If a recording stops part way through a call and you start another one, Listen
+now offers to put them back together. The later recording's page says which
+meeting it looks like the rest of and why, in the terms you can check yourself:
+how far apart they are and whether both were the same app or the same calendar
+event. **Join them** folds it into the earlier recording and **Not now** leaves
+them alone, because starting a second recording on purpose is an ordinary thing
+to do.
+
+The earlier recording is the one that survives, so the meeting keeps its start
+time, its calendar event, and every note and conversation already pointing at
+it. The time between the two halves becomes silence rather than being closed
+up: a joined recording is a timeline, and closing the hole would move every
+word after it earlier.
+
+`listen join <id> [--into <id>]` does the same from the command line, and prints
+what it would do without changing anything until you add `--apply`.
+
+### Listen will not be replaced while it is recording
+
+`./install.sh` now refuses to quit and replace a running copy that is in the
+middle of a recording, and says so. This is fixed because it happened: a build
+installed itself eleven minutes into a call, and the 97 seconds between the two
+halves of that meeting are simply gone. `LISTEN_INSTALL_FORCE=1` overrides it.
+
+### Typing in the search field no longer waits for the library
+
+Every keystroke re-read and re-decoded every transcript on disk, and a
+one-letter query built a match for each of the hundreds of thousands of places
+it occurred in order to show one line and a number. On a library of 120
+hour-long meetings the first letter cost 616 ms and each one after it 380 ms,
+and the list was rebuilt two or three times per keystroke. Transcripts are now
+kept in memory and checked against the file, a recording is rejected in one pass
+before its turns are walked, occurrences are counted rather than collected, and
+the field's delayed action no longer redoes the query it has already done. The
+same typing costs 111 ms for the first letter and 88 ms after it.
+
+### Fixes
+
+- Working out which people a transcript mentions compiled a fresh regular
+  expression for every name in every recording, every time. It is compiled once
+  and kept now. A full pass over a 100-source library went from 5.3 s to 4.1 s,
+  and the app no longer sits on a pegged CPU core between passes.
+- Deleting a recording from a library reached through a symbolic link wrote no
+  tombstone and kept no trashed copy, so another Mac could bring the recording
+  back and there was nothing local to restore from. The two paths are compared
+  resolved now. The default library is not reached through a symlink, so this
+  only affected libraries set with `LISTEN_LIBRARY`.
+- The galaxy turned about whichever star you had last selected rather than about
+  the centre, and clearing the selection never brought the pivot back.
+- Hiding the sidebar left the window's own controls sitting on top of the
+  galaxy's legend.
+- The picture described itself to VoiceOver, and none of that description was
+  ever reachable: it said what the shells are, how many stars are drawn and that
+  the list beside it opens the same pages, all of it inert.
+
+## 0.38.0 (2026-09-10)
+
+Summaries about people now reach your iPhone reliably, and two Macs no longer
+overwrite each other's setting to get there.
 
 ### Two Macs stop fighting over which model runs summaries
 
@@ -88,45 +152,6 @@ be handed to another Mac, and only while no Mac has claimed it.
   trip has not been repeated end to end since the change.
 - A preferred Mac that is asleep is still addressed by default. Nothing wakes
   it, so the summary runs when Listen is next open there.
-
-### A call that was cut in two is one meeting again
-
-If a recording stops part way through a call and you start another one, Listen
-now offers to put them back together. The later recording's page says which
-meeting it looks like the rest of and why, in the terms you can check yourself:
-how far apart they are and whether both were the same app or the same calendar
-event. **Join them** folds it into the earlier recording and **Not now** leaves
-them alone, because starting a second recording on purpose is an ordinary thing
-to do.
-
-The earlier recording is the one that survives, so the meeting keeps its start
-time, its calendar event, and every note and conversation already pointing at
-it. The time between the two halves becomes silence rather than being closed
-up: a joined recording is a timeline, and closing the hole would move every
-word after it earlier.
-
-`listen join <id> [--into <id>]` does the same from the command line, and prints
-what it would do without changing anything until you add `--apply`.
-
-### Listen will not be replaced while it is recording
-
-`./install.sh` now refuses to quit and replace a running copy that is in the
-middle of a recording, and says so. This is fixed because it happened: a build
-installed itself eleven minutes into a call, and the 97 seconds between the two
-halves of that meeting are simply gone. `LISTEN_INSTALL_FORCE=1` overrides it.
-
-### Fixes
-
-- Working out which people a transcript mentions compiled a fresh regular
-  expression for every name in every recording, every time. It is compiled once
-  and kept now. A full pass over a 100-source library went from 5.3 s to 4.1 s,
-  and the app no longer sits on a pegged CPU core between passes.
-- Deleting a recording from a library reached through a symbolic link wrote no
-  tombstone and kept no trashed copy, so another Mac could bring the recording
-  back and there was nothing local to restore from. The two paths are compared
-  resolved now. The default library is not reached through a symlink, so this
-  only affected libraries set with `LISTEN_LIBRARY`.
-
 
 ## 0.37.0 (2026-09-09)
 

@@ -89,6 +89,45 @@ be handed to another Mac, and only while no Mac has claimed it.
 - A preferred Mac that is asleep is still addressed by default. Nothing wakes
   it, so the summary runs when Listen is next open there.
 
+### A call that was cut in two is one meeting again
+
+If a recording stops part way through a call and you start another one, Listen
+now offers to put them back together. The later recording's page says which
+meeting it looks like the rest of and why, in the terms you can check yourself:
+how far apart they are and whether both were the same app or the same calendar
+event. **Join them** folds it into the earlier recording and **Not now** leaves
+them alone, because starting a second recording on purpose is an ordinary thing
+to do.
+
+The earlier recording is the one that survives, so the meeting keeps its start
+time, its calendar event, and every note and conversation already pointing at
+it. The time between the two halves becomes silence rather than being closed
+up: a joined recording is a timeline, and closing the hole would move every
+word after it earlier.
+
+`listen join <id> [--into <id>]` does the same from the command line, and prints
+what it would do without changing anything until you add `--apply`.
+
+### Listen will not be replaced while it is recording
+
+`./install.sh` now refuses to quit and replace a running copy that is in the
+middle of a recording, and says so. This is fixed because it happened: a build
+installed itself eleven minutes into a call, and the 97 seconds between the two
+halves of that meeting are simply gone. `LISTEN_INSTALL_FORCE=1` overrides it.
+
+### Fixes
+
+- Working out which people a transcript mentions compiled a fresh regular
+  expression for every name in every recording, every time. It is compiled once
+  and kept now. A full pass over a 100-source library went from 5.3 s to 4.1 s,
+  and the app no longer sits on a pegged CPU core between passes.
+- Deleting a recording from a library reached through a symbolic link wrote no
+  tombstone and kept no trashed copy, so another Mac could bring the recording
+  back and there was nothing local to restore from. The two paths are compared
+  resolved now. The default library is not reached through a symlink, so this
+  only affected libraries set with `LISTEN_LIBRARY`.
+
+
 ## 0.37.0 (2026-09-09)
 
 Speaker labels are now a way to review a conversation, not just a way to rename

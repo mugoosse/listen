@@ -1,4 +1,7 @@
 import Foundation
+// ListenKit is built as a module now, not compiled in file by file: see
+// verify_memory_core.sh for why the file list could not be kept correct.
+import ListenKit
 
 @main struct VerifyMemoryCore {
     static func main() throws {
@@ -24,7 +27,10 @@ import Foundation
         do { try ContextLedger.alias("Alex R.", entity: other.id, db: db); fatalError("ambiguous alias accepted") }
         catch { checks += 1 }
         do {
-            try db.transaction { try db.put("lost", in: .metadata, id: "rollback"); throw ContextDatabase.Failure(message: "test") }
+            // Any thrown error, not `ContextDatabase.Failure` specifically:
+            // rolling back only its own error type would be the bug.
+            struct Abort: Error {}
+            try db.transaction { try db.put("lost", in: .metadata, id: "rollback"); throw Abort() }
         } catch {}
         try check(try db.get(String.self, in: .metadata, id: "rollback") == nil, "failed transaction leaves no partial changes")
         try check(ContextTime.validDay("2026-02-12") && !ContextTime.validDay("2026-02-30"), "calendar dates validated")
@@ -225,13 +231,37 @@ import Foundation
         try check(try !MemoryPreferences.policy(personID, root: preferencesRoot).automatic, "missing per-person consent is manual")
         let firstModel = MemoryPreferences.Model(provider: "claude", model: "sonnet", name: "Sonnet · Claude Code", executor: "mac-one")
         let secondModel = MemoryPreferences.Model(provider: "codex", model: "gpt", name: "GPT · Codex", executor: "mac-two")
-        try MemoryPreferences.advertise(firstModel, root: preferencesRoot)
+        // A Mac advertises on its own device record now. `advertise` wrote one
+        // shared key that named the device that wrote it, so two Macs rewrote
+        // each other's for ever; these assert the same claims against the row.
+        func mac(_ id: String, model: MemoryPreferences.Model, secondsAgo: TimeInterval) -> CloudRecords.DeviceBlob {
+            // `Metadata.stamp` is what a heartbeat writes, and `isLive` parses
+            // with `Metadata.parser`: a stamp in any other shape reads as a
+            // device that has never said anything.
+            CloudRecords.DeviceBlob(id: id, name: "Mac " + id, kind: "mac",
+                                    lastSeen: Metadata.stamp(Date().addingTimeInterval(-secondsAgo)),
+                                    appVersion: "0.0.0", summaryModel: model)
+        }
+        let firstMac = mac("mac-one", model: firstModel, secondsAgo: 60)
+        let secondMac = mac("mac-two", model: secondModel, secondsAgo: 10)
         try MemoryPreferences.select(["rec:one"], known: ["rec:one", "rec:two"], person: personID, root: preferencesRoot)
         try check(try !MemoryPreferences.policy(personID, root: preferencesRoot).automatic, "choosing sources does not enable background generation")
-        try MemoryPreferences.automatic(true, person: personID, root: preferencesRoot)
-        try MemoryPreferences.advertise(secondModel, root: preferencesRoot)
+        try MemoryPreferences.automatic(true, person: personID, model: firstModel, root: preferencesRoot)
         let policy = try MemoryPreferences.policy(personID, root: preferencesRoot)
         try check(policy.model == firstModel, "another Mac cannot change an existing person's automatic model")
+        try check(MemoryPreferences.offered([firstMac, secondMac], root: preferencesRoot) == secondModel,
+                  "the freshest live offer is the one a request is addressed to")
+        try check(MemoryPreferences.offers([firstMac, secondMac]).map(\.device.id) == ["mac-two", "mac-one"],
+                  "two Macs offering different models are two rows, not one key being fought over")
+        try MemoryPreferences.setPreferredDevice("mac-one", root: preferencesRoot)
+        let plan = MemoryPreferences.plan([firstMac, secondMac], root: preferencesRoot)
+        try check(plan.use?.device.id == "mac-one" && plan.insteadOf == nil,
+                  "an awake preferred Mac is the one a request goes to")
+        let asleep = mac("mac-one", model: firstModel, secondsAgo: MemoryPreferences.awakeWithin + 60)
+        let whenAsleep = MemoryPreferences.plan([asleep, secondMac], root: preferencesRoot)
+        try check(whenAsleep.use?.device.id == "mac-one" && whenAsleep.insteadOf?.device.id == "mac-two",
+                  "a preferred Mac is a preference and not a lock: the awake alternative is offered, not taken")
+        try MemoryPreferences.setPreferredDevice(nil, root: preferencesRoot)
         try check(policy.includes("rec:one") && !policy.includes("rec:two") && policy.includes("note:new"), "automatic updates include new sources but remember a deselected source")
         let request = try MemoryPreferences.request(person: personID, name: "Alice", sources: ["rec:one"], model: firstModel, root: preferencesRoot)
         let original = try Data(contentsOf: preferencesRoot.appendingPathComponent(MemoryPreferences.filename))

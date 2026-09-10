@@ -10,8 +10,30 @@ headings inside an entry can be anything that is not one of those.
 
 ## 0.38.0 (2026-09-10)
 
-Summaries about people now reach your iPhone reliably, and two Macs no longer
-overwrite each other's setting to get there.
+Summaries about people now reach your iPhone reliably, two Macs no longer
+overwrite each other's setting to get there, and the library can be looked at
+as one picture.
+
+### The galaxy
+
+**View → Galaxy**, or Cmd-Shift-G, draws the whole library at once: your
+recordings, notes, people and Ask conversations on four shells around this Mac,
+with a line wherever the library already records a relationship between two of
+them. A note that names a meeting is a line. Somebody speaking in one is a
+line. A conversation asked about one is a line. Nothing is inferred: there is
+no similarity edge and no "these happened the same week" edge, so every line is
+a row you can go and read.
+
+Distance from the centre is the kind of a thing and nothing else, not how
+important it is or how recent. Click a star to see what it is connected to and
+open it; double-click to go straight there. The picture is drawn from what is
+already on this disk and reaches no network.
+
+It runs the GPU while it is open and stops on its own when the window is hidden
+or covered, under Reduce Motion and in Low Power Mode. **Settings → General**
+turns the whole thing off.
+
+
 
 ### Two Macs stop fighting over which model runs summaries
 

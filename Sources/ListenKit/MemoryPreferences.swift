@@ -14,6 +14,12 @@ public enum MemoryPreferences {
     public struct Value: Codable, Sendable {
         public var text: String
         public var updated: String
+        // A public struct's memberwise initialiser is internal, so this type
+        // could be named from outside ListenKit but never built there.
+        public init(text: String, updated: String) {
+            self.text = text
+            self.updated = updated
+        }
     }
     public struct Policy: Sendable {
         public var automatic = false

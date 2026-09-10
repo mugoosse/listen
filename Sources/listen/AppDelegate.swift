@@ -303,6 +303,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LibraryWindow.shared.previewRecording(silent: want.hasSuffix("silent"))
         case "ask":
             LibraryWindow.shared.previewAsk()
+        // The galaxy, which is otherwise one menu item deep and is the screen
+        // whose whole job is being looked at. `verify_galaxy.sh` is what drives
+        // it, and a screen a script cannot open is a screen nobody checks.
+        case let want where want.hasPrefix("galaxy"):
+            LibraryWindow.shared.show()
+            LibraryWindow.shared.showGalaxy()
+            // `galaxy:selected` opens with the first recording picked, which is
+            // the only way a script reaches the inspector card: the stars are
+            // drawn by the GPU inside one Metal view, so there is nothing in
+            // the accessibility tree for a probe to click.
+            if want.hasSuffix(":selected") { LibraryWindow.shared.selectFirstGalaxyStar() }
         case let want where want.hasPrefix("speaker-review"):
             LibraryWindow.shared.previewSpeakerReview(filtered: want.hasSuffix(":filtered"))
         case let want where want.hasPrefix("person:"):

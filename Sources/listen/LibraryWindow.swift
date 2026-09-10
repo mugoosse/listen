@@ -57,7 +57,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// than a place you have to leave. A tab set cannot express "all three",
     /// which is why pressing Notes on a library with none read as the control
     /// being broken instead of as an empty answer.
-    private enum Mode { case library, settings, chat }
+    private enum Mode { case library, settings, chat, galaxy }
     private var mode: Mode = .library
     /// Where Back goes, which is wherever chat mode was entered from.
     ///
@@ -85,6 +85,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// Notes are a fourth collection for the reason People is a third: a note
     /// can name four recordings, so a recording-centric list cannot show one.
     private let notePane = NotePane()
+    /// The library as concentric shells, and a fourth mode for the reason
+    /// settings is a second one: it wants the whole content area and it is not
+    /// a recording. The sidebar stays as it is underneath, because the galaxy
+    /// and the list are two views of the same set and moving between them
+    /// should not lose the row somebody had selected.
+    private lazy var galaxyPane: GalaxyPane = {
+        let pane = GalaxyPane()
+        pane.onOpen = { [weak self] id in self?.openGalaxySubject(id) }
+        return pane
+    }()
     /// The conversations, in the sidebar's slot while one is being read. See
     /// `ChatNav`, and `Mode.chat` above for why they are there rather than in a
     /// menu.
@@ -342,6 +352,79 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// never resumes a conversation you did not ask for.
     @objc func openChats() { enterChats(searching: nil) }
 
+    /// Show the library as concentric shells. The View menu, and nothing else.
+    @objc func showGalaxy() {
+        // The menu item is rebuilt away when the galaxy is off, and this is
+        // what makes that true rather than merely tidy: a key equivalent stays
+        // in the responder chain until the rebuild lands.
+        guard Settings.galaxyEnabled else { return }
+        if window == nil { build() }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        enter(.galaxy)
+    }
+
+    var isShowingGalaxy: Bool { mode == .galaxy }
+
+    /// Pick the first recording in the galaxy, for `LISTEN_PANEL=galaxy:selected`.
+    ///
+    /// Visual test scaffolding, in the family of `previewAsk`: the stars are
+    /// GPU-drawn inside one Metal view, so a probe has nothing to click and the
+    /// inspector card would otherwise be unreachable from a script.
+    func selectFirstGalaxyStar() {
+        // After the snapshot has been read off disk, which `reload` does on a
+        // background queue. Polling rather than a callback because this is
+        // scaffolding and a callback would be production surface for it.
+        var attempts = 0
+        func attempt() {
+            attempts += 1
+            let first = galaxyPane.testSnapshot.nodes.first { $0.kind == Galaxy.Node.recording }
+            if let first { galaxyPane.select(first.id); return }
+            guard attempts < 40 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: attempt)
+        }
+        attempt()
+    }
+
+    /// The galaxy has been turned off in Settings while it is on screen.
+    ///
+    /// Settings is a mode of this window, so the switch is thrown from inside
+    /// the same window the galaxy is under. Nothing else reads the flag once
+    /// the mode is entered, so leaving is the whole of it.
+    func galaxyEnabledChanged() {
+        guard window != nil, !Settings.galaxyEnabled, mode == .galaxy else { return }
+        enter(.library)
+    }
+
+    /// Open whatever a star stands for.
+    ///
+    /// The four routes already exist and are the ones every other reference in
+    /// this app takes, which is the point of `Galaxy.Node.id` carrying the
+    /// library's own identifier: there is no second way into a recording here,
+    /// only the same way from a different picture.
+    private func openGalaxySubject(_ id: String) {
+        guard let subject = Galaxy.subject(of: id) else { return }
+        switch subject.kind {
+        case Galaxy.Node.recording: open(recording: subject.key, note: nil)
+        case Galaxy.Node.note: open(note: subject.key)
+        case Galaxy.Node.person: showPerson(subject.key)
+        case Galaxy.Node.chat:
+            // A conversation whose file has gone is a star from a snapshot
+            // taken before it was deleted. Reloading is the honest answer.
+            guard Settings.askEnabled, let chat = Chat.load(id: subject.key) else {
+                NSSound.beep()
+                galaxyPane.reload()
+                return
+            }
+            // Through the composer, which is the one entry point every other
+            // route into a conversation takes. It asks for a page when the
+            // turns are in, and `chatReturn` is the galaxy, so Back comes back
+            // here rather than to the library.
+            composerHost?.open(chat)
+        default: return
+        }
+    }
+
     /// Enter Chats mode, optionally carrying a search over from the library.
     ///
     /// The handoff row at the foot of the library's results is what passes a
@@ -464,6 +547,9 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         composerHost.onDrawerHeight = { [weak self] points in
             self?.detail.setBottomInset(points)
+            // The galaxy's controls and its card float over the scene rather
+            // than scrolling in it, so the Ask bar would sit on top of them.
+            self?.galaxyPane.setBottomInset(points)
         }
         // **The drawer asks; the window decides.** A page is a mode, and a mode
         // change is the window's to make: it swaps the sidebar's list, its
@@ -564,6 +650,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         sidebar.onSelect = { [weak self] recording in
             guard let self else { return }
+            // **A row picked while the galaxy is up leaves it.** The list is
+            // live in that mode rather than replaced, because the stars and the
+            // rows are the same recordings; what must not happen is the pane
+            // being swapped underneath a toolbar and a composer that still
+            // believe they are over a galaxy. `enter` is a no-op on the mode it
+            // is already in, so this costs a comparison on every other click.
+            self.enter(.library)
             // Back from a note, if that is where we were. `PaneHost.show` is
             // idempotent, so the ordinary case of clicking one recording after
             // another costs a comparison and nothing else.
@@ -610,6 +703,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // pause.
         sidebar.onSelectNote = { [weak self] note in
             guard let self else { return }
+            // **A row picked while the galaxy is up leaves it.** The list is
+            // live in that mode rather than replaced, because the stars and the
+            // rows are the same recordings; what must not happen is the pane
+            // being swapped underneath a toolbar and a composer that still
+            // believe they are over a galaxy. `enter` is a no-op on the mode it
+            // is already in, so this costs a comparison on every other click.
+            self.enter(.library)
             self.detail.saveYours()
             self.detail.stopPlayback()
             self.notePane.show(note)
@@ -624,6 +724,13 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // collection possible rather than a loss.
         sidebar.onSelectPerson = { [weak self] person in
             guard let self else { return }
+            // **A row picked while the galaxy is up leaves it.** The list is
+            // live in that mode rather than replaced, because the stars and the
+            // rows are the same recordings; what must not happen is the pane
+            // being swapped underneath a toolbar and a composer that still
+            // believe they are over a galaxy. `enter` is a no-op on the mode it
+            // is already in, so this costs a comparison on every other click.
+            self.enter(.library)
             self.detail.saveYours()
             self.detail.stopPlayback()
             self.personPane.show(person)
@@ -898,6 +1005,20 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // it here would make Back a second navigation rather than a return.
             composerHost?.enterPage()
 
+        case .galaxy:
+            // Both for the reason settings has them: a keystroke that has not
+            // reached disk, and a transport nobody can see is one nobody can
+            // pause.
+            detail.saveYours()
+            detail.stopPlayback()
+            // **The sidebar is left alone, and that is the difference from the
+            // other two full-window modes.** Settings and chat replace the list
+            // because theirs is a different list; the galaxy is drawn from the
+            // same recordings the sidebar is showing, so taking it away would
+            // be hiding the answer to "which of these is that star".
+            detailHost.show(galaxyPane)
+            galaxyPane.reload()
+
         case .library:
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
@@ -921,6 +1042,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                 else if sidebar.selectedPerson != nil { detailHost.show(personPane) }
                 else { detailHost.show(detail) }
             }
+            // Whatever the galaxy had selected goes with it. Coming back to a
+            // card floating over a transcript, for a star that is no longer on
+            // screen, would be a second selection nobody made.
+            if was == .galaxy { galaxyPane.select(nil) }
             reload()
             if was == .settings { askBar.refreshModelSelection() }
             // **`isViewLoaded` first, and asking without it was a bug in the
@@ -1143,6 +1268,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// cross is the other answer, "put all of this away", and a control that
     /// duplicated Back would be worth less than either.
     @objc func closePage() {
+        // Both full-window modes leave the same way, and the galaxy has nothing
+        // selected underneath to close afterwards: `closeSelected` would act on
+        // whatever the library pane still holds behind it.
+        if mode == .galaxy { enter(.library); return }
         if mode == .chat { enter(.library) }
         closeSelected()
     }
@@ -1248,6 +1377,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // mistaken for somebody else's the next time it is activated.
         libraryStamps = Self.libraryStamps()
         sidebar.reload()
+        // A recording arriving from an iPhone, or a transcript finishing, is a
+        // star appearing. `GalaxyPane.reload` coalesces, so calling it from
+        // every path that reloads the list costs one pass rather than three.
+        if mode == .galaxy { galaxyPane.reload() }
         // Re-read the selected recording from disk so a transcript that just
         // finished appears without anyone clicking away and back.
         if let id = sidebar.selectedRecording?.id, let fresh = Recording.find(id) {
@@ -1556,6 +1689,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // is nothing to collide with.
             return [Self.settingsTitleItem, .flexibleSpace, Self.backItem,
                     .sidebarTrackingSeparator, .flexibleSpace]
+        case .galaxy:
+            // **The library's shape, not settings'.** The sidebar is live in
+            // this mode, so its collapse control stays where it always is and
+            // Back does not take that slot; the cross in the last position is
+            // the way out, which is what it is on every other page here.
+            var items: [NSToolbarItem.Identifier] =
+                [Self.brandItem, .flexibleSpace, Self.settingsItem, .toggleSidebar,
+                 .sidebarTrackingSeparator, .flexibleSpace]
+            // Stop outranks the page, the same rule chat mode states.
+            if Capture.shared.isRecording { items += [Self.recordItem, .space] }
+            items.append(Self.closeItem)
+            return items
         case .chat:
             // **Settings' shape, because this is settings' kind of mode.** The
             // word takes the masthead's slot, Back takes the collapse control's,

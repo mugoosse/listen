@@ -81,6 +81,12 @@ roots that remains clear at 16 points.
   sealed before they leave with a key Apple never holds. A lossless copy of the
   audio can travel with them, so a second Mac can play a meeting and transcribe
   it again rather than only read it.
+- **Draws the whole library as one picture.** **View → Galaxy** puts your
+  recordings, notes, people and chats on four shells around this Mac, with a
+  line wherever the library already records a relationship: a note naming a
+  meeting, somebody speaking in one, a conversation asked about one. Click a
+  star to see what it is connected to, and open it. Nothing is inferred and
+  nothing leaves the Mac; it can be switched off in **Settings → General**.
 - **Answers to an agent** over MCP. Ask about your own meetings, and have the
   answer written back as a note, which can name several meetings at once. Notes
   and tags are the only things an agent can write: it cannot rename a speaker,

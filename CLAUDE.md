@@ -633,6 +633,29 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 
+### `.agents/notes/galaxy.md`
+
+The library drawn as concentric shells around this Mac. `Galaxy`,
+`GalaxyRenderer`, `GalaxyPane`, `listen galaxy`, `Mode.galaxy`.
+
+- A hand-picked list of ListenKit files is a list upstream will break
+- A public struct's memberwise initialiser is internal
+- An app that never activates itself calls its own window occluded
+- What the GPU is doing is invisible to accessibility and to a screenshot
+- A locked screen photographs as black, and answers nothing
+- A wrapping label demands its whole string as one line
+- An `NSClipView`'s origin is at the bottom
+- A character count is not a width
+- Rank the labels on the position the star is drawn at
+- `turns.json` is a bare array
+- Adjacent ids land in one band of the sphere without an avalanche mix
+- Repulsion acts across shells, on purpose
+- A failed command buffer used to be a silent return
+- `mouseUp` must compare against where the press started
+- The sidebar stays live, so a row picked there has to leave the mode
+- The shader is compiled from source, not added to the build
+- What is deliberately not here: no inferred edges, no importance in the radius
+
 ### `.agents/notes/person-context.md`
 
 Person summaries, facts, relationships, background extraction and local semantic
@@ -763,6 +786,17 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # which pressed the cross on the card this deleted.
                         # `LISTEN_APP=` points it at a released build (uitest
                         # copy)
+./verify_galaxy.sh      # the galaxy. The first half is `listen galaxy --json`
+                        # over a scratch library and needs no screen: the four
+                        # shells, one centre with no edges, only the three
+                        # relationships the library writes down, the same
+                        # library twice giving the same picture, the 1200-star
+                        # cap disclosing what it dropped, and an empty library
+                        # drawing the centre alone. `--ui` adds the window
+                        # (uitest copy): the legend, the inspector card, Open
+                        # landing on the recording, and the motion policy read
+                        # out of the LISTEN_DEBUG trace, because whether the
+                        # GPU is drawing is invisible to the AX tree
 ./verify_language.sh    # the threshold that decides a meeting was read by
                         # the wrong model: five non-English calls flagged, the
                         # two English voice memos that the first version of the

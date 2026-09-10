@@ -1,5 +1,6 @@
 import Foundation
 import ListenKit
+import simd
 
 /// The `listen` command.
 ///
@@ -124,6 +125,8 @@ enum CLI {
             title(rest)
         case "people":
             people(rest)
+        case "galaxy":
+            galaxy(rest)
         case "rename":
             renamePerson(rest)
         case "merge":
@@ -1829,6 +1832,7 @@ enum CLI {
                                  window's Delete Sentence, for the sentence the
                                  model heard twice
       people [<name>]            who is in the library, or where one person is
+      galaxy [--json]            what the galaxy would draw, in counts
       context <command>          person facts, relationships and local semantic search
                                 (run context help for update and search options)
       rename <name> <new name>   rename one person in every recording
@@ -2703,6 +2707,64 @@ enum CLI {
         for (name, summary) in labelled {
             print(name.padding(toLength: width, withPad: " ", startingAt: 0) + "  " + summary)
         }
+        exit(0)
+    }
+
+    /// `listen galaxy [--json]`: what the galaxy would draw, without opening it.
+    ///
+    /// **Counts and structure, never a title.** It exists so the picture can be
+    /// checked from a script on a machine with a locked screen, which is where
+    /// the window itself is unreachable, and so a library that draws nothing
+    /// can say why. `--json` adds the shells and the link kinds; neither form
+    /// prints what anything is called, because a galaxy of a real library is a
+    /// list of everybody you have met.
+    private static func galaxy(_ args: [String]) -> Never {
+        var asJSON = false
+        for arg in args {
+            switch arg {
+            case "--json": asJSON = true
+            default: fail("unknown option `\(arg)`. Try `listen help`.")
+            }
+        }
+        let snapshot = Galaxy.build()
+        let byKind = Dictionary(grouping: snapshot.nodes, by: \.kind).mapValues(\.count)
+        let byLink = Dictionary(grouping: snapshot.edges, by: \.label).mapValues(\.count)
+        // Every star sits exactly on its shell, or the picture is not the thing
+        // this claims to draw. Reported rather than assumed: it is the one
+        // invariant a script can check without a window.
+        let offShell = snapshot.nodes.filter { node in
+            guard let radius = Galaxy.shellRadius(kind: node.kind) else { return node.position != .zero }
+            return abs(simd_length(node.position) - radius) > 0.001
+        }.count
+        let centred = snapshot.nodes.filter { $0.kind == Galaxy.Node.device }.count
+        if asJSON {
+            let payload: [String: Any] = [
+                "nodes": snapshot.nodes.count,
+                "edges": snapshot.edges.count,
+                "nodes_by_kind": byKind,
+                "edges_by_kind": byLink,
+                "centre": centred,
+                "off_shell": offShell,
+                "centre_edges": snapshot.edges.filter {
+                    $0.source == Galaxy.deviceID || $0.target == Galaxy.deviceID
+                }.count,
+                "label": snapshot.label,
+            ]
+            let data = try? JSONSerialization.data(withJSONObject: payload,
+                                                  options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data ?? Data(), as: UTF8.self))
+            exit(0)
+        }
+        print("\(snapshot.nodes.count) stars, \(snapshot.edges.count) links")
+        for kind in [Galaxy.Node.person, Galaxy.Node.note, Galaxy.Node.chat, Galaxy.Node.recording] {
+            let radius = Galaxy.shellRadius(kind: kind).map { String(format: "%.0f", $0) } ?? "-"
+            print("  \(kind.padding(toLength: 10, withPad: " ", startingAt: 0)) "
+                  + "\(byKind[kind] ?? 0) at radius \(radius)")
+        }
+        for (label, count) in byLink.sorted(by: { $0.key < $1.key }) {
+            print("  \(label): \(count)")
+        }
+        print(snapshot.label)
         exit(0)
     }
 

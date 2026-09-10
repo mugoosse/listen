@@ -448,6 +448,7 @@ final class ActionHandler: NSObject {
 
 final class GeneralPane: Pane {
     private var loginBox: NSButton?
+    private var galaxyBox: NSButton?
     private var nameField: NSTextField?
 
     override func build() {
@@ -478,10 +479,29 @@ final class GeneralPane: Pane {
         }
         note("Listen sits in the menu bar and records nothing until it is asked to, or "
              + "until it sees a meeting start.")
+
+        separator()
+        heading("Galaxy")
+        galaxyBox = checkbox("Show the galaxy in the View menu", Settings.galaxyEnabled) { on in
+            Settings.galaxyEnabled = on
+            MainMenu.refreshGalaxy()
+            LibraryWindow.shared.galaxyEnabledChanged()
+        }
+        // The trade-off out loud rather than in a tooltip, which is this app's
+        // rule: what it costs is the GPU, and what it does not cost is anything
+        // leaving the Mac.
+        note("Your recordings, notes, people and chats as one picture, on four "
+             + "shells around this Mac. It draws what is already on this disk "
+             + "and reaches no network.\n\n"
+             + "While it is open it runs the GPU at 30 frames a second, which is "
+             + "worth turning off if you record long meetings on battery. It "
+             + "stops on its own when the window is hidden or covered, under "
+             + "Reduce Motion, and in Low Power Mode.")
     }
 
     override func refresh() {
         loginBox?.state = LoginItem.state.isSelected ? .on : .off
+        galaxyBox?.state = Settings.galaxyEnabled ? .on : .off
         // Re-read rather than left alone: the same preference is set from the
         // person page's editor and from `listen me`, and a settings field
         // showing a stale name is a settings field nobody can trust.

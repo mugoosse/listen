@@ -21,6 +21,12 @@ enum MainMenu {
     /// Show or hide the Ask row, after `Settings.askEnabled` has changed.
     static func refreshAsk() { chatsItem?.isHidden = !Settings.askEnabled }
 
+    /// The galaxy's row, held for the same reason and hidden the same way.
+    private static weak var galaxyItem: NSMenuItem?
+
+    /// Show or hide it, after `Settings.galaxyEnabled` has changed.
+    static func refreshGalaxy() { galaxyItem?.isHidden = !Settings.galaxyEnabled }
+
     static func install() {
         let main = NSMenu()
 
@@ -206,7 +212,17 @@ enum MainMenu {
         chatsItem = add(menu, "Chats", #selector(MenuActions.openChats), "0",
                         [.command, .shift])
         chatsItem?.target = MenuActions.shared
+        // The only route to the galaxy, on purpose. It is a way of looking at
+        // the library rather than a thing in it, which is what the View menu
+        // is for, and a fifth toolbar item on the home page would be a control
+        // competing with Record for the eye. Hidden rather than removed when
+        // the setting is off, for the reason Chats is: `install` may not be
+        // called twice, so the row cannot be rebuilt when a checkbox moves.
+        galaxyItem = add(menu, "Galaxy", #selector(MenuActions.openGalaxy), "g",
+                         [.command, .shift])
+        galaxyItem?.target = MenuActions.shared
         refreshAsk()
+        refreshGalaxy()
         add(menu, "Open Listen", #selector(MenuActions.openLibrary), "0")
             .target = MenuActions.shared
         return item
@@ -265,6 +281,7 @@ final class MenuActions: NSObject {
     @objc func openSettings() { LibraryWindow.shared.showSettings() }
     @objc func openLibrary() { LibraryWindow.shared.show() }
     @objc func openChats() { LibraryWindow.shared.openChats() }
+    @objc func openGalaxy() { LibraryWindow.shared.showGalaxy() }
     /// The window, not the settings section. See `AboutWindow`.
     @objc func showAbout() { AboutWindow.show() }
     /// The notes that shipped with this build, not the ones on GitHub. See

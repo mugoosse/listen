@@ -691,6 +691,7 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - Background generation is a separate consent from local search
 - Text embeddings are not voiceprints
 - A preferred Mac is a preference, not a lock
+- A Mac that is recording does not begin, and the wait did not say so
 
 ### `.agents/notes/telemetry.md` (16k)
 

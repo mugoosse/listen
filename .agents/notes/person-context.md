@@ -265,3 +265,19 @@ alternative up as `insteadOf` for the screen to offer. Nothing substitutes on
 anybody's behalf. A waiting request can be handed to another Mac from the person
 page, and only while it is still `pending`: one a Mac has claimed is running
 somewhere, and re-addressing it would put two Macs on the same conversation.
+
+**A Mac that is recording does not begin, and the screen did not say so.**
+`ContextService.refresh` returns on `!Capture.shared.isRecording` before it
+looks at anything, so an explicit request addressed to this Mac sits at
+`pending` for the whole call: its 30 second timer ticks and does nothing, and
+Create Summary pressed during a meeting enqueues a request whose own
+`refresh(manual: true)` returns on that same line. Measured on 10 September
+2026: a nine source request created at 18:21, five minutes into a call, was
+never touched again (`updated` still equal to `created`) while the person page
+read "Waiting for this Mac to begin...". True, and useless, and the same
+"never runs and never says why" that the preferred-Mac paragraph above exists
+to prevent. The guard itself is right, because nothing should compete with the
+meeting being recorded, so the fix is the sentence and not the schedule: the
+pending line names the recording when the request's executor is this Mac and
+this Mac is recording, and the next tick after Stop picks the request up
+without anybody pressing anything again.

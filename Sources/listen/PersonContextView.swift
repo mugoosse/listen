@@ -187,10 +187,22 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
         } else { add(label("Loading summary…", size: 12, color: .secondaryLabelColor)) }
 
         if let request, ["pending", "running"].contains(request.state), !updating {
-            let message = request.message ?? (request.state == "running"
-                ? "Creating this summary on your Mac…"
-                : "Waiting for this Mac to begin…")
-            add(label(message, size: 12, color: .secondaryLabelColor))
+            // A request addressed to this Mac does not start while this Mac is
+            // recording: `ContextService.refresh` returns on `isRecording`, so
+            // every 30 second tick of a two hour call is a no-op. "Waiting for
+            // this Mac to begin" is then a wait with no end and no reason, the
+            // failure `MemoryPreferences.Plan` was written to avoid. Only this
+            // Mac's own recording may be named, because another executor's is
+            // invisible from here.
+            let held = request.model.executor == ContextService.deviceID && Capture.shared.isRecording
+            let message = held
+                ? "Waiting until the current recording stops…"
+                : (request.message ?? (request.state == "running"
+                    ? "Creating this summary on your Mac…"
+                    : "Waiting for this Mac to begin…"))
+            let line = label(message, size: 12, color: .secondaryLabelColor)
+            line.setAccessibilityLabel("Summary update: " + message)
+            add(line)
         }
         if let chosen = ContextModel.chosen(cachedOnly: true) {
             let policy = person.flatMap { try? MemoryPreferences.policy(MemoryPreferences.personID($0, root: Library.root), root: Library.root) }

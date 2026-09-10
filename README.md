@@ -339,11 +339,12 @@ somebody, and typing a name from scratch files nothing.
 
 ### What is coming up
 
-The library opens on **Up next**: the meetings in the next twelve hours that
-somebody else is invited to, three at most, with the time counting down and a
-camera on the ones you can join. A block you put in your own calendar is never
-listed, and neither is an all-day event or an invitation you declined. When
-there is nothing, the section is not there at all.
+The library opens on **Up next**: the meetings in the next twelve hours, three
+at most, with the time counting down and a camera on the ones you can join. An
+hour you have blocked out for yourself is listed too, because that is how most
+in-person meetings and every held hour are entered. An all-day event is not, and
+neither is an invitation you declined. When there is nothing, the section is not
+there at all.
 
 Open one and you get the invitation: who is coming, what the library already
 holds about each of them, the agenda if the invitation has one, and every

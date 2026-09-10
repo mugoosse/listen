@@ -40,6 +40,18 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private var snapshotGeneration = 0
 
     /// Everything the label layout depends on. See `updateLabels`.
+    ///
+    /// **`reserved` is part of it, and leaving it out was a bug.** The pass
+    /// refuses any title that would land under the legend, the status line, the
+    /// controls or the inspector card, and all four of those move: the card
+    /// grows with the number of links on the star, and the controls and the
+    /// card both slide up as the Ask bar grows. Keyed on the camera alone, the
+    /// corrective pass those movements trigger was skipped and the titles
+    /// stayed under them.
+    ///
+    /// It cannot re-open the loop the memo exists to break: the labels are
+    /// positioned by frame and move none of those four views, so the rects
+    /// settle after one pass and the next comparison is equal.
     private struct LabelState: Equatable {
         var camera: GalaxyCamera
         var time: Double
@@ -47,6 +59,7 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         var hovered: String?
         var size: CGSize
         var generation: Int
+        var reserved: [CGRect]
     }
     private var labelState: LabelState?
 
@@ -141,6 +154,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         bottomInset = points
         controlsBottom?.constant = -(16 + points)
         inspectorBottom?.constant = -(16 + points)
+        // The controls and the card have moved, so the titles that were told
+        // to keep clear of them have to be laid out again.
+        invalidate()
     }
 
     private func installMetalView() {
@@ -571,9 +587,13 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // two dozen text fields and asked for a frame for ever, on an idle
         // galaxy with the motion paused and nothing selected, which is exactly
         // the cost `GalaxyMotionPolicy` exists to prevent.
+        // The corners the chrome occupies, so a title never lands under the
+        // legend or behind the inspector card.
+        let reserved = [legend.frame, statusLabel.frame, controls.frame,
+                        inspector.isHidden ? .zero : inspector.frame].map { $0.insetBy(dx: -6, dy: -6) }
         let state = LabelState(camera: camera, time: motionTime, selected: selectedID,
                                hovered: hoveredID, size: metalView.bounds.size,
-                               generation: snapshotGeneration)
+                               generation: snapshotGeneration, reserved: reserved)
         guard state != labelState else { return }
         labelState = state
         labelUpdateCount += 1
@@ -604,10 +624,6 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         }
         let ranked = candidates.sorted { $0.priority == $1.priority ? $0.depth < $1.depth : $0.priority > $1.priority }
         var occupied: [CGRect] = []
-        // The corners the chrome occupies, so a title never lands under the
-        // legend or behind the inspector card.
-        let reserved = [legend.frame, statusLabel.frame, controls.frame,
-                        inspector.isHidden ? .zero : inspector.frame].map { $0.insetBy(dx: -6, dy: -6) }
         for candidate in ranked {
             if labels.count >= 24 { break }
             let node = candidate.node

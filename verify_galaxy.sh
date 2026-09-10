@@ -156,6 +156,9 @@ SHOT="$DIR/galaxy.png"
 LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --image "$SHOT" >/dev/null 2>&1
 [ -s "$SHOT" ]
 check $? "listen galaxy --image writes a PNG"
+LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --image "$DIR/wrong.jpg" >/dev/null 2>&1
+[ ! -e "$DIR/wrong.jpg" ]
+check $? "and refuses a path it would not be readable at"
 [ "$(python3 "$ROOT/tools/pngstats.py" "$SHOT" size)" = "1600 1000" ]
 check $? "at the size it says"
 bright=$(python3 "$ROOT/tools/pngstats.py" "$SHOT" bright)

@@ -473,6 +473,13 @@ enum GalaxyImage {
         guard width > 0, height > 0 else { throw GalaxyRendererError.bufferAllocation }
         guard let device = MTLCreateSystemDefaultDevice() else { throw GalaxyRendererError.metalUnavailable }
         let renderer = try GalaxyRenderer(device: device)
+        // **Without this the failure is invisible.** `encode` returns quietly
+        // when it cannot make a render encoder, and a command buffer with
+        // nothing in it completes successfully, so the PNG would be written
+        // from a texture whose clear had never run and the CLI would print
+        // "wrote out.png" over a blank file.
+        var failure: String?
+        renderer.onError = { failure = failure ?? $0 }
         renderer.update(snapshot: snapshot, selectionID: nil)
 
         let colour = MTLTextureDescriptor.texture2DDescriptor(
@@ -509,6 +516,7 @@ enum GalaxyImage {
         guard commandBuffer.status == .completed else {
             throw GalaxyRendererError.commandBuffer
         }
+        if failure != nil { throw GalaxyRendererError.renderEncoder }
 
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         colourTexture.getBytes(&pixels, bytesPerRow: width * 4,

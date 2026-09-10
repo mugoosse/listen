@@ -1040,6 +1040,14 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // one of their own. Cmd-Shift-G out of Settings left the section
             // list down the side of the galaxy.
             sidebarHost.show(sidebar)
+            // **And the composer is about the library again.** It is scoped by
+            // the three sidebar handlers and by `closeSelected`, none of which
+            // runs on the way in here, so "Ask about this meeting…" was left
+            // under a picture of the whole library and a question asked there
+            // was filed against whatever page had been open. The galaxy then
+            // drew that as an "Asked about" line, which is the one thing this
+            // screen promises never to invent.
+            askBar.show(nil)
             detailHost.show(galaxyPane)
             galaxyPane.setBottomInset(drawerHeight)
             // Explicitly rather than through `viewDidAppear`: a pane that is
@@ -1298,9 +1306,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// cross is the other answer, "put all of this away", and a control that
     /// duplicated Back would be worth less than either.
     @objc func closePage() {
-        // Both full-window modes leave the same way, and the galaxy has nothing
-        // selected underneath to close afterwards: `closeSelected` would act on
-        // whatever the library pane still holds behind it.
+        // The galaxy leaves the same way chat does, and has nothing selected
+        // underneath to close afterwards: `closeSelected` would act on whatever
+        // the library pane still holds behind it. So the cross does not mean
+        // quite the same thing on all four screens any more: on the two
+        // full-window modes it puts the mode away and leaves what was under it,
+        // and on a page it closes the page.
         if mode == .galaxy { enter(.library); return }
         if mode == .chat { enter(.library) }
         closeSelected()

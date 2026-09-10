@@ -2730,7 +2730,13 @@ enum CLI {
             case "--image":
                 i += 1
                 guard i < args.count else { fail("--image needs a path ending in .png") }
-                image = URL(fileURLWithPath: (args[i] as NSString).expandingTildeInPath)
+                let path = URL(fileURLWithPath: (args[i] as NSString).expandingTildeInPath)
+                // Checked, because the message above promises it is. A PNG
+                // written to `out.jpg` is a file nothing will open.
+                guard path.pathExtension.lowercased() == "png" else {
+                    fail("--image writes a PNG, so its path has to end in .png")
+                }
+                image = path
             default: fail("unknown option `\(args[i])`. Try `listen help`.")
             }
             i += 1

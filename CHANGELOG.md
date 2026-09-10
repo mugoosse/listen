@@ -8,11 +8,41 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
-## 0.39.0 (2026-09-10)
+## 0.39.0 (2026-09-11)
 
-The whole library can be looked at as one picture, a call that was cut in two
-can be put back together, and searching a library of long meetings is several
-times faster.
+Listen says what is coming up and can prepare you for it, the whole library can
+be looked at as one picture, a call that was cut in two can be put back
+together, and searching a library of long meetings is several times faster.
+
+### What is coming up
+
+The library opens on **Up next**: the meetings in the next twelve hours, three
+at most, each with the time counting down, the faces of who is coming and a
+camera on the ones you can join. An hour you have blocked out for yourself is
+listed too, because that is how most in-person meetings and every held hour are
+entered. An all-day event is not, and neither is an invitation you declined.
+When there is nothing coming, the section is not there at all.
+
+Twelve hours rather than the rest of today, which is the obvious rule and is
+wrong twice a day: at 18:00 it says the calendar is empty when tomorrow starts
+at 09:00. A meeting stays listed for fifteen minutes after it starts, because
+the one you are five minutes late for is the one whose link you most want.
+
+Open one and you get the invitation: who is coming, what the library already
+holds about each of them, the agenda if there is one, and every recording you
+have with those people. **Prepare** asks your agent what you should know before
+it starts, out of your own meetings. That conversation is not thrown away when
+the meeting begins: once the recording is matched to the invitation, the
+preparation sits on the meeting's own page rather than in History.
+
+`listen calendar next` prints the same list, and then every meeting nearby that
+it left out with the reason. `listen calendar next --prompt` prints the question
+Prepare sends, so the window and the command are provably asking the same thing.
+
+This is the third thing the calendar permission buys, after naming a recording
+and offering the people on the invitation when you name a speaker. Refusing it
+still costs exactly those things and nothing else, and **Settings → Meetings**
+turns the section off on its own.
 
 ### The galaxy
 
@@ -57,9 +87,9 @@ If a recording stops part way through a call and you start another one, Listen
 now offers to put them back together. The later recording's page says which
 meeting it looks like the rest of and why, in the terms you can check yourself:
 how far apart they are and whether both were the same app or the same calendar
-event. **Join them** folds it into the earlier recording and **Not now** leaves
-them alone, because starting a second recording on purpose is an ordinary thing
-to do.
+event. **Merge recordings** folds it into the earlier recording and **Not now**
+leaves them alone, because starting a second recording on purpose is an ordinary
+thing to do.
 
 The earlier recording is the one that survives, so the meeting keeps its start
 time, its calendar event, and every note and conversation already pointing at

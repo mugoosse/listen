@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Metal
 import MetalKit
@@ -453,4 +454,81 @@ final class GalaxyRenderer {
     }
     fragment float4 galaxyGuideFragment(Out in [[stage_in]]) { return in.color; }
     """
+}
+
+/// The galaxy rendered to a file, with no window.
+///
+/// **It exists because a locked screen photographs as black.** Metal needs no
+/// display, so this answers "what does the picture look like" on a machine
+/// whose window server will not hand over a single pixel, which is where
+/// `verify_galaxy.sh --ui` cannot run at all.
+///
+/// It draws stars, links and the shell guides, and **no titles**: the labels
+/// are AppKit text fields over the scene, so an image of a real library is a
+/// pattern of coloured dots and carries no recording, note or person's name.
+/// That is what makes it safe to write one out of somebody's own library.
+enum GalaxyImage {
+    static func write(_ snapshot: Galaxy.Snapshot, to output: URL,
+                      width: Int = 1600, height: Int = 1000) throws {
+        guard width > 0, height > 0 else { throw GalaxyRendererError.bufferAllocation }
+        guard let device = MTLCreateSystemDefaultDevice() else { throw GalaxyRendererError.metalUnavailable }
+        let renderer = try GalaxyRenderer(device: device)
+        renderer.update(snapshot: snapshot, selectionID: nil)
+
+        let colour = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        colour.usage = [.renderTarget]
+        colour.storageMode = .shared
+        let depth = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
+        depth.usage = [.renderTarget]
+        depth.storageMode = .private
+        guard let colourTexture = device.makeTexture(descriptor: colour),
+              let depthTexture = device.makeTexture(descriptor: depth) else {
+            throw GalaxyRendererError.bufferAllocation
+        }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = colourTexture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.035, green: 0.05, blue: 0.09, alpha: 1)
+        pass.depthAttachment.texture = depthTexture
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .dontCare
+        pass.depthAttachment.clearDepth = 1
+
+        var camera = GalaxyCamera()
+        camera.frameGalaxy(aspect: Float(width) / Float(height))
+        guard let commandBuffer = renderer.commandQueue.makeCommandBuffer() else {
+            throw GalaxyRendererError.commandBuffer
+        }
+        renderer.encode(commandBuffer: commandBuffer, renderPassDescriptor: pass,
+                        viewportSize: CGSize(width: width, height: height), camera: camera)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else {
+            throw GalaxyRendererError.commandBuffer
+        }
+
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        colourTexture.getBytes(&pixels, bytesPerRow: width * 4,
+                               from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        // The texture is BGRA and a PNG is RGBA. Without the swap the sky comes
+        // out brown and every shell is the wrong colour, which looks like a
+        // palette bug rather than a byte order.
+        for index in stride(from: 0, to: pixels.count, by: 4) { pixels.swapAt(index, index + 2) }
+        guard let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bitmapFormat: [.alphaNonpremultiplied],
+                bytesPerRow: width * 4, bitsPerPixel: 32),
+              let destination = bitmap.bitmapData else { throw GalaxyRendererError.bufferAllocation }
+        pixels.withUnsafeBytes {
+            destination.update(from: $0.baseAddress!.assumingMemoryBound(to: UInt8.self), count: pixels.count)
+        }
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw GalaxyRendererError.bufferAllocation
+        }
+        try png.write(to: output, options: .atomic)
+    }
 }

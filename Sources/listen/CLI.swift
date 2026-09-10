@@ -1832,7 +1832,9 @@ enum CLI {
                                  window's Delete Sentence, for the sentence the
                                  model heard twice
       people [<name>]            who is in the library, or where one person is
-      galaxy [--json]            what the galaxy would draw, in counts
+      galaxy [--json] [--image F.png]
+                                 what the galaxy would draw, in counts,
+                                 and optionally as an image with no titles
       context <command>          person facts, relationships and local semantic search
                                 (run context help for update and search options)
       rename <name> <new name>   rename one person in every recording
@@ -2720,13 +2722,28 @@ enum CLI {
     /// list of everybody you have met.
     private static func galaxy(_ args: [String]) -> Never {
         var asJSON = false
-        for arg in args {
-            switch arg {
+        var image: URL?
+        var i = 0
+        while i < args.count {
+            switch args[i] {
             case "--json": asJSON = true
-            default: fail("unknown option `\(arg)`. Try `listen help`.")
+            case "--image":
+                i += 1
+                guard i < args.count else { fail("--image needs a path ending in .png") }
+                image = URL(fileURLWithPath: (args[i] as NSString).expandingTildeInPath)
+            default: fail("unknown option `\(args[i])`. Try `listen help`.")
             }
+            i += 1
         }
         let snapshot = Galaxy.build()
+        if let image {
+            // Stars, links and the shell guides. No titles, because the labels
+            // are AppKit text fields over the scene rather than anything the
+            // GPU draws, so an image of a real library names nobody.
+            do { try GalaxyImage.write(snapshot, to: image) }
+            catch { fail("\(error.localizedDescription)") }
+            log("wrote \(image.path)")
+        }
         let byKind = Dictionary(grouping: snapshot.nodes, by: \.kind).mapValues(\.count)
         let byLink = Dictionary(grouping: snapshot.edges, by: \.label).mapValues(\.count)
         // Every star sits exactly on its shell, or the picture is not the thing

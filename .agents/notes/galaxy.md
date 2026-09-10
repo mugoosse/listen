@@ -98,6 +98,16 @@ locked, which is the same family as a sleeping display emptying the AX tree.
 Check `ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` before
 believing a picture, and before believing a UI run that "passed".
 
+`listen galaxy --image` is the way round it: Metal needs no display, so the
+scene renders to a PNG on a machine whose window server will not hand over a
+pixel. It draws stars, links and the shell guides and **no titles**, because
+the labels are AppKit text fields over the scene rather than anything the GPU
+draws, which is what makes it safe to write one out of a real library.
+`tools/pngstats.py` decodes the result without Pillow, and counts how many
+pixels fall in each shell's colour: that is what proves a shell is drawn at
+all, and it is the check that caught the layout collapsing into one hemisphere
+while every count-based assertion still passed.
+
 ### A wrapping label demands its whole string as one line
 
 `NSTextField(wrappingLabelWithString:)` in a leading-aligned `NSStackView`
@@ -147,6 +157,19 @@ where Swift's own `Hasher` is deliberately not. Raw FNV over ids that differ in
 their last character returns values that differ only in their low bits, so
 taking `z` from those put a whole library into one latitude band. Two
 avalanche-mixed draws per id, one for `z` and one for the angle.
+
+### Attraction is towards the average neighbour, never the sum of them
+
+Summing the edge force pulls a star with forty edges forty times as hard as one
+with a single edge, and every library has a star like that: you are in all of
+your own recordings. Measured on a synthetic library where three people spoke
+in all forty-eight meetings, the summed version dragged the whole picture into
+one hemisphere and left the other half of every shell empty. It was invisible
+in every count-based check, because the counts were all correct and the stars
+were all exactly on their shells; `listen galaxy --image` is what showed it.
+
+Dividing each star's accumulated pull by its degree fixes it. The real library
+was less obviously wrong and still wrong: `Me` speaks in 76 of 76 recordings.
 
 ### Repulsion acts across shells, on purpose
 

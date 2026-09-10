@@ -649,6 +649,7 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Rank the labels on the position the star is drawn at
 - `turns.json` is a bare array
 - Adjacent ids land in one band of the sphere without an avalanche mix
+- Attraction is towards the average neighbour, never the sum of them
 - Repulsion acts across shells, on purpose
 - A failed command buffer used to be a silent return
 - `mouseUp` must compare against where the press started
@@ -796,7 +797,12 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # (uitest copy): the legend, the inspector card, Open
                         # landing on the recording, and the motion policy read
                         # out of the LISTEN_DEBUG trace, because whether the
-                        # GPU is drawing is invisible to the AX tree
+                        # GPU is drawing is invisible to the AX tree. The
+                        # picture itself is checked offscreen through `listen
+                        # galaxy --image` and `tools/pngstats.py`, which is
+                        # what still answers on a machine whose screen is
+                        # locked: `screencapture` returns black there rather
+                        # than an error
 ./verify_language.sh    # the threshold that decides a meeting was read by
                         # the wrong model: five non-English calls flagged, the
                         # two English voice memos that the first version of the

@@ -140,6 +140,43 @@ check $? "an empty library is the centre and nothing else"
 [ "$(echo "$empty" | jq_ edges)" = "0" ]
 check $? "with no links invented to fill it"
 
+echo
+echo "6. the picture itself, rendered with no window at all"
+# Metal needs no display, so this is the half that still answers on a machine
+# whose screen is locked. `screencapture` returns a black image there rather
+# than an error, so a UI run that "passed" on one is a run that checked nothing.
+SHOT="$DIR/galaxy.png"
+LISTEN_LIBRARY="$LIB" "$APP_BIN" galaxy --image "$SHOT" >/dev/null 2>&1
+[ -s "$SHOT" ]
+check $? "listen galaxy --image writes a PNG"
+[ "$(python3 "$ROOT/tools/pngstats.py" "$SHOT" size)" = "1600 1000" ]
+check $? "at the size it says"
+bright=$(python3 "$ROOT/tools/pngstats.py" "$SHOT" bright)
+[ "$bright" -gt 500 ] 2>/dev/null
+check $? "and it is not a black frame ($bright lit pixels)"
+[ "$bright" -lt 400000 ] 2>/dev/null
+check $? "and not a wash over the whole image"
+read -r teal orange purple blue <<EOF
+$(python3 "$ROOT/tools/pngstats.py" "$SHOT" hues)
+EOF
+[ "$teal" -gt 50 ] 2>/dev/null
+check $? "the recordings shell is drawn ($teal px)"
+[ "$orange" -gt 20 ] 2>/dev/null
+check $? "the notes shell is drawn ($orange px)"
+[ "$blue" -gt 50 ] 2>/dev/null
+check $? "the people shell and the centre are drawn ($blue px)"
+# No chats in this fixture, so its shell must be empty rather than filled with
+# something else. A colour that appears where there is nothing to draw is a
+# palette bug, and it would be invisible in every count-based check above.
+[ "$purple" -lt 50 ] 2>/dev/null
+check $? "and the chats shell is empty, because this library has no chats ($purple px)"
+
+EMPTYSHOT="$DIR/empty.png"
+LISTEN_LIBRARY="$DIR/empty" "$APP_BIN" galaxy --image "$EMPTYSHOT" >/dev/null 2>&1
+emptyBright=$(python3 "$ROOT/tools/pngstats.py" "$EMPTYSHOT" bright)
+[ "$emptyBright" -lt "$bright" ] 2>/dev/null
+check $? "an empty library draws the centre and the guides, and nothing else ($emptyBright px)"
+
 # ---------------------------------------------------------------------------
 # The window. Needs Accessibility permission and an awake, unlocked display.
 # ---------------------------------------------------------------------------
@@ -171,7 +208,7 @@ launch() {
   sleep 6
 }
 
-echo "6. the galaxy opens, and says what it is showing"
+echo "7. the galaxy opens, and says what it is showing"
 launch galaxy
 dump=$("$PROBE" texts $APP 2>&1)
 case $? in 3) echo "  SKIP: no Accessibility permission" >&2; stop; exit 2;; esac
@@ -195,7 +232,7 @@ check $? "the snapshot it drew is the library, read on a background queue"
 stop
 
 echo
-echo "7. a selected star offers the page it stands for"
+echo "8. a selected star offers the page it stands for"
 : > "$TRACE"
 launch galaxy:selected
 dump=$("$PROBE" texts $APP 2>&1)
@@ -216,7 +253,7 @@ check $? "and lands in the library, on the recording"
 stop
 
 echo
-echo "8. motion stops when nobody can see it"
+echo "9. motion stops when nobody can see it"
 : > "$TRACE"
 launch galaxy
 # The window is frontmost after launch, so ambient motion is permitted unless

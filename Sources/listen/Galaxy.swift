@@ -264,13 +264,33 @@ enum Galaxy {
         let passes = max(0, min(iterations, 24))
         guard passes > 0 else { return Snapshot(nodes: nodes, edges: edges, label: snapshot.label) }
 
+        // How many edges each star has, computed once. See the loop below for
+        // why the number is needed rather than just the edges.
+        var degree = Array(repeating: 0, count: nodes.count)
+        for edge in edges {
+            guard let a = indices[edge.source], let b = indices[edge.target], a != b else { continue }
+            degree[a] += 1
+            degree[b] += 1
+        }
+
         for _ in 0..<passes {
+            var pull = Array(repeating: SIMD3<Float>.zero, count: nodes.count)
             var delta = Array(repeating: SIMD3<Float>.zero, count: nodes.count)
             for edge in edges {
                 guard let a = indices[edge.source], let b = indices[edge.target], a != b else { continue }
                 let da = unit(nodes[a].position), db = unit(nodes[b].position)
-                delta[a] += tangent(db - da * dot(db, da), at: da) * 0.12
-                delta[b] += tangent(da - db * dot(da, db), at: db) * 0.12
+                pull[a] += tangent(db - da * dot(db, da), at: da)
+                pull[b] += tangent(da - db * dot(da, db), at: db)
+            }
+            // **Towards the average neighbour, not the sum of them.** Summing
+            // pulls a star with forty edges forty times as hard as one with a
+            // single edge, and every library has a person like that: you are in
+            // all of your own recordings. Measured on a synthetic library where
+            // three people spoke in all forty-eight meetings, the summed
+            // version dragged the entire picture into one hemisphere and left
+            // the other half of every shell empty.
+            for index in pull.indices where degree[index] > 0 {
+                delta[index] = pull[index] / Float(degree[index]) * 0.12
             }
             // Fixed-resolution buckets over the unit sphere, so crowding costs
             // a bounded number of comparisons rather than every pair. A library

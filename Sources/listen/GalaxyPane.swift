@@ -678,6 +678,8 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     /// the app's own font at the app's own size and a bitmap atlas would be a
     /// second typographic system to keep agreeing with the first. The cap is
     /// what keeps that affordable: the stars and lines stay GPU-instanced.
+    private struct Candidate { let node: Galaxy.Node; let point: CGPoint; let depth: Float; let priority: Int }
+
     private func updateLabels() {
         guard let metalView, metalView.bounds.width > 0, metalView.bounds.height > 0 else { return }
         // **Nothing to do is a return.** Rebuilding two dozen text fields is
@@ -694,7 +696,8 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // motion paused, five runs, which a live loop would not allow. So the
         // saving is the reason and the loop is insurance.
         // The corners the chrome occupies, so a title never lands under the
-        // legend or behind the inspector card.
+        // legend or behind the inspector card. Part of the key as well as the
+        // layout: see `LabelState`.
         let reserved = [legend.frame, statusLabel.frame, controls.frame,
                         inspector.isHidden ? .zero : inspector.frame].map { $0.insetBy(dx: -6, dy: -6) }
         let state = LabelState(camera: camera, time: motionTime, selected: selectedID,
@@ -712,7 +715,6 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         let neighbours = Set(drawn.edges.flatMap { edge -> [String] in
             edge.source == selectedID || edge.target == selectedID ? [edge.source, edge.target] : []
         })
-        struct Candidate { let node: Galaxy.Node; let point: CGPoint; let depth: Float; let priority: Int }
         // Ranked on the position the star is drawn at, not the one the layout
         // gave it: those differ by the ambient rotation, and ranking on the
         // wrong one labels a different set of stars from the ones in front.
@@ -738,6 +740,15 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // least: it already has a title and a date in the list beside this.
         let asked = candidates.filter { $0.priority > 0 }
             .sorted { $0.priority == $1.priority ? $0.depth < $1.depth : $0.priority > $1.priority }
+        // **With a star selected, name it and what it links to, and nothing
+        // else.** The rest are dimmed to context, so labelling them puts
+        // twenty unrelated titles over a picture whose whole point at that
+        // moment is one thing and its neighbours. The turn-taking below is for
+        // the unselected view, where there is no answer to be crowded out.
+        guard selectedID == nil else {
+            layOut(asked, in: metalView)
+            return
+        }
         var queues: [[Candidate]] = [Galaxy.Node.person, Galaxy.Node.note,
                                      Galaxy.Node.chat, Galaxy.Node.recording].map { kind in
             candidates.filter { $0.priority == 0 && $0.node.kind == kind }.sorted { $0.depth < $1.depth }
@@ -748,6 +759,13 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                 ranked.append(queues[index].removeFirst())
             }
         }
+        layOut(ranked, in: metalView)
+    }
+
+    /// Place as many of these titles as fit without overlapping each other or
+    /// the chrome, in the order given.
+    private func layOut(_ ranked: [Candidate], in metalView: MTKView) {
+        let reserved = labelState?.reserved ?? []
         var occupied: [CGRect] = []
         for candidate in ranked {
             if labels.count >= 24 { break }
@@ -869,7 +887,7 @@ private final class GalaxyLegendRow: NSButton {
 /// does not try to be the page: a recording's transcript, a note's text and a
 /// conversation's turns all live somewhere that already shows them properly,
 /// and Open is the whole point of the card.
-final class GalaxyInspector: NSView {
+final class GalaxyInspector: NSVisualEffectView {
     var onOpen: (() -> Void)?
     var onClear: (() -> Void)?
 
@@ -882,11 +900,18 @@ final class GalaxyInspector: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // **The sidebar's own material**, so the card reads as part of this
+        // window rather than as a tooltip drawn on top of it. It was a flat
+        // near-black with a hairline border, which is what a panel over a
+        // scene looks like in a game and not what anything else here looks
+        // like. `.withinWindow` because what is behind it is the scene.
+        material = .sidebar
+        blendingMode = .withinWindow
+        state = .active
         wantsLayer = true
         layer?.cornerRadius = 10
-        layer?.backgroundColor = NSColor(calibratedRed: 0.07, green: 0.09, blue: 0.14, alpha: 0.94).cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
 
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -915,10 +940,7 @@ final class GalaxyInspector: NSView {
         openButton.bezelStyle = .rounded
         openButton.target = self
         openButton.action = #selector(open)
-        let clear = NSButton(title: "Clear", target: self, action: #selector(clear))
-        clear.bezelStyle = .rounded
-        clear.setAccessibilityLabel("Clear selection")
-        let row = NSStackView(views: [openButton, clear])
+        let row = NSStackView(views: [openButton])
         row.orientation = .horizontal
         row.spacing = 8
 
@@ -930,9 +952,57 @@ final class GalaxyInspector: NSView {
         for item in [title, detail] {
             item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
         }
+        // **A cross in the corner, where every other page in this window puts
+        // the way out.** It was a "Clear" button beside Open, which read as a
+        // second verb on the thing being described rather than as dismissing
+        // the card, and put the two at the same weight.
+        addSubview(close)
+        close.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            close.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            close.widthAnchor.constraint(equalToConstant: 22),
+            close.heightAnchor.constraint(equalToConstant: 22),
+            // The card's own text stops short of it, or a long kind word runs
+            // underneath the button.
+            kind.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -8),
+        ])
         setAccessibilityRole(.group)
     }
     required init?(coder: NSCoder) { nil }
+
+    /// The way out, as the round glass cross this window uses everywhere else.
+    private lazy var close: NSView = {
+        let glass = NSVisualEffectView()
+        glass.material = .hudWindow
+        glass.blendingMode = .withinWindow
+        glass.state = .active
+        glass.wantsLayer = true
+        glass.layer?.cornerRadius = 11
+        glass.layer?.masksToBounds = true
+        // The material alone is nearly invisible against this ground, which is
+        // most of the point of the ground. A little white over it gives the
+        // circle the same presence the window's own cross has.
+        glass.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        let button = NSButton(image: NSImage(systemSymbolName: "xmark",
+                                             accessibilityDescription: "Clear selection") ?? NSImage(),
+                              target: self, action: #selector(clear))
+        button.isBordered = false
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = NSColor.white.withAlphaComponent(0.9)
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        button.setAccessibilityLabel("Clear selection")
+        button.toolTip = "Clear selection"
+        button.translatesAutoresizingMaskIntoConstraints = false
+        glass.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: glass.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: glass.trailingAnchor),
+            button.topAnchor.constraint(equalTo: glass.topAnchor),
+            button.bottomAnchor.constraint(equalTo: glass.bottomAnchor),
+        ])
+        return glass
+    }()
 
     func show(node: Galaxy.Node, links edges: [Galaxy.Edge], titles: [String: String], openable: Bool) {
         title.stringValue = node.title

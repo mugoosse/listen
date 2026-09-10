@@ -160,11 +160,55 @@ struct ContextSource: Codable {
 }
 
 enum ContextSources {
-    static func containsName(_ text: String, _ name: String) -> Bool {
-        guard !name.isEmpty else { return false }
+    /// One compiled matcher per name, kept.
+    ///
+    /// `text.range(of:options:.regularExpression)` compiles a fresh
+    /// `NSRegularExpression` on **every** call, and this is the expensive kind
+    /// of pattern: `\p{L}` and `\p{N}` make ICU build two Unicode property
+    /// sets and then case-close them. Measured on this library on 10 September
+    /// 2026 by sampling the app while it sat at 115% CPU: of the 374 samples
+    /// under `range(of:)`, 250 were inside `initWithPattern:` and only the rest
+    /// were inside matching. `mentioned` asks once per roster name per
+    /// recording and `ContextRetrieval.project` once per alias per fact, so a
+    /// single pass over a 99-source library paid that compile tens of thousands
+    /// of times.
+    ///
+    /// `NSCache` rather than a dictionary because this is called from detached
+    /// tasks, the CLI and the MCP server at the same time, and an evicted entry
+    /// costs only the compile it was saving.
+    private static let matchers = NSCache<NSString, NSRegularExpression>()
+
+    private static func matcher(for name: String) -> NSRegularExpression? {
+        if let cached = matchers.object(forKey: name as NSString) { return cached }
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        return text.range(of: "(?<![\\p{L}\\p{N}_])" + escaped + "(?![\\p{L}\\p{N}_])",
-                          options: [.regularExpression, .caseInsensitive, .diacriticInsensitive]) != nil
+        // The option set here used to carry `.diacriticInsensitive` and it did
+        // nothing: Foundation drops it once `.regularExpression` is set, so
+        // `Jose` has never matched `José` in this library and `José` has never
+        // matched `Jose`. Measured before this was rewritten, precisely so that
+        // the rewrite would not quietly start folding and change which people
+        // every transcript is held to mention. Adding the fold is a real
+        // decision with a backfill behind it, not a tidy-up.
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?<![\\p{L}\\p{N}_])" + escaped + "(?![\\p{L}\\p{N}_])",
+            options: [.caseInsensitive]) else { return nil }
+        matchers.setObject(regex, forKey: name as NSString)
+        return regex
+    }
+
+    static func containsName(_ text: String, _ name: String) -> Bool {
+        contains(text, name, in: wholeOf(text))
+    }
+
+    /// The UTF-16 extent `NSRegularExpression` wants, which is not free to work
+    /// out for a long string. `mentioned` asks about one joined transcript once
+    /// per roster name, so it computes this once and passes it in.
+    static func wholeOf(_ text: String) -> NSRange {
+        NSRange(location: 0, length: (text as NSString).length)
+    }
+
+    static func contains(_ text: String, _ name: String, in range: NSRange) -> Bool {
+        guard !name.isEmpty, let regex = matcher(for: name) else { return false }
+        return regex.firstMatch(in: text, options: [], range: range) != nil
     }
 
     /// Full names, never guessed first names. Two people with the same display
@@ -184,10 +228,11 @@ enum ContextSources {
 
     static func mentioned(in text: String, roster: [Person], names: [String: [String]] = [:]) -> [String] {
         let grouped = Dictionary(grouping: roster, by: { $0.display.lowercased() })
+        let whole = wholeOf(text)
         return roster.filter {
             grouped[$0.display.lowercased()]?.count == 1
                 && (names[$0.label] ?? [$0.display]).contains { name in
-                    name != SpeakerName.you && containsName(text, name)
+                    name != SpeakerName.you && contains(text, name, in: whole)
                 }
         }.map(\.label)
     }

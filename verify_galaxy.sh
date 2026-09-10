@@ -303,6 +303,21 @@ field "$dump" "Open recording"
 check $? "and offers to open it"
 echo "$dump" | grep -qE "[0-9]+ links?|Nothing links"
 check $? "and says what it is connected to, or that nothing is"
+# The way out of the card, which is a cross in its corner rather than a second
+# verb beside Open. Pressed before Open, because Open leaves the galaxy.
+"$PROBE" press $APP "Clear selection" >/dev/null 2>&1
+check $? "the card's cross is pressable"
+sleep 2
+dump=$("$PROBE" texts $APP 2>&1)
+! field "$dump" "Open recording"
+check $? "and it puts the card away"
+! echo "$dump" | grep -q "RECORDING"
+check $? "with nothing of it left behind"
+
+stop
+: > "$TRACE"
+launch galaxy:selected
+dump=$("$PROBE" texts $APP 2>&1)
 "$PROBE" press $APP "Open recording" >/dev/null 2>&1
 check $? "Open is pressable"
 sleep 3

@@ -181,6 +181,21 @@ a reader is asking what the centre *is* rather than who it is; putting it in
 both made them disagree, because a promoted person kept their own name and the
 anchor carried the bracket.
 
+### The inspector card is the sidebar's material, and its way out is a cross
+
+It was a flat near-black panel with a hairline border, which is what a card
+over a scene looks like in a game and not what anything else in this window
+looks like. `NSVisualEffectView` with the `.sidebar` material and
+`.withinWindow` blending puts it in the same family as the list on the other
+side of the divider.
+
+Its dismiss was a "Clear" button beside Open, which read as a second verb on
+the thing being described rather than as putting the card away, and gave the
+two the same weight. It is a round glass cross in the corner now, where every
+other page in this window puts the way out. The material alone is nearly
+invisible against `Brand.canvas`, which is most of the point of that ground, so
+the circle carries a little white over it.
+
 ### The sky is the window's ground, and it is flat
 
 The scene is not a picture in a frame: it fills one pane of a window whose
@@ -306,6 +321,15 @@ with a floor so a star that links to nothing is not pressed against the lens.
 The rest of the library dims rather than going out; at the first dimming value
 it went black at that distance, and a recording with two links looked like a
 star alone in space.
+
+### A selection names itself and its links, and nothing else
+
+The label budget takes turns between the four shells only while nothing is
+selected. With a star picked, everything else in the scene is dimmed to
+context, so labelling it puts twenty unrelated titles over a picture whose
+whole point at that moment is one thing and what it connects to. Selected,
+hovered and neighbours; the centre keeps its label as the one fixed reference
+in the frame.
 
 ### The label pass returns when nothing it depends on has moved
 

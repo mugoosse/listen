@@ -650,6 +650,8 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - `turns.json` is a bare array
 - Adjacent ids land in one band of the sphere without an avalanche mix
 - You are the centre, and that is one star rather than two
+- A selection names itself and its links, and nothing else
+- The inspector card is the sidebar's material, and its way out is a cross
 - The sky is the window's ground, and it is flat
 - A window colour is four things, not one
 - Every hue belongs to a shell, and everything else is grey

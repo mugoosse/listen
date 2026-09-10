@@ -350,8 +350,13 @@ final class CloudSyncHost {
         }
 
         var report = CloudReport()
+        // What this Mac is offering to run, published on its own row. It used
+        // to be written into the shared memory-settings blob, where a second
+        // Mac with a different Ask selection overwrote it every few minutes
+        // and was overwritten back. See `CloudRecords.DeviceBlob.summaryModel`.
         devices = await core.heartbeat(name: identity.name, kind: identity.kind,
-                                       appVersion: AppInfo.version ?? "unknown")
+                                       appVersion: AppInfo.version ?? "unknown",
+                                       summaryModel: ContextService.modelChoice())
 
         // **A device that has never synced pulls before it pushes.**
         //

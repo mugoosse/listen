@@ -370,7 +370,7 @@ public struct CloudSyncCore: Sendable {
                     case .note: try pullNote(record, deleted: deleted, base: &base,
                                              into: &report)
                     case .blob:
-                        try await pullBlob(record, into: &report)
+                        try await pullBlob(record, into: &report, base: &base)
                         // One of the six blobs is the deletion list itself, and
                         // a tombstone arriving mid-loop has to apply to the
                         // records after it rather than a pass later. Which blob
@@ -422,8 +422,50 @@ public struct CloudSyncCore: Sendable {
 
         // Contents after rows, and inside the same pass, so one pull is still
         // one pull as far as its report and its caller are concerned.
+        await collectOwedBlobs(&base, into: &report)
         await collectOwedSidecars(&base, into: &report)
         await askWhoHoldsTheWaiting(&base)
+    }
+
+    /// Go back for every library blob a previous pass could not take.
+    ///
+    /// The same debt `collectOwedSidecars` settles, for the six files at the
+    /// library root, and it exists for the same reason: the change feed names
+    /// a record once, and a pull that throws lets the token move past it. A
+    /// recording that goes missing this way is visible, because the row on the
+    /// screen has no transcript behind it. A blob that goes missing this way is
+    /// invisible: the pass reports success, and a phone simply goes on
+    /// believing no Mac has offered to run a summary.
+    ///
+    /// Fetched by name rather than waited for, so this repairs a debt taken
+    /// under a build that had none. At most six fetches, and only when
+    /// something is actually owed.
+    private func collectOwedBlobs(_ base: inout SyncState,
+                                  into report: inout CloudReport) async {
+        let owing = base.blobsOwing
+        guard !owing.isEmpty else { return }
+        for name in owing {
+            if Task.isCancelled { break }
+            guard policy.blobs.contains(name) else { base[blobOwed: name] = false; continue }
+            do {
+                let recordName = CloudNaming.recordName(.blob, name, key: key)
+                guard let record = try await store.fetch(recordName, in: .library) else {
+                    // Gone from the container, so there is nothing to owe. A
+                    // blob is never deleted in the ordinary course; this is the
+                    // reset case, and a debt that outlived its record would be
+                    // a fetch every pass for ever.
+                    base[blobOwed: name] = false
+                    continue
+                }
+                try await applyBlob(record, header: try CloudRecords.blobHeader(record, key: key),
+                                    into: &report)
+                base[blobOwed: name] = false
+            } catch {
+                // Still owed. Reported, because a blob that cannot be taken
+                // twice running is the failure that used to be silent.
+                report.note(error, about: name)
+            }
+        }
     }
 
     /// Go back for the contents of every recording whose row has already
@@ -783,9 +825,25 @@ public struct CloudSyncCore: Sendable {
         }
     }
 
-    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport) async throws {
+    private func pullBlob(_ record: StoredRecord, into report: inout CloudReport,
+                          base: inout SyncState) async throws {
         let header = try CloudRecords.blobHeader(record, key: key)
         guard policy.blobs.contains(header.name) else { return }
+        // **Owed before it is attempted, cleared only on success.** Everything
+        // below can throw, the caller catches per record, and the change token
+        // moves at the end of the pull whether this worked or not. Writing the
+        // debt first is what makes a failure here cost a pass instead of
+        // costing everything until another device rewrites the record.
+        base[blobOwed: header.name] = true
+        try await applyBlob(record, header: header, into: &report)
+        base[blobOwed: header.name] = false
+    }
+
+    /// Take one blob's contents, fetching the asset body if the listing left it
+    /// behind. Separate from `pullBlob` so the debt above brackets it and so
+    /// `collectOwedBlobs` can run the same code on a record it fetched itself.
+    private func applyBlob(_ record: StoredRecord, header: CloudRecords.FileBlob,
+                           into report: inout CloudReport) async throws {
         var record = record
         if let asset = header.contentsAsset, record.assets[asset] == nil {
             guard let complete = try await store.fetch(record.name, in: .library) else {
@@ -1334,7 +1392,30 @@ public struct CloudSyncCore: Sendable {
         // only then learn of the restore: the token has moved past the record
         // by then and the feed will never mention it again. The generic blob
         // loop skips this name because of it.
-        await pushBlob(Deletions.filename, into: &report)
+        await pushBlob(Deletions.filename, into: &report, base: &base)
+
+        // **The rest of the small files go now too, before the library walk.**
+        //
+        // They used to go last, after every changed recording had been sealed
+        // and offered one round trip at a time. On a Mac that is an ordering
+        // detail. On a phone it is the difference between a request leaving in
+        // the first second of a pass and leaving in its last, and a phone's
+        // pass does not reliably reach its last: iOS suspends the app on a
+        // switch away, the task is cancelled, and everything after the break in
+        // the recordings loop is skipped. A summary requested on the phone
+        // could sit on it indefinitely while the screen said "Waiting for your
+        // Mac", which named a device that had never been told.
+        //
+        // Nothing here is expensive. Six files, a few kilobytes each, and a
+        // digest comparison that returns without a save when nothing changed.
+        // They are also the files most likely to carry something somebody is
+        // watching for, which is the opposite of what "last" is for.
+        // The generated projection is deliberately not in this group: it
+        // describes the library, so it goes after the library has been
+        // offered, which is where it has always gone.
+        for name in policy.blobs where name != Deletions.filename && name != ContextSnapshot.filename {
+            await pushBlob(name, into: &report, base: &base)
+        }
 
         // Only the ones that have changed since this device last sent them.
         //
@@ -1532,12 +1613,11 @@ public struct CloudSyncCore: Sendable {
             }
         }
 
-        for name in policy.blobs {
-            if name == ContextSnapshot.filename && !policy.publishesContext { continue }
-            // Already sent, at the top of this function, and for a reason
-            // stated there.
-            if name == Deletions.filename { continue }
-            await pushBlob(name, into: &report)
+        // Last, and after the recordings it describes. See the group pushed
+        // at the top of this function for everything a person authored, which
+        // does not wait behind the library walk any more.
+        if policy.publishesContext && policy.blobs.contains(ContextSnapshot.filename) {
+            await pushBlob(ContextSnapshot.filename, into: &report, base: &base)
         }
 
         await pushDeletions(&base, &seen, into: &report)
@@ -1671,7 +1751,8 @@ public struct CloudSyncCore: Sendable {
     /// A merge hook is what makes a blob converge rather than letting the last
     /// writer win: the file this device holds is reconciled with the one the
     /// container holds, and the result is both written to disk and published.
-    private func pushBlob(_ name: String, into report: inout CloudReport) async {
+    private func pushBlob(_ name: String, into report: inout CloudReport,
+                          base: inout SyncState) async {
         let url = library.root.appendingPathComponent(name)
         guard var contents = try? Data(contentsOf: url) else { return }
         let recordName = CloudNaming.recordName(.blob, name, key: key)
@@ -1693,14 +1774,35 @@ public struct CloudSyncCore: Sendable {
             }
             if let existing,
                try CloudRecords.openBlob(existing, key: key).version == sha256Hex(contents) {
+                // Agreed already, which is as sent as sent gets. Stamped, or
+                // a device that never has to push would look permanently
+                // behind to anything reading `blobSent`.
+                base[blobSent: name] = sha256Hex(contents)
                 return
             }
             var record = try CloudRecords.blob(name: name, contents: contents, key: key)
             record.changeTag = existing?.changeTag
             _ = try await store.save(record)
+            // After the save returned, never before it. This is the stamp a
+            // screen reads to say whether what somebody just did has left the
+            // device, so it must mean the container has it.
+            base[blobSent: name] = sha256Hex(contents)
         } catch {
             report.note(error, about: name)
         }
+    }
+
+    /// Whether a library blob on disk holds anything the container has not
+    /// been given yet.
+    ///
+    /// For the one screen that has to tell a person which device it is waiting
+    /// on. A request for a summary is a row in `people-memory-settings.json`,
+    /// and between making one and the pass that carries it away, the only
+    /// device that knows about it is the one it was made on.
+    public func unsentBlob(_ name: String) -> Bool {
+        let url = library.root.appendingPathComponent(name)
+        guard let contents = try? Data(contentsOf: url) else { return false }
+        return state.base[blobSent: name] != sha256Hex(contents)
     }
 
     /// Whether the container's copy already says what ours does.
@@ -1740,6 +1842,7 @@ public struct CloudSyncCore: Sendable {
     static let heartbeatRefresh: TimeInterval = 3600
 
     public func heartbeat(name: String, kind: String, appVersion: String,
+                          summaryModel: MemoryPreferences.Model? = nil,
                           now: Date = Date()) async -> [CloudRecords.DeviceBlob] {
         let recordName = CloudNaming.recordName(.device, device, key: key)
         // Read off the disk here rather than taken from the caller. It is
@@ -1755,8 +1858,13 @@ public struct CloudSyncCore: Sendable {
         // publishes at once. The device id is in the signature so two
         // devices sharing one library state cannot skip each other's turn.
         var base = state.base
+        // The offered model is in the signature, so choosing one in settings
+        // reaches the phone on the very next pass rather than at the next
+        // hourly republish. It is the one field here somebody is watching a
+        // screen for.
+        let offering = summaryModel.map { [$0.provider, $0.model ?? "", $0.name].joined(separator: "/") } ?? ""
         let signature = [device, name, kind, appVersion,
-                         keepAudio ? "keeps" : "frees",
+                         keepAudio ? "keeps" : "frees", offering,
                          held.sorted().joined(separator: ",")]
             .joined(separator: "|")
         let unchanged: Bool = {
@@ -1774,7 +1882,8 @@ public struct CloudSyncCore: Sendable {
                     CloudRecords.DeviceBlob(id: device, name: name, kind: kind,
                                             lastSeen: Metadata.stamp(now),
                                             appVersion: appVersion,
-                                            keepsAudio: keepAudio, holdsAudio: held), key: key)
+                                            keepsAudio: keepAudio, holdsAudio: held,
+                                            summaryModel: summaryModel), key: key)
                 record.changeTag = existing?.changeTag
                 _ = try await store.save(record)
                 base[file: "heartbeat"] = Metadata.stamp(now) + "|" + signature

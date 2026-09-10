@@ -1210,3 +1210,62 @@ restores has to be read first: otherwise the record is skipped as deleted, the
 change token moves past it, and the feed never mentions it again. The push
 publishes the deletion list before the recordings loop, for the mirror image of
 the same window.
+
+## A blob is announced once, and one missed pull lasts for ever
+
+The library change feed names a changed record exactly once. `pull` catches per
+record, so a blob that throws while it is being opened is noted and skipped, and
+the change token still moves at the end of the pass. Nothing offers that change
+again until some other device happens to rewrite the record.
+
+For a recording the debt is `owed:` and `collectOwedSidecars` settles it. The six
+files at the library root had no equivalent, and the failure is invisible in a
+way a recording's is not: a row with no transcript behind it is on the screen,
+while a missing blob is a pass reporting success and a phone quietly believing no
+Mac has ever offered to run a summary. Measured on 9 September 2026: the Macs had
+been exchanging `people-memory-settings.json` every pass for hours and the phone
+had no copy of it at all, with no error anywhere.
+
+`blobowed:` is the same debt for blobs, written **before** the attempt and cleared
+only after it, and `collectOwedBlobs` fetches by name so it also repairs a debt
+taken under a build that did not have one. At most six fetches, and only when
+something is owed.
+
+## What a person just did leaves first, not last
+
+The blob loop ran after the recordings and notes loops, at the end of `push`. On
+a Mac that is an ordering detail. On a phone it is the difference between a
+request leaving in the first second of a pass and leaving in its last, and a
+phone's pass does not reliably reach its last: iOS suspends the app on a switch
+away and the recordings loop breaks on cancellation.
+
+Everything a person authored now goes at the top, beside the deletion list.
+`people-context.json` deliberately does not: it is a projection *of* the library,
+so it still goes after the library has been offered.
+
+`blobsent:` records the digest that actually reached the container, which is what
+lets a screen say "Waiting to send from this iPhone" instead of naming a Mac that
+has not been told. The library rows have drawn that distinction for a year; the
+memory row was asserting the wrong device.
+
+## A per-device fact in one shared key is a fight, not a fact
+
+`MemoryPreferences.advertise` wrote a single `model` key into the shared settings
+blob, and the value carried the `executor` id of the device that wrote it. Two
+Macs with different Ask selections can never agree on that key, so each rewrote
+the other's advertisement for ever.
+
+Measured on this account on 9 September 2026: the key changed hands every few
+minutes all evening, and every flip was a CloudKit save from both machines. The
+value seen at 22:28:24 was the second Mac's, and at 22:28:45 the first Mac's
+again.
+
+It lives on each device's own record now, as `DeviceBlob.summaryModel`. Each
+device writes only its own row, which is the rule this zone already had written
+down, so two Macs offering different models is two rows saying two true things.
+It also fixes delivery: the devices zone is listed with `since: nil` on every
+pass, so there is no change token to move past a missed announcement. Readiness
+is exactly the state that must not be deliverable once.
+
+No CloudKit schema change: `CloudRecords.device` seals the whole blob into
+`payload`. The field is optional for the reason `keepsAudio` is.

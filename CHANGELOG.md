@@ -8,6 +8,56 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.38.0 (2026-09-10)
+
+Summaries about people now reach your iPhone reliably, and two Macs no longer
+overwrite each other's setting to get there.
+
+### Two Macs stop fighting over which model runs summaries
+
+Each Mac published the summary model it offers into a single shared setting
+whose value named the Mac that wrote it. Two Macs with different Ask selections
+could never agree, so each rewrote the other's every few minutes, indefinitely.
+Measured on a two-Mac library on 9 September 2026, the value changed hands
+roughly every four minutes all evening, and every change was a write to iCloud
+from both machines.
+
+Each Mac now advertises on its own record, so two Macs offering different models
+are two facts rather than one contested slot. `listen sync inspect` shows what
+each device is offering beside what it holds. No iCloud schema change was needed
+and nothing has to be reconfigured.
+
+### A phone that missed one update no longer misses it for ever
+
+Library-level files are announced in the change feed once. A pull that failed,
+was throttled, or died with a suspended app let the announcement pass and
+nothing offered it again, so an iPhone could sit indefinitely believing no Mac
+had ever offered to run summaries while every sync reported success. Those files
+now carry a debt that the next pass settles, and a file that cannot be taken
+twice running is reported instead of being silent.
+
+Requests and other things you have just done are also sent at the start of a
+sync rather than after the whole library has been walked, which is the
+difference between leaving in the first second of a pass and not leaving at all
+when iOS suspends the app part way through.
+
+### Choosing which Mac runs a summary
+
+The iPhone can name a preferred Mac. It is a preference and not a lock: if that
+Mac is asleep it is still the one asked, the screen says when it was last seen,
+and the Mac that is awake is offered rather than substituted, because two Macs
+can be on different models and different providers. A request still waiting can
+be handed to another Mac, and only while no Mac has claimed it.
+
+### Known limitations
+
+- The two-Mac measurement above is from one library on one account. The repair
+  is verified by the offline sync harness, which now also runs the phone in the
+  progressive configuration it actually uses; a real two-Mac-and-a-phone round
+  trip has not been repeated end to end since the change.
+- A preferred Mac that is asleep is still addressed by default. Nothing wakes
+  it, so the summary runs when Listen is next open there.
+
 ## 0.37.0 (2026-09-09)
 
 Speaker labels are now a way to review a conversation, not just a way to rename

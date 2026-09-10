@@ -649,6 +649,8 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Rank the labels on the position the star is drawn at
 - `turns.json` is a bare array
 - Adjacent ids land in one band of the sphere without an avalanche mix
+- You are the centre, and that is one star rather than two
+- Every hue belongs to a shell, and everything else is grey
 - The scene follows the pointer, and one axis shipped the other way
 - Framing a selection is framing its neighbourhood
 - The label pass returns when nothing it depends on has moved

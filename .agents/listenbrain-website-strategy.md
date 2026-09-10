@@ -559,6 +559,18 @@ Pair it with preparation, follow-through or better AI work.
 **Risk:** It is compelling but less explicit about the product. Use below the
 hero or in a campaign once category comprehension is established.
 
+### F. One memory across Mac and iPhone
+
+**Promise:** Calls at the desk and conversations in the room become one
+continuing memory of the same people, projects and decisions.
+
+**Best for:** Making Listen's full capture surface tangible and differentiating
+it from products built only around scheduled desktop meetings.
+
+**Risk:** “Available on all your devices” can sound like ordinary compatibility.
+Show the continuity of one real workflow—Mac call → iPhone room conversation →
+one sourced answer—rather than a row of platform logos.
+
 ## Recommended Message Combination
 
 Do not choose only one angle. Give each a job:
@@ -571,6 +583,8 @@ Do not choose only one angle. Give each a job:
 - **Differentiation:** Every important detail links back to what was actually
   said.
 - **Trust:** Your conversations stay under your control.
+- **Continuity:** Mac hears the call, iPhone hears the room, and both become one
+  private memory.
 
 ## Plain-Language Copy Rules
 
@@ -615,3 +629,5 @@ turn the initial concept into a brittle one-off visual composition.
 - Which customer quotes and company names have explicit permission.
 - Whether the commercial site replaces or sits beside the current open-source
   GitHub Pages site.
+- Whether Mac + iPhone continuity leads the homepage or supports the broader
+  conversation-first story.

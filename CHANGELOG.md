@@ -29,9 +29,18 @@ important it is or how recent. Click a star to see what it is connected to and
 open it; double-click to go straight there. The picture is drawn from what is
 already on this disk and reaches no network.
 
+You are the centre, once the library has heard you speak: one star rather than
+a hub on the people shell and an empty planet in the middle. Click a shell in
+the legend to strike it out and take it off the picture. The globe in the title
+bar opens it, and **Settings → General** turns the whole thing off.
+
 It runs the GPU while it is open and stops on its own when the window is hidden
-or covered, under Reduce Motion and in Low Power Mode. **Settings → General**
-turns the whole thing off.
+or covered, under Reduce Motion and in Low Power Mode.
+
+### A cooler ground
+
+The window takes a deep blue-black rather than the system grey, so the galaxy
+sits in the same temperature as everything around it instead of against a seam.
 
 
 

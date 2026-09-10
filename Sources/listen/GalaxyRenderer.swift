@@ -61,8 +61,29 @@ struct GalaxyCamera: Equatable {
         // direction are parallel and `lookAt` produces a matrix full of NaN.
         pitch = min(max(pitch - deltaY * radiansPerPoint, -1.45), 1.45)
     }
+    /// How far one point of a trackpad scroll moves the camera, in log units.
+    ///
+    /// Log units because zooming is multiplicative: a step should feel the same
+    /// close up and far out, and adding a constant to a distance does not. The
+    /// whole range, 2.5 to 90, is `ln(36)` = 3.58 of these, so a 250-point
+    /// swipe covers most of it.
+    static let zoomPerScrollPoint: Float = 0.009
+    /// And one line of a mouse wheel, which reports in lines rather than
+    /// points: three or so per notch where a trackpad sends hundreds. One rate
+    /// for both would make a wheel useless or a trackpad unusable.
+    static let zoomPerScrollLine: Float = 0.3
+    /// And a pinch, whose `magnification` is a fraction of the current size, so
+    /// a full one is about a doubling.
+    static let zoomPerMagnification: Float = 0.7
+
+    /// Move the camera in or out. **Positive is closer**, which is the sign of
+    /// every gesture that means "bigger": scrolling up, and pinching out.
+    ///
+    /// It was the other way round, so scrolling up pushed the galaxy away, and
+    /// far too slow to reach either end: 0.0015 per point made a good swipe a
+    /// 40% change on a range that spans 36 times.
     mutating func zoom(delta: Float) {
-        distance = min(max(distance * exp(delta * 0.0015), Self.minimumDistance), Self.maximumDistance)
+        distance = min(max(distance * exp(-delta), Self.minimumDistance), Self.maximumDistance)
     }
     mutating func pan(deltaX: Float, deltaY: Float, viewportSize: SIMD2<Float>) {
         guard viewportSize.x > 0, viewportSize.y > 0 else { return }
@@ -185,7 +206,13 @@ private struct GalaxyGPUUniforms {
     var viewport: SIMD2<Float>
     var pointScale: Float
     var time: Float
-    var padding = SIMD3<Float>.zero
+    /// **The sky, sent rather than written twice.** The shader used to carry
+    /// its own constant and the pane carried another, and they disagreed: the
+    /// pane's was RGB(10,15,29) and what the GPU actually painted was
+    /// RGB(1,2,6). Nobody could see that inside the scene, and it showed up as
+    /// a seam the moment the window put anything else beside it.
+    var sky: SIMD3<Float>
+    var padding: Float = 0
 }
 
 /// GPU-instanced stars, batched lines, and one shader compiled from source at
@@ -198,6 +225,12 @@ private struct GalaxyGPUUniforms {
 /// string costs about 40 ms once, on a background-eligible init, and it means
 /// this file is the whole shader story.
 final class GalaxyRenderer {
+    /// The one sky. Everything that paints a background beside this scene has
+    /// to use it: the pane under the Metal view before the first frame, the
+    /// clear colour, the shader, and the window's sidebar while the galaxy is
+    /// up. `GalaxyPane.sky` is this as an `NSColor`.
+    static let sky = SIMD3<Float>(0.008, 0.014, 0.036)
+
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     /// Runtime failures after a successful init. A silent return here leaves a
@@ -295,7 +328,12 @@ final class GalaxyRenderer {
         for edge in snapshot.edges {
             guard let source = byID[edge.source], let target = byID[edge.target] else { continue }
             let connected = selectionID != nil && (edge.source == selectionID || edge.target == selectionID)
-            var color = SIMD4<Float>(0.43, 0.63, 0.91, 0.15)
+            // **Neutral, so a link never competes with a shell for hue.** It
+            // was a blue within a few percent of the notes shell, which read
+            // as "this line is a note" and made a pixel check unable to tell
+            // them apart either. A link is a relationship between two
+            // colours; it should be neither of them.
+            var color = SIMD4<Float>(0.62, 0.68, 0.80, 0.15)
             if connected { color.w = 0.75 }
             else if selectionID != nil { color = SIMD4(color.x * 0.24, color.y * 0.24, color.z * 0.24, 0.08) }
             lines.append(GalaxyGPULine(position: source.position, color: color))
@@ -336,7 +374,7 @@ final class GalaxyRenderer {
             model: GalaxyMotion.matrix(time: time),
             viewport: SIMD2(Float(viewportSize.width), Float(viewportSize.height)),
             pointScale: Float(viewportSize.height) * 0.5 / tan(GalaxyCamera.halfFieldOfView),
-            time: Float(time))
+            time: Float(time), sky: Self.sky)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<GalaxyGPUUniforms>.stride, index: 2)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<GalaxyGPUUniforms>.stride, index: 2)
 
@@ -389,20 +427,49 @@ final class GalaxyRenderer {
 
     /// The same numbers the shader scales a quad by, so what is drawn and what
     /// is clickable are one statement.
+    /// **Bigger further in, and it is not arbitrary.** One radius for every
+    /// star made the people shell nearly invisible: it holds the fewest things,
+    /// they sit closest to the middle where the centre's glow is, and they are
+    /// the most nameable thing in the library. A recording has a title and a
+    /// date in the list beside this; a person is a name and a colour.
+    ///
+    /// Selection and hover still win, so the star under the pointer is always
+    /// the largest thing near it, and picking reads this same function.
     static func starRadius(id: String, kind: String, selectionID: String?, hoverID: String?) -> Float {
         if kind == Galaxy.Node.device { return 1.2 }
-        if id == selectionID { return 0.30 }
-        if id == hoverID { return 0.25 }
-        return 0.20
+        let base: Float
+        switch kind {
+        case Galaxy.Node.person: return id == selectionID ? 0.36 : id == hoverID ? 0.32 : 0.28
+        case Galaxy.Node.note: base = 0.23
+        case Galaxy.Node.chat: base = 0.21
+        default: base = 0.19
+        }
+        if id == selectionID { return base + 0.10 }
+        if id == hoverID { return base + 0.05 }
+        return base
     }
 
     static func starColor(kind: String) -> SIMD4<Float> {
         switch kind {
-        case Galaxy.Node.person: return SIMD4(0.27, 0.70, 1.0, 1)
-        case Galaxy.Node.note: return SIMD4(1.0, 0.72, 0.30, 1)
-        case Galaxy.Node.chat: return SIMD4(0.69, 0.43, 1.0, 1)
+        // People are the warm one, and notes took their blue. This is the way
+        // round somebody who reads their own library every day asked for: the
+        // shell you scan for a name is the one that should catch the eye. The
+        // guide circles in the shader carry the same four by radius, and a
+        // wrong one there is instantly visible.
+        case Galaxy.Node.person: return SIMD4(1.0, 0.80, 0.28, 1)
+        // A true blue rather than the cyan it started at. Beside the teal
+        // recordings shell that cyan read as the same colour at small sizes,
+        // and the two most numerous shells being one colour is the picture
+        // saying less than it knows.
+        case Galaxy.Node.note: return SIMD4(0.36, 0.52, 1.0, 1)
+        case Galaxy.Node.chat: return SIMD4(0.85, 0.42, 1.0, 1)
         case Galaxy.Node.recording: return SIMD4(0.20, 0.88, 0.74, 1)
-        case Galaxy.Node.device: return SIMD4(0.40, 0.86, 1.0, 1)
+        // **Warm, because the centre is a person and people are warm now.** It
+        // was a blue-white, which was fine beside blue people and wrong beside
+        // yellow ones: the one star that *is* you read as belonging to a shell
+        // it had just left. It is also the only blue-white left, so a pixel
+        // check could not tell it from a note.
+        case Galaxy.Node.device: return SIMD4(1.0, 0.93, 0.74, 1)
         default: return SIMD4(0.66, 0.76, 0.94, 1)
         }
     }
@@ -440,7 +507,7 @@ final class GalaxyRenderer {
     using namespace metal;
     struct Star { float3 position; float radius; float4 color; };
     struct Line { float3 position; float4 color; };
-    struct Uniforms { float4x4 viewProjection; float4x4 model; float2 viewport; float pointScale; float time; float3 padding; };
+    struct Uniforms { float4x4 viewProjection; float4x4 model; float2 viewport; float pointScale; float time; float3 sky; float padding; };
     struct Out { float4 position [[position]]; float4 color; float2 local; float3 world; };
     float galaxyHash(float2 p) { p = fract(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 
@@ -451,14 +518,21 @@ final class GalaxyRenderer {
     // are a depth cue, and a viewer must never be able to click one.
     fragment float4 galaxyBackgroundFragment(Out in [[stage_in]], constant Uniforms &u [[buffer(2)]]) {
         float2 uv = (in.local + 1.0) * .5;
-        float vignette = 1.0 - 0.42 * dot(in.local, in.local);
-        float3 space = float3(0.006, 0.012, 0.035) * max(vignette, .3);
+        // A gentle vignette. It was 0.42, which darkened the edges to a third
+        // of the middle: pleasant on its own and impossible to match with a
+        // flat colour beside it, which is what the sidebar is.
+        float vignette = 1.0 - 0.10 * dot(in.local, in.local);
+        float3 space = u.sky * max(vignette, .3);
         float2 grid = uv * float2(138., 86.);
         float2 cell = floor(grid);
         float2 local = fract(grid) - float2(.2 + .6 * galaxyHash(cell + 13.), .2 + .6 * galaxyHash(cell + 31.));
         float star = step(.987, galaxyHash(cell)) * exp(-dot(local, local) * 180.);
         float twinkle = .55 + .45 * sin(u.time * (0.8 + galaxyHash(cell)) + galaxyHash(cell + 9.) * 6.283);
-        return float4(space + star * twinkle * float3(.32, .48, .72), 1);
+        // **Neutral, like the links.** The rule this scene keeps is that every
+        // hue belongs to a shell and everything decorative is grey: these were
+        // a blue within a few percent of the notes shell, so a sky full of
+        // ornament read as a sky full of notes.
+        return float4(space + star * twinkle * float3(.58, .62, .70), 1);
     }
 
     vertex Out galaxyStarVertex(const device float2 *quad [[buffer(0)]], const device Star *stars [[buffer(1)]],
@@ -481,7 +555,10 @@ final class GalaxyRenderer {
         float3 color = in.color.rgb;
         // The centre is a lit sphere rather than a dot, which is the one thing
         // that makes it read as "here" instead of as a very large star.
-        if (in.color.b > .85 && in.color.g > .8) {
+        // The centre alone: warm and very bright, where a person is warm and a
+        // note is blue. Keyed on the colour rather than on a flag because the
+        // instance buffer carries nothing else, and no other star is this pale.
+        if (in.color.r > .95 && in.color.g > .85) {
             float light = max(0., 1. - length(in.local - float2(-.28, .32)));
             color *= .55 + .72 * light;
         }
@@ -497,8 +574,10 @@ final class GalaxyRenderer {
     vertex Out galaxyGuideVertex(const device float3 *v [[buffer(0)]], constant Uniforms &u [[buffer(2)]], uint vid [[vertex_id]]) {
         Out o; o.position = u.viewProjection * u.model * float4(v[vid], 1);
         float r = length(v[vid]);
-        float3 c = r < 7. ? float3(.27, .70, 1.) : r < 11. ? float3(1., .72, .30)
-                 : r < 15. ? float3(.69, .43, 1.) : float3(.20, .88, .74);
+        // Same four as `starColor`, by radius. Two places, and the only thing
+        // keeping them honest is that a wrong one is instantly visible.
+        float3 c = r < 7. ? float3(1., .80, .28) : r < 11. ? float3(.36, .52, 1.)
+                 : r < 15. ? float3(.85, .42, 1.) : float3(.20, .88, .74);
         o.color = float4(c, .095); o.local = 0; o.world = 0; return o;
     }
     fragment float4 galaxyGuideFragment(Out in [[stage_in]]) { return in.color; }
@@ -547,7 +626,9 @@ enum GalaxyImage {
         pass.colorAttachments[0].texture = colourTexture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.035, green: 0.05, blue: 0.09, alpha: 1)
+        pass.colorAttachments[0].clearColor = MTLClearColor(
+            red: Double(GalaxyRenderer.sky.x), green: Double(GalaxyRenderer.sky.y),
+            blue: Double(GalaxyRenderer.sky.z), alpha: 1)
         pass.depthAttachment.texture = depthTexture
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare

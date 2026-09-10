@@ -77,6 +77,22 @@ enum Brand {
         }
     }
 
+    /// The app's ground, and the reason it is not `windowBackgroundColor`.
+    ///
+    /// The galaxy put a deep blue-black beside the default grey and the grey
+    /// lost: a window that is one temperature throughout reads as one thing,
+    /// and two greys with a hard edge between them read as two panes bolted
+    /// together. So the whole app takes the cooler ground.
+    ///
+    /// It is **not** the galaxy's own sky, which is nearly black and belongs to
+    /// a scene rather than to a window; see `GalaxyRenderer.sky`. This is the
+    /// shade of it that still lets text, rows and separators sit on top.
+    ///
+    /// Dynamic, because a fixed value is painted on in one of the two
+    /// appearances and there is no third option. The light one is the same
+    /// cool cast at the other end, not a grey.
+    static var canvas: NSColor { dynamic(light: 0xF3F5F9, dark: 0x0A0F1D) }
+
     static func hex(_ value: Int) -> NSColor {
         NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
                 green: CGFloat((value >> 8) & 0xFF) / 255,

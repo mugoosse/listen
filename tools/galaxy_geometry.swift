@@ -89,12 +89,39 @@ import simd
         check(extreme.pitch.isFinite && abs(extreme.pitch) < 1.5, "pitch stops short of the pole")
         check(extreme.eye.x.isFinite && extreme.eye.y.isFinite && extreme.eye.z.isFinite, "and the eye stays finite there")
 
-        // Zoom is bounded at both ends, or a scroll runs the camera through the
-        // middle of the galaxy or off to infinity.
+        // **Which way a scroll goes, and how far.** Both shipped wrong: up
+        // pushed the galaxy away, and 0.0015 per point made a good swipe a 40%
+        // change on a range that spans 36 times.
+        var closer = camera
+        closer.zoom(delta: 1)
+        check(closer.distance < camera.distance, "a positive zoom brings the camera closer")
+        var further = camera
+        further.zoom(delta: -1)
+        check(further.distance > camera.distance, "and a negative one pushes it away")
+
+        // A 250-point swipe, which is one comfortable trackpad gesture.
+        var swiped = camera
+        swiped.zoom(delta: 250 * GalaxyCamera.zoomPerScrollPoint)
+        check(camera.distance / swiped.distance > 3,
+              "one trackpad swipe is worth more than three times the distance")
+        // And one notch of a wheel, which must be a step somebody can feel
+        // without being a jump across the whole range.
+        var notched = camera
+        notched.zoom(delta: 3 * GalaxyCamera.zoomPerScrollLine)
+        let step = camera.distance / notched.distance
+        check(step > 1.5 && step < 4, "and one wheel notch is a step, not a jump (\(step)x)")
+        // A full pinch is about a doubling, which is what the gesture means.
+        var pinched = camera
+        pinched.zoom(delta: 1 * GalaxyCamera.zoomPerMagnification)
+        let pinch = camera.distance / pinched.distance
+        check(pinch > 1.6 && pinch < 2.6, "and a full pinch is about a doubling (\(pinch)x)")
+
+        // Bounded at both ends, or a scroll runs the camera through the middle
+        // of the galaxy or off to infinity.
         var zoomed = camera
-        for _ in 0..<200 { zoomed.zoom(delta: -400) }
+        for _ in 0..<200 { zoomed.zoom(delta: 4) }
         check(zoomed.distance >= GalaxyCamera.minimumDistance, "zooming in stops before the centre")
-        for _ in 0..<400 { zoomed.zoom(delta: 400) }
+        for _ in 0..<400 { zoomed.zoom(delta: -4) }
         check(zoomed.distance <= GalaxyCamera.maximumDistance, "and zooming out stops")
 
         print("\nframing a selection")
@@ -118,6 +145,17 @@ import simd
         check(GalaxyRenderer.starRadius(id: "d", kind: Galaxy.Node.device, selectionID: nil, hoverID: nil)
               > GalaxyRenderer.starRadius(id: "a", kind: Galaxy.Node.recording, selectionID: "a", hoverID: nil),
               "and the centre is larger than any of them")
+        // Inner shells hold fewer things and sit closest to the glow, so they
+        // are drawn larger. Equal sizes made the people shell nearly invisible.
+        let sizes = [Galaxy.Node.person, Galaxy.Node.note, Galaxy.Node.chat, Galaxy.Node.recording]
+            .map { GalaxyRenderer.starRadius(id: "x", kind: $0, selectionID: nil, hoverID: nil) }
+        check(sizes == sizes.sorted(by: >), "stars get smaller as the shells go out")
+        for kind in [Galaxy.Node.person, Galaxy.Node.note, Galaxy.Node.chat, Galaxy.Node.recording] {
+            let plain = GalaxyRenderer.starRadius(id: "x", kind: kind, selectionID: nil, hoverID: nil)
+            let hovered = GalaxyRenderer.starRadius(id: "x", kind: kind, selectionID: nil, hoverID: "x")
+            let picked = GalaxyRenderer.starRadius(id: "x", kind: kind, selectionID: "x", hoverID: nil)
+            check(picked > hovered && hovered > plain, "and every shell still grows under the pointer")
+        }
 
         print("\nthe motion policy")
         var policy = GalaxyMotionPolicy()

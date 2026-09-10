@@ -158,6 +158,55 @@ their last character returns values that differ only in their low bits, so
 taking `z` from those put a whole library into one latitude band. Two
 avalanche-mixed draws per id, one for `z` and one for the angle.
 
+### You are the centre, and that is one star rather than two
+
+The centre began as a synthetic anchor with no id and no edges, on a rule
+worth keeping: a presentation anchor must not appear to stand in a
+relationship to everything around it. What that produced on a real library was
+two stars for one person, a huge `Me` hub out on the people shell with a line
+to almost every recording, and an empty planet in the middle carrying no
+evidence at all. The one in the middle was the falsehood.
+
+So the centre is the user's own person node, promoted out of the shells to the
+origin, keeping its id: clicking it opens your own page. The lines leaving it
+are the same "speaks in" rows every other person's lines are. The rule is
+intact and now says something sharper: **`Galaxy.deviceID` may never be an
+endpoint**, because that id stands for nothing on disk. It is only used when
+the library has never heard you speak, which is a first run or a library of
+imported recordings nobody has labelled, and `verify_galaxy.sh` asserts both
+cases.
+
+The star is labelled with your name. "(this Mac)" belongs to the legend, where
+a reader is asking what the centre *is* rather than who it is; putting it in
+both made them disagree, because a promoted person kept their own name and the
+anchor carried the bracket.
+
+### Every hue belongs to a shell, and everything else is grey
+
+Four shells, four colours, and the two rules that took three passes to find.
+
+**No two shells may share a hue.** People were blue and notes were amber; the
+owner asked for people to be the warm one, and swapping them put notes into a
+cyan a few percent from the recordings teal. At star size those are one colour,
+so the two most numerous shells said nothing to each other. Notes are a true
+blue now and chats moved to magenta to keep clear of it.
+
+**Nothing decorative may wear a shell's colour.** The links were a blue within
+a few percent of notes, and the ornamental background stars were another. A sky
+full of decoration read as a sky full of notes, and `tools/pngstats.py` could
+not tell them apart either: it counted 907 "note" pixels on a library with four
+notes in it. Links and background stars are neutral grey now.
+
+That pixel count is what found both. A colour bug is invisible to every
+assertion that counts nodes, and on a dark scene at star size it is easy to
+miss by eye as well.
+
+**The inner shells are drawn larger.** One radius for every star made people
+nearly invisible: the fewest members, closest to the centre's glow, and the
+most nameable thing in the library. 0.28 down to 0.19 going out, and selection
+and hover still win so the star under the pointer is always the largest thing
+near it.
+
 ### The scene follows the pointer, and one axis shipped the other way
 
 Drag right and the galaxy comes with you; drag up and it comes up. That is what
@@ -304,6 +353,10 @@ in a second place from the code that sets its uniforms.
   a note. Filters or a contextual highlight are the shape worth trying, and
   neither is designed yet.
 - **No editing.** Every verb is on the page the star opens.
+- **No filter that outlives the window.** Striking a shell out of the legend is
+  a lens over the snapshot, not a narrower read of the library, and it reaches
+  no preference: a filter somebody finds still applied a week later is one they
+  have no memory of setting.
 - **No panning.** The reference disables it too. With the target pinned to the
   centre the camera is two angles and a distance, which is what makes Reset a
   guarantee rather than a best effort; a panned target can leave the galaxy off

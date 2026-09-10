@@ -126,6 +126,17 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     // many, and this was the copy nobody was standing next to. See
     // `appendSourceHistory`, which is what that button still fills itself
     // from.
+    /// The way into the galaxy, in the slot the ellipsis had on the home page.
+    ///
+    /// **This reverses the note under `.library` in `modeItemIdentifiers`**,
+    /// which argued that the actions menu should stay whether or not anything
+    /// is selected, because a control that comes and goes is harder to find
+    /// than one that is always there and says why it is empty. That is still
+    /// true of a menu you might want. It was not true of this one: on the home
+    /// page the ellipsis has exactly one row, "No recording selected", so what
+    /// was always in the same place was an empty menu, and the slot is better
+    /// spent on the one screen that has no other way in.
+    private static let galaxyToolbarItem = NSToolbarItem.Identifier("openGalaxy")
     private static let chatsItem = NSToolbarItem.Identifier("openChats")
     private static let chatsTitleItem = NSToolbarItem.Identifier("chatsTitle")
     private static let newChatItem = NSToolbarItem.Identifier("newChat")
@@ -393,6 +404,20 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         attempt()
     }
 
+    /// Put the galaxy's sky behind the sidebar, or take it away again.
+    ///
+    /// A sidebar split item draws a vibrant material, and beside a near-black
+    /// scene that material reads as a seam down the middle of the window: two
+    /// different dark greys with a hard edge between them. The list itself is
+    /// already transparent (`Sidebar` clears the table and the scroll view), so
+    /// one opaque layer under it is the whole change, and it comes straight off
+    /// on the way out.
+    private func paintSidebarSky(_ on: Bool) {
+        sidebarHost.loadViewIfNeeded()
+        sidebarHost.view.wantsLayer = true
+        sidebarHost.view.layer?.backgroundColor = on ? GalaxyPane.sky.cgColor : NSColor.clear.cgColor
+    }
+
     /// Nothing to do when the galaxy is switched off, and that is worth
     /// stating rather than leaving a handler that never fires.
     ///
@@ -633,6 +658,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         w.titleVisibility = .hidden
         w.styleMask.insert(.fullSizeContentView)
         w.titlebarAppearsTransparent = true
+        // See `Brand.canvas`: the whole window takes the cooler ground, so the
+        // panes that draw no background of their own inherit it rather than
+        // the system grey.
+        w.backgroundColor = Brand.canvas
         // A content-view-controller window can inherit the split controller's
         // current fitting ceiling. That left the library capped at 1,136
         // points even though the main split item has no maximum thickness.
@@ -986,6 +1015,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             sidebarItem.canCollapse = false
             split.canToggleSidebar = false
             sidebarHost.show(settingsNav)
+            paintSidebarSky(false)
 
         case .chat:
             // Where Back goes. Taken before anything else, because everything
@@ -1010,6 +1040,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             chatNav.reload()
             syncChatSelection()
             sidebarHost.show(chatNav)
+            paintSidebarSky(false)
             // **`detailHost` is left exactly as it was.** The page covers it and
             // `applyHeight` hides it, and what it holds is where Back goes: the
             // meeting, the note or the person somebody was looking at. Swapping
@@ -1040,6 +1071,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // one of their own. Cmd-Shift-G out of Settings left the section
             // list down the side of the galaxy.
             sidebarHost.show(sidebar)
+            paintSidebarSky(true)
             // **And the composer is about the library again.** It is scoped by
             // the three sidebar handlers and by `closeSelected`, none of which
             // runs on the way in here, so "Ask about this meeting…" was left
@@ -1058,6 +1090,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             galaxyPane.reload()
 
         case .library:
+            paintSidebarSky(false)
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
             // Only settings hid the sidebar, so only settings restores it.
@@ -1608,7 +1641,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
          .flexibleSpace, .space, Self.settingsItem, Self.brandItem, Self.settingsTitleItem,
          Self.actionsItem, Self.recordItem,
          Self.chatsItem, Self.chatsTitleItem, Self.newChatItem, Self.chatActionsItem,
-         Self.closeItem]
+         Self.closeItem, Self.galaxyToolbarItem]
     }
 
     /// What the toolbar shows, which depends on the mode.
@@ -1702,7 +1735,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             if isHome && !isShowingLiveMeeting && Settings.askEnabled {
                 items.append(Self.chatsItem)
             }
-            items += [.flexibleSpace, Self.recordItem, .space, Self.actionsItem]
+            // The galaxy takes the ellipsis's slot on the home page, where the
+            // menu has nothing in it but the sentence saying so. See
+            // `galaxyToolbarItem`.
+            items += [.flexibleSpace, Self.recordItem, .space]
+            if isHome && Settings.galaxyEnabled { items.append(Self.galaxyToolbarItem) }
+            else { items.append(Self.actionsItem) }
             // And the way out of it, in the corner, last. Everything in the
             // ellipsis acts *on* the page; this puts the page away, so it is
             // outside the menu rather than the first row of it, which is where
@@ -2046,6 +2084,19 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
                                  accessibilityDescription: "Actions")
             item.menu = recordingActionsMenu
             item.showsIndicator = false
+            return item
+
+        case Self.galaxyToolbarItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Galaxy"
+            item.toolTip = "Your library as one picture"
+            item.target = self
+            item.action = #selector(showGalaxy)
+            // A sphere with meridians on it, which is what the shell guides
+            // actually draw. `sparkles` and the hex grid both read as something
+            // else in a Mac toolbar.
+            item.image = NSImage(systemSymbolName: "globe",
+                                 accessibilityDescription: "Galaxy")
             return item
 
         case Self.closeItem:

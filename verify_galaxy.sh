@@ -111,14 +111,21 @@ check $? "listen galaxy --json answers"
 check $? "every recording is a star"
 [ "$(echo "$out" | kind_ note)" = "4" ]
 check $? "every note is a star"
-[ "$(echo "$out" | kind_ person)" = "4" ]
-check $? "every speaker is a star"
+# Four speakers, and one of them is you: you are the centre rather than a
+# fourth star on the people shell. Two stars for one person was the falsehood,
+# and the one in the middle was the one carrying no evidence.
+[ "$(echo "$out" | kind_ person)" = "3" ]
+check $? "every speaker but you is a star on the people shell"
 [ "$(echo "$out" | kind_ device)" = "1" ]
-check $? "and exactly one centre"
+check $? "and you are the centre, exactly once"
+[ "$(echo "$out" | jq_ centre_is_you)" = "True" ]
+check $? "the centre is a person the library has heard, not an anonymous anchor"
+[ "$(echo "$out" | jq_ centre_links)" -gt 0 ] 2>/dev/null
+check $? "so its links are real ones it earned ($(echo "$out" | jq_ centre_links))"
 [ "$(echo "$out" | jq_ off_shell)" = "0" ]
 check $? "every star sits exactly on its own shell"
 [ "$(echo "$out" | jq_ centre_edges)" = "0" ]
-check $? "the centre has no edges: it is where you are looking from, not a claim"
+check $? "and the synthetic anchor is never an endpoint, because it stands for nothing"
 
 echo
 echo "2. the links are the ones already written down"
@@ -162,6 +169,8 @@ mkdir -p "$DIR/empty"
 empty=$(LISTEN_LIBRARY="$DIR/empty" "$APP_BIN" galaxy --json 2>/dev/null)
 [ "$(echo "$empty" | jq_ nodes)" = "1" ]
 check $? "an empty library is the centre and nothing else"
+[ "$(echo "$empty" | jq_ centre_is_you)" = "False" ]
+check $? "and with nobody heard yet the centre falls back to the anchor"
 [ "$(echo "$empty" | jq_ edges)" = "0" ]
 check $? "with no links invented to fill it"
 
@@ -184,20 +193,20 @@ bright=$(python3 "$ROOT/tools/pngstats.py" "$SHOT" bright)
 check $? "and it is not a black frame ($bright lit pixels)"
 [ "$bright" -lt 400000 ] 2>/dev/null
 check $? "and not a wash over the whole image"
-read -r teal orange purple blue <<EOF
-$(python3 "$ROOT/tools/pngstats.py" "$SHOT" hues)
+read -r people notes chats recordings <<EOF
+$(python3 "$ROOT/tools/pngstats.py" "$SHOT" shells)
 EOF
-[ "$teal" -gt 50 ] 2>/dev/null
-check $? "the recordings shell is drawn ($teal px)"
-[ "$orange" -gt 20 ] 2>/dev/null
-check $? "the notes shell is drawn ($orange px)"
-[ "$blue" -gt 50 ] 2>/dev/null
-check $? "the people shell and the centre are drawn ($blue px)"
+[ "$recordings" -gt 50 ] 2>/dev/null
+check $? "the recordings shell is drawn ($recordings px)"
+[ "$notes" -gt 20 ] 2>/dev/null
+check $? "the notes shell is drawn ($notes px)"
+[ "$people" -gt 20 ] 2>/dev/null
+check $? "the people shell is drawn ($people px)"
 # No chats in this fixture, so its shell must be empty rather than filled with
 # something else. A colour that appears where there is nothing to draw is a
 # palette bug, and it would be invisible in every count-based check above.
-[ "$purple" -lt 50 ] 2>/dev/null
-check $? "and the chats shell is empty, because this library has no chats ($purple px)"
+[ "$chats" -lt 40 ] 2>/dev/null
+check $? "and the chats shell is empty, because this library has no chats ($chats px)"
 
 EMPTYSHOT="$DIR/empty.png"
 LISTEN_LIBRARY="$DIR/empty" "$APP_BIN" galaxy --image "$EMPTYSHOT" >/dev/null 2>&1
@@ -249,14 +258,16 @@ field "$dump" "People"
 check $? "the legend names the people shell"
 field "$dump" "Recordings"
 check $? "and the recordings shell"
-field "$dump" "Listen on this Mac"
-check $? "and says what the centre is"
+# The centre is named after you now, so the row is "<your name> (this Mac)".
+# Matched on the bracket rather than the name, which is a preference.
+echo "$dump" | grep -q "(this Mac)"
+check $? "and says the centre is you, on this Mac"
 echo "$dump" | grep -q "on four shells"
 check $? "the status line says how much of the library is drawn"
 field "$dump" "Pause motion"
 check $? "the motion switch is on the pane, named, and reachable"
-# 12 recordings + 4 notes + 4 people + the centre.
-grep -q "galaxy snapshot 21 stars" "$TRACE"
+# 12 recordings + 4 notes + 3 people, because the fourth is the centre.
+grep -q "galaxy snapshot 20 stars" "$TRACE"
 check $? "the snapshot it drew is the library, read on a background queue"
 stop
 
@@ -290,11 +301,14 @@ launch galaxy
 # trace is asked which it is rather than the run being called a failure.
 if grep -q "galaxy motion on" "$TRACE"; then
   ok "a visible galaxy animates"
-  osascript -e 'tell application "System Events" to keystroke "h" using command down' >/dev/null 2>&1
+  # **By pid, never by name and never by keystroke.** Several copies of this
+  # app run on this machine at once, and Cmd-H goes to whatever is frontmost,
+  # which on a busy desktop is not reliably the one just launched.
+  osascript -e "tell application \"System Events\" to set visible of (first process whose unix id is $APP) to false" >/dev/null 2>&1
   sleep 2
   grep -q "galaxy motion off .*visible=false" "$TRACE"
   check $? "hiding the app stops it, and the trace says visibility is why"
-  osascript -e 'tell application "System Events" to tell process "Listen" to set visible to true' >/dev/null 2>&1
+  osascript -e "tell application \"System Events\" to set visible of (first process whose unix id is $APP) to true" >/dev/null 2>&1
 else
   reason=$(grep -m1 "galaxy motion off" "$TRACE" || echo "no motion line in the trace")
   case "$reason" in

@@ -10,9 +10,9 @@ no other check can reach on a machine with a locked screen.
   bright  how many pixels are clearly brighter than the sky, which is the stars
           and the links: near zero is a black frame, and half the image is a
           renderer painting over everything
-  hues    how many pixels fall in each shell's colour, in the order
-          teal/orange/purple/blue, which is recordings, notes, chats, and
-          people plus the centre. A shell that is not drawn scores zero.
+  shells  how many pixels fall in each shell's colour, in the order
+          people/notes/chats/recordings. A shell that is not drawn scores
+          zero, which is the only check that proves one is drawn at all.
 """
 import struct, sys, zlib
 
@@ -68,16 +68,47 @@ if __name__ == '__main__':
         # Pixels clearly brighter than the sky, which is the star and line count.
         n = sum(1 for i in range(0, len(px), 4) if px[i] + px[i+1] + px[i+2] > 200)
         print(n)
-    elif mode == 'hues':
-        # Which shells are drawn, by their dominant channel. A recording is
-        # green-dominant teal, a note is red-dominant orange, a chat is
-        # purple with red under blue, a person and the centre are blue.
-        teal = orange = purple = blue = 0
+    elif mode == 'pixel':
+        # One pixel, for comparing two regions that should be the same colour.
+        x, y = int(sys.argv[3]), int(sys.argv[4])
+        i = (y * w + x) * 4
+        print(px[i], px[i+1], px[i+2])
+    elif mode == 'shells':
+        # Which shells are drawn, by colour. These mirror
+        # `GalaxyRenderer.starColor`, and they are matched on chromaticity
+        # rather than on the raw values because the shader scales every star by
+        # a brightness and a shimmer: a dim recording and a bright one are the
+        # same hue at different lengths.
+        targets = [
+            ('people',     (1.00, 0.80, 0.28)),
+            ('notes',      (0.36, 0.52, 1.00)),
+            ('chats',      (0.85, 0.42, 1.00)),
+            ('recordings', (0.20, 0.88, 0.74)),
+            # The centre, which is bright enough to swamp any shell it is
+            # mistaken for. Counted separately and then discarded.
+            ('centre',     (1.00, 0.93, 0.74)),
+            # And the links, which cross the whole picture and are deliberately
+            # neither of any shell's colours. Counted so they are not mistaken
+            # for one, then discarded.
+            ('links',      (0.62, 0.68, 0.80)),
+            # The decorative sky. Neutral for the same reason the links are:
+            # every hue in this scene belongs to a shell.
+            ('sky',        (0.58, 0.62, 0.70)),
+        ]
+        def chroma(c):
+            total = sum(c) or 1.0
+            return tuple(v / total for v in c)
+        normed = [(name, chroma(rgb)) for name, rgb in targets]
+        counts = {name: 0 for name, _ in targets}
         for i in range(0, len(px), 4):
             r, g, b = px[i], px[i+1], px[i+2]
-            if r + g + b < 150: continue
-            if g > r + 30 and g > 60 and b > 40: teal += 1
-            elif r > b + 40 and r > g + 20: orange += 1
-            elif b > g + 40 and r > g + 10: purple += 1
-            elif b > r + 30 and b > g: blue += 1
-        print(teal, orange, purple, blue)
+            # Above the sky, and not so grey that the hue is noise.
+            if r + g + b < 150 or max(r, g, b) - min(r, g, b) < 25:
+                continue
+            here = chroma((r, g, b))
+            name, distance = min(
+                ((n, sum((a - c) ** 2 for a, c in zip(here, t))) for n, t in normed),
+                key=lambda pair: pair[1])
+            if distance < 0.006:
+                counts[name] += 1
+        print(' '.join(str(counts[name]) for name, _ in targets[:4]))

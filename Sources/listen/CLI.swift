@@ -2759,6 +2759,7 @@ enum CLI {
             guard let radius = Galaxy.shellRadius(kind: node.kind) else { return node.position != .zero }
             return abs(simd_length(node.position) - radius) > 0.001
         }.count
+        let centre = snapshot.nodes.first { $0.kind == Galaxy.Node.device }
         let centred = snapshot.nodes.filter { $0.kind == Galaxy.Node.device }.count
         if asJSON {
             let payload: [String: Any] = [
@@ -2768,9 +2769,18 @@ enum CLI {
                 "edges_by_kind": byLink,
                 "centre": centred,
                 "off_shell": offShell,
+                // Edges touching the *synthetic* anchor, which must always be
+                // zero: it stands for nothing on disk, so a line to it would
+                // be a line to nothing. A real person at the centre is a
+                // different thing and keeps every line they earned, which is
+                // `centre_links`.
                 "centre_edges": snapshot.edges.filter {
                     $0.source == Galaxy.deviceID || $0.target == Galaxy.deviceID
                 }.count,
+                "centre_is_you": centre.map { Galaxy.subject(of: $0.id) != nil } ?? false,
+                "centre_links": centre.map { middle in
+                    snapshot.edges.filter { $0.source == middle.id || $0.target == middle.id }.count
+                } ?? 0,
                 // **A digest of the positions, not the positions.** The whole
                 // point of the seeded hash is that a star is in the same place
                 // next launch, and counts cannot say whether it moved: two

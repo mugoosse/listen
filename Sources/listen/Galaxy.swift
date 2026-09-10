@@ -141,8 +141,22 @@ enum Galaxy {
     /// The cap is a presentation limit and it is disclosed in the label rather
     /// than applied quietly: a picture that silently stops at 1200 stars is a
     /// picture that lies about a library of 3000.
-    static func scene(nodes input: [Node], edges: [Edge], deviceTitle: String = "Listen · This Mac",
-                      maximumNodes: Int = 1200) -> Snapshot {
+    /// Lay the shells out around a centre.
+    ///
+    /// **`centreID` is you, when the library knows who you are.** The centre
+    /// used to be a synthetic anchor with no id and no edges, on the rule that
+    /// a presentation anchor must not appear to stand in a relationship to
+    /// everything around it. That rule is right and this does not break it: it
+    /// makes the centre a *real* person, so the lines leaving it are the same
+    /// "speaks in" rows every other person's lines are, already written down
+    /// and openable. Two stars for one person was the actual falsehood, and
+    /// the one at the middle was the one carrying no evidence.
+    ///
+    /// It falls back to the synthetic anchor, which keeps its old rule about
+    /// edges, when the library has no speaker for you yet: a first run, or a
+    /// library of imported recordings nobody has labelled.
+    static func scene(nodes input: [Node], edges: [Edge], deviceTitle: String = "This Mac",
+                      centreID: String? = nil, maximumNodes: Int = 1200) -> Snapshot {
         var seen: Set<String> = []
         // Sorted by kind and then id, so the picture is the same every launch.
         // The kind is first for a second reason: alphabetically it runs chat,
@@ -158,18 +172,32 @@ enum Galaxy {
             .sorted { ($0.kind, $0.id) < ($1.kind, $1.id) }
             .filter { seen.insert($0.id).inserted }
         let capacity = max(0, maximumNodes - 1)
-        let visible = Array(sorted.prefix(capacity))
-        let visibleIDs = Set(visible.map(\.id))
+        var visible = Array(sorted.prefix(capacity))
+        // The centre comes out of the shells and goes to the origin, keeping
+        // its own id so a click on it opens that person's page.
+        var device = Node(id: deviceID, kind: Node.device, title: deviceTitle, position: .zero)
+        if let centreID, let at = visible.firstIndex(where: { $0.id == centreID }) {
+            let you = visible.remove(at: at)
+            device = Node(id: you.id, kind: Node.device, title: you.title,
+                          detail: you.detail, position: .zero)
+        }
+        let visibleIDs = Set(visible.map(\.id)).union([device.id])
         var edgeIDs: Set<String> = []
         let kept = edges
             .sorted { $0.id < $1.id }
             .filter { edge in
+                // `deviceID` is the synthetic anchor, and it may never be an
+                // endpoint: it stands for nothing on disk, so a line to it
+                // would be a line to nothing. A real person at the centre is a
+                // different thing and keeps every line it earned.
                 edge.source != edge.target && edge.source != deviceID && edge.target != deviceID
                     && visibleIDs.contains(edge.source) && visibleIDs.contains(edge.target)
                     && edgeIDs.insert(edge.id).inserted
             }
-        let omitted = sorted.count - visible.count
-        let device = Node(id: deviceID, kind: Node.device, title: deviceTitle, position: .zero)
+        // The centre left `visible` by being promoted, not by being cut, so it
+        // must not be counted among the stars the cap dropped.
+        let promoted = device.id == deviceID ? 0 : 1
+        let omitted = max(0, sorted.count - visible.count - promoted)
         var label = "\(visible.count) of your library, on four shells."
         if omitted > 0 {
             label += " \(omitted) \(omitted == 1 ? "star is" : "stars are") not drawn:"

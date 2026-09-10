@@ -70,7 +70,26 @@ extension Galaxy {
                                   label: "Asked about", reverse: "Asked about in"))
             }
         }
-        return scene(nodes: nodes, edges: edges, maximumNodes: maximumNodes)
+        // **The centre is named after you, not after the app.** "Listen on
+        // this Mac" described the software; what a reader wants at the middle
+        // of their own library is their own name, and this is the same one the
+        // transcript, the roster and an agent all use. The bracket says what
+        // the star actually is, because the centre is still a presentation
+        // anchor rather than a person: there is no `person:` star for you here
+        // that this could be confused with.
+        let name = Settings.userName ?? SpeakerName.you
+        // You are the centre, when the library has heard you speak. See
+        // `scene`: this is one star rather than two, and the one it keeps is
+        // the one carrying evidence.
+        // The name alone. The star at the middle is labelled the way every
+        // other star is, with what the thing is called; "(this Mac)" is the
+        // legend's job, because that is where a reader asks what the centre
+        // *is* rather than who it is. Passing it here made the two disagree:
+        // a promoted person kept their own name and the anchor carried the
+        // bracket, so the legend read "Me" on one library and "Me (this Mac)"
+        // on another.
+        return scene(nodes: nodes, edges: edges, deviceTitle: name,
+                     centreID: personID(SpeakerName.you), maximumNodes: maximumNodes)
     }
 
     private static func recordingDetail(_ recording: Recording) -> String {

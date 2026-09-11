@@ -232,7 +232,107 @@ check $? "a pair the dictionary already handles is not offered again"
 check $? "dismissing something that is not there is refused, not silent"
 
 # ---------------------------------------------------------------------------
-echo "4. the pane"
+echo "4. the agent's tools"
+# ---------------------------------------------------------------------------
+# The dictionary is the only writable surface on the MCP server that can change
+# a transcript, so what is asserted here is the guard rather than the write: an
+# apply that never previewed is refused, and a preview somebody read is what
+# `sentences` carries.
+
+# One `listen mcp` process per call, which is what a client does anyway. The
+# request is built in python because a tool's arguments are JSON and quoting
+# them through bash twice is how a test starts asserting on its own escaping.
+mcp() {   # tool, json arguments, optional --tools allowlist
+  python3 - "$LISTEN" "$1" "$2" "${3:-}" <<'PY'
+import json, subprocess, sys
+listen, tool, args, tools = sys.argv[1:5]
+cmd = [listen, "mcp"] + (["--tools", tools] if tools else [])
+lines = [json.dumps({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}}),
+         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                     "params": {"name": tool, "arguments": json.loads(args)}})]
+p = subprocess.run(cmd, input="\n".join(lines) + "\n", capture_output=True, text=True)
+for line in p.stdout.splitlines():
+    m = json.loads(line)
+    if m.get("id") != 1:
+        continue
+    r = m.get("result", {})
+    print(("ERROR: " if r.get("isError") else "")
+          + r.get("content", [{}])[0].get("text", ""))
+PY
+}
+
+AAAA="$LISTEN_LIBRARY/recordings/2026-09-01-100000-AAAA"
+
+mcp list_dictionary '{}' | grep -q "cloud code"
+check $? "list_dictionary reads the list the pane writes"
+
+# The allowlist is the only thing standing between a read-only question and the
+# transcripts, and it is enforced here rather than by the client. See `MCP.call`.
+mcp add_dictionary_entry '{"text":"Nope","replacement":"Nah"}' "list_dictionary" \
+  | grep -q "not one of the tools this session may call"
+check $? "a session without writes cannot add a rule"
+mcp apply_dictionary_backfill '{"sentences":1}' "list_dictionary" \
+  | grep -q "not one of the tools this session may call"
+check $? "nor apply a backfill"
+
+mcp add_dictionary_entry '{"text":"everybody","replacement":"everyone"}' \
+  | grep -q '"kind" : "correction"'
+check $? "both halves of a mishearing make a correction"
+mcp add_dictionary_entry '{"text":"everybody","replacement":"everyone"}' \
+  | grep -q "already in the dictionary"
+check $? "and adding it twice is refused rather than duplicated"
+
+# `DictionarySuggestions.entry` makes the same choice from `caseOnly`. An
+# insensitive correction here matches its own replacement for ever.
+mcp add_dictionary_entry '{"text":"seapoint","replacement":"Seapoint"}' \
+  | grep -q '"forced_case_sensitive" : true'
+check $? "a pair differing only in capitals is forced case-sensitive"
+
+mcp add_dictionary_entry '{"text":"Beehiv"}' | grep -q "ordinary English word"
+check $? "a term that sounds like English is saved with the reason it will not fire"
+mcp add_dictionary_entry '{"text":"Ekko"}' | grep -q "needs five letters"
+check $? "so is a term too short to be matched by sound"
+mcp add_dictionary_entry '{"text":"Embt","replacement":"Embt"}' \
+  | grep -q "would do nothing"
+check $? "and a correction that replaces text with itself is refused"
+
+before=$(cat "$AAAA/transcript.json")
+preview=$(mcp preview_dictionary_backfill '{"recording_id":"2026-09-01-100000-AAAA"}')
+echo "$preview" | grep -q "everybody in the room.  ->  .*everyone in the room."
+check $? "the preview quotes the sentence either side of the edit"
+[ "$(cat "$AAAA/transcript.json")" = "$before" ]
+check $? "and writes nothing"
+
+mcp apply_dictionary_backfill \
+  '{"recording_id":"2026-09-01-100000-AAAA","sentences":99}' \
+  | grep -q "Nothing was written"
+check $? "an apply whose count does not match the preview is refused"
+[ "$(cat "$AAAA/transcript.json")" = "$before" ]
+check $? "and really does write nothing"
+
+mcp apply_dictionary_backfill \
+  '{"recording_id":"2026-09-01-100000-AAAA","sentences":1}' | grep -q '"sentences" : 1'
+check $? "the count the preview returned is what lets it through"
+grep -q "everyone in the room" "$AAAA/transcript.json"
+check $? "and the transcript is rewritten"
+grep -q "everyone in the room" "$AAAA/turns.json"
+check $? "with turns.json rebuilt from the same segments"
+[ ! -f "$AAAA/transcript.raw.json.bak" ]
+check $? "and no .raw.json.bak, because a backfill is not a human correction"
+
+mcp preview_dictionary_backfill '{"recording_id":"2026-09-01-100000-AAAA"}' \
+  | grep -q '"sentences" : 0'
+check $? "a second preview of the same recording finds nothing"
+
+mcp remove_dictionary_entry '{"text":"EVERYBODY"}' | grep -q '"text" : "everybody"'
+check $? "an entry is removed however it is capitalised"
+grep -q "everyone in the room" "$AAAA/transcript.json"
+check $? "and removing the rule does not put the sentence back"
+mcp remove_dictionary_entry '{"text":"never-added"}' | grep -q "no dictionary entry"
+check $? "removing one that is not there is refused, not silent"
+
+# ---------------------------------------------------------------------------
+echo "5. the pane"
 # ---------------------------------------------------------------------------
 mkdir -p "$(dirname "$PROBE")"
 [ -x "$PROBE" ] || swiftc -O "$ROOT/tools/axprobe.swift" -o "$PROBE" || exit 2

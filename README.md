@@ -486,8 +486,11 @@ Nothing is ever asked in the background: transcripts travel at the moment you
 press send and at no other time.
 
 Ask is read-only unless you say otherwise. `listen ask --write`, and the
-window's own equivalent, let it add notes and tags, which are the same two
-things MCP allows and for the same reason.
+window's own equivalent, let it add notes and tags and teach your dictionary,
+which are the same things MCP allows and for the same reason. Telling it a word
+came out wrong is the one worth knowing about: say "it says C point, it should
+be Seapoint" and it adds the rule, shows you what that would change in the
+meetings you already have, and rewrites them if that is what you asked for.
 
 At the command line, `listen ask` with no question reports what is set up, and
 `listen ask --to http://localhost:11434/v1 "..."` tries an endpoint for one run
@@ -751,7 +754,8 @@ on purpose.
 listen ask                        what is set up, and nothing else
 listen ask "<question>"           through whichever backend is configured
 listen ask --to <url> "<q>"       one run against a URL, changing no preference
-listen ask --write "<q>"          let it write notes and tags. Read-only without.
+listen ask --write "<q>"          let it write notes, tags, dictionary rules
+                                  and names
 listen ask --print-request        the POST body it would send, minus the key
 listen provider list              the endpoints this Mac knows about
 listen provider add <id>          one of the twelve, or a URL of your own
@@ -793,11 +797,12 @@ Settings, Developers has this ready to copy with the right path filled in.
 Opens no port, and the app does not need to be running: the library on disk is
 the source of truth.
 
-**Notes and tags are the only things an agent can write.** Everything else is
-read-only, and that is a boundary rather than a milestone. An agent can add,
-rewrite and delete the notes it wrote, and tag and untag a recording or a note;
-it can read your own note and tag it but not change a word of it; and it cannot
-rename a speaker, correct a transcript, retitle a recording or delete one.
+**Notes, tags, your dictionary and a recording's name are the only things an
+agent can write.** Everything else is read-only, and that is a boundary rather
+than a milestone. An agent can add, rewrite and delete the notes it wrote, tag
+and untag a recording or a note, and name a recording nobody has named; it can
+read your own note and tag it but not change a word of it; and it cannot rename
+a speaker or delete a recording.
 
 Recordings and notes share one set of tag names, and nothing is inherited:
 tagging a meeting `kinsight` does not tag the write-ups of it, so filing a
@@ -812,9 +817,25 @@ one is a wrong opinion sitting beside the recording that disproves it. A wrong
 transcript edit is a fact that is simply gone. Changing the evidence goes through
 you, in the window or at the command line, where you can see it and undo it.
 
-Thirteen tools, eight of them reads. [`MCP.md`](MCP.md) is the reference: how to
-connect each client, what every tool takes, and how to walk a large library
-without reading it whole.
+The dictionary is the one that needed thinking about, because a rule is
+harmless and applying it to transcripts you already have is not. Adding one
+changes nothing that exists: it says how the next recording should be spelled,
+and it can be taken back. Rewriting the ones you have is offered too, because a
+rule that fixes tomorrow and leaves the meeting where you noticed the mistake
+spelled wrong for ever is no use, but it takes no backup, so an agent cannot
+reach it without first showing you every sentence it would change: the call
+refuses unless it carries the count that preview returned.
+
+It can also see what it could not before: the meetings coming up on your
+calendar, the questions you have asked it in the past, and how much of the
+library its own memory of your people has actually read. Those are all reads.
+Where it finds a claim in that memory misreading its own source it can say so,
+and that waits for you: `listen context suggestions --accept` applies one,
+`--dismiss` stops it being offered again.
+
+Twenty-nine tools, nineteen of which write nothing. [`MCP.md`](MCP.md) is the reference:
+how to connect each client, what every tool takes, and how to walk a large
+library without reading it whole.
 
 ## Where things are kept
 

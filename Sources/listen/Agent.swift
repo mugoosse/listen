@@ -1207,8 +1207,13 @@ final class AgentRun {
     static func tools(allowWrites: Bool) -> [String] {
         let read = ["list_recordings", "get_recording", "get_transcript",
                     "search_transcripts", "list_people", "list_tags",
-                    "list_notes", "read_note", "get_person_context", "get_project_context", "list_context_entities", "search_context"]
-        let write = ["write_note", "edit_note", "add_tags", "remove_tags"]
+                    "list_notes", "read_note", "get_person_context", "get_project_context", "list_context_entities", "search_context",
+                    "list_dictionary", "list_conversations", "read_conversation",
+                    "list_upcoming", "get_event", "get_context_status"]
+        let write = ["write_note", "edit_note", "add_tags", "remove_tags",
+                     "add_dictionary_entry", "remove_dictionary_entry",
+                     "preview_dictionary_backfill", "apply_dictionary_backfill",
+                     "set_recording_title", "suggest_context_correction"]
         return read + (allowWrites ? write : [])
     }
 
@@ -1288,6 +1293,12 @@ final class AgentRun {
         having already read the meeting.
         - `get_transcript` last, and only for the recordings you have narrowed to.
 
+        Two things sit outside the library. `list_upcoming` is the calendar, for \
+        a meeting that has not happened and so has no transcript; check its \
+        `authorized` before reporting an empty day. And memory can be behind \
+        rather than empty, so `get_context_status` is what says how much of the \
+        library it has read.
+
         Speakers are named where somebody has named them and single letters \
         where nobody has. `Me` is \(name).
 
@@ -1324,6 +1335,21 @@ final class AgentRun {
             means tagging the meetings and the notes about them separately, and \
             `list_notes` with a tag asks what is filed rather than what the \
             meeting was filed as.
+
+            When the user tells you a word came out wrong, fix it in the \
+            dictionary rather than only in your own answer. \
+            `add_dictionary_entry` with a `replacement` is the one to reach for \
+            when they have given you both halves, which "it says X, it should \
+            be Y" is; a term with no replacement is a guess by sound and often \
+            fires on nothing. Check `list_dictionary` first.
+
+            That rule only changes what is recorded next. The transcripts they \
+            already have are `preview_dictionary_backfill`, and they are \
+            rewritten by `apply_dictionary_backfill`, which **cannot be undone \
+            and takes no backup**. So preview it, tell them what it would \
+            change, and apply it only when changing what they already have is \
+            what they asked for. "Fix the transcription" is that request. \
+            "Remember it is called Seapoint" is not.
             """
         }
         return text

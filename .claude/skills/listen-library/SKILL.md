@@ -7,7 +7,8 @@ description: Find things across a Listen meeting library without reading every t
 
 Listen records meetings, transcribes them and labels who spoke. The library is
 markdown and JSON files on disk; the MCP server serves them read-only apart from
-notes, and the `listen` CLI does the same thing without an MCP client.
+notes, tags and the dictionary, and the `listen` CLI does the same thing without
+an MCP client.
 
 **The whole skill is one idea: narrow before you read.** Transcripts are the
 only expensive thing here and everything else exists so you can decide which

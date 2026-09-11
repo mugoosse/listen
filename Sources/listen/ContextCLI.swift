@@ -17,6 +17,7 @@ enum ContextCLI {
     listen context note --person <name> <text> [--exclude-from-ai]
     listen context forget --person <name>
     listen context dismiss <claim-id>
+    listen context suggestions [--accept <claim-id>] [--dismiss <claim-id>] [--json]
     listen context search <query> [--person <name>] [--limit <count>] [--as-of YYYY-MM-DD] [--json]
     listen context index
     listen context embeddings status|download|apple|multilingual|evaluate
@@ -27,6 +28,45 @@ enum ContextCLI {
     run locally after one model download. Briefs and corrections use encrypted
     owner-device sync; jobs and search vectors stay on this Mac.
     """
+
+    /// How much of the library person and project memory has actually read.
+    ///
+    /// Lifted out of `context status` when the MCP server needed the same
+    /// numbers. One type and one reader rather than two, because a CLI and a
+    /// tool that disagreed about how many sources are pending would be a
+    /// disagreement nobody could reproduce from either side.
+    struct Coverage: Encodable {
+        var automatic: Bool
+        var askEnabled: Bool
+        var sources: Int
+        /// Recordings that cannot be extracted from until somebody names who is
+        /// speaking. The one number here that names a fix rather than a state.
+        var waitingForNames: Int
+        var pending: Int
+        var failed: Int
+        var processed: Int
+        var embeddingModels: [String]
+        var indexedPassages: Int
+    }
+
+    static func coverage() throws -> Coverage {
+        let sources = ContextSources.all(), document = try PeopleMemory.load()
+        let index = try SemanticIndex.load()
+        return Coverage(
+            automatic: Settings.peopleContextEnabled
+                && ((try? MemoryPreferences.read(root: Library.root).contains {
+                    $0.key.hasPrefix("person:") && $0.key.hasSuffix(":automatic")
+                        && $0.value.text == "true"
+                }) ?? false),
+            askEnabled: Settings.askEnabled,
+            sources: sources.count,
+            waitingForNames: sources.filter { $0.kind == "recording" && !$0.extractable }.count,
+            pending: ContextProcessor.pending(sources, document, retry: true).count,
+            failed: document.receipts.values.filter { $0.failure != nil && $0.source.isCurrent }.count,
+            processed: PeopleMemory.validReceipts(document).count,
+            embeddingModels: Set(index.entries.compactMap { $0.vector?.model }).sorted(),
+            indexedPassages: index.entries.count)
+    }
 
     static func json<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
@@ -45,6 +85,10 @@ enum ContextCLI {
             var asOf: String?
             var selectedSources: Set<String> = []
             var excluded = false
+            // `suggestions` alone reads these, but every option is parsed before
+            // the switch, so an unknown one is refused rather than treated as a
+            // name. Declared here for that reason and no other.
+            var accept: String?, refuse: String?
             var i = 1
             while i < arguments.count {
                 let arg = arguments[i]
@@ -56,6 +100,12 @@ enum ContextCLI {
                     i += 1
                     guard i < arguments.count else { throw ContextProblem.message("--source needs a source ID.") }
                     selectedSources.insert(arguments[i])
+                case "--accept", "--dismiss":
+                    i += 1
+                    guard i < arguments.count else {
+                        throw ContextProblem.message("\(arg) needs a claim ID.")
+                    }
+                    if arg == "--accept" { accept = arguments[i] } else { refuse = arguments[i] }
                 case "--claude", "--codex":
                     guard backend == nil else { throw ContextProblem.message("Choose one backend.") }
                     backend = arg == "--claude" ? .claude : .codex
@@ -95,15 +145,7 @@ enum ContextCLI {
             switch command {
             case "status":
                 guard text.isEmpty else { throw ContextProblem.message("context status takes no name.") }
-                let sources = ContextSources.all(), document = try PeopleMemory.load()
-                struct Status: Encodable { var automatic: Bool; var askEnabled: Bool; var sources: Int; var waitingForNames: Int; var pending: Int; var failed: Int; var processed: Int; var embeddingModels: [String]; var indexedPassages: Int }
-                let index = try SemanticIndex.load()
-                let result = Status(automatic: Settings.peopleContextEnabled && ((try? MemoryPreferences.read(root: Library.root).contains { $0.key.hasPrefix("person:") && $0.key.hasSuffix(":automatic") && $0.value.text == "true" }) ?? false), askEnabled: Settings.askEnabled,
-                    sources: sources.count, waitingForNames: sources.filter { $0.kind == "recording" && !$0.extractable }.count,
-                    pending: ContextProcessor.pending(sources, document, retry: true).count,
-                    failed: document.receipts.values.filter { $0.failure != nil && $0.source.isCurrent }.count,
-                    processed: PeopleMemory.validReceipts(document).count,
-                    embeddingModels: Set(index.entries.compactMap { $0.vector?.model }).sorted(), indexedPassages: index.entries.count)
+                let result = try coverage()
                 if jsonOutput { print(try json(result)) }
                 else {
                     print("Automatic context: \(result.automatic ? "on" : "off") · Ask: \(result.askEnabled ? "on" : "off")")
@@ -178,6 +220,44 @@ enum ContextCLI {
                 try MemoryPreferences.deleteMemory(person: MemoryPreferences.personID(label, root: Library.root), root: Library.root)
                 try SemanticIndex.refresh()
                 print("Generated memory deleted. Notes and recordings retained; automatic briefs are off.")
+            case "suggestions", "suggest":
+                // The same three shapes `listen dictionary suggestions` has, for
+                // the same reason: a worklist is only worth keeping if acting on
+                // it is one command, and the two lists should not be two ideas
+                // of what a worklist is. `--accept` and `--dismiss` are parsed
+                // with every other option above.
+                guard text.isEmpty else {
+                    throw ContextProblem.message(
+                        "Use context suggestions [--accept <claim-id>] [--dismiss <claim-id>].")
+                }
+                if let id = refuse {
+                    ContextSuggestions.dismiss(id)
+                    print("Dismissed. It will not be offered again.")
+                } else if let id = accept {
+                    guard let one = ContextSuggestions.find(id) else {
+                        throw ContextProblem.message("No suggestion for \(id).")
+                    }
+                    try ContextSuggestions.accept(one)
+                    print("Corrected. \(one.entityName): \(one.text)")
+                } else {
+                    let waiting = ContextSuggestions.pending()
+                    if jsonOutput {
+                        print(try json(waiting))
+                    } else if waiting.isEmpty {
+                        print("Nothing suggested. An agent proposes these when it "
+                              + "reads a claim that disagrees with its own source.")
+                    } else {
+                        for one in waiting {
+                            print("\(one.claim) · \(one.entityName)")
+                            print("  now: \(one.was)")
+                            print("  ->:  \(one.text)")
+                            print("  why: \(one.why)")
+                        }
+                        print("")
+                        print("`--accept <claim-id>` applies one, "
+                              + "`--dismiss <claim-id>` stops it being offered.")
+                    }
+                }
             case "dismiss":
                 guard text.count == 1, value.count == 64, value.allSatisfy(\.isHexDigit) else {
                     throw ContextProblem.message("context dismiss needs a claim ID from context person --json.")

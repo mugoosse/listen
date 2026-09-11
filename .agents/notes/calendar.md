@@ -427,7 +427,38 @@ would cancel a drag, fight the scroller and rebuild every cell in the library to
 advance one number. Same ids means redraw those cells in place. A different list
 means reload.
 
-### The agent has no calendar, so the invitation travels in the question
+### An unauthorized Mac and a clear afternoon are the same empty list
+
+`MeetingCalendar.upcoming` opens with `guard isAuthorized else { return [] }`,
+which is right for a sidebar section that simply does not appear. It is wrong
+for a tool. `list_upcoming` returning only an array would have an agent tell
+somebody their day is free when Listen cannot see the calendar at all, and the
+user has no way to tell those apart from the answer.
+
+So the tool returns `authorized` beside the events, `get_event` refuses with
+"this is a permission, not an empty calendar", and the description tells the
+model to check the field before reporting nothing. The horizon and the lateness
+come back too, so twelve hours ahead is stated rather than implied by an answer
+that stops there.
+
+**The branch cannot be reached from a shell.** A binary started from a terminal
+is not the TCC subject, the terminal is, so `Listen.app/Contents/MacOS/Listen`
+and a copy under a fresh bundle identifier both answer with whatever the
+terminal was granted. `verify_mcp.sh` tries the copy and skips saying so. It is
+reachable where the responsible process genuinely lacks the permission, which is
+the app itself and a client such as Claude Desktop spawning `listen mcp`, and
+that is exactly the population the field exists for.
+
+## A meeting being recorded is marked on the list, not dropped from it
+
+The sidebar excludes the live meeting because it shows the recording immediately
+above it, and one meeting in two places is a wrong answer twice. A tool has no
+second place. `list_upcoming` therefore carries `recording_id` on any event the
+library already holds a recording of, built once from `Recording.all()` for the
+whole list rather than per row, and "this is the meeting you are in, and here is
+its id" is strictly more use to an agent than an event silently missing.
+
+## The agent has no calendar, so the invitation travels in the question
 
 It reaches the library through `listen mcp` and that is all. There is no
 calendar tool and there should not be one: an upcoming meeting is a handful of

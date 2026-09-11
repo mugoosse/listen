@@ -256,6 +256,8 @@ How a recording gets a name and a guest list, and what is about to happen.
 - `LISTEN_FAKE_EVENTS`, because nobody will hold a meeting to test a list
 - `listen calendar next` reads two hours back, and the list reads fifteen minutes
 - A store kept for hours answers from the cache the notification invalidated
+- An unauthorized Mac and a clear afternoon are the same empty list
+- A meeting being recorded is marked on the list, not dropped from it
 
 ### `.agents/notes/titles.md` (16k)
 
@@ -273,7 +275,8 @@ which. `Metadata.TitleSource`, `Recording.mayTitle`, `AutoTitle`, `DeviceTitle`,
 - The phone named every memo, and the guard read that as a person
 - The id carries the phone's wall clock, and `recorded_at` does not
 - Unnaming goes back to the floor, not to the placeholder
-- What is deliberately not here: no model title
+- The `model` rank was written before anything wrote it
+- What is deliberately not here: no title generated unasked
 
 ### `.agents/notes/notes-tags-dictionary.md` (48k)
 
@@ -316,6 +319,9 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 - `pageless` only earns its keep while recordings are in the list too
 - The tags are text in the note row, and pills everywhere else
 - An agent may tag the user's own note, and still may not rewrite it
+- The agent may add a rule, and only a preview it produced may apply one
+- A model cannot know about `caseOnly`, so the tool decides
+- A rule that will fire on nothing is saved, with the reason
 
 ### `.agents/notes/window.md` (159k)
 
@@ -551,6 +557,9 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - Codex has two approval gates, and the second one is the one that matters
 - The working directory is a choice, not a leftover
 - The brief is the retrieval ladder, and without it the first move is wrong
+- The tool surface is a per-turn cost, and it was measured before it grew
+- The reads grew by five, and two of them are not the library at all
+- The write list is notes, tags and vocabulary, and the third one is the odd one
 - `delete_note` is on neither tool list, and for a long time that was only true of Claude
 - No cost is shown anywhere, and that is a decision rather than an omission
 - The Ask pane is a third mode, not a panel
@@ -721,6 +730,9 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - Text embeddings are not voiceprints
 - A preferred Mac is a preference, not a lock
 - A Mac that is recording does not begin, and the wait did not say so
+- The model proposes in writing now, and a person still applies it
+- Coverage is a number the agent could not see
+- Exclusion reaches search, and now there is a test that says so
 
 ### `.agents/notes/telemetry.md` (16k)
 
@@ -811,16 +823,38 @@ One script stands in for one, over the app built in the working directory:
                         # ordinary English, the backfill previewing, applying
                         # and being idempotent, the counts it merges, the
                         # absence of a `.raw.json.bak`, and the suggestions a
-                        # hand edit through `listen edit` leaves behind. The
-                        # pane's ten assertions need an unlocked screen and
-                        # skip without one (uitest copy)
+                        # hand edit through `listen edit` leaves behind. Then
+                        # the same ground through the MCP tools: the allowlist
+                        # refusing a write, a correction forced case-sensitive,
+                        # a term saved with the reason it will fire on nothing,
+                        # and an apply refused unless it carries the total its
+                        # own preview returned. The pane's ten assertions need
+                        # an unlocked screen and skip without one (uitest copy)
+./verify_mcp.sh         # the MCP server's read surface, over a synthetic
+                        # library: the provenance on get_recording that says
+                        # how far to trust a transcript, note bodies being
+                        # searchable, the calendar (which meetings are listed
+                        # and the `authorized` field that stops an empty list
+                        # reading as a clear day), conversations, naming a
+                        # recording and the two names that outrank it, and the
+                        # allowlist refusing each write by name. Needs no
+                        # calendar: `LISTEN_FAKE_EVENTS` stands in. The one
+                        # branch it skips is a Mac with no calendar
+                        # permission, because a shell-launched CLI inherits the
+                        # terminal's grant and is not its own TCC subject
 ./verify_note_tags.sh   # tags on a note: the file on disk, files written by
                         # hand or by an older build, the shared vocabulary in
                         # both directions, no inheritance, and `listen mcp
                         # --tools` refusing a tool by name
 python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # source invalidation, local semantic search, CLI/MCP
-                        # pagination and one writer across processes
+                        # pagination and one writer across processes. Also the
+                        # proposal channel end to end (an agent proposes, memory
+                        # does not move, accepting goes through the same
+                        # correction contract the window uses, a dismissal is
+                        # never re-offered) and the assertion that excluding a
+                        # processed note stops its passages coming back from
+                        # search, not only from the card
 ./verify_desktop_connect.sh  # `listen mcp connect-desktop` over scratch
                         # configs: merge, backup, idempotence, refusals
 ./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying

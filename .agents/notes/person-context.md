@@ -53,6 +53,76 @@ the identical validator. Failed extraction is quarantined, remains pending and
 backs off. Successful retry removes the rejected response. Quarantine is removed
 when its source changes or disappears. Never put private content in telemetry.
 
+## The model proposes in writing now, and a person still applies it
+
+"The model proposes" was true of extraction and false of everything after it. An
+agent could read a claim, read the transcript under it, see the two disagree, and
+had nowhere to put that: `get_person_context` hands out claim ids, and `correct`,
+`pin` and `dismiss` were the window's and the CLI's alone. What it could do was
+say so in an answer, which dies with the conversation.
+
+`ContextSuggestions` is the inbox, modelled closely on `DictionarySuggestions`
+because that file had already solved this shape: something notices a change worth
+making, a human is the only thing allowed to make it. Same document, same
+worklist behaviour, same encoder settings, including `dateDecodingStrategy =
+.iso8601` on the **decoder** as well, which is the bug recorded in
+`notes-tags-dictionary.md` that made every suggestion invisible.
+
+Three properties are the whole design:
+
+- **The wording only.** The one field carried is the replacement text, which is
+  exactly what `context correct <claim-id> <text>` takes. Subject, predicate and
+  evidence are unreachable from here, so the rule above is enforced by shape
+  rather than by validation.
+- **Accepting goes through the existing contract**, `ContextStore.override` and
+  then `SemanticIndex.refresh`, which is what the person page and the CLI already
+  call. A correction that did not reach the index is one search still disagrees
+  with.
+- **A dismissal outranks a repeat.** An agent re-reading the same transcript next
+  week reaches the same conclusion, and somebody who has already said no should
+  not be asked again. `suggest_context_correction` refuses with that in words, so
+  the model puts it in the answer instead.
+
+A claim id is resolved against the store before anything is queued, so an
+invented one is refused at the tool rather than found missing later by whoever
+tries to accept it. The file is not in `DevicePolicy.blobs`: `dictionary.json`
+syncs because two devices with different vocabularies transcribe differently, a
+worklist is not a fact about the library, and the context store already has an
+owner projection with its own correction register to reconcile.
+
+The person page rows are deliberately not here yet. `listen context suggestions`,
+with `--accept` and `--dismiss`, is the whole acting surface for now.
+
+## Coverage is a number the agent could not see
+
+`get_person_context` reports one entity's `pending`, and `listen context status`
+reports the library's. Only the first was reachable, so an agent asked about
+somebody with no facts could say "nothing recorded" and could not say why.
+Measured on the real library: Edgar, 53 sources pending and no card at all;
+`context status`, 321 pending and **2 recordings waiting for speaker names**,
+which is the only number in either place that names something a person can go
+and do.
+
+`get_context_status` returns `ContextCLI.Coverage`, lifted out of the CLI's own
+`status` case so the two cannot come to different totals. `list_context_entities`
+carries the counts per row as well, because finding out who Listen knows anything
+about otherwise costs one `get_person_context` per entity.
+
+**An entity with no card still has a queue.** `cards()` builds one only for a
+label appearing in a valid receipt, so somebody entirely unprocessed is missing
+from it, and a row reading `claims: 0` with no `pending` would say "nothing known
+and nothing coming". The fallback reads `PeopleMemory.person` for those, with the
+document loaded once for the whole listing.
+
+## Exclusion reaches search, and now there is a test that says so
+
+`ContextSources` drops an `exclude_from_ai` note at source selection, and this
+file says to check exclusion at retrieval rather than only at index construction.
+`verify_context.py` asserted the card and the MCP note read, and not search.
+It does now, and the answer was that the gate already holds: excluding a
+processed note stops its passages coming back from `context search` in the same
+pass that revokes its evidence from the card.
+
 ## Temporal changes have their own evidence
 
 `ContextTime` preserves effective boundaries and original wording separately
@@ -178,6 +248,7 @@ implementation record for current performance/quality measurements and their
 limits. Do not turn a small fixture score into a production quality claim.
 
 ## Verification commands
+
 
 - `./build.sh && ./make_app.sh`
 - `bash tools/verify_memory_core.sh`

@@ -144,10 +144,10 @@ def main():
         path = WORK / "calls.jsonl"
         return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
 
-    def mcp(name, args, allowed=None):
+    def mcp(name, args, allowed=None, custom_env=None):
         argv = [str(binary), "mcp"] + (["--tools", allowed] if allowed else [])
         request = dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(name=name, arguments=args))
-        r = subprocess.run(argv, input=json.dumps(request) + "\n", env=env, text=True, capture_output=True, timeout=60)
+        r = subprocess.run(argv, input=json.dumps(request) + "\n", env=custom_env or env, text=True, capture_output=True, timeout=60)
         return json.loads(r.stdout)["result"]
 
     old = recording("2026-08-01-alice", "First conversation", "Alice Rivera", "I work as a designer at Northstar.", "2026-08-01T10:00:00Z")
@@ -424,6 +424,9 @@ def main():
     request = dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(name="read_note", arguments={"note":slug}))
     response = subprocess.run([str(binary), "mcp"], input=json.dumps(request) + "\n", env=consent_env, text=True, capture_output=True, timeout=60)
     check(json.loads(response.stdout)["result"].get("isError") is True, "MCP cannot read a known excluded note slug")
+    found = run("context", "search", "written follow-up", "--json", custom_env=consent_env, as_json=True)
+    check(all(e["source"] != "note:" + slug for m in found.get("matches", []) for e in m.get("evidence", [])),
+          "and local semantic search stops returning that note's passages too")
     check(saved_note.exists() and "written follow-up" in saved_note.read_text(), "exclusion keeps the owner's original note")
     run("context", "update", "--person", "Ben Ortiz", "--source", "rec:shared-meeting", "--claude", "--limit", "100", custom_env=consent_env)
     run("context", "forget", "--person", "Alice Rivera", custom_env=consent_env)
@@ -432,6 +435,43 @@ def main():
     check(saved_note.exists() and shared.exists(), "deleting generated memory preserves notes and recordings")
     run("context", "update", "--person", "Alice Rivera", "--source", "rec:shared-meeting", "--claude", "--limit", "100", custom_env=consent_env)
     check(run("context", "person", "Alice Rivera", "--json", custom_env=consent_env, as_json=True)["entries"], "a new explicit request may rebuild memory after deletion")
+
+    # The proposal channel. An agent may say a claim misreads its own source and
+    # may not apply that, which is the same split `DictionarySuggestions` makes
+    # and the reason this is a worklist rather than a write.
+    alice = run("context", "person", "Alice Rivera", "--budget", "16000", "--json", custom_env=consent_env, as_json=True)
+    claim = alice["entries"][0]
+    proposed = claim["text"] + " Corrected by hand."
+    result = mcp("suggest_context_correction", {"claim_id": claim["id"], "text": proposed,
+                                                "why": "The source sentence says so."}, custom_env=consent_env)
+    check(result.get("isError") is not True, "an agent may propose a correction to a claim")
+    unchanged = run("context", "person", "Alice Rivera", "--budget", "16000", "--json", custom_env=consent_env, as_json=True)
+    check(next(x for x in unchanged["entries"] if x["id"] == claim["id"])["text"] == claim["text"],
+          "and proposing changes nothing in memory")
+    waiting = run("context", "suggestions", "--json", custom_env=consent_env, as_json=True)
+    check(len(waiting) == 1 and waiting[0]["claim"] == claim["id"] and waiting[0]["was"] == claim["text"],
+          "the worklist carries the claim, what it says now and what is proposed")
+    check(mcp("suggest_context_correction", {"claim_id": "0" * 64, "text": "x", "why": "y"},
+              custom_env=consent_env).get("isError") is True,
+          "a claim id that is in no card is refused rather than queued against nothing")
+    run("context", "suggestions", "--accept", claim["id"], custom_env=consent_env)
+    corrected = run("context", "person", "Alice Rivera", "--budget", "16000", "--json", custom_env=consent_env, as_json=True)
+    entry = next(x for x in corrected["entries"] if x["id"] == claim["id"])
+    check(entry["text"] == proposed and entry["corrected"],
+          "accepting applies it through the same correction contract the window uses")
+    check(not run("context", "suggestions", "--json", custom_env=consent_env, as_json=True),
+          "and takes it off the worklist without remembering a refusal")
+    second = corrected["entries"][1]
+    mcp("suggest_context_correction", {"claim_id": second["id"], "text": second["text"] + " No.",
+                                       "why": "Because."}, custom_env=consent_env)
+    run("context", "suggestions", "--dismiss", second["id"], custom_env=consent_env)
+    check(not run("context", "suggestions", "--json", custom_env=consent_env, as_json=True),
+          "dismissing takes it off the worklist")
+    check(mcp("suggest_context_correction", {"claim_id": second["id"], "text": second["text"] + " No.",
+                                             "why": "Because."}, custom_env=consent_env).get("isError") is True,
+          "and a claim the user has dismissed is never offered again")
+    check((consent_lib / "context-suggestions.json").exists(),
+          "the worklist is a file beside the library, like dictionary-suggestions.json")
 
     run("context", "auto", "on")
     elsewhere = dict(env, LISTEN_LIBRARY=str(WORK / "other-library"))

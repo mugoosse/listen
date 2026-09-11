@@ -325,6 +325,59 @@ only sentences that changed, and `TranscriptEditor` merges those counts into
 real library: 55 fires before, 119 after, and a second pass adds nothing and
 changes nothing.
 
+## The agent may add a rule, and only a preview it produced may apply one
+
+An agent that could read a transcript and not write down that "C point" is
+Seapoint made the user say it again next week, which is the whole complaint that
+started this. So `add_dictionary_entry`, `remove_dictionary_entry`,
+`preview_dictionary_backfill` and `apply_dictionary_backfill` are on the MCP
+server's writable side, with `list_dictionary` on the read side beside
+`list_tags`.
+
+Adding a rule is admitted for the same reason tags are: it changes nothing that
+exists, it says how the *next* recording should be spelled, and
+`remove_dictionary_entry` takes it back. Applying it to transcripts that already
+exist is the other half, and it is exactly the transcript edit `MCP`'s header
+rules out, because `DictionaryBackfill.apply` takes no backup and the audio
+becomes the only copy of what the pipeline first wrote.
+
+**What keeps it honest is that the apply will not run without the sentence total
+the preview returned, over the same scope.** `apply_dictionary_backfill` replans
+from the same arguments and refuses unless `sentences` matches, so an agent
+cannot reach the write without having first produced the `before -> after` lines
+a human reads, and a library that moved in between refuses rather than writing
+something nobody saw. That is a second compare-and-swap above the per-recording
+one `TranscriptEditor` already does: that one catches a transcript that moved,
+this one catches an apply that never previewed. The brief says the rest, in the
+one sentence that turned out to carry it: "fix the transcription" asks for both
+halves, "remember it is called Seapoint" asks only for the rule.
+
+### A model cannot know about `caseOnly`, so the tool decides
+
+A correction whose two halves differ only in capitals matches its own
+replacement for ever unless it is case-sensitive, which is why
+`DictionarySuggestions.Suggestion.entry` passes `caseSensitive: caseOnly`.
+Nothing in the tool's schema would make a model work that out, and "seapoint"
+-> "Seapoint" is the commonest shape of the request.
+
+So `add_dictionary_entry` forces it rather than warning about it, and returns
+`forced_case_sensitive: true` so the answer can say what was saved. The two
+paths must keep agreeing: accepting a suggestion in the pane and asking for the
+same pair here are the same request.
+
+### A rule that will fire on nothing is saved, with the reason
+
+Both silent failures of a term are checked on the way in: `eligible` (five
+letters, or eight across a phrase) and `englishSoundalike`. Neither refuses the
+write. They come back in `warnings`, because a term is often added alongside a
+correction that does the real work, and refusing would lose a rule the user
+asked for over one this file cannot be sure is useless. The description tells
+the model what a populated `warnings` means, which is that the rule was saved
+and will do nothing.
+
+The one thing that *is* refused is a correction whose replacement is its own
+text, because there is no reading of that which does anything.
+
 ## One row per word, and the mechanism is Listen's to choose
 
 The pane was a segmented control over *terms* and *corrections* with an editable

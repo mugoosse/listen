@@ -41,11 +41,14 @@ hermes -p career mcp add listen --command /usr/local/bin/listen --args mcp
 If you reach Hermes through its messaging gateway rather than a terminal, that is
 a long-running process and wants `hermes gateway restart`.
 
-Enable all thirteen tools rather than picking a subset. Hermes writes the chosen names
+Enable all twenty-nine tools rather than picking a subset. Hermes writes the chosen names
 into the config as an `include` list, which freezes the surface: a tool added in
 a later version of Listen would then be missing until you re-ran
-`hermes mcp configure`. The one destructive tool, `delete_note`, already refuses
-to touch your own notes.
+`hermes mcp configure`. The two that change anything you cannot get back are
+`delete_note`, which already refuses to touch your own notes, and
+`apply_dictionary_backfill`, which will not run without the count its own
+preview returned. Everything else is either reversible in the window or waits
+for you to accept it.
 
 The commands above use `/usr/local/bin/listen`, which is where the CLI lands when
 that directory exists. Without Homebrew it does not, and the install goes to
@@ -76,6 +79,83 @@ binary, which is why the installed command is a symlink rather than a copy.
 | `write_note` | add a note. Markdown body, free-text title, one or more recordings |
 | `edit_note` | rewrite one, refused if it changed since you read it |
 | `delete_note` | remove one |
+| `get_person_context` | what is known about one person: facts, relationships, dated evidence |
+| `get_project_context` | the same for a project |
+| `list_context_entities` | the people and projects memory holds, with their stable ids |
+| `search_context` | local semantic search over that memory |
+| `list_dictionary` | the terms and corrections you have taught Listen |
+| `add_dictionary_entry` | teach it a word, or a mishearing and what it should say |
+| `remove_dictionary_entry` | take one out |
+| `preview_dictionary_backfill` | what the dictionary would change in transcripts you already have |
+| `apply_dictionary_backfill` | rewrite them, and only with the count the preview returned |
+| `list_upcoming` | meetings coming up, twelve hours ahead and fifteen minutes back |
+| `get_event` | one of them in full, with the agenda and the sentence to build a briefing on |
+| `list_conversations` | questions you have put to your own agent, without the answers |
+| `read_conversation` | one of them in full |
+| `get_context_status` | how much of the library person and project memory has read |
+| `suggest_context_correction` | propose a fix to a claim in that memory. You accept it, not the agent |
+| `set_recording_title` | name a recording after what was said in it |
+
+### The calendar, your conversations, and what memory has not read
+
+`list_upcoming` is the only tool that answers about something that has not
+happened. **Check its `authorized` before believing an empty list**: a Mac that
+cannot see your calendar and a clear afternoon look identical otherwise, and
+that is the whole reason the field is there. `get_event` gives one meeting in
+full, including `invitation`, which is the same sentence the Prepare button
+hands a model.
+
+`list_conversations` and `read_conversation` read what you have asked Ask
+before. Nothing there was filed on purpose: only what you pressed Save as note
+on is in `list_notes`. Conversations never leave this Mac, and neither of these
+tools writes.
+
+`get_context_status` says how much of the library person and project memory has
+actually been through. A person with no facts and a high `pending` is unread
+rather than unknown, and `waitingForNames` counts the recordings that cannot be
+read at all until somebody names who is speaking, which is the one number here
+that names something you can go and do. `list_context_entities` carries the same
+counts per person and project.
+
+`suggest_context_correction` is the other half of that. An agent that reads a
+transcript and finds a claim misreading it can say so, and cannot apply it: the
+proposal waits on `listen context suggestions`, where `--accept` puts it through
+the same correction contract the person page uses and `--dismiss` stops it being
+offered again. Only the wording can be proposed. Who a claim is about, what kind
+of claim it is, and the evidence under it stay yours.
+
+### Naming a recording
+
+`set_recording_title` writes a name derived from what was said. It ranks below
+a name you typed and below the meeting's own name from your calendar, so it
+never writes over either: a call that cannot write says whose name is there and
+changes nothing. Clearing puts the recording back to whatever it was called
+before anybody named it, which is not always "Untitled".
+
+### The dictionary, and the one write that changes a transcript
+
+`add_dictionary_entry` with a `replacement` is a correction, an exact swap for a
+mishearing whose shape you know. Without one it is a term, a spelling matched by
+sound. A correction is the one to reach for when both halves are known, because
+a term has two silent failure modes: it needs five letters, or eight across a
+phrase, and one that sounds like an ordinary English word never fires. Both come
+back in `warnings`, and a warning there means the rule was saved and will do
+nothing.
+
+A rule changes what is transcribed from now on, and your dictation as well:
+there is one list for both. It does not touch transcripts that already exist.
+
+Those are `preview_dictionary_backfill`, which writes nothing and quotes every
+sentence either side of the edit, and `apply_dictionary_backfill`, which
+rewrites them. **The apply is the one call here that cannot be undone**: it
+takes no backup, so the audio becomes the only surviving copy of what the model
+first wrote. It refuses unless it is handed the `sentences` total the preview
+returned over the same scope, which is what makes it impossible to reach the
+write without first producing the lines a person reads, and what makes it refuse
+rather than write something nobody saw if the library moved in between.
+
+Notes, chats and saved answers are never touched by a backfill. Those are your
+own writing.
 
 `list_recordings` takes `query`, `person`, `tags`, `after`, `before`, `limit` and
 `offset`. They combine with AND:

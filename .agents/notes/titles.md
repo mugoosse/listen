@@ -290,12 +290,32 @@ For every recording the Mac made, `candidates` is empty and the floor is
 `verify_title.sh` passes unchanged. That is the check worth making on any edit
 here: the phone is a case, not a new rule.
 
+## The `model` rank was written before anything wrote it
+
+`TitleSource` has had a `model` case since the ladder was designed, documented as
+"not yet written by anything" and ranked above `people` and below `calendar`.
+`set_recording_title` on the MCP server is what writes it, which made the tool
+cheap: it obeys an ordering that already existed rather than bringing a rule of
+its own. A title the user typed has no source and freezes the recording, the
+meeting's own name from the calendar outranks a derived one, and
+`mayTitle(from: .model)` settles both. A call that may not write says whose name
+is there and changes nothing.
+
+**Not `Recording.rename`.** That one clears `title_source`, which is the mark of
+a title a person typed, so an agent going through it would freeze the recording
+against every automatic writer for ever. Clearing from the tool goes to
+`DeviceTitle.floor` instead, which is `AutoTitle`'s rule and not the placeholder:
+a phone memo lands back on the phone's own string.
+
 ## What is deliberately not here
 
-**No model title.** `.agents/notes/agent.md` is the constraint: Listen ships no
-language model and calls no API, and a title generated per recording through the
-user's own `claude` or `codex` costs their subscription for something they did
-not ask for, measured at 19.9s and $0.21 for one question that read three
-transcripts. The two routes that stay open are FoundationModels on macOS 26,
-which most machines running a `.macOS(.v14)` app do not have, and a manual
-"Suggest a title" that spends nothing until somebody presses it.
+**No title generated unasked.** `.agents/notes/agent.md` is the constraint:
+Listen ships no language model and calls no API, and a title generated per
+recording through the user's own `claude` or `codex` costs their subscription for
+something they did not ask for, measured at 19.9s and $0.21 for one question that
+read three transcripts. That is still true of anything automatic. What changed is
+only that an agent already answering a question the user asked can now write the
+name down, through `set_recording_title`, spending nothing extra to do it. The
+two routes that stay open for the unasked case are unchanged: FoundationModels on
+macOS 26, which most machines running a `.macOS(.v14)` app do not have, and a
+manual "Suggest a title" that spends nothing until somebody presses it.

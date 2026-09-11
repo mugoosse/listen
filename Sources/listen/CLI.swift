@@ -1997,9 +1997,16 @@ enum CLI {
                                  says what that cost. --check asks whether the
                                  other side actually recorded, which a duration
                                  and a file size cannot tell you.
-      mcp [--tools a,b,c]        stdio MCP server. Notes and tags are the only
-                                 things an agent can write. --tools serves only
-                                 those, and refuses the rest by name.
+      mcp [--tools a,b,c]        stdio MCP server. Notes, tags, your own
+                                 dictionary and a recording's name are the only
+                                 things an agent can write; it reads the
+                                 calendar, your past questions and how much of
+                                 the library its memory has covered, and it
+                                 proposes corrections to that memory rather
+                                 than applying them. A backfill over
+                                 transcripts that already exist needs the count
+                                 its own preview returned. --tools serves only
+                                 the named tools, and refuses the rest by name.
       mcp connect-desktop        add Listen to the Claude app's MCP
                                  configuration, backing the file up first.
                                  --dry-run says what it would write.

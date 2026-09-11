@@ -185,6 +185,61 @@ Claude takes it through `--append-system-prompt`. Codex has no equivalent flag,
 so it rides in front of the first question and is left off resumed threads,
 where it is already in the history.
 
+## The tool surface is a per-turn cost, and it was measured before it grew
+
+An OpenAI-compatible endpoint is handed every tool schema in every request, so
+the surface is a tax on each question rather than a one-off. Measured with
+`listen ask --write --to <url> --print-request`: **21 tools, 18,254 bytes, about
+4,600 tokens**, plus a 4,142 byte brief. On an 8k-context local model that is
+most of the window before the question arrives.
+
+Eight tools were added in one pass. Trimming the five fattest descriptions first
+bought 2 KB back, and the whole surface then landed at **29 tools and 22,485
+bytes**: seven more tools for 4.2 KB. The rule that did it is worth keeping: a
+description says what the tool returns and the one trap that stops it being used
+wrongly, and the rationale a human reader wants moves to the `//` comment above
+the entry, which costs nothing.
+
+The brief is the other per-turn cost and it grew by two sentences in the same
+pass, one for the calendar and one for memory coverage. Everything else went
+into descriptions, where only the sessions carrying that tool pay for it.
+
+## The reads grew by five, and two of them are not the library at all
+
+`list_upcoming` and `get_event` read the calendar; `list_conversations` and
+`read_conversation` read `chats/`; `get_context_status` reads how much of the
+library memory has been through. All five are on the read list, because "what
+have I got tomorrow" and "what did I ask you last week" are reads, and a
+read-only `listen ask` should answer both.
+
+`read_conversation` drops every `Step` of kind `activity`. That line is the
+shimmer under a running answer, which is progress rather than content, and it is
+the same rule the window follows when it replays a conversation.
+
+**Conversations have no `exclude_from_ai`, and notes do.** A note promoted from
+a conversation can be excluded while the conversation it came from stays
+readable, which is a hole in that gate. Stated in the tool description rather
+than papered over with a coupling between a note's exclusion and its source
+chat; if it is ever closed it wants the same versioned field `Notes` uses.
+
+## The write list is notes, tags and vocabulary, and the third one is the odd one
+
+`AgentRun.tools(allowWrites:)` is still the one owner of what a question may
+call, and it now hands out `add_dictionary_entry`, `remove_dictionary_entry`,
+`preview_dictionary_backfill` and `apply_dictionary_backfill` as well, with
+`list_dictionary` on the read side.
+
+It is the odd one because everything else on that list is somebody's opinion
+sitting beside the evidence, and a backfill rewrites the evidence. The guard is
+not in this file: `apply_dictionary_backfill` refuses unless it is handed the
+sentence total its own preview returned. See **The agent may add a rule, and
+only a preview it produced may apply one** in `notes-tags-dictionary.md`, which
+has the reasoning and the rest of the traps.
+
+The brief gained a paragraph for it, and one sentence in that paragraph is
+carrying the whole distinction: "fix the transcription" asks for the existing
+transcripts to change, "remember it is called Seapoint" asks only for the rule.
+
 ## `delete_note` is on neither tool list, and for a long time that was only true of Claude
 
 The server offers it, because the CLI and a human at an MCP client should be

@@ -366,13 +366,29 @@ fi
 # credentials degrade to a warning rather than a failure, because a release
 # with unreadable stack traces still ships, it is just harder to act on.
 #
-# One-time setup (a personal API key, not the project token compiled into the
-# app):
+# One-time setup, either way round. Interactively, which stores a token under
+# $POSTHOG_CREDENTIALS and is what this machine uses:
+#   posthog-cli login
+# Or from the environment, which is what CI has to use (a personal API key,
+# not the project token compiled into the app):
 #   export POSTHOG_CLI_API_KEY=phx_...
 #   export POSTHOG_CLI_PROJECT_ID=...
 #   export POSTHOG_CLI_HOST=https://eu.posthog.com
+#
+# **Both count as credentials, and checking only the variable skips the
+# upload on an authenticated machine.** 0.39.0 shipped with no symbols for
+# exactly that reason: the key was never exported, the warning said so, and
+# the same `posthog-cli symbol-sets upload` run by hand afterwards worked
+# with no variable set at all. The symbols were recoverable that time only
+# because .xcbuild had not been rebuilt yet.
 DSYM="$ROOT/.xcbuild/Build/Products/Release/listen.dSYM"
-if command -v posthog-cli >/dev/null 2>&1 && [ -n "${POSTHOG_CLI_API_KEY:-}" ]; then
+POSTHOG_CREDENTIALS="${POSTHOG_CLI_CREDENTIALS:-$HOME/.posthog/credentials.json}"
+if [ -n "${POSTHOG_CLI_API_KEY:-}" ] || [ -s "$POSTHOG_CREDENTIALS" ]; then
+    POSTHOG_AUTHED=1
+else
+    POSTHOG_AUTHED=
+fi
+if command -v posthog-cli >/dev/null 2>&1 && [ -n "$POSTHOG_AUTHED" ]; then
     if [ -d "$DSYM" ]; then
         echo "uploading crash symbols…"
         posthog-cli symbol-sets upload --directory "$ROOT/.xcbuild/Build/Products/Release"
@@ -383,8 +399,8 @@ else
     echo "warning: skipping crash symbol upload." >&2
     command -v posthog-cli >/dev/null 2>&1 || \
         echo "         posthog-cli not found. npm install -g @posthog/cli" >&2
-    [ -n "${POSTHOG_CLI_API_KEY:-}" ] || \
-        echo "         POSTHOG_CLI_API_KEY not set." >&2
+    [ -n "$POSTHOG_AUTHED" ] || \
+        echo "         not authenticated. Run: posthog-cli login" >&2
     echo "         A crash reported through telemetry will show raw addresses" >&2
     echo "         instead of a symbolicated stack." >&2
 fi

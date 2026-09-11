@@ -167,12 +167,19 @@ Delete it once it is in the password manager.
 
 ### 4. posthog-cli, for symbolicated crash reports
 
-Optional. Without it `release.sh` still ships, it just warns and a crash
-reported through the opt-in telemetry shows raw addresses instead of a
-symbolicated stack.
+**Done on this machine.** Without it `release.sh` still ships, it just warns
+and a crash reported through the opt-in telemetry shows raw addresses instead
+of a symbolicated stack.
 
 ```sh
 npm install -g @posthog/cli
+posthog-cli login                         # EU region; stores a token at
+                                          # ~/.posthog/credentials.json
+```
+
+CI has no browser, so it authenticates from the environment instead:
+
+```sh
 export POSTHOG_CLI_API_KEY=phx_...        # a personal API key, not the
                                            # project token compiled into the app
 export POSTHOG_CLI_PROJECT_ID=...
@@ -182,6 +189,15 @@ export POSTHOG_CLI_HOST=https://eu.posthog.com
 The personal API key comes from your PostHog account, not from `TelemetrySchema.projectToken`:
 that constant is a write-only ingestion token, and cannot list or upload
 anything.
+
+`release.sh` accepts either, and that is a fix rather than a nicety. It used to
+require `POSTHOG_CLI_API_KEY`, which `posthog-cli login` never sets, so an
+authenticated machine still skipped the upload and said the key was missing.
+0.39.0 shipped that way. The symbols were recoverable only because `.xcbuild`
+had not been rebuilt yet: a dSYM is keyed to the built binary's UUID, so once
+that directory is overwritten the crash reports for that version can never be
+symbolicated. Check the run said `uploading crash symbols…` rather than
+warning.
 
 ### 5. Repository secrets, for CI
 

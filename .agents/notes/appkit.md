@@ -930,3 +930,28 @@ it kept its own line whether or not there were any chips in it. Two views
 sharing a slot have to be made exclusive by one call, or the arithmetic that
 assumes they are will be wrong in a way that looks like a text bug: the body
 wrapped correctly and only its first line was ever drawn.
+
+## A view with no intrinsic size, laid out by frame, is solved at zero
+
+`ComposerWell` positions its field, model control and send button by frame
+rather than by constraint, for the Liquid Glass reason recorded on the class,
+and every one of them was created with
+`translatesAutoresizingMaskIntoConstraints = false`. That combination is a
+contradiction, and an `NSTextField` hides it: the engine has an intrinsic
+content size to fall back on, so the frame the well assigned and the frame the
+engine solved were close enough that nothing looked wrong for as long as this
+app has existed.
+
+Replace the field with a text view in a scroll view and the contradiction
+lands. There is no intrinsic size, there are no constraints, and autolayout is
+free to solve the frame at zero, so it does. Traced: the well framed the field
+at 447x52 and the field's own layout pass, in the same run, reported bounds of
+0x0. What that looks like on screen is not a layout bug. It looks like a text
+control that does not work: no placeholder is drawn, because there is no width
+to draw it in, and the accessibility tree reports the element at `0x52`, which
+is the one place the zero is visible at all.
+
+A view positioned by frame wants `translatesAutoresizingMaskIntoConstraints =
+true`, which is the default, so the fix is to delete the line rather than to add
+one. The reason it is stated explicitly in `buildComposer` instead is that the
+false was there for years and reads as deliberate.

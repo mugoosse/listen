@@ -494,7 +494,7 @@ final class AskView: NSView {
         // active, so the well's 44 points and the status line's stay in the
         // layout as a hole under the card unless the constants go to zero too.
         wellHeight = composer.heightAnchor.constraint(
-            equalToConstant: ComposerWell.height)
+            equalToConstant: ComposerWell.baseHeight)
         lineHeight = status.heightAnchor.constraint(
             equalToConstant: Self.statusHeight)
 
@@ -789,16 +789,30 @@ final class AskView: NSView {
     /// `NSTextField` next to two separate buttons reads as a form, and this is
     /// the one control on the pane.
     private func buildComposer() {
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .systemFont(ofSize: 15)
+        field.font = ComposerField.font
         field.placeholderString = placeholder(for: nil)
-        field.target = self
-        field.action = #selector(send)
-        field.delegate = self
         field.onFocusChanged = { [weak self] on in self?.setComposing(on) }
-        field.translatesAutoresizingMaskIntoConstraints = false
+        // **One route into `send`, and it is Return.** There used to be a
+        // target and an action as well, which is a second way in that nothing
+        // exercised and that an `NSTextField` can fire on losing focus. The
+        // field tells the two Returns apart itself now: see
+        // `ComposerField.textView(_:doCommandBy:)`.
+        field.onSend = { [weak self] in self?.send() }
+        field.onTextChanged = { [weak self] in
+            self?.updateSendButton()
+            self?.updateWellHeight()
+        }
+        field.onHeightChanged = { [weak self] in self?.updateWellHeight() }
+        // **True, and the field this replaced got away with false.**
+        // `ComposerWell` positions everything inside itself by frame, for the
+        // reason stated on the class. A view with no constraints *and* no
+        // intrinsic size is one autolayout is free to solve at zero, and it
+        // does: the well framed the field at 447x52 and the field's own layout
+        // pass then ran at 0x0, so the question was typed into a box with no
+        // width and the placeholder was never drawn. An `NSTextField` has an
+        // intrinsic size and survived the same line; a text view in a scroll
+        // view has none to survive on.
+        field.translatesAutoresizingMaskIntoConstraints = true
 
         // Which agent and which model, in the composer rather than only in
         // Settings. It belongs here for the reason the mode picker belongs
@@ -1126,7 +1140,7 @@ final class AskView: NSView {
     /// reading. Only another control took it away. See `watchClicks` for why
     /// this is driven by an event monitor rather than by `mouseDown`.
     func endComposing() {
-        guard field.currentEditor() != nil else { return }
+        guard field.hasCaret else { return }
         window?.makeFirstResponder(nil)
     }
 
@@ -1379,7 +1393,7 @@ final class AskView: NSView {
         // height and the status line to another, and a hidden view keeps both.
         composer.isHidden = up
         status.isHidden = up
-        wellHeight.constant = up ? 0 : ComposerWell.height
+        if up { wellHeight.constant = 0 } else { updateWellHeight() }
         lineHeight.constant = up ? 0 : Self.statusHeight
     }
 
@@ -1536,7 +1550,11 @@ final class AskView: NSView {
         // The well and the line are zero while the setup card is up, and this
         // has to agree with `showNotice` or the drawer is solved for a
         // composer that is not there.
-        let well = notice.isHidden ? ComposerWell.height : 0
+        // The constant rather than the constant it was built with: the well is
+        // as tall as what has been typed into it, and a drawer sized for one
+        // line under a composer holding four is the same class of bug the
+        // paragraph above is about. See `updateWellHeight`.
+        let well = notice.isHidden ? wellHeight.constant : 0
         let line = notice.isHidden ? Self.statusHeight : 0
         var height = Self.paneBottomInset + 6 + line + 6 + well + 8
         if !notice.isHidden {
@@ -1623,6 +1641,35 @@ final class AskView: NSView {
         onSizeChanged?()
     }
 
+    /// The well is as tall as what has been typed into it, up to a cap.
+    ///
+    /// **One number in one place.** `barHeight` reads this same constant rather
+    /// than working the height out again, because a composer that has grown and
+    /// a drawer that has not is a question with its first two lines behind a
+    /// transcript.
+    ///
+    /// The guard on the change is not a nicety either. `reportSize` ends in a
+    /// layout pass, a layout pass is what measures the text, and measuring is
+    /// what calls this: without an equality test the two take turns for ever.
+    /// `ComposerField.invalidateHeight` holds the other half of the same guard.
+    ///
+    /// Nothing to do while the setup card is up. It takes the composer's place
+    /// rather than sitting over it, and `showNotice` owns the constant then.
+    private func updateWellHeight() {
+        guard notice.isHidden else { return }
+        let wanted = ComposerWell.height(for: field.contentHeight)
+        guard abs(wellHeight.constant - wanted) > 0.5 else { return }
+        wellHeight.constant = wanted
+        composer.needsLayout = true
+        reportSize()
+        // How tall the well is cannot be read off the accessibility tree: the
+        // well is a plain `NSView` and the drawer around it is another, so a
+        // script asserting that Shift+Return grew the composer has nothing to
+        // look at. Same reason the find bar's landing position is traced.
+        trace("askview well: \(Int(wanted)) points for "
+              + "\(Int(field.contentHeight)) of text")
+    }
+
     /// Everything that has to agree about whether a question can be asked.
     ///
     /// The chips are in here rather than in `redraw` because they are one of
@@ -1698,6 +1745,7 @@ final class AskView: NSView {
         guard isRunning ? queue(text) : ask(text) else { return }
         field.stringValue = ""
         updateSendButton()
+        updateWellHeight()
     }
 
     /// Park a follow-up until the answer on screen has finished.
@@ -1754,6 +1802,7 @@ final class AskView: NSView {
         else { return }
         field.stringValue = text
         updateSendButton()
+        updateWellHeight()
     }
 
     /// Ask now. Returns whether the question was taken, which is what tells the
@@ -1821,7 +1870,7 @@ final class AskView: NSView {
         // set inside `start`, so the call above it reads `isRunning == false`
         // and styles an arrow: the stop control existed, answered to a press,
         // and drew itself as Ask for the whole run. It corrected itself on the
-        // first keystroke, because `controlTextDidChange` asks again, which is
+        // first keystroke, because a text change asks again, which is
         // why a pane nobody typed into while it worked never showed it.
         updateSendButton()
         refreshPlaceholder()
@@ -2336,28 +2385,284 @@ private final class QuestionTurn: NSView {
     required init?(coder: NSCoder) { fatalError("no nib") }
 }
 
-extension AskView: NSTextFieldDelegate {
-    /// The send button lights up on the first character and goes out on the
-    /// last one deleted.
-    func controlTextDidChange(_ notification: Notification) {
-        updateSendButton()
+/// The composer's field: a text view, because a question can have lines in it.
+///
+/// **It is deliberately not an `NSTextField`, and the reason is Shift+Return.**
+/// A composer that takes a line break has to wrap, and on `NSCell` `wraps` and
+/// `isScrollable` are mutually exclusive: a wrapping `NSTextField` cannot
+/// scroll, so everything past the height cap would be clipped, with the caret
+/// somewhere below the well and no way to reach it. That is worse than the
+/// single-line field this replaced, which at least scrolled sideways and kept
+/// the caret in view. An `NSTextView` wraps *and* scrolls, which is the whole
+/// requirement.
+///
+/// The surface is the one `NSTextField` had, on purpose: `AskView` reads and
+/// writes `stringValue`, `placeholderString`, `font` and `isEnabled` exactly as
+/// it did, and the twenty-odd call sites did not move.
+///
+/// **`controlTextDidBeginEditing` was not the caret signal, and it looked like
+/// it.** It is posted when the text first *changes*, so keying the starter chips
+/// off it put them up one keystroke after the caret arrived, which is exactly
+/// one keystroke too late for something whose whole job is to suggest what to
+/// type. Measured: focusing the field left the chips down and the drawer
+/// unbacked. `becomeFirstResponder` and `resignFirstResponder` on the text view
+/// are the two edges, and between them they are the caret.
+@MainActor
+final class ComposerField: NSView {
+    /// The composer's type size, kept here because the line height below is
+    /// measured from it and two places stating 15 is one place to get it wrong.
+    static let font: NSFont = .systemFont(ofSize: 15)
+
+    /// One line of that font, measured rather than remembered. Everything about
+    /// how the well grows is a multiple of this.
+    static let lineHeight: CGFloat = ceil(NSLayoutManager().defaultLineHeight(for: font))
+
+    /// The padding above and below one line, which is what makes a composer
+    /// holding one line exactly `ComposerWell.baseHeight` tall. It stays put as
+    /// the well grows, so the first line never moves.
+    static let verticalInset: CGFloat = (ComposerWell.baseHeight - lineHeight) / 2
+
+    /// True when the caret arrives, false when it leaves.
+    var onFocusChanged: ((Bool) -> Void)?
+    /// A character typed, pasted, or written in through accessibility.
+    var onTextChanged: (() -> Void)?
+    /// Return, with no modifier on it.
+    var onSend: (() -> Void)?
+    /// The text got taller or shorter. It carries no number, because the well
+    /// asks: see `AskView.updateWellHeight`.
+    var onHeightChanged: (() -> Void)?
+
+    private let storage: NSTextStorage
+    private let text: ComposerTextView
+    private let scroll = NSScrollView()
+
+    /// The height last reported, so a report is only made when the number
+    /// actually changed. **This is what terminates the loop**: a report ends in
+    /// a layout pass, and a layout pass is what measures.
+    private var reported: CGFloat = -1
+
+    override init(frame: NSRect) {
+        // **TextKit 1, built by hand rather than left to the default.** A text
+        // view created the ordinary way is TextKit 2, where `layoutManager` is
+        // nil and touching it silently switches the view into a compatibility
+        // mode. The height of the text is the one thing this control exists to
+        // report, so the stack it is measured through is stated here instead of
+        // being whatever the OS picked.
+        let store = NSTextStorage()
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(
+            size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        store.addLayoutManager(manager)
+        manager.addTextContainer(container)
+        // Zero, not the default 5, so the text's left edge is the well's inset
+        // and not the inset plus a padding nothing else in the bar shares. The
+        // placeholder is drawn at the same origin for the same reason.
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = true
+        storage = store
+        text = ComposerTextView(frame: .zero, textContainer: container)
+        super.init(frame: frame)
+
+        // The plumbing at `.agents/notes/appkit.md`, "A bare `NSTextView()`
+        // handed to a scroll view can draw nothing at all". None of it is
+        // optional politeness: it is what makes the document view take the clip
+        // view's width, and which macOS versions survive its absence is not a
+        // thing to bet on. `ChangelogWindow` carries the same list.
+        text.frame = NSRect(x: 0, y: 0, width: max(frame.width, 1), height: Self.lineHeight)
+        text.minSize = NSSize(width: 0, height: 0)
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                              height: CGFloat.greatestFiniteMagnitude)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainerInset = NSSize(width: 0, height: Self.verticalInset)
+        text.font = Self.font
+        // Explicitly, for the reason the same note gives: a text view built this
+        // way is not guaranteed the semantic default everywhere.
+        text.textColor = .labelColor
+        text.insertionPointColor = .labelColor
+        text.drawsBackground = false
+        text.focusRingType = .none
+        text.isRichText = false
+        text.allowsUndo = true
+        // A question is a prompt, not prose. Curly quotes and an em dash are
+        // both things somebody typing a name or a path did not ask for.
+        text.isAutomaticQuoteSubstitutionEnabled = false
+        text.isAutomaticDashSubstitutionEnabled = false
+        text.isAutomaticTextReplacementEnabled = false
+        text.delegate = self
+        text.onFocusChanged = { [weak self] on in self?.onFocusChanged?(on) }
+        text.onSend = { [weak self] in self?.onSend?() }
+
+        scroll.documentView = text
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasHorizontalScroller = false
+        // Overlay, so the scroller that appears past the cap is drawn over the
+        // text rather than taking a strip of the well's width away from it.
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.autoresizingMask = [.width, .height]
+        scroll.frame = bounds
+        addSubview(scroll)
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    // MARK: - The surface `AskView` uses
+
+    var stringValue: String {
+        get { text.string }
+        set {
+            text.string = newValue
+            // Set rather than typed, so nothing posts a change: the callers
+            // that clear and refill the field update the send button
+            // themselves. The height is this view's own business.
+            text.needsDisplay = true
+            invalidateHeight()
+        }
+    }
+
+    var placeholderString: String? {
+        get { text.placeholder.isEmpty ? nil : text.placeholder }
+        set {
+            text.placeholder = newValue ?? ""
+            text.needsDisplay = true
+            // **Not decoration.** `tools/axprobe.swift` finds this composer by
+            // its placeholder and nothing else, and an `NSTextView` does not
+            // publish one on its own: without this line every Ask verification
+            // script stops finding the field at all.
+            text.setAccessibilityPlaceholderValue(newValue)
+            // And a label, because `.agents/notes/agent.md` records that every
+            // control on these surfaces was silent until it was pressed. The
+            // placeholder is what the control is for, so it is what it says.
+            text.setAccessibilityLabel(newValue)
+        }
+    }
+
+    var font: NSFont? {
+        get { text.font }
+        set { text.font = newValue; text.needsDisplay = true; invalidateHeight() }
+    }
+
+    var isEnabled: Bool = true {
+        didSet {
+            text.isEditable = isEnabled
+            text.isSelectable = isEnabled
+            text.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+        }
+    }
+
+    /// Does this field hold the caret? What `currentEditor() != nil` answered
+    /// when there was a field editor to ask about.
+    var hasCaret: Bool { window?.firstResponder === text }
+
+    /// How tall the well has to be to show what has been typed, insets included.
+    ///
+    /// Measured through the layout manager rather than counted in newlines,
+    /// because a line that wraps is a line too.
+    var contentHeight: CGFloat {
+        guard let manager = text.layoutManager, let container = text.textContainer else {
+            return ComposerWell.baseHeight
+        }
+        manager.ensureLayout(for: container)
+        let used = manager.usedRect(for: container).height
+        return max(Self.lineHeight, ceil(used)) + Self.verticalInset * 2
+    }
+
+    override func layout() {
+        super.layout()
+        scroll.frame = bounds
+        // The container tracks the text view's width, so a width change is a
+        // rewrap, and a rewrap is a new height.
+        invalidateHeight()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        // The caret belongs in the text, wherever the click landed.
+        window?.makeFirstResponder(text) ?? false
+    }
+
+    private func invalidateHeight() {
+        let now = contentHeight
+        guard abs(now - reported) > 0.5 else { return }
+        reported = now
+        onHeightChanged?()
     }
 }
 
-/// The composer's field, which says when it has the caret.
-///
-/// **`controlTextDidBeginEditing` is not that signal, and it looks like it.**
-/// It is posted when the text first *changes*, so keying the starter chips off
-/// it put them up one keystroke after the caret arrived, which is exactly one
-/// keystroke too late for something whose whole job is to suggest what to type.
-/// Measured: focusing the field left the chips down and the drawer unbacked.
-///
-/// `becomeFirstResponder` is called on the field itself before it hands over to
-/// the field editor, and `textDidEndEditing` when the field editor gives up,
-/// whether or not anything was typed. Between them they are the caret.
-final class ComposerField: NSTextField {
-    /// True when the caret arrives, false when it leaves.
+extension ComposerField: NSTextViewDelegate {
+    /// The send button lights up on the first character and goes out on the
+    /// last one deleted, and the well grows with the lines.
+    func textDidChange(_ notification: Notification) {
+        text.needsDisplay = true
+        onTextChanged?()
+        invalidateHeight()
+    }
+
+    /// **Not where the two Returns are told apart.** `ComposerTextView.keyDown`
+    /// does that, because the command is the same one either way; this is the
+    /// fallback for a Mac whose key bindings send `insertNewline:` from
+    /// somewhere else, and it agrees with the keystroke rather than differing
+    /// from it.
+    func textView(_ view: NSTextView, doCommandBy command: Selector) -> Bool {
+        switch command {
+        case #selector(NSResponder.insertNewline(_:)):
+            onSend?()
+            return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            view.insertText("\n", replacementRange: view.selectedRange())
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            // An `NSTextView` types a tab character. The field this replaced
+            // moved the focus on, and that is not a behaviour to lose over an
+            // implementation detail.
+            window?.selectNextKeyView(nil)
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// The text view inside `ComposerField`: draws the placeholder, and says when
+/// it has the caret.
+final class ComposerTextView: NSTextView {
     var onFocusChanged: ((Bool) -> Void)?
+    /// Return, with nothing held down with it. See `keyDown`.
+    var onSend: (() -> Void)?
+
+    /// Drawn rather than held in a label, so it cannot come apart from the text
+    /// it stands in for.
+    var placeholder: String = ""
+
+    /// Return sends, Shift+Return puts a line in.
+    ///
+    /// **The two cannot be told apart by their command, and that is measured.**
+    /// A field editor maps Shift+Return to `insertNewlineIgnoringFieldEditor:`,
+    /// which is why `FindInPage` can tell next match from previous one without
+    /// ever looking at an event. A text view standing on its own is not a field
+    /// editor, and the same keystroke arrives as plain `insertNewline:`: traced
+    /// on this composer, one command per press, Shift or no Shift. Reading the
+    /// modifier off the event is the only thing that separates them.
+    ///
+    /// Command is left alone, so ⌘Return still reaches whatever the window
+    /// makes of it, and marked text is left alone because Return belongs to the
+    /// input method while it is composing a candidate.
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        guard isReturn, !hasMarkedText(),
+              !event.modifierFlags.contains(.command) else {
+            super.keyDown(with: event)
+            return
+        }
+        if event.modifierFlags.intersection([.shift, .option]).isEmpty {
+            onSend?()
+        } else {
+            insertNewlineIgnoringFieldEditor(self)
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let took = super.becomeFirstResponder()
@@ -2365,19 +2670,34 @@ final class ComposerField: NSTextField {
         return took
     }
 
-    /// **This is not what makes clicking away work.** `NSView` does not accept
-    /// first responder, so a click on a plain view leaves the caret where it is
-    /// and this never fires; only another control takes the field away.
-    /// `AskView.watchClicks` is what turns a click on the page into a lost
-    /// caret, and it does it by asking for this the ordinary way.
-    ///
-    /// Pressing a chip still does not end editing, and must not: an `NSButton`
-    /// does not take first responder on a click, and if the row were emptied
-    /// under the mouse between the press and the release the chip's action would
-    /// never run. That is why the monitor treats the whole bar as inside.
-    override func textDidEndEditing(_ notification: Notification) {
-        super.textDidEndEditing(notification)
-        onFocusChanged?(false)
+    override func resignFirstResponder() -> Bool {
+        let gave = super.resignFirstResponder()
+        if gave { onFocusChanged?(false) }
+        return gave
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty, let font else { return }
+        // The text's own origin: the container inset plus the fragment padding,
+        // which is zero here. Anything else and the placeholder sits somewhere
+        // the first typed character does not.
+        let origin = NSPoint(x: textContainerInset.width
+                                + (textContainer?.lineFragmentPadding ?? 0),
+                             y: textContainerInset.height)
+        placeholder.draw(at: origin, withAttributes: [
+            .font: font, .foregroundColor: NSColor.placeholderTextColor,
+        ])
+    }
+
+    /// **An accessibility write is a change, and it did not say so.**
+    /// `axprobe settext` is how every Ask verification script types, and it sets
+    /// the value straight onto the view: without this the text lands but nothing
+    /// hears about it, so the send button stays out and the script presses a
+    /// control that will not answer.
+    override func setAccessibilityValue(_ value: Any?) {
+        super.setAccessibilityValue(value)
+        didChangeText()
     }
 }
 
@@ -2396,19 +2716,36 @@ final class ComposerWell: NSView {
     /// Deliberately large. 36 was the first version and read as a search field;
     /// this is the primary control of the pane and the thing the whole mode
     /// exists for, so it is sized like one.
-    static let height: CGFloat = 52
-    private static let radius: CGFloat = height / 2
+    ///
+    /// This is the height of a well holding **one** line, and the floor it
+    /// grows from. See `height(for:)`.
+    static let baseHeight: CGFloat = 52
+    /// Six lines, past which the field scrolls rather than the well growing.
+    ///
+    /// A starting number rather than a measured one: over a transcript this is
+    /// a bar, and a bar that takes a fifth of the window has stopped being one.
+    static let maxHeight: CGFloat = baseHeight + 5 * ComposerField.lineHeight
+    /// Still the one-line radius, so a grown well is a rounded rectangle rather
+    /// than a stretched capsule. A radius that tracked the height would leave
+    /// the sides bulging at four lines.
+    private static let radius: CGFloat = baseHeight / 2
     private static let inset: CGFloat = 20
     private static let gap: CGFloat = 10
     private static let send: CGFloat = 36
 
+    /// What the well has to be to show `textHeight` of text, which is what
+    /// `ComposerField.contentHeight` reports.
+    static func height(for textHeight: CGFloat) -> CGFloat {
+        min(maxHeight, max(baseHeight, ceil(textHeight)))
+    }
+
     private let backdrop: NSView
     private let content = NSView()
-    private let field: NSTextField
+    private let field: ComposerField
     private let model: NSButton
     private let sendButton: NSView
 
-    init(field: NSTextField, model: NSButton, send: NSView) {
+    init(field: ComposerField, model: NSButton, send: NSView) {
         self.field = field
         self.model = model
         self.sendButton = send
@@ -2456,21 +2793,27 @@ final class ComposerWell: NSView {
         content.frame = bounds
         let b = content.bounds
         let sendSize = sendButton.isHidden ? 0 : Self.send
-        sendButton.frame = NSRect(x: b.width - sendSize - (Self.height - sendSize) / 2,
-                                  y: (b.height - sendSize) / 2,
+        // **Both controls sit on the base row, not in the middle of the well.**
+        // `y` is measured from the bottom in this unflipped view, so this is the
+        // number the centred version produced at 52 points and stays there while
+        // the well grows upward. Centred on a four-line well they would float
+        // beside the middle of the question, which is nothing.
+        sendButton.frame = NSRect(x: b.width - sendSize - (Self.baseHeight - sendSize) / 2,
+                                  y: (Self.baseHeight - sendSize) / 2,
                                   width: sendSize, height: sendSize)
         let modelSize = model.intrinsicContentSize
         let modelWidth = model.isHidden ? 0 : ceil(modelSize.width)
         model.frame = NSRect(x: sendButton.frame.minX - Self.gap - modelWidth,
-                             y: round((b.height - modelSize.height) / 2),
+                             y: round((Self.baseHeight - modelSize.height) / 2),
                              width: modelWidth, height: ceil(modelSize.height))
-        let fieldSize = field.intrinsicContentSize
         let fieldRight = model.isHidden ? sendButton.frame.minX : model.frame.minX
         let fieldLeft = Self.inset
-        field.frame = NSRect(x: fieldLeft,
-                             y: round((b.height - fieldSize.height) / 2),
+        // The field takes the whole well. It carries its own vertical padding
+        // (`ComposerField.verticalInset`), so one line sits exactly where it
+        // always sat and the rest grow downward from it.
+        field.frame = NSRect(x: fieldLeft, y: 0,
                              width: max(0, fieldRight - Self.gap - fieldLeft),
-                             height: ceil(fieldSize.height))
+                             height: b.height)
     }
 
     override func viewDidChangeEffectiveAppearance() {

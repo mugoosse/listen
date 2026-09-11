@@ -3233,3 +3233,68 @@ copy, and the invitation may have been edited, deleted, or simply be in the past
 by the time somebody resumes. `persist` only fills the field in when it is
 empty, so a follow-up on a resumed preparation keeps the meeting it was asked
 ahead of.
+
+## The composer is a text view, and `NSCell` is why it had to be
+
+A question can have lines in it now: Return sends, Shift+Return puts a line
+break in, and the well grows a line at a time up to six of them
+(`ComposerWell.maxHeight`), past which the text scrolls.
+
+The obvious way to get there is the field that was already here. `ComposerField`
+was an `NSTextField`, `SentenceField` in `DetailView` is already a wrapping
+self-sizing one, and making the composer wrap looks like a few lines of cell
+configuration. It is a dead end: **on `NSCell`, `wraps` and `isScrollable` are
+mutually exclusive**, setting either clears the other, so a wrapping
+`NSTextField` cannot scroll vertically at all. Capped at six lines it would clip
+the seventh with the caret somewhere below the well and no way to reach it,
+which is worse than the single-line field it replaced, because that at least
+scrolled sideways and kept the caret in view.
+
+So `ComposerField` is an `NSView` around an `NSScrollView` around an
+`NSTextView`, and it keeps the surface the field had (`stringValue`,
+`placeholderString`, `font`, `isEnabled`) so the twenty-odd call sites in
+`AskView` did not move. Three things it has to do that an `NSTextField` did for
+free:
+
+- **Publish a placeholder to accessibility.** `tools/axprobe.swift` finds this
+  composer by `AXPlaceholderValue` and nothing else, and a text view does not
+  set one. Without `setAccessibilityPlaceholderValue` every Ask verification
+  script stops finding the field at all, which reads as the composer having
+  vanished rather than as a missing attribute.
+- **Treat an accessibility write as a change.** `axprobe settext` sets the value
+  straight onto the view, and a text view does not tell its delegate. The text
+  lands, nothing hears about it, and the send button stays out, so a script that
+  types then presses send presses a control that will not answer.
+  `setAccessibilityValue` calls `didChangeText()` for that reason.
+- **Be laid out by frame on purpose.** See the note in `appkit.md` about a view
+  with no intrinsic size solved at zero, which this is what found.
+
+The well's height is one constant in one place: `updateWellHeight` sets
+`wellHeight.constant` and `barHeight` reads it back, rather than working the
+same number out twice. Both ends carry an equality guard, because a report ends
+in a layout pass, a layout pass is what measures the text, and measuring is what
+calls the report.
+
+## Shift+Return is `insertNewline:` unless something is a field editor
+
+`FindInPage` tells next match from previous one by the command alone:
+`insertNewline:` against `insertNewlineIgnoringFieldEditor:`, no event, no
+modifier mask. That works there and does not generalise, and the composer is
+where the difference bites.
+
+The ignoring-field-editor binding exists to get past a *field editor's* refusal
+to hold a newline. A text view standing on its own has no such refusal, so the
+binding is not used: measured on this composer with a trace on every
+`doCommandBy`, Shift+Return arrives as one plain `insertNewline:` per press,
+identical to Return. A handler written against the `FindInPage` pair therefore
+sends the question on both keys, and the line break can never be typed.
+
+`ComposerTextView.keyDown` reads the modifier off the event instead, which is
+the only thing that separates them. Two exemptions worth keeping: Command is
+passed to `super`, so ⌘Return still reaches the window, and `hasMarkedText()`
+is, because Return belongs to the input method while it is composing a
+candidate and stealing it would break every non-Latin keyboard.
+
+Option+Return inserts a line too. It costs nothing to honour, it is what the
+standard bindings mean by it, and somebody who reaches for it is asking for the
+same thing.

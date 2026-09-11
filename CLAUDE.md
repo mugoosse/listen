@@ -399,7 +399,7 @@ Listen's own window behaviour. `LibraryWindow`, `Sidebar`, `DetailView`,
 - One record control per screen, and the empty home page has its own
 - Two buttons said only "Not now", and a script pressed the wrong one
 
-### `.agents/notes/appkit.md` (35k)
+### `.agents/notes/appkit.md` (53k)
 
 Things AppKit does that no documentation warns about. These generalise past
 this app, so read them before building any new window, menu or popover.
@@ -437,6 +437,7 @@ this app, so read them before building any new window, menu or popover.
 - A bare `NSTextView()` handed to a scroll view can draw nothing at all
 - `MainMenu.install()` may not be called twice
 - A wrapping label's `fittingSize` is one line high, and the card it is in gets clipped
+- A view with no intrinsic size, laid out by frame, is solved at zero
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -532,7 +533,7 @@ How a recording and phone audio cross CloudKit. `CloudSyncCore`, `EngineState`,
 - A per-device fact in one shared key is a fight, not a fact
 - A library reached through a symlink deleted without a tombstone
 
-### `.agents/notes/agent.md` (172k)
+### `.agents/notes/agent.md` (184k)
 
 Asking questions about the library, through an agent CLI the user already has
 or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
@@ -656,6 +657,8 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - What could not be verified: the download stall
 - A question goes to the page, and the card is gone
 - The fourth subject is a meeting that has not happened (see `calendar.md`)
+- The composer is a text view, and `NSCell` is why it had to be
+- Shift+Return is `insertNewline:` unless something is a field editor
 
 ### `.agents/notes/galaxy.md`
 

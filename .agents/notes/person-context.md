@@ -90,8 +90,39 @@ syncs because two devices with different vocabularies transcribe differently, a
 worklist is not a fact about the library, and the context store already has an
 owner projection with its own correction register to reconcile.
 
-The person page rows are deliberately not here yet. `listen context suggestions`,
-with `--accept` and `--dismiss`, is the whole acting surface for now.
+Three surfaces act on one worklist, and all three go through
+`ContextSuggestions.accept`: the row under the claim on a person's page, the
+`listen context suggestions --accept` flag, and nothing else. The pane in
+Settings counts what is waiting and names whose page to open; it deliberately
+does not accept anything, because that decision needs the claim's own evidence
+one disclosure away and the pane has none of it.
+
+## A suggestion inside a collapsed disclosure is invisible
+
+The row shipped, the pane counted it, and the page showed nothing. `Details` on
+a person page opens collapsed, every claim lives inside it, and so did the
+suggestion row. So the sentence the pane had just written, "open that page to
+accept or dismiss", led somebody to a summary with no sign of what they came
+for, which is the exact failure a worklist with no surface has.
+
+Two changes, and both are needed. `reload` opens `Details` when anything under
+it is waiting, set on load rather than in `render` so the reader can still close
+the section afterwards. And the disclosure's own title carries the count,
+`Details (4) · 1 suggested`, because a section that can be closed again should
+still say there is something in it to answer.
+
+**The test found this and then hid it.** The first version of the UI check
+skipped with "is the display asleep?" whenever the row was missing, which is
+true of a sleeping display and equally true of a row that is simply not there.
+Separating the two is the rule `verify_dictionary.sh` already follows: the
+window has to prove it is on screen, and past that line a missing row is a
+failure. It reported a defect within a minute of being told the difference.
+
+**A fixed wait reported a sleeping display on a Mac that was merely busy.** The
+UI section runs straight after the headless half has spent a minute in the same
+process, and seven seconds was not enough to open a window on a loaded machine.
+It polls the tree until the window appears now, up to 25 seconds, which is the
+one thing in this dance that is safe to repeat.
 
 ## Coverage is a number the agent could not see
 
@@ -248,6 +279,13 @@ implementation record for current performance/quality measurements and their
 limits. Do not turn a small fixture score into a production quality claim.
 
 ## Verification commands
+
+**`defaults delete` does not delete the file.** `verify_context.py` gives each
+run its own preference domain and deletes it at the end, and left a 42 byte
+plist in `~/Library/Preferences` every time regardless: cfprefsd writes the file
+back out for a domain the app has touched, so the delete lands and the litter
+stays. Forty-two had accumulated over four days before anybody looked. The
+`finally` unlinks the file as well now.
 
 
 - `./build.sh && ./make_app.sh`

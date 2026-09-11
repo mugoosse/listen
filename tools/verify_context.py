@@ -12,6 +12,7 @@ import plistlib
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -106,6 +107,101 @@ body = "not valid JSON" if mode == "malformed" else json.dumps(out)
 print(json.dumps({"type":"assistant","message":{"content":[{"type":"text","text":body}]}}), flush=True)
 print(json.dumps({"type":"result","subtype":"success","is_error":False,"duration_ms":1,"total_cost_usd":0}), flush=True)
 '''
+
+
+def ui(binary, environment, library, person, claim):
+    """The two screens the worklist reaches, driven through accessibility.
+
+    Only under `--ui`, because it needs an unlocked screen and Accessibility
+    permission for this terminal, and because everything above it is the half
+    that has to pass on a build machine.
+
+    The app copy is the one `main` already made under its own bundle identifier,
+    so the real preferences and the real library are never touched.
+    """
+    probe = ROOT / ".xcbuild/tools/axprobe"
+    if not probe.exists():
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["swiftc", "-O", str(ROOT / "tools/axprobe.swift"), "-o", str(probe)], check=True)
+    # Detection off, or the copy records the room in the middle of the test.
+    subprocess.run(["defaults", "write", DOMAIN, "autoDetectMeetings", "-bool", "false"], check=True)
+
+    proposed = claim["text"] + " Proposed by an agent."
+    request = dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(
+        name="suggest_context_correction",
+        arguments={"claim_id": claim["id"], "text": proposed, "why": "The source says so."}))
+    subprocess.run([str(binary), "mcp"], input=json.dumps(request) + "\n",
+                   env=environment, text=True, capture_output=True, timeout=60)
+
+    def texts(app):
+        out = subprocess.run([str(probe), "texts", str(app.pid)], capture_output=True, text=True)
+        # 3 is no Accessibility permission, 4 an empty tree, which is what a
+        # sleeping display gives back: every assertion below would pass on
+        # nothing. See the axprobe note in CLAUDE.md.
+        if out.returncode in (3, 4):
+            return None
+        return out.stdout
+
+    def drive(panel, marker, seconds=25):
+        """Launch, then poll the tree until `marker` is on it.
+
+        Polling rather than one long wait, because how long the window takes is
+        a property of the machine: this runs straight after the headless half
+        has spent a minute in the same process, and a fixed 7 seconds reported a
+        sleeping display on a Mac that was merely busy. Reading the tree is the
+        one thing here that is safe to repeat.
+        """
+        app = subprocess.Popen([str(binary)], env=dict(environment, LISTEN_PANEL=panel),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + seconds
+        dump = None
+        while time.time() < deadline:
+            time.sleep(2)
+            dump = texts(app)
+            if dump is None or marker in dump:
+                break
+        return app, dump
+
+    app, dump = drive("person:" + person, "Summary")
+    if dump is None:
+        app.kill()
+        print("  SKIP: no Accessibility permission, or an empty tree", flush=True)
+        return
+    # **The window has to prove it is there before anything below is believed.**
+    # A sleeping display leaves the application element in the tree with no
+    # window under it, which is not an empty tree and would fail every assertion
+    # here for a reason that has nothing to do with the row. Past that line a
+    # missing row is a failure, not a skip.
+    if "Summary" not in dump:
+        app.kill()
+        print("  SKIP: the person page is not readable (is the display asleep?)", flush=True)
+        return
+    check("Suggested correction" in dump, "the person page shows what an agent proposed")
+    check(proposed in dump, "with the wording it proposed")
+    check("The source says so." in dump, "and why, which is what the reader decides on")
+    subprocess.run([str(probe), "press", str(app.pid), "Accept"], capture_output=True)
+    time.sleep(3)
+    after = texts(app) or ""
+    check(proposed in after and "Suggested correction" not in after,
+          "Accept applies it and the row goes")
+    check("Your correction" in after, "and the claim reads as one the user corrected")
+    app.kill(); time.sleep(1)
+
+    # A second proposal, so the pane has something to count.
+    request["params"]["arguments"]["text"] = claim["text"] + " Again."
+    subprocess.run([str(binary), "mcp"], input=json.dumps(request) + "\n",
+                   env=environment, text=True, capture_output=True, timeout=60)
+    app, found = drive("settings:People & Memory", "People & Memory")
+    dump = found or ""
+    if "People & Memory" not in dump:
+        app.kill()
+        print("  SKIP: the settings pane is not readable", flush=True)
+        return
+    check("suggested correction" in dump,
+          "People & Memory says a correction is waiting")
+    check(person in dump,
+          "and names whose page to open rather than only counting")
+    app.kill()
 
 
 def main():
@@ -479,6 +575,16 @@ def main():
     run("context", "auto", "off")
     run("context", "update", "--unknown", ok=False)
     check(True, "unknown CLI flags fail instead of silently changing the request")
+    if "--ui" in sys.argv:
+        # Ben rather than Alice: every one of her claims has been corrected or
+        # has a dismissal remembered against it by now, and the UI section needs
+        # one with neither. His memory was generated independently above, which
+        # is what that assertion is for.
+        ben = run("context", "person", "Ben Ortiz", "--budget", "16000",
+                  "--json", custom_env=consent_env, as_json=True)
+        check(bool(ben["entries"]), "the fixture has a claim the UI section can use")
+        ui(binary, consent_env, consent_lib, "Ben Ortiz", ben["entries"][0])
+
     fixture_env = {k: env[k] for k in ["LISTEN_LIBRARY", "LISTEN_NO_KEYCHAIN", "LISTEN_NO_TELEMETRY", "SHELL", "CONTEXT_MODE", "CONTEXT_CALLS"]}
     (WORK / "environment.json").write_text(json.dumps({"binary":str(binary), "domain":DOMAIN, "environment":fixture_env}, indent=2))
     print(f"\n{checks} checks passed. Fixture: {WORK}", flush=True)
@@ -489,6 +595,12 @@ try:
 finally:
     if not os.environ.get("LISTEN_CONTEXT_KEEP"):
         subprocess.run(["defaults", "delete", DOMAIN], capture_output=True)
+        # **And the file, because `defaults delete` alone does not remove it.**
+        # One 42 byte plist was left in ~/Library/Preferences per run, and 42 of
+        # them had accumulated before anybody looked. cfprefsd writes the file
+        # back out for a domain the app has touched, so the delete lands and the
+        # litter stays.
+        Path("~/Library/Preferences").expanduser().joinpath(DOMAIN + ".plist").unlink(missing_ok=True)
         shutil.rmtree(WORK, ignore_errors=True)
     else:
         print("Retained fixture:", WORK, flush=True)

@@ -10,6 +10,13 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
     private var lastProviderModel: (String, String)?
     private var problem: String?
     private var expanded: Set<String> = []
+    /// Corrections an agent has proposed, by claim id.
+    ///
+    /// Read with the rest of the page rather than watched, because nothing
+    /// proposes one while somebody is looking at this view: a suggestion
+    /// arrives from an answer being written in the Ask pane or from a `listen
+    /// mcp` client, and either way the next `reload` picks it up.
+    private var suggestions: [String: ContextSuggestions.Suggestion] = [:]
     private var lastHidden: String?
     private var loadTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
@@ -64,11 +71,24 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
                     let search: ContextSearchResult? = query.isEmpty ? nil : try SemanticIndex.search(query, person: person, limit: 5)
                     let latest = PeopleMemory.validReceipts(try PeopleMemory.load()).filter { $0.source.people.contains(person) && $0.resolvedModel != nil }
                         .max { $0.processedAt < $1.processedAt }
-                    return (memory, search, latest.map { ($0.backend, $0.resolvedModel!) })
+                    // Off the main thread with everything else this page reads.
+                    let proposed = Dictionary(ContextSuggestions.pending().map { ($0.claim, $0) },
+                                              uniquingKeysWith: { first, _ in first })
+                    return (memory, search, latest.map { ($0.backend, $0.resolvedModel!) }, proposed)
                 }.value
                 guard !Task.isCancelled, self?.person == person else { return }
                 self?.memory = result.0; self?.problem = nil
                 self?.lastProviderModel = result.2
+                self?.suggestions = result.3
+                // **A suggestion inside a collapsed disclosure is invisible**,
+                // and this page opens with Details collapsed. The pane that
+                // counts these says "open that page", so somebody following
+                // that sentence would arrive at a summary and see nothing,
+                // which is the whole failure the row exists to prevent.
+                //
+                // Set on load rather than in `render`, so it opens the section
+                // once and the reader can still close it.
+                if !(result.3.isEmpty) { self?.showsDetails = true }
                 if self?.searchText == query { self?.searchResult = result.1 }
                 self?.render(); self?.renderSearchResults()
             } catch {
@@ -164,7 +184,14 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
                 let count = currentFacts.count + currentRelations.count
                 if count > 0 {
                     if let last = arrangedSubviews.last { setCustomSpacing(12, after: last) }
-                    add(disclosure("Details (\(count))", open: showsDetails, #selector(toggleDetails)))
+                    // The count of what is waiting goes on the title, because
+                    // the section can be closed again and a closed one should
+                    // still say there is something in it to answer.
+                    let proposed = (currentFacts + currentRelations)
+                        .filter { suggestions[$0.id] != nil }.count
+                    let title = "Details (\(count))"
+                        + (proposed > 0 ? " · \(proposed) suggested" : "")
+                    add(disclosure(title, open: showsDetails, #selector(toggleDetails)))
                     if showsDetails {
                         if !currentFacts.isEmpty {
                             for item in currentFacts { claim(item) }
@@ -310,6 +337,7 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
         let qualifiers = ContextPresentation.qualifiers(modality: item.modality ?? "asserted", attribution: item.attribution ?? "direct")
         if !qualifiers.isEmpty { add(label(qualifiers.joined(separator: " · "), size: 11, color: .secondaryLabelColor)) }
         if item.corrected == true { add(label("Your correction", size: 11, color: .secondaryLabelColor)) }
+        if let proposed = suggestions[item.id] { suggestion(proposed, for: item) }
         if item.status == "conflicted" { add(label("Sources disagree", size: 11, color: .secondaryLabelColor)) }
         if item.status == "needs_review" { add(label("Needs review · change evidence is no longer available", size: 11, color: .secondaryLabelColor)) }
         if let from = item.time?.from { add(label("From " + Self.date(from), size: 11, color: .secondaryLabelColor)) }
@@ -326,6 +354,60 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
             }
         }
         setCustomSpacing(18, after: arrangedSubviews.last!)
+    }
+
+    /// What an agent says this claim should say, and the two ways out.
+    ///
+    /// **Under the claim rather than in its menu.** A proposed rewrite is only
+    /// assessable against the quote it came from, which is one disclosure away
+    /// on this row and nowhere near a menu item; the alternative considered was
+    /// a chip on the answer that proposed it, which would be asking somebody to
+    /// approve a rewrite of something they cannot see. It is the same placement
+    /// the Dictionary pane gives its own suggestions, and for the same reason.
+    ///
+    /// Both buttons carry the claim id in `identifier`, which is how every
+    /// other control on this row finds its claim.
+    private func suggestion(_ proposed: ContextSuggestions.Suggestion,
+                            for item: PersonMemory.Item) {
+        let heading = label("Suggested correction", size: 11, weight: .semibold,
+                            color: .secondaryLabelColor)
+        add(heading)
+        setCustomSpacing(2, after: heading)
+        let text = label(proposed.text, size: 13)
+        add(text)
+        setCustomSpacing(2, after: text)
+        let why = label(proposed.why, size: 11, color: .secondaryLabelColor)
+        add(why)
+
+        let accept = NSButton(title: "Accept", target: self, action: #selector(acceptSuggestion(_:)))
+        accept.bezelStyle = .inline; accept.controlSize = .small
+        accept.identifier = NSUserInterfaceItemIdentifier(item.id)
+        accept.setAccessibilityLabel("Accept the suggested correction")
+        let no = NSButton(title: "Dismiss", target: self, action: #selector(dismissSuggestion(_:)))
+        no.bezelStyle = .inline; no.controlSize = .small
+        no.identifier = NSUserInterfaceItemIdentifier(item.id)
+        no.setAccessibilityLabel("Dismiss the suggested correction")
+        let row = NSStackView(views: [accept, no, spacer()])
+        row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 8
+        setCustomSpacing(6, after: why)
+        add(row)
+    }
+
+    @objc private func acceptSuggestion(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let proposed = suggestions[id] else { return }
+        // Through `ContextSuggestions.accept`, which is `ContextStore.override`
+        // and a `SemanticIndex.refresh`: the same correction contract the menu's
+        // Correct Detail uses and the same one `listen context suggestions
+        // --accept` uses. Three routes, one write.
+        do { try ContextSuggestions.accept(proposed); reload() }
+        catch { problem = error.localizedDescription; render() }
+    }
+
+    @objc private func dismissSuggestion(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        ContextSuggestions.dismiss(id)
+        reload()
     }
 
     private func sourceLinks(_ evidence: [MemoryEvidence]) {

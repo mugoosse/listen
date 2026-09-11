@@ -9,6 +9,15 @@ final class PeopleContextPane: Pane {
     private var privacy: NSTextField?
     private var activity: NSTextField?
     private var detail: NSTextField?
+    /// Corrections an agent has proposed and nobody has answered.
+    ///
+    /// **Its own field rather than another branch of the activity line.** That
+    /// line is one string chosen by an if/else chain, so a count added to it
+    /// would be hidden behind "Daily limit reached" or "Updates paused" on
+    /// exactly the days somebody is most likely to have stopped reading the
+    /// page. A worklist nobody is shown is the failure this row exists to
+    /// avoid, so it does not compete for a slot.
+    private var suggested: NSTextField?
     private var update: NSButton?
     private var chooseModel: NSButton?
     private var observer: NSObjectProtocol?
@@ -64,6 +73,8 @@ final class PeopleContextPane: Pane {
         activity?.font = .systemFont(ofSize: 13)
         activity?.textColor = .labelColor
         detail = note("")
+        suggested = note("")
+        suggested?.textColor = .labelColor
         update = button("Check for Updates") { [weak self] in
             let service = ContextService.shared
             if service.isGenerating {
@@ -93,6 +104,12 @@ final class PeopleContextPane: Pane {
     }
 
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+
+    /// "Marcia", "Marcia and Ion", "Marcia, Ion and Edgar".
+    private static func list(_ names: [String]) -> String {
+        guard names.count > 1 else { return names.first ?? "" }
+        return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+    }
 
     override func refresh() {
         guard isViewLoaded else { return }
@@ -154,6 +171,21 @@ final class PeopleContextPane: Pane {
                 : "Leave Listen open. Summary requests from your iPhone will sync here and run automatically."
         }
         detail?.isHidden = detail?.stringValue.isEmpty ?? true
+
+        // Named rather than counted. "3 waiting" sends somebody hunting through
+        // the roster; the names say which pages to open, which is the whole job
+        // of this row. Accepting one happens beside the claim and its evidence,
+        // on the person's own page, and never here.
+        let waiting = ContextSuggestions.pending()
+        var people: [String] = []
+        for one in waiting where !people.contains(SpeakerName.display(one.entityName)) {
+            people.append(SpeakerName.display(one.entityName))
+        }
+        suggested?.stringValue = waiting.isEmpty ? "" :
+            "\(waiting.count) suggested correction\(waiting.count == 1 ? "" : "s") on "
+            + Self.list(people) + ". Open "
+            + (people.count == 1 ? "that page" : "those pages") + " to accept or dismiss."
+        suggested?.isHidden = waiting.isEmpty
         let limits = [10, 40, 100, 250]
         if let index = limits.firstIndex(of: Settings.contextDailyRequests) { budget.selectItem(at: index) }
         if let today = try? ContextBudget.today() {

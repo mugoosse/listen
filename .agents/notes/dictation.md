@@ -212,6 +212,35 @@ the same converted buffers to `Dictation`, wired by
 hidden: what you dictate is also in the meeting's microphone track, because it
 is your voice in the room.
 
+## A dictation the window started hands its words over, never through the clipboard
+
+`Dictation` ends a run by writing the transcript to the clipboard and posting a
+synthetic Cmd-V, and that is the right answer to the question it is usually
+asked: the chord fires over whatever app is in front, and a pasteboard plus a
+keystroke is the only way into an editor it knows nothing about. It is the wrong
+answer when Listen's own window is what asked.
+
+`toggle(into:)` takes a sink. A dictation started with one calls it with the
+finished text and skips the pasteboard and the paste entirely, so:
+
+- the clipboard somebody was holding is still theirs afterwards
+- nothing in the delivery needs the Accessibility grant, which the paste does
+  and which secure input takes away
+- the words cannot land in the wrong place, because the caller named the place
+
+The sink is taken when the dictation **starts** and cleared by every way one can
+end: delivered, heard nothing, cancelled, or abandoned while the microphone was
+still opening. That is what lets the chord stop a dictation the composer's
+microphone began and still have the words arrive in the composer.
+
+`onChange` is one slot and the menu bar holds it, so anything else that follows
+the phase watches the `Dictation.changed` notification. The Ask composer's
+button is the first of those, and there are two of it alive at once.
+
+The caller is `AskView`; see `.agents/notes/agent.md` under "The microphone
+beside it is the chord's own dictation" for what the button draws and why it
+refuses to light up for somebody else's dictation.
+
 ## One `ASR`, and a yield so dictation can get a word in
 
 `ASR.shared` is the whole engine for the process. Two instances is two copies of

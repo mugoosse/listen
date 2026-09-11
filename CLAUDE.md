@@ -470,6 +470,7 @@ that repo is being archived.**
 - A term is a phonetic rule, not just a prompt hint
 - Corrections run either side of polishing
 - The pill has to be driven by the microphone, not by a timer
+- A dictation the window started hands its words over, never through the clipboard
 - One column edge decides the pill's whole layout
 - Signing decides whether the Accessibility grant survives a rebuild
 - What is deliberately not here: no MCP tool, no import from Speak
@@ -661,6 +662,8 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The fourth subject is a meeting that has not happened (see `calendar.md`)
 - The composer is a text view, and `NSCell` is why it had to be
 - Shift+Return is `insertNewline:` unless something is a field editor
+- The microphone beside the send button is the chord's own dictation, delivered rather than pasted
+- A centred line box draws text low, and the placeholder is where it showed
 
 ### `.agents/notes/galaxy.md`
 

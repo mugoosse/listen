@@ -370,11 +370,18 @@ shift** anywhere on the Mac, say what you want written, press it again, and the
 words go to the clipboard and are typed into whatever you were using. Escape
 cancels, and so does the trash button on the floating pill.
 
+The Ask box has a microphone button of its own, between the model it is using
+and the arrow that sends. It is the same dictation, with the caret already in
+the box: press it, talk, press it again, and the words arrive in the question
+rather than on the clipboard, so whatever you had copied stays copied.
+
 It is off until you grant Accessibility, which is the permission that lets
-Listen see the shortcut and type for you. Recording meetings never uses it, so
-if you only want the recorder you can ignore this entirely. Everything else is
-in Settings, Dictation: the shortcut itself, which speech engine to use, the
-sounds, and whether the pill appears.
+Listen see the shortcut and type for you. The microphone in the Ask box needs
+the model but not the grant, because nothing has to be typed into another app
+for it. Recording meetings never uses it, so if you only want the recorder you
+can ignore this entirely. Everything else is in Settings, Dictation: the
+shortcut itself, which speech engine to use, the sounds, and whether the pill
+appears.
 
 The custom vocabulary is shared. A name Listen mishears in a meeting is the
 same name it mishears when you dictate, so a rule you add in Settings,

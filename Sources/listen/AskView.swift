@@ -204,8 +204,18 @@ final class AskView: NSView {
     private let welcome = NSStackView()
     private let field = ComposerField()
     private let sendButton = SendButton()
+    private let dictateButton = DictateButton()
     private let modelButton = HoverButton()
-    private lazy var composer = ComposerWell(field: field, model: modelButton, send: sendButton)
+    private lazy var composer = ComposerWell(field: field, model: modelButton,
+                                             dictate: dictateButton, send: sendButton)
+    /// True while the dictation that is running is **this** composer's.
+    ///
+    /// The chord starts dictations over other apps, and the phase alone cannot
+    /// tell the two apart. Set when this button starts one, cleared when the
+    /// phase comes back to idle, whichever of the two stopped it.
+    private var dictating = false
+    /// Dropped with the view, which is what unsubscribes it.
+    private var dictationWatch: (any NSObjectProtocol)?
     private let status = NSTextField(labelWithString: "")
     /// The composer well's height and the status line's, so `showNotice` can
     /// collapse both when the setup card replaces them.
@@ -322,6 +332,17 @@ final class AskView: NSView {
             // Off the monitor's queue: everything below this line is AppKit.
             DispatchQueue.main.async { self?.updateStatus() }
         }
+        // A notification rather than `Dictation.onChange`, which is one slot
+        // and the menu bar holds it. Two `AskView`s exist at once and either
+        // can be looking at the same dictation.
+        dictationWatch = NotificationCenter.default.addObserver(
+            forName: Dictation.changed, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateDictateButton() }
+            }
+    }
+
+    deinit {
+        if let dictationWatch { NotificationCenter.default.removeObserver(dictationWatch) }
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }
@@ -841,11 +862,71 @@ final class AskView: NSView {
             guard let self else { return }
             if self.isRunning { self.stopAndTidy() } else { self.send() }
         }
+        dictateButton.onPress = { [weak self] in self?.dictate() }
+        updateDictateButton()
         // Everything inside is positioned by `ComposerWell.layout`, by frame,
         // for the reason `RecordButton` does the same: on macOS 26 the middle
         // view belongs to `NSGlassEffectView`, which places its content view
         // itself, and constraints pinned across that boundary are two things
         // fighting over one number.
+    }
+
+    // MARK: - Saying the question instead of typing it
+
+    /// Start or stop a dictation that lands in this composer's field.
+    ///
+    /// The caret goes in first and not afterwards. The field is where the
+    /// words are going, and somebody who presses the microphone and then types
+    /// while it listens should be typing in the same place: focusing after the
+    /// transcript arrives would move the caret out from under them.
+    private func dictate() {
+        if dictating { Dictation.shared.toggle(); return }
+        // Somebody else's dictation, started by the chord. Pressing this would
+        // stop it and paste it wherever the caret used to be, which is not
+        // what a microphone in this composer offers to do.
+        guard Dictation.shared.phase == .idle else { return }
+        window?.makeFirstResponder(field)
+        dictating = true
+        Dictation.shared.toggle(into: { [weak self] text in self?.dictated(text) })
+        // `toggle` beeps and stays idle when no model is loaded, which is the
+        // same answer the chord gives. Nothing is coming, so the button must
+        // not sit there saying it is listening.
+        if Dictation.shared.phase == .idle { dictating = false }
+        updateDictateButton()
+    }
+
+    /// The words, out of `Dictation` and into the field.
+    private func dictated(_ text: String) {
+        dictating = false
+        // Inserted rather than assigned: a dictation is a continuation of
+        // whatever is already typed, the caret may be in the middle of it, and
+        // an insert posts the change, so the send button lights up and the
+        // well grows without this having to say so. Assigning `stringValue`
+        // would do none of that, which is why it is not used here.
+        field.insert(text)
+        // The caret may have left while the pill was up, and the words having
+        // arrived is the moment to carry on typing.
+        window?.makeFirstResponder(field)
+        updateDictateButton()
+    }
+
+    /// What the microphone looks like right now.
+    private func updateDictateButton() {
+        let phase = Dictation.shared.phase
+        // Whoever stopped it, a dictation that is over is not this composer's
+        // any more.
+        if phase == .idle { dictating = false }
+        // Hidden rather than dimmed when dictation is switched off. A control
+        // that cannot work is not an invitation, and Settings is where it is
+        // turned on: see `DictationPane`.
+        let wasHidden = dictateButton.isHidden
+        dictateButton.isHidden = !Settings.dictationEnabled
+        if dictating {
+            dictateButton.mode = phase == .transcribing ? .working : .listening
+        } else {
+            dictateButton.mode = phase == .idle ? .idle : .busy
+        }
+        if wasHidden != dictateButton.isHidden { composer.needsLayout = true }
     }
 
     // MARK: - Choosing the agent and the model
@@ -2427,10 +2508,34 @@ final class ComposerField: NSView {
     /// how the well grows is a multiple of this.
     static let lineHeight: CGFloat = ceil(NSLayoutManager().defaultLineHeight(for: font))
 
+    /// How far the ink of a line sits below the middle of the fragment the
+    /// layout manager puts it in.
+    ///
+    /// **A line box is not symmetrical, and centring one draws the text low.**
+    /// Measured by rendering this field offscreen at 2x and reading the rows
+    /// that have ink in them: in a 52 point well the placeholder occupies 20.5
+    /// to 35.0, which is centred on 27.75 rather than on 26. The cause is in
+    /// the fragment: 18 points tall with the baseline 15 down it, so the
+    /// tallest ascender starts 3.5 points below its top while the descenders
+    /// land exactly on its bottom. All of the slack is above the glyphs, and
+    /// half of it is what this takes back.
+    ///
+    /// It is the ink that is centred here and not the metrics, because the
+    /// metric box is what was already centred and is what looked wrong. A
+    /// string with no descender in it is drawn 1.5 points high by this, which
+    /// is the trade: the placeholder has one, and so does nearly every
+    /// question anybody types.
+    static let inkLift: CGFloat = 1.75
+
     /// The padding above and below one line, which is what makes a composer
     /// holding one line exactly `ComposerWell.baseHeight` tall. It stays put as
     /// the well grows, so the first line never moves.
-    static let verticalInset: CGFloat = (ComposerWell.baseHeight - lineHeight) / 2
+    ///
+    /// The lift comes off both ends, because `textContainerInset` has one
+    /// number for the pair. Only the top one moves anything: the text is laid
+    /// out from there, and the bottom is padding under the last line.
+    static let verticalInset: CGFloat =
+        (ComposerWell.baseHeight - lineHeight) / 2 - inkLift
 
     /// True when the caret arrives, false when it leaves.
     var onFocusChanged: ((Bool) -> Void)?
@@ -2532,6 +2637,24 @@ final class ComposerField: NSView {
             text.needsDisplay = true
             invalidateHeight()
         }
+    }
+
+    /// Put words in at the caret, as though they had been typed.
+    ///
+    /// Through `insertText`, which is what makes this an edit rather than an
+    /// assignment: it posts the change, so the send button lights up and the
+    /// well grows, and it goes on the undo stack, so a dictation that came out
+    /// wrong is one Cmd-Z away. The `stringValue` setter does none of that on
+    /// purpose, and its callers are the ones that clear and refill the field.
+    ///
+    /// Spaced against what is already there rather than jammed onto it: a
+    /// dictation into a half-typed question is a continuation of it, and
+    /// "ask aboutthe meeting" is nobody's question.
+    func insert(_ string: String) {
+        let range = text.selectedRange()
+        let before = (text.string as NSString).substring(to: range.location)
+        let spaced = before.isEmpty || before.last?.isWhitespace == true
+        text.insertText((spaced ? "" : " ") + string, replacementRange: range)
     }
 
     var placeholderString: String? {
@@ -2742,6 +2865,15 @@ final class ComposerWell: NSView {
     private static let inset: CGFloat = 20
     private static let gap: CGFloat = 10
     private static let send: CGFloat = 36
+    /// The same size as the send button. It was 32 first, on the argument that
+    /// only one of the two is the verb the pane exists for, and a pair of equal
+    /// discs reads better than a graded one: the weight is already carried by
+    /// the fill, which is the accent on one and a wash on the other.
+    private static let dictate: CGFloat = send
+    /// Between the two round buttons, which is not the gap between a word and
+    /// a button: `gap` set them as far apart as the model control is from the
+    /// send button and the pair stopped reading as a pair.
+    private static let tight: CGFloat = 6
 
     /// What the well has to be to show `textHeight` of text, which is what
     /// `ComposerField.contentHeight` reports.
@@ -2753,11 +2885,13 @@ final class ComposerWell: NSView {
     private let content = NSView()
     private let field: ComposerField
     private let model: NSButton
+    private let dictateButton: NSView
     private let sendButton: NSView
 
-    init(field: ComposerField, model: NSButton, send: NSView) {
+    init(field: ComposerField, model: NSButton, dictate: NSView, send: NSView) {
         self.field = field
         self.model = model
+        self.dictateButton = dictate
         self.sendButton = send
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
@@ -2778,6 +2912,7 @@ final class ComposerWell: NSView {
 
         content.addSubview(field)
         content.addSubview(model)
+        content.addSubview(dictateButton)
         content.addSubview(sendButton)
 
         if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
@@ -2811,12 +2946,23 @@ final class ComposerWell: NSView {
         sendButton.frame = NSRect(x: b.width - sendSize - (Self.baseHeight - sendSize) / 2,
                                   y: (Self.baseHeight - sendSize) / 2,
                                   width: sendSize, height: sendSize)
+        // The microphone is between the two, and it takes no room at all when
+        // there is no dictation to offer: a hidden view still has a frame, and
+        // one left where it was would hold the model control and the field off
+        // the send button by 38 points of nothing.
+        let dictateSize = dictateButton.isHidden ? 0 : Self.dictate
+        let afterDictate = dictateButton.isHidden
+            ? sendButton.frame.minX
+            : sendButton.frame.minX - Self.tight - dictateSize
+        dictateButton.frame = NSRect(x: afterDictate,
+                                     y: (Self.baseHeight - dictateSize) / 2,
+                                     width: dictateSize, height: dictateSize)
         let modelSize = model.intrinsicContentSize
         let modelWidth = model.isHidden ? 0 : ceil(modelSize.width)
-        model.frame = NSRect(x: sendButton.frame.minX - Self.gap - modelWidth,
+        model.frame = NSRect(x: afterDictate - Self.gap - modelWidth,
                              y: round((Self.baseHeight - modelSize.height) / 2),
                              width: modelWidth, height: ceil(modelSize.height))
-        let fieldRight = model.isHidden ? sendButton.frame.minX : model.frame.minX
+        let fieldRight = model.isHidden ? afterDictate : model.frame.minX
         let fieldLeft = Self.inset
         // The field takes the whole well. It carries its own vertical padding
         // (`ComposerField.verticalInset`), so one line sits exactly where it
@@ -2942,6 +3088,152 @@ final class SendButton: NSView {
         pressed = true
         // Tracked to mouse-up rather than acting on the way down, so a press
         // that slides off the button is a cancelled press.
+        var inside = true
+        while let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            let point = convert(next.locationInWindow, from: nil)
+            inside = bounds.contains(point)
+            pressed = inside
+            if next.type == .leftMouseUp { break }
+        }
+        pressed = false
+        if inside { onPress?() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyle()
+    }
+}
+
+/// The microphone in the composer: say the question instead of typing it.
+///
+/// It is the same dictation the chord runs, with the two differences that are
+/// the reason it exists. It puts the caret in the field first, so the words
+/// have somewhere to land without anybody having clicked there; and it takes
+/// the transcript straight out of `Dictation` rather than through the
+/// clipboard and a synthetic Cmd-V, which is all `Dictation` can do when it
+/// cannot know what is in front of it. See `Dictation.toggle(into:)`.
+///
+/// Built like `SendButton` beside it rather than out of `HoverButton`: the two
+/// are the same shape in the same row, and a bordered button between them
+/// would read as a third kind of thing.
+final class DictateButton: NSView {
+    /// **Not `Dictation.Phase`.** `listening` means *this* composer's
+    /// dictation, and the chord can start one over any app on the Mac: a
+    /// microphone here lighting up for words that are going to land in
+    /// somebody's editor would be a lie about where they end up. That
+    /// dictation is `busy` here, which is the one state that is about
+    /// somewhere else.
+    enum Mode { case idle, listening, working, busy }
+
+    var onPress: (() -> Void)?
+    var mode: Mode = .idle { didSet { if mode != oldValue { restyle() } } }
+
+    private let glyph = NSImageView()
+    private var pressed = false { didSet { restyle() } }
+    private var hovering = false { didSet { restyle() } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        glyph.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(glyph)
+        restyle()
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    /// For the same reason `SendButton` has one: this is an `NSView` with a
+    /// `mouseDown`, so without this it is a control only a pointer can reach,
+    /// and the Ask scripts drive everything through accessibility.
+    override func accessibilityPerformPress() -> Bool {
+        guard mode != .busy, mode != .working else { return false }
+        onPress?()
+        return true
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2
+        // 16 points on a 36 point disc, which is the glyph it had on the 32
+        // point one: the disc grew to match the send button and the microphone
+        // on it did not, because it was the right size already. `SendButton`'s
+        // own 0.46 is a different number for the same reason, an arrow being a
+        // wider shape than a microphone.
+        let side = round(bounds.height * 0.44)
+        glyph.frame = NSRect(x: round((bounds.width - side) / 2),
+                             y: round((bounds.height - side) / 2),
+                             width: side, height: side)
+    }
+
+    private func restyle() {
+        let live = mode == .listening
+        glyph.image = NSImage(systemSymbolName: "mic.fill",
+                              accessibilityDescription: nil)
+        glyph.symbolConfiguration = .init(pointSize: 12, weight: .medium)
+        // **Red, and it is this app's own word rather than a new one.**
+        // `RecordButton` turns red while it is capturing and
+        // `RecordingIndicator` is red for the same reason: in Listen red means
+        // a microphone is open right now. A dictation is a microphone open
+        // right now.
+        if live {
+            layer?.backgroundColor = NSColor.systemRed
+                .withAlphaComponent(pressed ? 0.8 : 1).cgColor
+            glyph.contentTintColor = .white
+        } else {
+            // A wash rather than a fill, so the primary control in the row is
+            // the only filled disc in it. `hoverTint` and not a label colour,
+            // for the reason `SendButton` states: a label colour used as a
+            // background is a translucent white in dark mode and reads as a
+            // blob.
+            let alpha: CGFloat = pressed ? 0.18 : (hovering ? 0.12 : 0.07)
+            layer?.backgroundColor = hoverTint(mode == .idle ? alpha : 0.05).cgColor
+            glyph.contentTintColor = mode == .idle
+                ? (hovering ? .labelColor : .secondaryLabelColor)
+                : .tertiaryLabelColor
+        }
+        switch mode {
+        case .idle:
+            setAccessibilityLabel("Dictate")
+            toolTip = "Dictate your question (\(Dictation.shared.shortcutDescription))"
+        case .listening:
+            setAccessibilityLabel("Stop dictating")
+            toolTip = "Stop dictating"
+        case .working:
+            setAccessibilityLabel("Transcribing what you said")
+            toolTip = "Transcribing on this Mac…"
+        case .busy:
+            setAccessibilityLabel("Dictation is busy")
+            toolTip = "A dictation is already running"
+        }
+    }
+
+    /// Ours by name, for the reason `HoverButton` records: `trackingAreas` also
+    /// holds whatever AppKit put there, and this one has a tool tip.
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) {
+        guard mode == .idle || mode == .listening else { return }
+        pressed = true
+        // Tracked to mouse-up rather than acting on the way down, so a press
+        // that slides off the button is a cancelled press. Same as `SendButton`.
         var inside = true
         while let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
             let point = convert(next.locationInWindow, from: nil)

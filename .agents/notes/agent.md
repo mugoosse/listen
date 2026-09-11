@@ -449,6 +449,72 @@ Its idle state is **the accent faded, never a grey**. The first attempt used
 *white*, so it drew a white disc with a `secondaryLabelColor` arrow on it: light
 grey on near-white, a blank blob with no glyph. A label colour is for labels.
 
+### The microphone beside it is the chord's own dictation
+
+`DictateButton` sits between the model control and the send button, and it runs
+the same `Dictation` the global chord runs: the same pill, the same model, the
+same dictionary and the same polish pass. It is not a second capture path, and
+it must not become one. `PersonNoteComposer` is the app's other microphone and
+*does* own a `DictationRecorder`, because it records into a sheet that has no
+pill and no chord; this one is in a window that has both.
+
+Two things are its own, and both are about where the words end up.
+
+**The caret goes in first, before anything is listening.** The field is where
+the transcript is going, so the press focuses it and then starts. Focusing
+afterwards would move the caret out from under somebody who started typing while
+it listened.
+
+**The transcript is handed over, not pasted.** `Dictation.toggle(into:)` takes a
+sink, and a dictation started with one skips the clipboard and the synthetic
+Cmd-V entirely. That path exists because the chord cannot know what is in front
+of it; a button in the composer can. The clipboard somebody was holding stays
+theirs, and nothing in the delivery needs the Accessibility grant. The sink is
+captured when the dictation *starts*, so the chord can stop one the button
+began and the words still land in the field.
+
+`Dictation.onChange` is one slot and the menu bar holds it, so the button
+follows `Dictation.changed`, a notification, instead: there are two `AskView`s
+alive at once and either can be looking at the same dictation. What it draws is
+not the phase, either. `listening` means *this* composer's dictation; a
+dictation the chord started over another app is `busy` here, greyed and inert,
+because a microphone lighting up in this well for words that are going to land
+in somebody's editor would be a lie about where they end up.
+
+Verified end to end rather than reasoned about, which is worth the two minutes:
+launch against a scratch library, `axprobe press <pid> dictate`, `say "what did
+we decide about the roadmap"`, press `stop dictating`, and read the field.
+`AXTextArea ... What did we decide about the roadmap?` is the assertion, and the
+button's own label flipping from `Dictate` to `Stop dictating` is what says the
+state landed.
+
+### A centred line box draws text low, and the placeholder is where it showed
+
+The composer's placeholder read as sitting below the middle of the well next to
+"Sonnet 5", and it was: **centring a line fragment is not centring the text in
+it.** A 15 point system font lays out an 18 point fragment with the baseline 15
+points down, so the tallest ascender starts 3.5 points below the fragment's top
+while the descenders land exactly on its bottom. All of the slack is above the
+glyphs.
+
+Measured by rendering the field offscreen at 2x and reading the rows with ink in
+them: in a 52 point well the placeholder occupied 20.5 to 35.0, centred on 27.75
+against a well centred on 26. `ComposerField.inkLift` takes half the slack back,
+which is 1.75 points, and the same shot then reads 26.25. On the running app,
+where the well's centre is known from the microphone's frame (32 points, centred
+by `ComposerWell.layout`), the placeholder's ink is rows 98 to 125 of a well
+spanning 60 to 164: centred on 112.0 exactly, against "Sonnet 5" at 111.0.
+
+It is the **ink** that is centred and not the metrics, because the metric box is
+what was already centred and is what looked wrong. `font.ascender` overstates
+the real ink top by 3 points on this font. The trade is stated where the
+constant is: a string with no descender in it now draws 1.5 points high, and the
+placeholder has one, as does nearly every question anybody types.
+
+The placeholder is drawn by `NSStringDrawing` and the typed text by the layout
+manager, which are two different routes to the same baseline: both were measured
+before the change and both moved by the same 1.75, so one constant covers them.
+
 ### Codex sends its preamble and its answer as separate messages
 
 Two `agent_message` items, and appended end to end they read as one broken

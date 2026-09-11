@@ -93,7 +93,34 @@ final class Dictation {
 
     /// Fires whenever anything above changes, so the menu bar can follow without
     /// polling. Same shape as `Capture.onChange`.
+    ///
+    /// **One slot, and the menu bar holds it.** A second listener assigning
+    /// here takes it away silently, so anything else that wants to follow the
+    /// phase watches `Dictation.changed` instead. See `notifyChange`.
     var onChange: (() -> Void)?
+
+    /// Posted alongside `onChange`, for the views that cannot have the slot.
+    /// The composer's microphone button is one: it is on two `AskView`s at
+    /// once, and either of them may be looking at a dictation the chord
+    /// started.
+    static let changed = Notification.Name("ListenDictationChanged")
+
+    /// Say that something moved, to both kinds of listener.
+    private func notifyChange() {
+        onChange?()
+        NotificationCenter.default.post(name: Dictation.changed, object: nil)
+    }
+
+    /// Where the transcript goes when a control inside Listen's own window
+    /// started the dictation rather than the chord.
+    ///
+    /// The chord types into whatever app is in front, which it can only do
+    /// through the clipboard and a synthetic Cmd-V. A button in the composer
+    /// knows the field it belongs to, so it takes the words directly: nothing
+    /// in that path needs the Accessibility grant, and the clipboard somebody
+    /// was holding stays theirs. Cleared at the end of every dictation, and by
+    /// every way one can be abandoned, so the next chord goes back to pasting.
+    private var deliver: ((String) -> Void)?
 
     /// Called with each finished transcript, nil when nothing was heard. Setup's
     /// try-it-out step listens here, so the user sees their own words rather
@@ -144,7 +171,7 @@ final class Dictation {
     func activate() {
         guard Settings.dictationEnabled else {
             hotkey.uninstall()
-            onChange?()
+            notifyChange()
             return
         }
         if !hotkey.installIfPermitted() {
@@ -154,7 +181,7 @@ final class Dictation {
             hotkey.watchForAccessibility()
         }
         prewarm()
-        onChange?()
+        notifyChange()
     }
 
     /// Load the speech model before anybody presses anything.
@@ -185,7 +212,7 @@ final class Dictation {
             }
             let ready = await self.engine.isReady
             self.isReady = ready
-            self.onChange?()
+            self.notifyChange()
         }
     }
 
@@ -210,17 +237,24 @@ final class Dictation {
 
     // MARK: - The dictation itself
 
-    func toggle() {
+    /// Start or stop a dictation.
+    ///
+    /// `sink` is where the words go, and it is only ever read when this press
+    /// is the one that starts something: a dictation the chord began pastes,
+    /// whoever stops it, and one the composer began goes to the composer even
+    /// if the chord is what ends it. See `deliver`.
+    func toggle(into sink: ((String) -> Void)? = nil) {
         switch phase {
         case .recording:    finish()
         case .starting:     abandonStart()
         case .transcribing: break      // still working on the last one
-        case .idle:         begin()
+        case .idle:         deliver = sink; begin()
         }
     }
 
     private func begin() {
         guard isReady else {
+            deliver = nil
             // A beep rather than a message. There is no window in front of the
             // user to put one in, and the state is temporary: the model is
             // loading, or no model has been chosen yet, and the menu bar says
@@ -257,7 +291,7 @@ final class Dictation {
             announcedLive = true
             live()
             trace("dictating into a running recording")
-            onChange?()
+            notifyChange()
             return
         }
 
@@ -291,7 +325,7 @@ final class Dictation {
         firstBufferSeen = false
         announcedLive = false
         armSlowStartNotice()
-        onChange?()
+        notifyChange()
 
         recorder.start { [weak self] result in
             MainActor.assumeIsolated { self?.opened(result) }
@@ -355,7 +389,7 @@ final class Dictation {
                 CustomDictionary.warm()
                 await Polisher.shared.prewarm()
             }
-            onChange?()
+            notifyChange()
         case .failure(let error):
             // The raw CoreAudio error is unreadable and names nothing the user
             // can act on, so the menu gets a sentence and the log keeps the
@@ -365,7 +399,7 @@ final class Dictation {
             phase = .idle
             Cue.failed()
             hud.hide()
-            onChange?()
+            notifyChange()
         }
     }
 
@@ -376,13 +410,14 @@ final class Dictation {
     /// releasing, because the open cannot be interrupted part way through.
     private func abandonStart() {
         startCancelled = true
+        deliver = nil
         slowStartNotice?.invalidate()
         slowStartNotice = nil
         phase = .idle
         hud.hide()
         Cue.cancel()
         trace("dictation abandoned while the microphone was still opening")
-        onChange?()
+        notifyChange()
     }
 
     /// Whether the device has delivered audio, and whether `live()` has already
@@ -423,13 +458,14 @@ final class Dictation {
     private func finish() {
         guard let pcm = collect() else {
             phase = .idle
-            onChange?()
+            deliver = nil
+            notifyChange()
             return
         }
 
         phase = .transcribing
         if Settings.dictationShowHUD { hud.show(.transcribing) }
-        onChange?()
+        notifyChange()
 
         let seconds = Double(pcm.count) / SAMPLE_RATE
         Task { [weak self] in
@@ -468,11 +504,24 @@ final class Dictation {
             // and from Phase 3 the wait it covers is longer than the
             // transcription itself.
             self.hud.hide()
+            // Taken before the branch below, because either way this
+            // dictation is over and the next one starts from nothing.
+            let sink = self.deliver
+            self.deliver = nil
             if let text {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(text, forType: .string)
-                if Settings.dictationAutoPaste { self.paste() }
+                if let sink {
+                    // Straight into the control that asked for it. No
+                    // clipboard: the words are already where they were meant
+                    // to go, and overwriting what somebody had copied to put
+                    // a duplicate there would be a side effect nobody asked
+                    // for.
+                    sink(text)
+                } else {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(text, forType: .string)
+                    if Settings.dictationAutoPaste { self.paste() }
+                }
                 Cue.done()
                 // The raw transcript is kept only when something changed it, so
                 // the history stays a record of what was said as well as what
@@ -492,7 +541,7 @@ final class Dictation {
                 Cue.failed()
                 trace("dictation produced nothing")
             }
-            self.onChange?()
+            self.notifyChange()
             self.onTranscript?(text)
         }
     }
@@ -507,12 +556,13 @@ final class Dictation {
         // not started yet, and would wait on the open in order to do it.
         if phase == .starting { abandonStart(); return }
         guard phase == .recording else { return }
+        deliver = nil
         _ = collect()
         phase = .idle
         hud.hide()
         Cue.cancel()
         trace("dictation cancelled")
-        onChange?()
+        notifyChange()
     }
 
     /// Stop whichever microphone path is running and hand back the samples.

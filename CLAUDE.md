@@ -438,6 +438,7 @@ this app, so read them before building any new window, menu or popover.
 - `MainMenu.install()` may not be called twice
 - A wrapping label's `fittingSize` is one line high, and the card it is in gets clipped
 - A view with no intrinsic size, laid out by frame, is solved at zero
+- Liquid Glass is a vocabulary, and the rule is one material per layer
 
 ### `.agents/notes/dictation.md` (18k)
 
@@ -650,6 +651,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The wizard's save path is not scripted, and the reason is the Keychain service
 - Ask is off until somebody turns it on, and onboarding is where they are asked
 - The setup card stands alone, and takes the composer's place rather than sitting over it
+- The setup card is a consumer offer now, and the words were the bigger half
 - The cross's `putAway` was inverted, and the bug it was chased for is still open (superseded)
 - "Catch me up" was a sentence no user of this app can say
 - The fourth recording chip is `Positions`, and it comes and goes
@@ -769,6 +771,11 @@ PostHog project.
 - Comments explain *why*, especially where the obvious implementation is wrong.
   Most comments in this codebase mark a trap; keep them when editing nearby.
 - UI copy states the trade-off rather than hiding it in a tooltip.
+- Every floating surface is made of the system's own material: Liquid Glass on
+  macOS 26, `.hudWindow` vibrancy below it, never a hand-drawn panel and never
+  one material inside another. `.agents/notes/appkit.md` has the table of which
+  surface is built by what, and `GlassIconButton` is the round icon button to
+  reach for outside a toolbar.
 - Prefer measured numbers to remembered ones. Every threshold and size that came
   from a measurement says so.
 - A device frees its audio only when another **live** device that is **keeping**

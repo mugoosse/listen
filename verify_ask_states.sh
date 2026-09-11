@@ -65,6 +65,14 @@ launch() {  # launch -> $APP set, composer focused
   "$COPY/Contents/MacOS/Listen" >/dev/null 2>&1 &
   APP=$!
   sleep 5
+  # **Activate first.** `AXSetFocusedUIElement` on a window that is not key
+  # succeeds and leaves the caret where it was, and a script that has launched
+  # and killed a few apps has focus wherever the last one left it. Measured: a
+  # `settext` into the composer failed three times running from this function
+  # and passed every time by hand, which is the same shape as the note in
+  # CLAUDE.md about `AXShowMenu` on a toolbar item in a window that is not key.
+  "$PROBE" activate $APP >/dev/null 2>&1
+  sleep 1
   # The Ask surfaces draw their setup card only once the composer has the
   # caret ("the chips wait for the caret"), so every case starts focused.
   "$PROBE" focus $APP "Ask about" >/dev/null 2>&1
@@ -102,13 +110,19 @@ configure "$DIR/bin/claude" "/nonexistent/codex"
 launch
 dump=$("$PROBE" texts $APP 2>&1)
 case $? in 3) echo "  SKIP: no Accessibility permission" >&2; exit 2;; esac
-echo "$dump" | grep -q "Claude Code is installed but not signed in"
-check $? "the setup card names the state"
-echo "$dump" | grep -q "Set up Ask"
-check $? "and the way in is the wizard button"
+echo "$dump" | grep -q "One more step to finish setting up"
+check $? "the setup card opens on what to do, not on what is missing"
+echo "$dump" | grep -q "just needs you to sign in"
+check $? "and names the state in the body"
+echo "$dump" | grep -q "Finish setup"
+check $? "the way in is the wizard button"
+# The command is in the wizard now, under the option it belongs to, beside a
+# button that copies it. A consumer empty state is the wrong place to meet it.
+! echo "$dump" | grep -q "claude auth login"
+check $? "the card sends nobody to a terminal"
 ! echo "$dump" | grep -qi "npm install"
 check $? "nothing tells an installed CLI's owner to install it"
-"$PROBE" press $APP "Set up Ask" >/dev/null 2>&1
+"$PROBE" press $APP "Finish setup" >/dev/null 2>&1
 check $? "the wizard opens from the card"
 settle
 dump=$("$PROBE" texts $APP 2>&1)
@@ -153,10 +167,21 @@ echo "3. nothing installed at all: the plain-language card"
 configure "/nonexistent/claude" "/nonexistent/codex"
 launch
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -q "Pick what answers your questions"
-check $? "the card leads with the choice, not with a requirement"
-echo "$dump" | grep -q "each option says what it costs"
-check $? "and says the options carry their price"
+echo "$dump" | grep -q "Ask your conversations anything"
+check $? "the card leads with the offer, not with a requirement"
+echo "$dump" | grep -q "What did we decide?"
+check $? "and says what the reader gets out of it"
+# Recording is the input, not the product, and everybody in this library was
+# in the room. See the note on `SetupNotice.show`.
+! echo "$dump" | grep -qi "meeting you missed"
+check $? "and never offers to catch them up on something they were at"
+echo "$dump" | grep -q "Closing this hides Ask"
+check $? "the small print says what the cross does"
+# One button in the body. The way out is the glyph in the corner, which has no
+# title, so a `texts` dump that finds a second call to action has found the old
+# pair of push buttons back again.
+! echo "$dump" | grep -q "^AXButton.*Not now, put Ask away.*Not now"
+check $? "and the way out is a glyph rather than a second button"
 # The selling is the onboarding step's job now, and this card is only ever
 # read by somebody who already said yes there. See `Settings.askEnabled`.
 ! echo "$dump" | grep -q "Check again"
@@ -170,17 +195,23 @@ echo '{"loggedIn": true, "email": "stub@example.com"}' > "$DIR/bin/auth.json"
 configure "$DIR/bin/claude" "/nonexistent/codex"
 launch
 dump=$("$PROBE" texts $APP 2>&1)
-! echo "$dump" | grep -q "installed but not signed in"
+! echo "$dump" | grep -q "One more step to finish setting up"
 check $? "a signed-in probe shows no card"
 "$PROBE" settext $APP "Ask about" "how many recordings do I have?" >/dev/null 2>&1
 check $? "the composer takes a question"
 sleep 1
 "$PROBE" press $APP "Ask" >/dev/null 2>&1
 check $? "and it can be sent"
-sleep 6
+# The run has to fail, its text has to be classified, and detection has to be
+# forgotten and redone before the card can go up. Measured on this build: at 6
+# the page still showed the failed turn alone and the card arrived a beat
+# later, which read as the surface not correcting itself at all.
+sleep 9
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -q "installed but not signed in"
+echo "$dump" | grep -q "One more step to finish setting up"
 check $? "the failed run put the sign-in card up instead of a second failure"
+echo "$dump" | grep -q "just needs you to sign in"
+check $? "and the card names the CLI that has to be signed into"
 kill $APP 2>/dev/null
 
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1

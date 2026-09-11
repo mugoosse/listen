@@ -109,7 +109,7 @@ record_control "$dump"
 check $? "the window is up and readable (guard against an empty AX tree)"
 ! field "$dump" "Ask"
 check $? "no composer: its send button is not in the window"
-! echo "$dump" | grep -q "Pick what answers your questions"
+! echo "$dump" | grep -q "Ask your conversations anything"
 check $? "no setup card"
 ! echo "$dump" | grep -q "Set up Ask"
 check $? "and nothing on the page asks to set anything up"
@@ -126,14 +126,14 @@ sleep 2
 dump=$("$PROBE" texts $APP 2>&1)
 field "$dump" "Chats"
 check $? "Chats is in the title bar"
-echo "$dump" | grep -q "Pick what answers your questions"
-check $? "and with no agent the card asks which one"
+echo "$dump" | grep -q "Ask your conversations anything"
+check $? "and with no agent the card makes the offer"
 # The card replaces the composer rather than sitting over it: the state is
 # known before anything is typed, so a field that can only fail is not offered.
 ! field "$dump" "Ask"
 check $? "and the card stands alone, with no field that cannot answer"
-echo "$dump" | grep -q "Not now puts Ask away"
-check $? "the card says what its way out does"
+echo "$dump" | grep -q "Closing this hides Ask"
+check $? "the card says in words what its glyph does"
 
 # The card is the only screen somebody who turned Ask on and could not finish
 # setting it up ever sees, so the way out has to be on it rather than back in
@@ -150,7 +150,7 @@ sleep 2
 dump=$("$PROBE" texts $APP 2>&1)
 record_control "$dump"
 check $? "the window is still there afterwards"
-! echo "$dump" | grep -q "Pick what answers your questions"
+! echo "$dump" | grep -q "Ask your conversations anything"
 check $? "the card is gone"
 ! field "$dump" "Chats"
 check $? "and Chats with it"

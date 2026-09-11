@@ -100,6 +100,21 @@ word after it earlier.
 `listen join <id> [--into <id>]` does the same from the command line, and prints
 what it would do without changing anything until you add `--apply`.
 
+### Setting Ask up says what it is for
+
+Turn Ask on before choosing something to answer with and Listen shows a card
+where the composer would be. It used to lead with "Pick what answers your
+questions" and explain that Ask was on and needed an answerer. It now leads
+with what you get: ask your conversations anything, what did we decide, where
+did that idea come from, and every answer linked back to the moment it was
+said. One button to set it up rather than two of equal weight, and the way out
+is the round cross in the corner that the rest of the window uses.
+
+If a CLI is installed and signed out the card says so in a sentence and hands
+you to setup, instead of printing a terminal command at you. The command is
+still in the wizard, under the option it belongs to, with a button that copies
+it.
+
 ### Listen will not be replaced while it is recording
 
 `./install.sh` now refuses to quit and replace a running copy that is in the

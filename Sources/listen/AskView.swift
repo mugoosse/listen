@@ -1599,6 +1599,16 @@ final class AskView: NSView {
     /// work, and it has to be readable over whatever is behind it.
     var isActive: Bool { composing || !notice.isHidden }
 
+    /// Is the one thing on this pane already made of glass?
+    ///
+    /// The drawer draws a panel behind whatever the pane is showing, because
+    /// the starter chips have no material of their own and are otherwise read
+    /// straight off the transcript. The setup card is not in that position: it
+    /// carries its own, so a second panel around it is a frame drawn a few
+    /// points outside a frame, which is what the card in a card looked like
+    /// both times this has come up. See `SetupNotice.panel`.
+    var carriesOwnPanel: Bool { !notice.isHidden }
+
     /// Which conversation is open, so the history can tick it.
     var currentID: String? { chat.id }
 
@@ -2949,6 +2959,106 @@ final class SendButton: NSView {
     }
 }
 
+/// A round Liquid Glass button carrying one glyph.
+///
+/// The shape and the size of the globe and the cross in this window's own
+/// toolbar, which is where a reader has already met this control: macOS draws
+/// a toolbar's items in its glass for free, and a card in the middle of a pane
+/// has no toolbar to be drawn by, so the material is built here instead.
+///
+/// **Not `bezelStyle = .glass` on a square button**, which is the obvious
+/// version and was the first one. AppKit gives a glass bezel a capsule's
+/// corner radius rather than the frame's, so forced to 24 by 24 it came out a
+/// squircle: the one round control on the screen drawn as the only thing that
+/// is nearly round. `NSGlassEffectView` takes the radius as a number, so a
+/// circle is a circle.
+///
+/// Laid out by frame rather than by constraints, for the reason
+/// `ComposerWell` and `RecordButton` are: a glass view positions its own
+/// `contentView`, and anything pinned across that boundary is two systems
+/// fighting over one number.
+final class GlassIconButton: NSView {
+    /// The globe's diameter in the library window's toolbar, measured against
+    /// a screenshot of the two side by side rather than read off a constant:
+    /// a toolbar item's own frame is its slot in the row, which is taller and
+    /// wider than the glass it draws inside it.
+    static let size: CGFloat = 32
+
+    private let backdrop: NSView
+    private let button = NSButton(title: "", target: nil, action: nil)
+
+    var target: AnyObject? {
+        get { button.target }
+        set { button.target = newValue }
+    }
+    var action: Selector? {
+        get { button.action }
+        set { button.action = newValue }
+    }
+
+    init(symbol: String, describedAs description: String) {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = Self.size / 2
+            backdrop = glass
+        } else {
+            let vibrant = NSVisualEffectView()
+            vibrant.material = .hudWindow
+            vibrant.blendingMode = .withinWindow
+            vibrant.state = .active
+            vibrant.wantsLayer = true
+            vibrant.layer?.cornerRadius = Self.size / 2
+            vibrant.layer?.masksToBounds = true
+            backdrop = vibrant
+        }
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        button.isBordered = false
+        button.bezelStyle = .shadowlessSquare
+        button.imagePosition = .imageOnly
+        button.image = NSImage(systemSymbolName: symbol,
+                               accessibilityDescription: description)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        button.contentTintColor = .secondaryLabelColor
+
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            // The supported way in: the header says only `contentView` is
+            // guaranteed a place inside the effect.
+            glass.contentView = button
+            addSubview(glass)
+        } else {
+            addSubview(backdrop)
+            addSubview(button)
+            // Liquid Glass brings its own edge. Below it the circle is a flat
+            // blur with nothing separating it from the card it sits on.
+            backdrop.layer?.borderWidth = 1
+            backdrop.layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("no nib") }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: Self.size, height: Self.size)
+    }
+
+    override func layout() {
+        super.layout()
+        backdrop.frame = bounds
+        if button.superview === self { button.frame = bounds }
+    }
+
+    override func setAccessibilityLabel(_ label: String?) {
+        button.setAccessibilityLabel(label)
+    }
+
+    override var toolTip: String? {
+        get { button.toolTip }
+        set { button.toolTip = newValue }
+    }
+}
+
 /// What the pane says when there is nothing to ask with.
 ///
 /// It stands in the starter chips' place rather than over the conversation, and
@@ -2956,11 +3066,13 @@ final class SendButton: NSView {
 /// CLI was removed or logged out, and those are still worth reading. A block in
 /// the middle of the pane would cover them.
 ///
-/// Both buttons earn their space. `AgentCLI` caches its answer for the life
-/// of the process, so without "Check again" the reward for installing
-/// something is having to quit the app. "Set up Ask…" opens the wizard, which
-/// lays the options out with their trade-offs and finishes each one; the
-/// settings pane stays a gear-click away for whoever wants the facts instead.
+/// **One call to action and one way out, and the way out is a glyph.** It used
+/// to be two push buttons of equal weight sitting side by side, which asked a
+/// first-time reader to weigh "Set up Ask…" against "Not now" as though they
+/// were alternatives. They are not: one is the thing to do and the other is the
+/// corner of a card. So the setup button is the only button in the body, drawn
+/// in the accent on Liquid Glass, and dismissal is the round cross in the top
+/// right that every dismissible panel in this OS carries.
 private final class SetupNotice: NSView {
     /// Somebody has decided they do not want Ask after all. See `dismiss`.
     var onDismiss: (() -> Void)?
@@ -2969,15 +3081,23 @@ private final class SetupNotice: NSView {
     /// paragraph as wide as a full-screen window is one nobody finishes.
     static let maxWidth: CGFloat = 560
 
+    /// The card's own inset, which is also what `height(forWidth:)` adds back.
+    private static let inset: CGFloat = 16
+    private static let topInset: CGFloat = 14
+
     private let heading = NSTextField(wrappingLabelWithString: "")
     private let body = NSTextField(wrappingLabelWithString: "")
+    /// The small print under the button: what the cross does, and how to undo
+    /// it. In the card and not in the cross's tooltip, because a tooltip is
+    /// where you put something you have decided nobody needs to read, and the
+    /// one control here that turns a feature off is not that.
+    private let footnote = NSTextField(wrappingLabelWithString: "")
     // The wizard, not the settings pane. The pane states facts about what is
     // installed, which is the right surface for checking on a thing and the
     // wrong one for choosing: the first outside install stared at accurate
     // facts and had no path to a working composer. `AskSetupWizard` is the
     // path, and the pane stays one gear-click away for whoever wants facts.
-    private let settings = NSButton(title: "Set up Ask…",
-                                    target: nil, action: nil)
+    private let settings = NSButton(title: "Set up Ask", target: nil, action: nil)
     /// **The way out, and this card needed one.**
     ///
     /// It only appears once somebody has turned Ask on, so it is never the
@@ -2989,66 +3109,166 @@ private final class SetupNotice: NSView {
     /// It turns Ask off rather than hiding only itself, and those are the same
     /// thing said honestly. Hiding the card alone would leave a composer that
     /// cannot answer and nothing on screen saying why, which is the state this
-    /// card exists to prevent. The three buttons are the three answers: set it
-    /// up, look again, or not at all.
-    private let dismiss = NSButton(title: "Not now", target: nil, action: nil)
+    /// card exists to prevent.
+    ///
+    /// `xmark` in a circle rather than the words "Not now": the words read as
+    /// the second half of a choice, and this is not one. `footnote` is what
+    /// says where Ask goes, because a glyph cannot.
+    ///
+    /// The size is the globe's in this window's own toolbar, because that is
+    /// the round glass button a reader of this card has already met. A 24 point
+    /// one read as a dismissal for something small, and this card is the pane.
+    private let dismiss = GlassIconButton(symbol: "xmark", describedAs: "Not now")
+
+    /// The card's own material, and the reason the cross has a corner to sit
+    /// in. See `Self.panel`.
+    private let backdrop: NSView
+    /// Liquid Glass where the OS has it and the same `.hudWindow` vibrancy
+    /// below it, which is the pair `ComposerWell` and `RecordButton` already
+    /// use. This card stands in the composer's place, so it should be made of
+    /// what the composer is made of.
+    ///
+    /// **The card's material, and the drawer gives its own up for it.** The
+    /// version before this drew no background at all, on the reasoning that an
+    /// edge a few points inside the drawer's rounded panel reads as a frame
+    /// inside a frame. That reasoning is right and the conclusion was wrong:
+    /// the unbacked card paid for it twice, because on the Chats page the
+    /// drawer gives way to an opaque canvas and three paragraphs and a button
+    /// sat on bare ground with nothing to say they were one thing, and because
+    /// a dismissal in the top right corner needs a corner to be in.
+    ///
+    /// So the card carries the material and the drawer skips its own while the
+    /// card is up. One panel on both screens, which is the rule the whole app
+    /// follows: see `AskView.carriesOwnPanel` and the glass vocabulary table
+    /// in `.agents/notes/appkit.md`.
+    private static func panel(radius: CGFloat) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = radius
+            return glass
+        }
+        let vibrant = NSVisualEffectView()
+        vibrant.material = .hudWindow
+        vibrant.blendingMode = .withinWindow
+        vibrant.state = .active
+        vibrant.wantsLayer = true
+        vibrant.layer?.cornerRadius = radius
+        vibrant.layer?.masksToBounds = true
+        // Liquid Glass brings its own edge. Below it the panel is a flat blur
+        // with nothing separating it from the page behind.
+        vibrant.layer?.borderWidth = 1
+        vibrant.layer?.borderColor = NSColor.separatorColor.cgColor
+        return vibrant
+    }
 
     override init(frame: NSRect) {
+        backdrop = Self.panel(radius: 16)
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        // **No border of its own.** It used to draw one, from when it shared
-        // the drawer with the composer and had to read as a separate block
-        // above it. It is the only thing in the drawer now, so its edge landed
-        // a few points inside the drawer's own rounded panel: a card in a
-        // card, which is what it looked like.
-        layer?.cornerRadius = 12
 
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
-        body.font = .systemFont(ofSize: 12)
+        heading.font = .systemFont(ofSize: 15, weight: .semibold)
+        body.font = .systemFont(ofSize: 13)
+        footnote.font = .systemFont(ofSize: 11)
+        footnote.textColor = .tertiaryLabelColor
 
-        // **Two, and there used to be three.** The third was "Check again",
-        // which re-ran detection in place. It is inside the wizard as well,
-        // under the option it applies to, and a card with three calls to
-        // action asks the reader to choose between them before they have
-        // decided anything at all.
-        for button in [settings, dismiss] {
-            button.bezelStyle = .rounded
-            button.font = .systemFont(ofSize: 12)
+        // The one thing to do, in the accent, on the system's own glass. Large
+        // because it is the only control in the card and the card exists to be
+        // pressed; `Brand.tint` because every other primary surface in this app
+        // is that blue and the system's would be the one that is not.
+        settings.controlSize = .large
+        if #available(macOS 26.0, *) {
+            settings.bezelStyle = .glass
+        } else {
+            settings.bezelStyle = .rounded
         }
+        settings.bezelColor = Brand.tint
         settings.target = self
         settings.action = #selector(openSettings)
+
         dismiss.target = self
         dismiss.action = #selector(notNow)
-        // What "not now" is declining, because the two words on their own are
-        // the same two words the join offer uses. See the note there.
+        // What "not now" is declining, because the glyph on its own is the same
+        // glyph three other controls in this window use. See the note there.
         dismiss.setAccessibilityLabel("Not now, put Ask away")
+        dismiss.toolTip = "Put Ask away"
 
-        let buttons = NSStackView(views: [settings, dismiss])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
+        // The heading and the cross share the top line, which is where a card's
+        // dismissal belongs: level with the first thing to read, not below the
+        // last. `topRow` is the only horizontal stack here, so the two labels
+        // under it still wrap to the card's full width.
+        let topRow = NSStackView(views: [heading, dismiss])
+        topRow.orientation = .horizontal
+        // Centres, not baselines. A 32 point circle has no baseline worth
+        // aligning to: `.firstBaseline` hangs it off the heading's and the
+        // whole 14 points of difference lands underneath, which opens a gap
+        // between the heading and the body that reads as a missing line.
+        topRow.alignment = .centerY
+        topRow.spacing = 8
+        topRow.distribution = .fill
+        heading.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        dismiss.setContentHuggingPriority(.required, for: .horizontal)
+        dismiss.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let column = NSStackView(views: [heading, body, buttons])
+        // A row of one, so the button keeps its intrinsic width inside a
+        // vertical stack that stretches everything else to the card.
+        let actions = NSStackView(views: [settings])
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+
+        let column = NSStackView(views: [topRow, body, actions, footnote])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 8
+        // The button is a block of its own, and the small print under it is a
+        // caption on that block rather than a fourth paragraph.
+        column.setCustomSpacing(12, after: body)
+        column.setCustomSpacing(6, after: actions)
         column.translatesAutoresizingMaskIntoConstraints = false
+
+        // **The material goes behind the column, not around it.**
+        // `NSGlassEffectView` positions its `contentView` itself, so handing
+        // the column over cuts the only chain of constraints that ties this
+        // card's height to the words in it. Measured: the card took the whole
+        // drawer, the heading landed on its bottom edge and the body was off
+        // the end of it, which is `appkit.md`'s "a view with no intrinsic size,
+        // laid out by frame, is solved at zero" arriving from the other
+        // direction. So the glass is a sibling under the column, sized by
+        // frame in `layout`, and the column stays pinned to the card.
+        addSubview(backdrop)
         addSubview(column)
 
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 14),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            // Both labels wrap to the card rather than to their own strings. A
-            // vertical stack gives an arranged subview the width it asks for,
-            // and a wrapping label asks for its whole sentence on one line.
-            heading.widthAnchor.constraint(equalTo: column.widthAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor,
+                                        constant: Self.topInset),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor,
+                                           constant: -Self.topInset),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                            constant: Self.inset),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                             constant: -Self.inset),
+            // The two wrapping labels and the top row wrap to the card rather
+            // than to their own strings. A vertical stack gives an arranged
+            // subview the width it asks for, and a wrapping label asks for its
+            // whole sentence on one line.
+            topRow.widthAnchor.constraint(equalTo: column.widthAnchor),
             body.widthAnchor.constraint(equalTo: column.widthAnchor),
+            footnote.widthAnchor.constraint(equalTo: column.widthAnchor),
+            dismiss.widthAnchor.constraint(equalToConstant: dismissWidth),
+            dismiss.heightAnchor.constraint(equalToConstant: dismissWidth),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("no nib") }
+
+    /// The material fills the card. By frame, because the column above it is
+    /// what the card's own height is solved from and a second view pinned to
+    /// the same edges is a second opinion about that number.
+    override func layout() {
+        super.layout()
+        backdrop.frame = bounds
+    }
 
     /// The height this card needs when it is `width` points wide.
     ///
@@ -3066,16 +3286,25 @@ private final class SetupNotice: NSView {
     /// it is going to be given. `Pane.layout` carries the same trap, in the
     /// same words: a note left at the old width reports the old height.
     ///
-    /// The 32 is the two 16-point insets the column is pinned inside.
+    /// The heading shares its line with the cross, so it wraps into what is
+    /// left of the card rather than into all of it.
+    ///
     func height(forWidth width: CGFloat) -> CGFloat {
-        let content = max(0, width - 32)
-        for label in [heading, body]
-        where abs(label.preferredMaxLayoutWidth - content) > 0.5 {
-            label.preferredMaxLayoutWidth = content
+        let inner = max(0, width - 2 * Self.inset)
+        for label in [body, footnote]
+        where abs(label.preferredMaxLayoutWidth - inner) > 0.5 {
+            label.preferredMaxLayoutWidth = inner
+        }
+        let headingWidth = max(0, inner - dismissWidth - 8)
+        if abs(heading.preferredMaxLayoutWidth - headingWidth) > 0.5 {
+            heading.preferredMaxLayoutWidth = headingWidth
         }
         layoutSubtreeIfNeeded()
         return fittingSize.height
     }
+
+    /// The cross, which the heading has to wrap around.
+    private let dismissWidth: CGFloat = GlassIconButton.size
 
     /// Say the shortest true thing about why nothing can be asked.
     ///
@@ -3084,63 +3313,83 @@ private final class SetupNotice: NSView {
     /// one command apart and the wrong sentence sends somebody to install
     /// something they already have.
     /// **Two kinds of "there but not usable", and they are not one sentence.**
-    /// A CLI that was never signed into is one command away, and naming that
-    /// command is the whole value of this card. An endpoint that is not
-    /// answering is a server to start or a URL to correct, and `refused` is
-    /// what tells those apart without this card parsing prose meant for a
-    /// settings row.
+    /// A CLI that was never signed into is one sign-in away, and saying so is
+    /// the whole value of this card. An endpoint that is not answering is a
+    /// server to start or a URL to correct, and `refused` is what tells those
+    /// apart without this card parsing prose meant for a settings row.
     ///
     /// The signed-out CLIs win when both kinds are present, because that is the
-    /// one with a command in it.
+    /// one a person can finish from here.
     func show(_ statuses: [AgentStatus]) {
         isHidden = false
         let out = statuses.filter { $0.path != nil && $0.signedIn == false }
         guard !out.isEmpty else {
-            // Plain language first: this card is most often read by somebody
-            // who never chose a CLI and never will. The npm and ollama
-            // sentences that used to live here moved into the wizard, where
-            // each appears only under the option that needs it.
-            heading.stringValue = "Pick what answers your questions"
-            say("Ask is on, and it needs something to do the answering. "
-                + "It takes about a minute, and each option says what it costs.")
+            // **The offer, not the requirement.** This card is most often read
+            // by somebody who has never chosen an AI and does not think of
+            // themselves as somebody who would. So it opens on what they get
+            // rather than on what Ask lacks, and the install commands stay in
+            // the wizard, under the option that needs them.
+            //
+            // **"Conversations", never "recordings", and never a meeting you
+            // missed.** Recording is the input; the thing being offered is the
+            // memory it builds. Everything in this library was recorded by the
+            // person reading this card, who was in the room for all of it, so
+            // copy about catching up on what you missed describes a product
+            // this is not. The word is also the category: see
+            // `.agents/product-marketing-context.md`, which puts the wedge at
+            // "conversation-first second brain" and warns in as many words
+            // against framing Listen as a meeting recorder.
+            //
+            // The two questions are from that document's own customer
+            // language, and they are a pair rather than a list because they
+            // are the two halves of what gets recorded here: the call where
+            // something was settled, and the session where something was
+            // thought up. The last sentence is the difference between this and
+            // a summary, which is the objection the same document answers
+            // under "Can I trust what the AI remembers?".
+            heading.stringValue = "Ask your conversations anything"
+            cta("Set up Ask")
+            say("What did we decide? Where did that idea come from? "
+                + "Every answer is linked back to the moment it was said.")
+            note("Takes about a minute.")
             return
         }
         let signedOut = out.filter { $0.backend.isCLI }
         guard signedOut.isEmpty else {
-            heading.stringValue = signedOut.map(\.name).joined(separator: " and ")
-                + (signedOut.count == 1 ? " is" : " are") + " installed but not signed in"
-            // No "check again" in the sentence any more: the button that did
-            // it is gone, and the wizard re-runs detection on the way in.
-            say("Run " + signedOut.compactMap { status in
-                    status.backend.signInCommand.map { "`\($0)`" }
-                }.joined(separator: " or ")
-                + " in a terminal, then Set up Ask to finish.")
+            let names = signedOut.map(\.name).joined(separator: " and ")
+            heading.stringValue = "One more step to finish setting up"
+            cta("Finish setup")
+            // No terminal command in the card any more. The wizard states it
+            // under the option it belongs to, with a button that copies it,
+            // which is a better place to meet it than a sentence somebody has
+            // to retype. See `AskSetupWizard.buildCLI`.
+            say("\(names) \(signedOut.count == 1 ? "is" : "are") already on this "
+                + "Mac and just needs you to sign in. Setup walks you through it.")
+            note("Takes about a minute.")
             return
         }
         // Only the endpoint is left, and it is configured and silent.
         let endpoint = out[0]
-        heading.stringValue = "\(endpoint.name) is not answering"
+        cta("Open setup")
         if endpoint.refused {
-            say("It is there, and it refused the key. Settings › Ask is where to "
-                + "change it.")
+            heading.stringValue = "\(endpoint.name) turned down the key"
+            say("The server answered, but it would not take the key it was "
+                + "given. Settings › Ask is where to change it.")
+            note("")
         } else {
-            say("Nothing answered at `\(endpoint.path?.absoluteString ?? "the base URL")`. "
-                + "Start the server, with `ollama serve` or whatever runs yours.")
+            heading.stringValue = "\(endpoint.name) is not answering"
+            say("Nothing came back from `\(endpoint.path?.absoluteString ?? "the base URL")`. "
+                + "Start the server, with `ollama serve` or whatever runs yours, "
+                + "and try again.")
+            note("")
         }
     }
 
     /// The app's own renderer, for the one thing the copy needs it for: a
-    /// command in a sentence, set in the face a command is set in.
+    /// command or a URL in a sentence, set in the face one is set in.
     private func say(_ markdown: String) {
-        // **Appended to every branch rather than written into one**, because
-        // the button is on all three and a control whose effect is not stated
-        // is one nobody dares press. In the body and not in a tooltip, for the
-        // reason the rest of this app's copy is: a tooltip is where you put
-        // something you have decided nobody needs to read.
         let text = NSMutableAttributedString(
-            attributedString: MarkdownText.attributed(
-                markdown + " Not now puts Ask away, and Settings › Ask "
-                    + "brings it back.", width: 12))
+            attributedString: MarkdownText.attributed(markdown, width: 13))
         // Every paragraph carries the newline it ended with, and the last one
         // would be a blank line inside the card.
         while let last = text.string.last, last.isNewline {
@@ -3149,6 +3398,27 @@ private final class SetupNotice: NSView {
         text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
                           range: NSRange(location: 0, length: text.length))
         body.attributedStringValue = text
+    }
+
+    /// The caption under the button. Always states what the cross does, because
+    /// the cross is the one control here whose effect is a feature going away.
+    private func note(_ prefix: String) {
+        let close = "Closing this hides Ask. Settings › Ask brings it back."
+        footnote.stringValue = prefix.isEmpty ? close : prefix + " " + close
+        footnote.isHidden = false
+    }
+
+    /// The call to action's title, in the colour the accent takes text in.
+    ///
+    /// An attributed title and not `title`: `contentTintColor` moves a button's
+    /// symbol and leaves its words alone, so the plain setter left white text
+    /// on `Brand.accent` at 3.63:1. `Brand.onAccent` is the pairing the website
+    /// ships and it measures 5.35:1. See the note there.
+    private func cta(_ title: String) {
+        settings.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: Brand.onAccent,
+        ])
     }
 
     @objc private func openSettings() { AskSetupWizard.shared.present() }

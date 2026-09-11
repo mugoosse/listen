@@ -2973,6 +2973,85 @@ that cannot answer with nothing on screen saying why, which is the state the
 card exists to prevent.
 
 
+## The setup card is a consumer offer now, and the words were the bigger half
+
+Two changes, and the copy is the one that mattered. What the card said before
+was accurate and inward-facing: "Pick what answers your questions", then "Ask
+is on, and it needs something to do the answering. It takes about a minute, and
+each option says what it costs. Not now puts Ask away, and Settings > Ask
+brings it back." Every clause of that is about Listen's own state. The reader
+of this card is somebody who has never chosen an AI and does not think of
+themselves as somebody who would, so it opens on what they get instead:
+
+- **Nothing configured.** "Ask your conversations anything" over "What did we
+  decide? Where did that idea come from? Every answer is linked back to the
+  moment it was said."
+
+  **Conversations, never recordings, and never a meeting you missed.** The
+  first draft of this said "Ask your recordings anything" over "Catch up on a
+  meeting you missed", and both halves were wrong about the product. Recording
+  is the input; what is being offered is the memory built out of it. And every
+  recording in this library was made by the person reading the card, who was in
+  the room for all of it: there is no meeting here that anybody missed, so that
+  sentence describes a bot-joins-your-call product Listen deliberately is not.
+  `.agents/product-marketing-context.md` puts the category at
+  "conversation-first second brain" and warns against framing Listen as a
+  meeting recorder in as many words.
+
+  The two questions are that document's own customer language, and they are a
+  pair rather than a list because they are the two halves of what gets recorded
+  here: the call where something was settled, and the session where something
+  was thought up. The last sentence is the difference between this and a
+  summary, which is the objection the same document answers under "Can I trust
+  what the AI remembers?".
+
+  The galaxy is deliberately not mentioned. This card has one decision on it.
+- **A CLI installed and signed out.** "One more step to finish setting up" over
+  "Claude Code is already on this Mac and just needs you to sign in. Setup
+  walks you through it." The terminal command is gone from the card: it is in
+  the wizard, under the option it belongs to, next to a button that copies it,
+  which is a better place to meet `claude auth login` than a sentence somebody
+  has to retype. See `AskSetupWizard.buildCLI`.
+- **An endpoint that will not answer.** Unchanged in substance, because a
+  server that is down is a fact and not an offer, but "turned down the key"
+  rather than "refused the key" and "is not answering" kept as it was.
+
+The button says what happens next rather than naming a screen: "Set up Ask",
+"Finish setup", "Open setup". The time estimate moved out of the paragraph into
+the small print under the button, where a reader who has already decided does
+not have to walk past it.
+
+**One call to action, and the way out is a glyph.** The two `.rounded` push
+buttons side by side asked a first-time reader to weigh "Set up Ask..." against
+"Not now" as though they were alternatives. They are not: one is the thing to
+do and the other is the corner of a card. So the setup button is the only
+button in the body, drawn in `Brand.tint` on a glass bezel, and dismissal is a
+`GlassIconButton` in the top right at the size of the globe in this window's
+own toolbar. A 24 point one was tried first and read as the dismissal for
+something small; this card is the whole pane.
+
+**The glyph still turns Ask off, so the card has to say so in words.** That is
+what the tertiary footnote is for: "Closing this hides Ask. Settings > Ask
+brings it back." Not a tooltip on the cross. A tooltip is where you put
+something you have decided nobody needs to read, and the one control here whose
+effect is a feature disappearing is not that.
+
+**The card carries its own material now, and the drawer stops drawing one.**
+See `AskView.carriesOwnPanel`, and the glass vocabulary table in
+`.agents/notes/appkit.md` for why nesting the two was never an option. The
+unbacked version was legible on the home page, where the drawer's panel stood
+in for a card, and was three loose paragraphs on bare canvas on the Chats page,
+where the drawer gives way to `pageBackground`. One card, one material, both
+screens.
+
+**`Brand.onAccent` is not optional on the CTA.** `contentTintColor` moves a
+button's symbol and leaves its words alone, so the first version had white text
+on `Brand.accent` at 3.63:1. The title is an `NSAttributedString` carrying
+`Brand.onAccent`, which measures 5.35:1. This file's own note and
+`appkit.md`'s "an attributed title's colour wins over `contentTintColor`" are
+the same fact read from two directions.
+
+
 ## The cross's `putAway` was inverted, and the bug it was chased for is still open
 
 > **Superseded: the card is gone.** See "A question goes to the page, and

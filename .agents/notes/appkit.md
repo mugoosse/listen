@@ -955,3 +955,61 @@ A view positioned by frame wants `translatesAutoresizingMaskIntoConstraints =
 true`, which is the default, so the fix is to delete the line rather than to add
 one. The reason it is stated explicitly in `buildComposer` instead is that the
 false was there for years and reads as deliberate.
+
+## Liquid Glass is a vocabulary, and the rule is one material per layer
+
+Nothing in AppKit stops you putting glass inside glass, and this app has drawn
+the frame-inside-a-frame twice to find that out. The vocabulary, so the next
+surface does not re-derive it:
+
+| Surface | Material | Built by |
+|---|---|---|
+| Toolbar items (gear, ellipsis, globe, cross) | The toolbar's own | macOS, for free, from a plain `NSToolbarItem` |
+| The record capsule | `NSGlassEffectView` | `RecordButton` |
+| The composer well | `NSGlassEffectView` | `ComposerWell` |
+| The Ask drawer's panel | `NSGlassEffectView` | `DetailWithComposer.glassPanel` |
+| The Ask setup card | `NSGlassEffectView` | `SetupNotice.panel` |
+| A round icon button off the toolbar | `NSGlassEffectView`, radius = size / 2 | `GlassIconButton` |
+| Everything on macOS 25 and earlier | `NSVisualEffectView`, `.hudWindow`, `.withinWindow`, plus a 1pt `separatorColor` border | each of the above |
+
+Four things are worth stating once rather than rediscovering:
+
+**`.hudWindow` and `.withinWindow`, never `.underWindowBackground` and never
+`.behindWindow`.** `.underWindowBackground` is opaque enough that the page
+behind it stops existing, which defeats the point of a drawer; `.behindWindow`
+samples the desktop rather than the view underneath, so inside a window it
+blurs the wrong thing.
+
+**The fallback needs a border and Liquid Glass does not.** Glass brings its own
+edge and shadow. A `.hudWindow` blur below macOS 26 is a flat wash with nothing
+separating it from what it sits on, so every fallback branch adds
+`borderWidth = 1` in `separatorColor`, and every glass branch must not.
+
+**Only `contentView` is guaranteed a place inside the effect.** The header says
+so, and `RecordButton`, `ComposerWell` and `GlassIconButton` all go through it.
+The cost is that a glass view positions its content itself, so anything pinned
+across that boundary is two systems fighting over one number, and the content
+inside is laid out by frame.
+
+That cost has a second edge, paid on the setup card: handing the card's column
+to `contentView` cut the only chain of constraints tying the card's height to
+the words in it, and the card took the whole drawer with its heading on the
+bottom edge. Where a view's own height has to be solved from its contents, the
+glass goes **behind** as a sibling, sized by frame in `layout`, and the content
+stays pinned to the view. That is this file's "a view with no intrinsic size,
+laid out by frame, is solved at zero", arriving from the other direction.
+
+**A square `bezelStyle = .glass` button is a squircle, not a circle.** AppKit
+gives a glass bezel a capsule's corner radius rather than the frame's, so a
+24 by 24 button with an `xmark` in it comes out the only nearly-round thing on
+the screen. `NSGlassEffectView.cornerRadius` takes a number, so a circle is a
+circle: that is what `GlassIconButton` is for, and it is what an icon button
+outside a toolbar should be made of.
+
+**Glass is never nested.** A panel inside a panel reads as a frame drawn a few
+points inside a frame whether the inner edge is a hairline or a material. Where
+two would stack, the inner one wins and the outer one is hidden: the Ask drawer
+asks `AskView.carriesOwnPanel` and skips its own panel while the setup card is
+up. The drawer's glass exists because the starter chips have no material of
+their own; the card has one, so the drawer's is redundant rather than
+decorative.

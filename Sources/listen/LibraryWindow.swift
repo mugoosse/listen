@@ -3103,8 +3103,11 @@ final class DetailWithComposer: NSViewController {
         // **And no glass at all on a page.** A material exists to say what is
         // behind it; on a page nothing is, so the glass would be a blur of a
         // transcript the reader has just asked to be rid of.
-        backdrop.isHidden = page || (!composer.hasConversation
-            && !composer.isActive)
+        //
+        // **And none around the setup card, which brings its own.** See
+        // `AskView.carriesOwnPanel`.
+        backdrop.isHidden = page || composer.carriesOwnPanel
+            || (!composer.hasConversation && !composer.isActive)
         pageBackground.isHidden = !page
         // Hidden rather than merely covered. An opaque background is enough for
         // the eye, and not for accessibility: a transcript still in the tree

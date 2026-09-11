@@ -8,6 +8,114 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.40.0 (2026-09-11)
+
+Ask takes dictation and more than one line, a correction proposed about somebody
+can be answered where the evidence for it is, and the tools an agent can reach
+now match what the window and the command line can already do.
+
+### Asking out loud
+
+The Ask composer gets a microphone between the model chooser and the send
+button. It runs the same dictation the keyboard chord runs: the same pill, the
+same model, the same dictionary and the same polish pass. Two things are its
+own, and both are about where the words land. The caret goes into the field
+before anything is listening, and the transcript is handed straight to the field
+rather than pasted, so whatever you had copied stays on the clipboard and
+nothing about the delivery needs the Accessibility grant.
+
+The button shows listening only for its own dictation. Start the chord over
+another app while Ask is open and the button is drawn inert, because a
+microphone lighting up here for words going into somebody else's editor would be
+a lie about where they end up.
+
+### A question that does not fit on one line
+
+Return sends and Shift+Return breaks the line, up to six lines, after which the
+well scrolls. That meant replacing the single-line text field the composer was
+built on: on `NSCell`, wrapping and scrolling are mutually exclusive, so a
+wrapping field would have clipped everything past the cap with no way to reach
+the caret.
+
+Selecting a question and carrying the pointer out of the well used to scroll the
+text up against the top or bottom edge of the capsule and leave it there. One
+line in a 52 point well is a document smaller than the thing clipping it, which
+is the case `NSClipView` does not clamp, so the offset it was offered was the
+offset it took. The text is pinned now whenever it fits, and left alone past the
+six line cap, where the document really is taller than the well and the
+scrolling is the point.
+
+### Turning Ask on
+
+The card that stands in the composer's place before you have chosen something to
+answer with used to open on "Pick what answers your questions", then explain
+that Ask was on and needed an answerer. Every clause of that was about Listen's
+own state, read by somebody who has never chosen an AI and does not think of
+themselves as somebody who would. It opens on what they get instead, and signing
+in is a wizard rather than a `claude auth login` printed at them, though the
+command is still there under the option it belongs to, beside a button that
+copies it.
+
+It is made of the system's material now as well. It drew no background at all,
+which read as a card only on the home page, where the drawer's panel stood in
+for one, and was three loose paragraphs on bare canvas on the Chats page.
+
+### What an agent can reach
+
+Somebody asked Ask to fix a transcription and was told there was no tool for it,
+which was true. Auditing the rest of the MCP surface against the command line
+and the window found more of the same shape, so they are closed together. Seven
+new tools, costing 4.2 KB of per-turn schema rather than the 8 KB they would
+have, because the five fattest existing descriptions were trimmed first: 22,485
+bytes of a 24,000 byte budget.
+
+The dictionary is writable, split so that the reversible half is the agent's and
+the one-way half is not. Adding a rule changes nothing that already exists.
+Rewriting the transcripts behind it is `apply_dictionary_backfill`, and it
+refuses unless it carries the sentence total its own preview returned, so the
+write cannot be reached without first producing the lines a person reads.
+
+The reads it was missing: provenance on `get_recording`, which is how far to
+trust a transcript; note bodies searchable through `list_notes`; the calendar;
+past Ask conversations; and how much of the library person memory has actually
+read. `list_upcoming` reports whether the calendar is authorized separately from
+what is on it, because an unauthorized Mac and a clear afternoon are otherwise
+the same empty list.
+
+`suggest_context_correction` proposes a fix to something the library believes
+about a person and cannot apply one. That stays a decision somebody makes.
+
+### Answering a correction where the evidence is
+
+Which is the other half. A proposal told the model it was waiting for the user,
+and for anybody who does not run `listen context suggestions` that was false:
+proposals would have collected in a file nothing pointed at.
+
+The proposal sits under the claim on the person's own page, because a proposed
+rewrite is only assessable against the quote it came from, and that is one
+disclosure away. Accepting it there, from the command line, or through the tool
+are three routes to one write. People & Memory counts what is waiting and names
+whose page to open.
+
+### An update that was already waiting
+
+A staged update stalls Sparkle's update cycle, and Sparkle will not look at the
+feed again until that one is installed, so Check for Updates was dead for as
+long as a version sat waiting. The menu offers the install and names the version
+instead, coming back to the app raises it with Install and Relaunch, and a real
+check at launch stops a copy that has just updated from sitting six hours behind
+the next release.
+
+### Crash reports carry symbols again
+
+0.39.0 uploaded none. The release script required an environment variable that
+`posthog-cli login` does not set, so a machine that was installed and
+authenticated skipped the upload and reported the key as missing, which reads
+like setup nobody had done. Either source counts now. 0.39.0's symbols were
+recoverable, but only because the build directory still held the dSYM it was
+built with: a dSYM is keyed to the binary's UUID, and one rebuild would have
+ended it.
+
 ## 0.39.0 (2026-09-11)
 
 Listen says what is coming up and can prepare you for it, the whole library can

@@ -26,6 +26,12 @@
 //                                    it, because AXShowMenu on a toolbar item
 //                                    in a window that is not key succeeds and
 //                                    does nothing
+//   axprobe statusmenu <pid>         open the menu bar item's menu and dump it,
+//                                    one line per row, then close it again.
+//                                    The status item is NOT under the app's
+//                                    AXChildren, so `texts` cannot see it: it
+//                                    hangs off AXExtrasMenuBar, which is a
+//                                    separate attribute and the only way in
 //
 // Exit 3 means this terminal has no Accessibility permission, which is a fact
 // about the harness and not about the build.
@@ -295,6 +301,40 @@ case "activate":
     }
     print("not active")
     exit(1)
+
+case "statusmenu":
+    // The status item is the one surface of this app that `texts` is blind to.
+    // An application element's AXChildren are its windows and its menu bar;
+    // a menu bar extra hangs off AXExtrasMenuBar instead, one element with one
+    // child and one action.
+    guard let extras = attribute(app, "AXExtrasMenuBar"),
+          CFGetTypeID(extras) == AXUIElementGetTypeID(),
+          let item = children(extras as! AXUIElement).first else {
+        FileHandle.standardError.write(Data("no menu bar item for this pid\n".utf8))
+        exit(4)
+    }
+    // AXPress opens it. The rows exist in the tree only while it is open, which
+    // is the same rule the toolbar's menus follow.
+    AXUIElementPerformAction(item, kAXPressAction as CFString)
+    RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+    var rows = 0
+    walk(item, budget: &budget) { element in
+        let role = string(element, kAXRoleAttribute)
+        let title = string(element, kAXTitleAttribute)
+        let value = (attribute(element, kAXValueAttribute) as? String) ?? ""
+        let described = string(element, kAXDescriptionAttribute)
+        if !title.isEmpty || !value.isEmpty || !described.isEmpty {
+            print("\(role)\t\(title)\t\(value)\t\(described)")
+            rows += 1
+        }
+        return true
+    }
+    // Press again to close. An app left in a menu tracking loop answers
+    // nothing else, and the next command in the script would read an empty
+    // tree and look like a broken build.
+    AXUIElementPerformAction(item, kAXPressAction as CFString)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    exit(rows == 0 ? 4 : 0)
 
 case "hasclose":
     guard arguments.count >= 4 else { exit(2) }

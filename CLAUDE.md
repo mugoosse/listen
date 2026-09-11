@@ -750,6 +750,8 @@ PostHog project.
 - The launch probe was what stopped the automatic install
 - The dot is restored from disk, and never from the network
 - Install on quit is a promise an app you never quit cannot keep
+- A staged version is a blind window, and a greyed Check for Updates was all it said
+- The launch check is back, and it is not the probe that was deleted
 - `LISTEN_UPDATE_READY`, because publishing a release is not a test
 - The badged control has to answer its own badge
 - The changelog is the only place release notes are written
@@ -881,6 +883,16 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # of the transcript (that last one is read from the
                         # `LISTEN_DEBUG` trace, because where a page scrolled to
                         # is invisible to the AX tree)
+./verify_update_offer.sh # what happens to a version that is downloaded and
+                        # waiting: the offer raised when somebody comes back to
+                        # the app, Later being honoured, the menu row that
+                        # replaces a check Sparkle cannot run, the Updates
+                        # pane, the install itself, and the launch check
+                        # stamping `SULastCheckTime` only when checking is on.
+                        # Runs off `LISTEN_UPDATE_READY`, so it needs no
+                        # release and no network; the one thing it cannot
+                        # reproduce is Sparkle's stall, which is what greys the
+                        # real menu row (uitest copy)
 ./verify_upcoming.sh    # what is coming up: which meetings are listed and
                         # which are dropped by which rule, the twelve hour
                         # horizon and the fifteen minute lateness, what the
@@ -913,8 +925,18 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
 ```
 
 The AX-driven ones share `tools/axprobe.swift`, compiled on demand into
-`.xcbuild/tools/axprobe`: texts, press, showmenu, activate, focus, settext, selectrow,
-frame, hasclose, all through `AXUIElementCreateApplication(pid)` per the rule above.
+`.xcbuild/tools/axprobe`: texts, press, showmenu, statusmenu, activate, focus,
+settext, selectrow, frame, hasclose, all through
+`AXUIElementCreateApplication(pid)` per the rule above.
+**`statusmenu` is the only way to read the menu bar item.** An application
+element's `AXChildren` are its windows and its menu bar, and a menu bar extra
+is none of those: it hangs off `AXExtrasMenuBar`, a separate attribute, so
+`texts` is blind to the whole status menu and always was. `statusmenu` presses
+the item, dumps the rows while they exist, and presses again to close, because
+an app left in a menu tracking loop answers nothing else afterwards. Two things
+follow from opening it: it takes the front away from the window, so
+**`activate` again before pressing anything in the window** or the press
+reports success and does nothing, the same trap `showmenu` has.
 **`showmenu` is not a nicety.** The toolbar's ellipsis is an
 `NSMenuToolbarItem` and the recording screen's two pull-downs are
 `NSPopUpButton`s, and none of them opens on `AXPress`: the call returns
@@ -930,7 +952,11 @@ command by hand works every time. Retrying the command is worse than useless,
 since `AXShowMenu` on an open menu closes it: activate, open once, then poll
 the tree, which is the only one of the three that is safe to repeat. One run in
 three failed on `verify_upcoming.sh` before this, at one, two and three second
-waits alike. **`frame` answers where.** A `texts` dump reads every
+waits alike. **`activate` may need asking twice, and it is safe to.** A
+background process activating another app is not always granted on the first
+ask, and a run where it was not looks exactly like a window that never drew or
+an alert that never appeared: `verify_update_offer.sh` loops until the command
+answers `active`. **`frame` answers where.** A `texts` dump reads every
 string on a window and can say nothing about what landed on top of what, so a
 control sitting under the traffic lights passes every assertion in it; `frame`
 prints an element's screen rect, and the galaxy's legend moving out from under
@@ -1033,6 +1059,14 @@ It gets its own defaults domain, so setup runs from the top every time, and
 copy of `/Applications/Listen.app` is how the download bug was shown to be in
 the shipped build rather than only in the reading of it, which is worth the two
 minutes: a claim about a released binary is not something to make from a diff.
+
+**One defaults domain, so two AX scripts must not run at once.** Every script
+above drives a copy under `com.mgo.listen-uitest` and deletes that domain
+between runs, so a second run wipes the first one's setup mid-flight: measured
+as `verify_update_offer.sh` coming up on the welcome screen because another
+script had just deleted `onboarded`, which reads as a broken build rather than
+as a collision. That script takes `LISTEN_UITEST_ID` for a domain of its own
+when two have to overlap, which is worth copying if it happens again.
 
 Do not press "Allow microphone" in that copy. A new bundle identifier is a new
 TCC subject, so it raises a real system prompt; "Skip" reaches the model step

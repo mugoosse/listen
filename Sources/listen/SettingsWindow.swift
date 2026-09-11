@@ -1589,8 +1589,11 @@ final class UpdatesPane: Pane {
             let blocker = Updater.shared.installNowBlocker
             installButton.isEnabled = blocker == nil
             installNote.stringValue = blocker
-                ?? "Listen quits and comes straight back on the new version. "
-                 + "Leaving it will install the same version the next time you quit."
+                ?? "Listen quits and comes straight back on the new version, and "
+                 + "checking resumes once it has: a version that is already "
+                 + "downloaded is the only one Listen can act on, which is why "
+                 + "Check Now is grey. Leaving it will install the same version "
+                 + "the next time you quit."
         }
 
         if let date = Updater.shared.lastCheck {

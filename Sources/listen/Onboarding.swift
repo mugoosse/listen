@@ -47,6 +47,12 @@ final class Onboarding: NSObject, NSWindowDelegate {
     }
 
     private var window: NSWindow?
+
+    /// Whether setup is on screen. Read by `Updater.offerStagedUpdate`, which
+    /// must not put an alert over a flow that has a position in it, nor
+    /// relaunch out of one halfway through.
+    var isShowing: Bool { window?.isVisible == true }
+
     private var step: Step = .welcome
     private var body: NSStackView!
     private var titleLabel: NSTextField!

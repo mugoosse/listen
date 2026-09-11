@@ -235,6 +235,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // all. The dot the probe existed for is restored from disk instead, by
         // `Updater.recall`, which asks nobody.
         _ = Updater.shared
+        // One real check now, which is a different thing from the probe that
+        // was deleted: see `Updater.checkAtLaunch`. It is what makes launching
+        // Listen the moment it finds out, and what stops the copy that just
+        // installed an update from sitting six hours behind the next one.
+        Updater.shared.checkAtLaunch()
 
         // Last, so a series of shots catches a launch that has already queued
         // whatever was pending.
@@ -665,12 +670,28 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         prefs.image = symbol("gearshape")
         menu.addItem(prefs)
 
-        let update = NSMenuItem(title: "Check for Updates…",
+        // While a version is downloaded and waiting, checking is the one thing
+        // Sparkle will not do: the staged update stalls the cycle, so
+        // `canCheckForUpdates` is false and stays false until it is installed.
+        // This row was greyed for all of that time, which reads as "this app
+        // cannot check any more" rather than "there is nothing left to check
+        // for", and the way out was in Settings. The verb that is actually
+        // available goes here instead, named after the version it will install.
+        let update: NSMenuItem
+        if case .ready(let version) = Updater.shared.outcome {
+            update = NSMenuItem(title: "Update to \(version)…",
+                                action: #selector(Updater.installUpdate(_:)),
+                                keyEquivalent: "")
+            update.isEnabled = true
+            update.image = symbol("arrow.down.circle")
+        } else {
+            update = NSMenuItem(title: "Check for Updates…",
                                 action: #selector(Updater.checkForUpdates(_:)),
                                 keyEquivalent: "")
+            update.isEnabled = Updater.shared.canCheck
+            update.image = symbol("arrow.triangle.2.circlepath")
+        }
         update.target = Updater.shared
-        update.isEnabled = Updater.shared.canCheck
-        update.image = symbol("arrow.triangle.2.circlepath")
         menu.addItem(update)
 
         let about = NSMenuItem(title: "About Listen", action: #selector(openAbout),

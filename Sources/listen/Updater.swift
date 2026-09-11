@@ -44,6 +44,16 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
             if outcome != oldValue {
                 remember()
                 NotificationCenter.default.post(name: Self.outcomeChanged, object: self)
+                // A version that finishes downloading while somebody is
+                // looking at Listen is offered there and then, rather than
+                // waiting for a quit. Asynchronously, because this is set from
+                // inside Sparkle's own delegate callback and an alert raised on
+                // that stack runs a modal run loop inside it.
+                if isReady {
+                    DispatchQueue.main.async { [weak self] in
+                        MainActor.assumeIsolated { self?.offerStagedUpdate() }
+                    }
+                }
             }
         }
     }
@@ -71,6 +81,13 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
         controller = SPUStandardUpdaterController(
             startingUpdater: true, updaterDelegate: self, userDriverDelegate: self)
         if !stageFakeUpdate() { recall() }
+        // Coming back to Listen is the moment to offer what is already on
+        // disk. For an app that opens at login and is never quit, that is the
+        // only "opening it again" there is, and it is the one other updaters
+        // use. See `offerStagedUpdate`.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appBecameActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
     /// `LISTEN_UPDATE_READY=<version>` puts this into the state only a real
@@ -104,6 +121,33 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
 
     /// Human-readable last check, for Settings.
     var lastCheck: Date? { controller.updater.lastUpdateCheckDate }
+
+    /// Ask once at launch, because opening an app is when somebody expects it
+    /// to know whether it is current.
+    ///
+    /// **This is not the probe that was deleted, and the difference is the
+    /// whole reason it is safe.** `checkForUpdateInformation` downloads
+    /// nothing and rescheduled the next real check a full interval out, so a
+    /// copy launched more often than the interval never installed anything;
+    /// see `applicationDidFinishLaunching` and `.agents/notes/release.md`.
+    /// `checkForUpdatesInBackground` **is** the check the scheduler would have
+    /// run: it downloads and stages with automatic installing on, and puts
+    /// Sparkle's own window up with it off. Sparkle's header names launch as
+    /// the place to force one, "immediately after starting the updater, and
+    /// only when automatic update checks are enabled", and `startUpdater:`
+    /// says the same in its own comment: the cycle is started one runloop turn
+    /// later precisely to leave the app that turn to check first.
+    ///
+    /// It is what closes the six hour hole on the far side of an install.
+    /// Putting an update in place stamps `SULastCheckTime`
+    /// (`SPUUpdater.updateWillInstallHandler`), so the copy that comes back up
+    /// is not due a scheduled check for a full interval, which is exactly the
+    /// moment somebody who ships several versions a day is most likely to be
+    /// one behind again.
+    func checkAtLaunch() {
+        guard !fake, automaticallyChecks else { return }
+        controller.updater.checkForUpdatesInBackground()
+    }
 
     var automaticallyChecks: Bool {
         get { controller.updater.automaticallyChecksForUpdates }
@@ -203,6 +247,13 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
             return "Not while a recording is being transcribed. Installing quits "
                 + "Listen, and that job would start again from the beginning."
         }
+        // The third thing a relaunch can throw away, and the only one measured
+        // in gigabytes. It matters more now than when this list was two, because
+        // installing is offered rather than only asked for.
+        if ModelDownload.shared.isDownloading {
+            return "Not while the speech model is downloading. Installing quits "
+                + "Listen, and the download would be interrupted."
+        }
         return nil
     }
 
@@ -216,7 +267,106 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
         return true
     }
 
+    // MARK: - Offering it to somebody who is looking
+
+    /// When the staged version was last put in front of anybody.
+    ///
+    /// "Later" is honoured for an hour rather than for ever: the dot on the
+    /// gear says the same thing in the meantime and asks for nothing, and an
+    /// app somebody tabs in and out of all day would otherwise be asking on
+    /// every visit.
+    private var offeredAt: Date?
+    private static let offerAgainAfter: TimeInterval = 3600
+
+    /// The alert activates the app, and activation is one of the two things
+    /// that raises the alert.
+    private var offering = false
+
+    @objc private func appBecameActive() {
+        MainActor.assumeIsolated { offerStagedUpdate() }
+    }
+
+    /// Offer the version that is already on disk.
+    ///
+    /// **Why this exists.** `SUAutomaticallyUpdate` means "installed on the
+    /// next quit", and Listen opens at login and is not quit for weeks, so a
+    /// staged version could sit there indefinitely. Worse, Sparkle stops
+    /// looking at the feed while one is staged (`checkForUpdates` and the
+    /// scheduler both resume the download they already have rather than
+    /// fetching the appcast), so everything published in the meantime is
+    /// invisible until this one is in place. The staged window is the blind
+    /// window, and this is what keeps it short.
+    ///
+    /// `force` is the explicit ask from the menu: it ignores the throttle and
+    /// says why it cannot install rather than going quiet.
+    @MainActor
+    func offerStagedUpdate(force: Bool = false) {
+        guard case .ready(let version) = outcome, !offering else { return }
+        // Never to somebody who is in another app. An alert that takes the
+        // keyboard away from the meeting somebody is in is how an updater gets
+        // switched off.
+        guard force || NSApp.isActive else { return }
+        // Setup is a flow with its own position, and a relaunch loses it.
+        guard force || !Onboarding.shared.isShowing else { return }
+
+        if let blocker = installNowBlocker {
+            guard force else { return }
+            offering = true
+            defer { offering = false }
+            let alert = NSAlert()
+            alert.messageText = "Listen \(version) is ready to install"
+            alert.informativeText = blocker
+            alert.runModal()
+            return
+        }
+
+        if !force, let offeredAt,
+           Date().timeIntervalSince(offeredAt) < Self.offerAgainAfter { return }
+
+        offering = true
+        defer { offering = false }
+        offeredAt = Date()
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Listen \(version) is ready to install"
+        alert.informativeText = "Listen quits and comes straight back on the new "
+            + "version, which takes a few seconds. Until it does it cannot see "
+            + "anything published since: a version that is already downloaded is "
+            + "the only one it can act on."
+        alert.addButton(withTitle: "Install and Relaunch")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Re-read rather than trusted: a recording can start in the seconds the
+        // alert is up, `installNow` re-checks and would refuse, and a press
+        // that silently does nothing is the worst of the three outcomes.
+        if !installNow(), let blocker = installNowBlocker {
+            let refused = NSAlert()
+            refused.messageText = "Listen \(version) was not installed"
+            refused.informativeText = blocker
+            refused.runModal()
+        }
+    }
+
+    /// What the menu offers in place of a check while a version is waiting.
+    ///
+    /// Sparkle's own check is genuinely unavailable then, so the row used to be
+    /// greyed, and a greyed row reads as "this app cannot check any more"
+    /// rather than "there is nothing left to check for". This is the verb that
+    /// is actually available, and it names the version.
+    @MainActor
+    @objc func installUpdate(_ sender: Any?) {
+        // The status menu does not activate the app, so an alert raised from it
+        // would open behind whatever is in front. Same line, same reason, as
+        // `checkForUpdates`.
+        NSApp.activate(ignoringOtherApps: true)
+        offerStagedUpdate(force: true)
+    }
+
     @objc func checkForUpdates(_ sender: Any?) {
+        // Under the fake there is nobody to ask: the delegate callbacks all
+        // return early, so a check started here would leave "Checking…" on
+        // screen for the rest of the launch.
+        guard !fake else { return }
         NSApp.activate(ignoringOtherApps: true)
         // Set before asking, not in a delegate callback: a check that never
         // reaches the network still has to stop showing the previous answer.
@@ -243,10 +393,20 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
     // MARK: - SPUUpdaterDelegate
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        guard !fake else { return }
         outcome = .available(item.displayVersionString)
     }
 
+    /// **Every one of these guards on `fake`, and it is not paranoia.**
+    /// `LISTEN_UPDATE_READY` fakes the outcome without stalling Sparkle, so
+    /// Sparkle's own cycle still starts at launch and, on a copy with no
+    /// `SULastCheckTime`, runs a real check about ten seconds in. Measured
+    /// while writing `verify_update_offer.sh`: the alert and the menu row were
+    /// right at nine seconds and gone at sixteen, because `.upToDate` had
+    /// landed on top of the staged state. A seam that expires mid-test is
+    /// worse than no seam.
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
+        guard !fake else { return }
         // Sparkle's own wording, which names the newest version on the feed and
         // covers the cases where a newer one exists but cannot run here: macOS
         // too old, Intel hardware, and so on. Writing our own would either
@@ -265,11 +425,16 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
     /// exactly as it did, and this only adds a second way in.
     ///
     /// The cost, also from the header, is that answering `true` stalls the
-    /// update cycle: no further checks run until this one is applied. That is
-    /// the right trade here, because there is nothing a later check could find
-    /// that this copy could act on without first installing what it already
-    /// has, and `canCheck` going false is what disables Check Now while a
-    /// version sits waiting.
+    /// update cycle: no further checks run until this one is applied. Sparkle
+    /// would not look at the feed anyway while a download is staged, answered
+    /// `true` or not, because both `checkForUpdates` and the scheduler resume
+    /// the update they already hold rather than fetching the appcast. So the
+    /// staged window is a blind window either way, and the answer is to keep it
+    /// short rather than to give up the Install button: `offerStagedUpdate`
+    /// asks whenever somebody comes back to the app, and the menu offers the
+    /// install in place of the check it cannot run. Without that, a copy that
+    /// staged 0.39.0 and was never quit could not see 0.40.0 at all, and the
+    /// only evidence was a greyed Check for Updates.
     ///
     /// Without this the automatic path had no surface at all. Listen opens at
     /// login and watches for meetings, so "installs on the next quit" is a
@@ -279,6 +444,7 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
     func updater(_ updater: SPUUpdater,
                  willInstallUpdateOnQuit item: SUAppcastItem,
                  immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        guard !fake else { return false }
         installImmediately = immediateInstallHandler
         outcome = .ready(item.displayVersionString)
         return true
@@ -287,6 +453,7 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
     func updater(_ updater: SPUUpdater,
                  didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                  error: (any Error)?) {
+        guard !fake else { return }
         // Only failures are recorded here. Finding an update and finding none
         // both arrive through their own callback first, and this one fires
         // again when a found update is dismissed or skipped, which must not

@@ -182,16 +182,18 @@ case Sparkle will always attempt to install the update when the app terminates".
 Quitting still behaves exactly as it did.
 
 The stated cost of answering `true` is that it stalls the update cycle, so no
-further checks run until this one is applied. That is the right trade, because
-there is nothing a later check could find that this copy could act on without
-first installing what it already has, and `canCheckForUpdates` going false is
-what greys out Check Now while a version waits.
+further checks run until this one is applied. That is still the right trade,
+but the reason first written here was wrong about who pays it, and the section
+below is what a user reported to correct it.
 
-**The button asks about recording and transcription first, because a relaunch
-destroys both.** `Updater.installNowBlocker` refuses while `Capture.isRecording`
-or `Queue.isBusy`, and says which, in the note under the button. An hour of
-meeting that has not been written out and a transcription job that would restart
-from the top are the two things in this app that a quit cannot be taken back on.
+**The button asks about recording, transcription and the model download first,
+because a relaunch destroys all three.** `Updater.installNowBlocker` refuses
+while `Capture.isRecording`, `Queue.isBusy` or `ModelDownload.isDownloading`,
+and says which, in the note under the button and in the alert. An hour of
+meeting that has not been written out, a transcription job that would restart
+from the top and a 2.5 GB download are what a quit cannot be taken back on. The
+third was added when installing stopped being something only a button in
+Settings could start.
 
 **Optional protocol methods fail silently, so the selector was checked in the
 binary rather than in the diff.** `SPUUpdaterDelegate` is an ObjC protocol and
@@ -204,6 +206,77 @@ strings -a Listen.app/Contents/MacOS/Listen | grep willInstallUpdateOnQuit
 # updater:willInstallUpdateOnQuit:immediateInstallationBlock:
 ```
 
+## A staged version is a blind window, and a greyed Check for Updates was all it said
+
+Reported from a copy that had been left running: the menu bar's Check for
+Updates is disabled whenever a new version has already been found, and the only
+way forward is to install that version, come back up on it, and update again to
+whatever shipped in between. Both halves are real and they have different
+causes.
+
+**The greyed row is the stall.** Answering `true` to `willInstallUpdateOnQuit`
+leaves `SPUAutomaticUpdateDriver` alive: it never calls its completion handler,
+so `SPUUpdater`'s `_driver` stays non-nil and `sessionInProgress` stays `YES`
+for the rest of the launch, and that is what holds `canCheckForUpdates` at `NO`.
+`AppDelegate.refreshMenu` mirrored it into `isEnabled`, and that menu has
+`autoenablesItems` off, so the row was genuinely dead rather than merely inert.
+Settings' Check Now went with it.
+
+**The second update is Sparkle itself, not the stall.** Read in 2.9.5's
+`checkForUpdatesWithDriver:updateCheck:installerInProgress:`: when the installer
+is already running or `_resumableUpdate != nil`, every driver, user-initiated
+and scheduled alike, calls `resumeInstallingUpdate` or `resumeUpdate:` instead
+of fetching the appcast. So a copy holding a staged 0.39.0 cannot learn that
+0.40.0 exists by any route, whichever way the delegate answers and whatever the
+menu offers. **The staged window is a blind window, and the only way out of it
+is through.** Returning `false` would buy back an enabled menu row that still
+could not find anything, and would cost the Install button, which is the wrong
+half to keep.
+
+So the fix is not "let it check". It is to stop a version sitting there staged:
+
+- **The menu offers the verb that exists.** While `Updater.outcome` is
+  `.ready`, the row reads `Update to 0.39.0…` and installs, rather than being a
+  greyed Check for Updates. A control that is grey for hours says "this app
+  cannot check any more"; naming the version says what is actually waiting.
+- **Coming back to Listen is when it is offered.** `Updater.offerStagedUpdate`
+  runs on `NSApplication.didBecomeActiveNotification` and when a download
+  finishes while the app is frontmost, and puts up Install and Relaunch /
+  Later. `SUAutomaticallyUpdate` promises "installed on the next quit", and for
+  an app that opens at login and is never quit, opening its window is the only
+  "next time you open it" there is. It never fires into another app
+  (`NSApp.isActive`), never over setup, never against a blocker, and "Later" is
+  honoured for an hour, which is the throttle that keeps tabbing in and out of
+  Listen from being an interrogation.
+- **The alert says what the blind window costs**: "Until it does it cannot see
+  anything published since." Same sentence, shorter, under the Install button
+  in Settings, where it doubles as the reason Check Now is grey.
+
+What is deliberately not here: no hand-rolled appcast fetch to answer "is there
+something newer than the one I am holding". It would be a second way to read
+the feed, on an app whose claim is that it talks to two hosts, to produce a
+sentence whose only action is the one already on offer.
+
+## The launch check is back, and it is not the probe that was deleted
+
+`Updater.checkAtLaunch` calls `checkForUpdatesInBackground()` one line after the
+updater is constructed, when automatic checks are on. The probe this file spends
+a section on was `checkForUpdateInformation()`, and the difference is the whole
+reason this one is safe: the probe downloads nothing, so the launch spent the
+cycle and pushed the only check that could act a full interval out. This call
+**is** the check the scheduler would have run, and it downloads and stages.
+Sparkle's own header names launch as the place to force one, "immediately after
+starting the updater, and only when automatic update checks are enabled", and
+`startUpdater:` says so in its own comment: the cycle is started one runloop
+turn later precisely to leave the app that turn to check first.
+
+It is there for the far side of an install. `SPUUpdater` stamps `SULastCheckTime`
+from its `updateWillInstallHandler`, so the copy that comes back up on the new
+version is not due a scheduled check for six hours, which is exactly the moment
+somebody who ships several versions in a day is most likely to be one behind
+again. With this, installing 0.39.0 and coming back up finds 0.40.0 within
+seconds and offers it, instead of finding it after lunch.
+
 ## `LISTEN_UPDATE_READY`, because publishing a release is not a test
 
 The staged state cannot be reached without a signed release newer than the one
@@ -214,6 +287,30 @@ the second gear tooltip would ship having never been on screen. Same family as
 ```sh
 LISTEN_UPDATE_READY=0.99.0 LISTEN_LIBRARY=/tmp/scratch ./Listen.app/Contents/MacOS/Listen
 ```
+
+It reaches the offer as well as the button: the fake sets `.ready`, so
+activating the app raises Install and Relaunch, and the menu's row reads
+`Update to 0.99.0…`. What it cannot reproduce is the stall, because
+`canCheckForUpdates` belongs to Sparkle and the fake never asks Sparkle
+anything: with `LISTEN_UPDATE_READY` set, Check for Updates is still live
+underneath. A real staged update is the only way to see the greyed row, which
+is why it took a user report to find it.
+
+**Sparkle's own check landed on top of the fake, about ten seconds in.** The
+fake stages nothing, so nothing stalls, so the cycle starts as usual and a copy
+with no `SULastCheckTime` is overdue at launch. Measured while writing
+`verify_update_offer.sh`: the alert and the menu row were right at nine seconds
+and gone at sixteen, `.upToDate` having replaced `.ready` from
+`updaterDidNotFindUpdate`. Every delegate callback that writes `outcome` now
+returns early while `fake` is set, and so does `checkForUpdates`, which would
+otherwise leave "Checking…" on screen with nobody left to answer it. A seam
+that expires in the middle of a test is worse than no seam.
+
+`verify_update_offer.sh` is the script, and it asserts what Listen owns here:
+the offer on activation, Later being honoured for the hour, the menu row that
+replaces the check, the Updates pane, the install itself, and the launch check
+stamping `SULastCheckTime` only when checking is on. It needs no network and no
+release.
 
 The install block prints `[Listen] would install 0.99.0` to stderr instead of
 relaunching, which is the one part a fake cannot do. Nothing is persisted while

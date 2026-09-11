@@ -732,6 +732,8 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - A preferred Mac is a preference, not a lock
 - A Mac that is recording does not begin, and the wait did not say so
 - The model proposes in writing now, and a person still applies it
+- A suggestion inside a collapsed disclosure is invisible
+- `defaults delete` does not delete the file
 - Coverage is a number the agent could not see
 - Exclusion reaches search, and now there is a test that says so
 
@@ -855,7 +857,14 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
                         # correction contract the window uses, a dismissal is
                         # never re-offered) and the assertion that excluding a
                         # processed note stops its passages coming back from
-                        # search, not only from the card
+                        # search, not only from the card. `--ui` adds the two
+                        # screens the worklist reaches, against the isolated app
+                        # copy it already builds: the row under the claim on a
+                        # person's page, Accept applying it, and People & Memory
+                        # naming whose page to open. It polls for the window
+                        # rather than waiting a fixed time, and a missing row is
+                        # a failure rather than a skip once the window has
+                        # proved it is on screen
 ./verify_desktop_connect.sh  # `listen mcp connect-desktop` over scratch
                         # configs: merge, backup, idempotence, refusals
 ./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying

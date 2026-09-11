@@ -672,6 +672,7 @@ or through an OpenAI-compatible endpoint such as Ollama. `Agent`, `AgentCLI`,
 - The composer is a text view, and `NSCell` is why it had to be
 - Shift+Return is `insertNewline:` unless something is a field editor
 - The microphone beside the send button is the chord's own dictation, delivered rather than pasted
+- A clip view will scroll a document that already fits, and a drag-selection finds it
 - A centred line box draws text low, and the placeholder is where it showed
 
 ### `.agents/notes/galaxy.md`

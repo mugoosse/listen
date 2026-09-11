@@ -2609,6 +2609,11 @@ final class ComposerField: NSView {
         text.onFocusChanged = { [weak self] on in self?.onFocusChanged?(on) }
         text.onSend = { [weak self] in self?.onSend?() }
 
+        // **A drag that leaves the field scrolled a line that already fits.**
+        // See `PinnedClipView`: this is the whole of the fix, and it has to be
+        // installed before the document view, because a clip view swapped in
+        // afterwards re-lays out what is already in it.
+        scroll.contentView = PinnedClipView()
         scroll.documentView = text
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -2756,6 +2761,43 @@ extension ComposerField: NSTextViewDelegate {
         default:
             return false
         }
+    }
+}
+
+/// The clip view inside `ComposerField`: it will not scroll a document that
+/// already fits.
+///
+/// **A document smaller than its clip view is still scrollable, and a
+/// drag-selection is what finds that out.** Selecting the question and carrying
+/// the pointer out of the well autoscrolls, and `NSClipView` only clamps the
+/// origin in the direction where the document is *bigger* than it is: with one
+/// line in a 52 point well the text view is 48 points tall, there is nothing to
+/// clamp, and the proposed origin is taken as offered. Measured through the
+/// accessibility frames, which is where this stops being a matter of opinion
+/// about a screenshot: the well never moves (the microphone stayed at y 924 in
+/// all of them) and the text view went from y 916 to 903 on a drag that left
+/// the bottom of the field and to 932 on one that left the top. The question
+/// ends up printed against the top or the bottom edge of the capsule and stays
+/// there, because nothing scrolls it back.
+///
+/// It is not new, and not the optical centring that moved the text 1.75 points:
+/// 0.39.0 does the same thing to the same quarter point, 15.00 to 33.00 points
+/// down the well at rest and 2.50 to 20.50 after the drag.
+///
+/// `automaticallyAdjustsContentInsets` was the first suspect and is not the
+/// cause: zeroing the insets changed none of the numbers above. Recorded
+/// because it is the plausible answer somebody will reach for next.
+private final class PinnedClipView: NSClipView {
+    override func constrainBoundsRect(_ proposed: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposed)
+        guard let document = documentView else { return rect }
+        // The origin is the top in a flipped clip view, which this one is
+        // because `NSTextView` is. Past the six line cap the document is taller
+        // than the well, and then this does nothing at all and the scrolling
+        // the composer does want goes through untouched.
+        if document.frame.height <= rect.height { rect.origin.y = 0 }
+        if document.frame.width <= rect.width { rect.origin.x = 0 }
+        return rect
     }
 }
 

@@ -543,6 +543,36 @@ we decide about the roadmap"`, press `stop dictating`, and read the field.
 button's own label flipping from `Dictate` to `Stop dictating` is what says the
 state landed.
 
+### A clip view will scroll a document that already fits
+
+Select the question and carry the pointer out of the well, and the text
+autoscrolls to the top or the bottom edge of the capsule and stays there. The
+well does not move and the buttons do not move: only the text does.
+
+`NSClipView` clamps the origin in the direction where the document is *bigger*
+than it is. With one line in a 52 point well the text view is 48 points tall,
+so there is nothing to clamp and the origin `autoscroll` proposes is taken as
+offered. `PinnedClipView` pins it to zero whenever the document fits, and does
+nothing at all past the six line cap, where the document really is taller than
+the well and the scrolling is wanted.
+
+**Measured through the accessibility frames, not from a screenshot**, because
+"the text looks low" and "the well grew" are the same picture and only one of
+them is what happened. The microphone's frame stayed at y 924 in every reading,
+so the well never moved; the text view's went from y 916 to 903 on a drag that
+left the bottom of the field and to 932 on one that left the top, and stayed
+there afterwards. With the pin, all four drags read 916.
+
+It was reported as a side effect of the optical centring above and is not:
+0.39.0 does the same thing to the same quarter point, 15.00 to 33.00 points
+down the well at rest and 2.50 to 20.50 after the drag. The centring changed
+the document's height from 52 to 48.5, which changes how much slack there is
+and not whether there is any.
+
+`automaticallyAdjustsContentInsets` is the plausible next suspect and is not
+the cause either: zeroing the scroll view's insets changed none of those
+numbers. Recorded so nobody spends the same twenty minutes on it.
+
 ### A centred line box draws text low, and the placeholder is where it showed
 
 The composer's placeholder read as sitting below the middle of the well next to

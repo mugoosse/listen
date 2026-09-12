@@ -51,10 +51,26 @@ public enum MemoryPreferences {
         public var message: String?
         public var updated: String
     }
+    /// **Cached on inode, size and mtime**, in the same shape and for the same
+    /// reason as `ContextSnapshotCache` and `ContextProofCache`.
+    ///
+    /// This is read far more often than its name suggests. `personID` reads it
+    /// and then calls `canonicalID`, which reads it again, so resolving one
+    /// name is two decodes; `ContextSnapshot.verified` calls `policy` once per
+    /// entry, so verifying a card is one decode per claim on it. The Library
+    /// screen does both while drawing, and measured against a 86-recording
+    /// library on 12 September 2026 that was 198 ms of blocked main thread per
+    /// body evaluation: 84 ms resolving forty speaker names and 111 ms
+    /// verifying six cards, all of it this function, none of it new work.
+    ///
+    /// Nothing is invalidated by hand. Every writer goes through `write`, which
+    /// replaces the file, and a replaced file has a new mtime or a new inode,
+    /// so the next read misses and decodes. A file changed by another process
+    /// (a sync pass landing a merged copy) is caught the same way.
     public static func read(root: URL) throws -> [String: Value] {
         let url = root.appendingPathComponent(filename)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
-        return try decode(Data(contentsOf: url))
+        guard let stamp = SettingsCache.stamp(url) else { return [:] }
+        return try SettingsCache.shared.values(url, stamp: stamp, decode: decode)
     }
     private static func decode(_ data: Data) throws -> [String: Value] {
         guard data.count <= 4_000_000 else { throw ContextDatabase.Failure(message: "Memory settings exceed their size limit.") }
@@ -334,5 +350,36 @@ public enum MemoryPreferences {
             let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             return parts.count == 2 && parts[0] == "exclude_from_ai" && parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'")).lowercased() == "true"
         }
+    }
+}
+
+/// The decoded settings file, reused while inode, size and mtime agree.
+///
+/// Separate from `ContextSnapshotCache` rather than generic over both, because
+/// the two hold different types and a shared generic cache would have to erase
+/// them. Two twenty-line caches beat one clever one.
+private final class SettingsCache: @unchecked Sendable {
+    static let shared = SettingsCache()
+    private let lock = NSLock()
+    private var cached: [String: (String, [String: MemoryPreferences.Value])] = [:]
+
+    /// Nil when the file is not there, which is an empty settings file and not
+    /// an error: a library nobody has expressed a preference in yet.
+    static func stamp(_ url: URL) -> String? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        return "\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0):\(a[.size] ?? 0):\(a[.systemFileNumber] ?? 0)"
+    }
+
+    func values(_ url: URL, stamp: String,
+                decode: (Data) throws -> [String: MemoryPreferences.Value])
+        throws -> [String: MemoryPreferences.Value] {
+        lock.lock(); defer { lock.unlock() }
+        if let value = cached[url.path], value.0 == stamp { return value.1 }
+        let value = try decode(Data(contentsOf: url))
+        // A device reads one library, and the Mac's fake-sync harness reads a
+        // handful. Four is generous and the reset is cheap.
+        if cached.count >= 4 { cached.removeAll() }
+        cached[url.path] = (stamp, value)
+        return value
     }
 }

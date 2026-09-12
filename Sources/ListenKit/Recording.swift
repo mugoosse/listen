@@ -6,7 +6,7 @@ import Foundation
 /// absent audio is a normal state rather than a broken one. On the Mac the
 /// missing-audio case is a second machine; here it is every recording the
 /// phone did not make, which is most of them.
-public struct Recording: Sendable, Identifiable {
+public struct Recording: Sendable, Identifiable, Equatable {
     public let folder: URL
     public var metadata: Metadata
 

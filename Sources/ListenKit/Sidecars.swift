@@ -48,7 +48,7 @@ public struct Waveform: Codable, Sendable {
 /// phone then shows both versions rather than choosing one. A note is the only
 /// thing in this system two people can edit at once, so it is the only thing
 /// that needs the ceremony.
-public struct Note: Codable, Sendable, Identifiable {
+public struct Note: Codable, Sendable, Identifiable, Equatable {
     public var slug: String
     public var title: String
     public var created: String

@@ -2159,9 +2159,14 @@ private var continuationHeight: NSLayoutConstraint!
             guard let date, touched[label] == nil || date > touched[label]! else { return }
             touched[label] = date
         }
+        // `Instants`, not a formatter per call. This runs once per note, per
+        // conversation, per summary and per receipt every time the home page
+        // is built, and `ISO8601DateFormatter` is expensive to construct. Its
+        // default `formatOptions` is `.withInternetDateTime`, which is exactly
+        // what `Instants` sets, so nothing that parsed before stops parsing.
         func parsed(_ value: String?) -> Date? {
             guard let value else { return nil }
-            return ISO8601DateFormatter().date(from: value)
+            return Instants.parse(value)
         }
         func matching(_ value: String) -> Person? {
             people.first { $0.label == value
@@ -2214,7 +2219,7 @@ private var continuationHeight: NSLayoutConstraint!
 
     private func activityDate(_ value: String?) -> Date? {
         guard let value else { return nil }
-        return ISO8601DateFormatter().date(from: value)
+        return Instants.parse(value)
     }
 
     private func recentActivity(_ date: Date) -> String {

@@ -85,6 +85,102 @@ public enum ContextPresentation {
         let text = predicate.replacingOccurrences(of: "_", with: " ")
         return text.prefix(1).uppercased() + text.dropFirst()
     }
+    /// The human heading a claim is filed under on screen.
+    ///
+    /// **The stored predicate is a vocabulary for the extractor, not a word for
+    /// a reader.** A card printed as `preference · goal · role · commitment ·
+    /// blocker · skill` reads like a schema leaking through the page, and
+    /// "Blocker" over a sentence about somebody's therapy practice reads like a
+    /// project board. The predicate is still there, on the row's tooltip and in
+    /// every machine-readable form of this card; it is only the heading that
+    /// changes. Anything the extractor invents outside the vocabulary lands in
+    /// `otherSection` rather than being dropped.
+    public static let sections: [String] = [
+        "Who they are", "What they're working on", "What they want",
+        "What they've committed to", "How you know each other",
+        "What's in the way", "Other details",
+    ]
+    public static let otherSection = "Other details"
+    public static func section(_ predicate: String) -> String {
+        switch predicate {
+        case "role", "location", "skill", "works_at": return "Who they are"
+        case "project", "works_on": return "What they're working on"
+        case "goal", "preference", "interest", "interested_in": return "What they want"
+        case "decision", "commitment": return "What they've committed to"
+        case "collaborates_with", "reports_to", "mentors": return "How you know each other"
+        case "blocker": return "What's in the way"
+        default: return otherSection
+        }
+    }
+
+    /// A claim about one conversation rather than about a person.
+    ///
+    /// Extraction files everything it finds as a fact about somebody, so "their
+    /// goal **in this session**" and "wants to meet **next week**" are stored
+    /// beside "works as a psychotherapist" and outlive their own meaning: one
+    /// of them was the lead sentence of a real brief months after the session
+    /// it describes. This does not change what is stored, and it does not
+    /// throw anything away; it decides whether a line belongs on the permanent
+    /// card or under the date it was said on.
+    ///
+    /// Deliberately narrow. A phrase is episodic only when it points at the
+    /// occasion itself or at a moving date, never merely because it mentions
+    /// time: "moved off the platform team last week" is exactly the dated
+    /// change the ledger exists to keep.
+    public static func episodic(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return ["in this session", "this session", "in this meeting", "in this call",
+                "in this conversation", "next week", "next month", "tomorrow",
+                "this weekend", "later today", "right now", "at the moment"]
+            .contains { lower.contains($0) }
+    }
+
+    /// The same sentence, addressed to the person reading it.
+    ///
+    /// Extraction writes about the owner in the third person, because from
+    /// inside one transcript that is what they are: a real card carried "the
+    /// other person" five times in thirteen lines, which reads like notes a
+    /// stranger took about two strangers. Nothing is rewritten on disk. The
+    /// quote under every claim is untouched, so the original wording is always
+    /// one disclosure away.
+    public static func addressed(_ text: String, you: String?) -> String {
+        var result = text
+        for phrase in ["the other person", "the other party", "the other participant"] {
+            result = replacing(phrase + "'s", with: "your", in: result)
+            result = replacing(phrase + "’s", with: "your", in: result)
+            result = replacing(phrase, with: "you", in: result)
+        }
+        // Only a name the owner has actually given themselves, and only as a
+        // whole word: a substring pass turns "Maximes" and "Roberta" into
+        // nonsense, and a card about somebody who shares the owner's first
+        // name should read oddly rather than wrongly.
+        if let you, you.count > 2 {
+            result = replacing(you + "'s", with: "your", in: result)
+            result = replacing(you + "’s", with: "your", in: result)
+            result = replacing(you, with: "you", in: result)
+        }
+        return result
+    }
+
+    /// Whole-word replacement that keeps the sentence's capitalisation.
+    private static func replacing(_ needle: String, with replacement: String, in text: String) -> String {
+        var result = "", rest = Substring(text)
+        while let found = rest.range(of: needle, options: [.caseInsensitive]) {
+            let before = rest[rest.startIndex..<found.lowerBound]
+            let after = rest[found.upperBound...]
+            let boundaryBefore = before.last.map { !$0.isLetter && !$0.isNumber } ?? true
+            let boundaryAfter = after.first.map { !$0.isLetter && !$0.isNumber } ?? true
+            guard boundaryBefore, boundaryAfter else {
+                result += before + rest[found]; rest = after; continue
+            }
+            let capital = rest[found].first?.isUppercase == true
+                && (before.last.map { $0 == "." || $0 == "\n" } ?? true)
+            result += before + (capital ? replacement.prefix(1).uppercased() + replacement.dropFirst() : replacement)
+            rest = after
+        }
+        return result + rest
+    }
+
     public static func qualifiers(modality: String, attribution: String) -> [String] {
         var labels: [String] = []
         if modality == "planned" { labels.append("Planned") }

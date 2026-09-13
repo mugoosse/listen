@@ -278,6 +278,96 @@ budget approval and a handover versus someone merely being a designer. See the
 implementation record for current performance/quality measurements and their
 limits. Do not turn a small fixture score into a production quality claim.
 
+## Nobody was enrolled, and the queue could never move
+
+Consent is per person and absent means off (`MemoryPreferences.Policy.automatic`
+is `text == "true"`). The only way in was a person's own page: press Create
+Summary, work through a sheet of source checkboxes, tick "Keep up to date for
+this person". The ellipsis menu's own toggle is gated on `hasContent`, so a
+person with no card could not be enrolled from the menu at all.
+
+Measured on the real library, 11 September 2026: **34 named people, one
+enrolled**, 321 pending parts against 18 processed. The one enrolled person had
+0 pending, so the sweep's entire permitted workload was already finished: the
+queue was not slow, it was complete and empty, and no amount of waiting would
+have moved it. `Me` had 73 recordings, 179 pending parts and no card at all.
+
+`ContextEnrolment.sync` writes an explicit register for everybody an extractable
+source can speak for, gated on one library-level register, `enrolNewPeople`.
+**Explicit registers, never a changed default**, because absence-means-off is
+load-bearing in three places: the equal-clock merge rule at
+`MemoryPreferences.merge` lets `"false"` win for `person:*:automatic` keys so a
+decline cannot lose a tie; `ContextCLI.Coverage.automatic` decides whether to
+print "on" by looking for a literal `"true"`; and a second Mac that has never
+heard of somebody would infer consent rather than wait to be told. Somebody with
+an existing register is never touched, so a decline survives every later pass.
+
+## One name would have eaten the budget every day
+
+The sweep walked `Set(sources.flatMap(\.people)).sorted()` and broke at the
+first person with work. That is correct at one enrolled person and a starvation
+bug at thirty-four: the alphabetically first person with anything left spends
+the whole daily limit every day for as many days as their backlog lasts, and
+nobody after them is ever read. Nothing recorded whose turn it had been, so
+nothing could have noticed it happening.
+
+`ContextEnrolment.order` is least-recently-served first, stamped in
+`context/schedule.json` on **selection** rather than on success, so somebody
+whose extraction keeps failing takes one turn like everybody else. The schedule
+is in the library's own `context` directory rather than the settings file:
+whose turn it is next is this Mac's queue, not a fact about the library, and
+`people-memory-settings.json` is republished to CloudKit on every change. It
+being library-scoped also means `LISTEN_LIBRARY` isolates it, so a scratch
+library cannot reorder the real one's queue.
+
+Cold start has no stamps, so the tie-break carries the whole order: you first,
+then whoever there is most to read about, then alphabetically for reproducibility.
+`Coverage.nextUp` reports that queue with each person's entity id, because
+fairness is otherwise unobservable and a name cannot be turned back into an id
+from outside.
+
+## A passing mention is not somebody speaking
+
+`ContextSource.people` is named speakers **plus** every roster name the regex in
+`mentioned` found anywhere in the text. While one person was enrolled that
+distinction cost nothing. Enrolling the roster turns every passing reference in
+an hour of transcript into eligible work, through
+`MemoryPreferences.Policy.includes`, whose implicit branch admits any source not
+in `knownSources`.
+
+`ContextSource.speakers` is the named half, `names(_:)` reads it, and
+`includes(_:named:)` takes it. An explicitly selected source is still read
+whatever `named` says, because that is somebody choosing it in the composer.
+`speakers` is absent on catalogue rows written by an older build and falls back
+to `people` rather than to nothing, so a stale row keeps its old behaviour
+instead of dropping silently out of the sweep.
+
+## The card would not say "you", and said "in this session" for ever
+
+The extractor writes about the owner in the third person, because from inside
+one transcript that is what they are. A real card carried "the other person"
+five times in thirteen lines, which reads like notes a stranger took about two
+strangers. Worse, session-scoped observations were stored as facts about a
+person and outlived their meaning: "Marcia's goal **in this session**…" was the
+lead sentence of her brief weeks after the session, and "wants to meet **next
+week**" was permanently true-looking.
+
+All of this is **display only**, in `ContextPresentation`: `addressed` for the
+voice, `section` for the heading, `episodic` for which lines belong under "Last
+time you spoke" rather than on the permanent card. Nothing is rewritten on disk,
+`--json` and every MCP read carry the stored wording and the stored predicate,
+and the quote under each claim is untouched, so the original is one disclosure
+away. `episodic` is deliberately narrow: it fires on the occasion itself or a
+moving date, never merely on a mention of time, because "moved off the platform
+team last week" is exactly the dated change the ledger exists to keep.
+
+The predicate vocabulary is the extractor's, not a reader's. `preference · goal
+· role · commitment · blocker · skill` printed as headings reads like a schema
+leaking through the page, so the stored predicate moved to the row's tooltip and
+`ContextPresentation.section` supplies the heading. Ordering inside a group is
+newest evidence first: on the measured card the single most identifying line,
+"works as a psychotherapist and currently sees patients", was last of thirteen.
+
 ## Verification commands
 
 **`defaults delete` does not delete the file.** `verify_context.py` gives each
@@ -289,6 +379,10 @@ stays. Forty-two had accumulated over four days before anybody looked. The
 
 
 - `./build.sh && ./make_app.sh`
+- `./verify_memory_consent.sh` (and `--ui` for the roster pane), over a
+  synthetic library built by the script: enrolment, an explicit decline
+  surviving later passes, a new person joining on the next pass, the mention
+  fan-out staying out, and the round-robin serving everybody in turn
 - `bash tools/verify_memory_core.sh`
 - `python3 tools/verify_context.py` (isolated app identity, synthetic library,
   stub provider, real Apple embeddings; `LISTEN_CONTEXT_KEEP=1` retains it)

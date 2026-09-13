@@ -27,8 +27,20 @@ public enum MemoryPreferences {
         public var knownSources: Set<String> = []
         public var deletedBefore = ""
         public var model: Model? = nil
-        public func includes(_ source: String) -> Bool {
-            sources.contains(source) || (automatic && !knownSources.contains(source))
+        /// Whether an automatic sweep may read this source for this person.
+        ///
+        /// `named` is whether they speak in it, or a note is explicitly about
+        /// them; `ContextSource.names(_:)` is what answers that. A person
+        /// somebody else merely mentioned is not disclosing anything, and once
+        /// the whole roster is enrolled that distinction is the difference
+        /// between a bounded queue and every meeting in the library times
+        /// everybody whose first name occurs in it.
+        ///
+        /// An explicitly selected source is still read whatever `named` says,
+        /// because that is somebody choosing it in the composer rather than
+        /// the sweep helping itself.
+        public func includes(_ source: String, named: Bool = true) -> Bool {
+            sources.contains(source) || (automatic && named && !knownSources.contains(source))
         }
     }
     public struct Model: Codable, Sendable, Equatable {
@@ -175,6 +187,19 @@ public enum MemoryPreferences {
             try set(json(selected), key: "person:\(person):model", root: root)
         }
         try set(String(enabled), key: "person:\(person):automatic", root: root)
+    }
+    /// Whether somebody nobody has answered for yet is enrolled automatically.
+    ///
+    /// One register for the library rather than a preference on each install,
+    /// because generation consent is scoped to the library path: the answer
+    /// belongs with the recordings it is an answer about, and it should reach
+    /// a second Mac without being given again. Absent means no, like every
+    /// other consent in this file.
+    public static func enrolsNewPeople(root: URL) -> Bool {
+        ((try? read(root: root))?["enrolNewPeople"]?.text) == "true"
+    }
+    public static func enrolNewPeople(_ enabled: Bool, root: URL) throws {
+        try set(String(enabled), key: "enrolNewPeople", root: root)
     }
     public static func deleteMemory(person: String, root: URL) throws {
         try automatic(false, person: person, root: root)

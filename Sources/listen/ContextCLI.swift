@@ -14,6 +14,7 @@ enum ContextCLI {
     listen context jobs|usage [--json]
     listen context update [--person <name>] [--source rec:<id>|note:<slug>] [--limit <parts>] [--retry] [--claude|--codex] [--json]
     listen context auto on|off [--person <name>]
+    listen context enrol on|off
     listen context note --person <name> <text> [--exclude-from-ai]
     listen context forget --person <name>
     listen context dismiss <claim-id>
@@ -47,17 +48,72 @@ enum ContextCLI {
         var processed: Int
         var embeddingModels: [String]
         var indexedPassages: Int
+        /// Whether somebody nobody has answered for yet is enrolled
+        /// automatically.
+        var enrolsNewPeople: Bool
+        /// People at least one extractable source can speak for.
+        var people: Int
+        /// How many of them the sweep is allowed to read about.
+        var enrolled: Int
+        /// What those people between them are still waiting to have read.
+        ///
+        /// Not the same number as `pending`, and larger: `pending` counts each
+        /// source once, and extraction is scoped per subject, so a meeting
+        /// with three enrolled people in it is read three times. This is the
+        /// one that answers "how long until it has caught up".
+        var enrolledPending: Int
+        /// Whole days of automatic work that backlog is at the current daily
+        /// limit. A floor rather than an estimate: consolidation and summaries
+        /// spend requests too, and they are not counted here.
+        var estimatedDays: Int
+        /// Who the sweep would read about next, soonest first.
+        ///
+        /// The same `ContextEnrolment.order` the sweep itself walks, so this
+        /// is the queue rather than a description of it. It is here because
+        /// round-robin fairness is otherwise unobservable: the old
+        /// alphabetical scan starved everybody after the first name in the
+        /// list for as long as their backlog lasted, and nothing anywhere
+        /// could have shown that happening.
+        ///
+        /// The entity id travels with the name because the queue is keyed by
+        /// id and a name cannot be turned back into one from outside: without
+        /// it, a script can read this queue and has no way to say "and then
+        /// this person was served".
+        var nextUp: [Queued]
+    }
+    struct Queued: Encodable {
+        var name: String
+        var id: String
+        var pending: Int
     }
 
     static func coverage() throws -> Coverage {
         let sources = ContextSources.all(), document = try PeopleMemory.load()
         let index = try SemanticIndex.load()
+        let values = (try? MemoryPreferences.read(root: Library.root)) ?? [:]
+        let candidates = ContextEnrolment.candidates(sources)
+        let enrolled = candidates.filter {
+            values["person:\(MemoryPreferences.personID($0, root: Library.root)):automatic"]?.text == "true"
+        }
+        // Per person this reads SQLite rather than transcripts, because
+        // `personBatchCounts` was written by the index pass. Thirty-four of
+        // them is cheap beside the `ContextSources.all()` above.
+        let daily = max(1, Settings.contextDailyRequests)
+        let served = ContextEnrolment.served()
+        var ids: [String: String] = [:], weight: [String: Int] = [:]
+        for label in enrolled {
+            ids[label] = MemoryPreferences.personID(label, root: Library.root)
+            weight[label] = sources.reduce(0) { $0 + ($1.names(label) ? 1 : 0) }
+        }
+        var backlog: [String: Int] = [:]
+        for label in enrolled { backlog[label] = (try? PeopleMemory.person(label, document: document).pending) ?? 0 }
+        let waiting = Set(enrolled.filter { (backlog[$0] ?? 0) > 0 })
         return Coverage(
             automatic: Settings.peopleContextEnabled
-                && ((try? MemoryPreferences.read(root: Library.root).contains {
+                && values.contains {
                     $0.key.hasPrefix("person:") && $0.key.hasSuffix(":automatic")
                         && $0.value.text == "true"
-                }) ?? false),
+                },
             askEnabled: Settings.askEnabled,
             sources: sources.count,
             waitingForNames: sources.filter { $0.kind == "recording" && !$0.extractable }.count,
@@ -65,7 +121,23 @@ enum ContextCLI {
             failed: document.receipts.values.filter { $0.failure != nil && $0.source.isCurrent }.count,
             processed: PeopleMemory.validReceipts(document).count,
             embeddingModels: Set(index.entries.compactMap { $0.vector?.model }).sorted(),
-            indexedPassages: index.entries.count)
+            indexedPassages: index.entries.count,
+            enrolsNewPeople: MemoryPreferences.enrolsNewPeople(root: Library.root),
+            people: candidates.count,
+            enrolled: enrolled.count,
+            enrolledPending: backlog.values.reduce(0, +),
+            estimatedDays: backlog.values.reduce(0, +) == 0 ? 0
+                : max(1, (backlog.values.reduce(0, +) + daily - 1) / daily),
+            nextUp: ContextEnrolment.order(waiting, ids: ids, weight: weight, served: served).prefix(5).map {
+                Queued(name: SpeakerName.display($0), id: ids[$0] ?? "", pending: backlog[$0] ?? 0)
+            })
+    }
+
+    /// One claim, as the window shows it: when, who, what, then its quotes.
+    private static func printEntry(_ item: ContextCard.Entry, you: String?) {
+        let when = item.evidence.map(\.recordedAt).max().map { String($0.prefix(10)) } ?? ""
+        print("  \(when.isEmpty ? "" : when + "  ")\(ContextPresentation.addressed(item.text, you: you)) [\(item.status)]")
+        for evidence in item.evidence { print("    [\(evidence.source)] \(evidence.quote)") }
     }
 
     static func json<T: Encodable>(_ value: T) throws -> String {
@@ -149,7 +221,12 @@ enum ContextCLI {
                 if jsonOutput { print(try json(result)) }
                 else {
                     print("Automatic context: \(result.automatic ? "on" : "off") · Ask: \(result.askEnabled ? "on" : "off")")
+                    print("\(result.enrolled) of \(result.people) people remembered · new people \(result.enrolsNewPeople ? "join automatically" : "stay off")")
                     print("\(result.processed) processed parts · \(result.pending) pending · \(result.failed) failed · \(result.waitingForNames) recordings waiting for speaker names")
+                    if result.enrolledPending > 0 {
+                        print("\(result.enrolledPending) to read for those people · about \(result.estimatedDays) day\(result.estimatedDays == 1 ? "" : "s") at \(Settings.contextDailyRequests) requests a day")
+                        if !result.nextUp.isEmpty { print("next: " + result.nextUp.map { "\($0.name) (\($0.pending))" }.joined(separator: ", ")) }
+                    }
                     print("\(result.indexedPassages) search entries · embeddings generated locally")
                     if !result.embeddingModels.isEmpty { print(result.embeddingModels.joined(separator: "\n")) }
                 }
@@ -158,12 +235,30 @@ enum ContextCLI {
                 let packet = try ContextRetrieval.packet(value, kind: command, question: question, tokenBudget: budget, asOf: asOf)
                 if jsonOutput { print(try json(packet)) }
                 else {
+                    // The same grouping and the same voice as the person page,
+                    // out of `ContextPresentation`, so the window and the
+                    // command line cannot describe one card two ways. `--json`
+                    // above is untouched: it carries the stored wording and the
+                    // stored predicate, which is what a machine reader wants.
+                    let you = Settings.userName
                     print(packet.name)
-                    for sentence in packet.brief { print(sentence.text) }
-                    for item in packet.entries {
-                        print("\(item.subjectName) · \(item.predicate): \(item.text) [\(item.status)]")
-                        for evidence in item.evidence { print("  [\(evidence.source)] \(evidence.recordedAt) \(evidence.quote)") }
+                    for sentence in packet.brief { print(ContextPresentation.addressed(sentence.text, you: you)) }
+                    let episodic = packet.entries.filter { ContextPresentation.episodic($0.text) }
+                    for section in ContextPresentation.sections {
+                        let group = packet.entries.filter {
+                            !ContextPresentation.episodic($0.text) && ContextPresentation.section($0.predicate) == section
+                        }
+                        guard !group.isEmpty else { continue }
+                        print("")
+                        print(section)
+                        for item in group { printEntry(item, you: you) }
                     }
+                    if !episodic.isEmpty {
+                        print("")
+                        print("Last time you spoke")
+                        for item in episodic { printEntry(item, you: you) }
+                    }
+                    print("")
                     print("\(packet.estimatedTokens) estimated tokens · \(packet.omitted) additional details · \(packet.pending) pending")
                 }
             case "history":
@@ -191,6 +286,24 @@ enum ContextCLI {
                 if jsonOutput { print(try json(report)) }
                 else { print("\(report.processed) parts processed · \(report.summaries) summaries · \(report.pending) pending · \(report.failed) failed") }
                 return report.failed == 0 ? 0 : 1
+            case "enrol", "enroll":
+                guard value == "on" || value == "off" else { throw ContextProblem.message("Use context enrol on|off.") }
+                try MemoryPreferences.enrolNewPeople(value == "on", root: Library.root)
+                let executor = await MainActor.run { ContextService.deviceID }
+                let chosen = ContextModel.chosen()
+                let model = chosen.map { MemoryPreferences.Model(provider: $0.key, model: ContextModel.model($0), name: ContextModel.description($0, model: ContextModel.model($0)), executor: executor) }
+                // Turning it on enrols the people who are already here, not
+                // only the ones who arrive next. Otherwise the answer to "yes,
+                // remember the people I talk to" is a library that goes on
+                // knowing nothing about everybody already in it.
+                let added = value == "on" ? ContextEnrolment.sync(ContextSources.all(), model: model) : 0
+                if value == "on" && model == nil {
+                    print("New people will be remembered once a model is chosen. Run listen endpoint or choose one in Settings, Ask.")
+                } else if value == "on" {
+                    print("New people are remembered automatically. \(added) \(added == 1 ? "person" : "people") enrolled now.")
+                } else {
+                    print("New people stay off. People already enrolled are unchanged; use context auto off --person to stop one.")
+                }
             case "auto":
                 guard value == "on" || value == "off" else { throw ContextProblem.message("Use context auto on|off.") }
                 if let person {

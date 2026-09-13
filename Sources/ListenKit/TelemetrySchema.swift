@@ -140,7 +140,7 @@ public enum TelemetrySchema {
         Event.installationActivated.rawValue: ["activation"],
         Event.setupCompleted.rawValue: [
             "outcome", "mic_granted", "model", "dictation_on", "sync_on",
-            "calendar_on",
+            "calendar_on", "memory_on",
         ],
         Event.recordingCompleted.rawValue: [
             "kind", "source_app", "duration_bucket",

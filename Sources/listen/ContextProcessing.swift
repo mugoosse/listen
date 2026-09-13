@@ -529,6 +529,27 @@ final class ContextService {
         task?.cancel()
         if isGenerating { status = "Waiting until you're finished"; notify() }
     }
+    /// Read the whole backlog now, ignoring the daily limit.
+    ///
+    /// **The limit is a pace, not a permission.** It exists so background work
+    /// cannot quietly spend a provider budget somebody did not agree to, and a
+    /// manual run has always bypassed it for the same reason: pressing a button
+    /// is the agreement. What was missing was a manual run that covers
+    /// *everything* rather than one person's next four parts, so a library with
+    /// a backlog could only be caught up by waiting days for the pace to do it.
+    ///
+    /// Measured on this library on 13 September 2026: 432 pending parts at a
+    /// median 12,149 prompt tokens and $0.034 a request is about $15 and
+    /// 49 minutes of provider time. That number belongs on the button, because
+    /// it is somebody else's money.
+    var catchingUp = false {
+        didSet {
+            guard catchingUp != oldValue else { return }
+            if catchingUp { isPaused = false; sourcesChanged() }
+            notify()
+        }
+    }
+
     func refresh(person: String? = nil, manual: Bool = false) {
         guard !askActive, !Capture.shared.isRecording, task == nil else { return }
         // Calling refresh is not consent. Only a saved request or an explicit
@@ -543,6 +564,10 @@ final class ContextService {
         let request = requests.first { ["pending", "running"].contains($0.state) && $0.model.executor == Self.deviceID }
         let automaticAllowed = Settings.askEnabled && Settings.peopleContextEnabled && !isPaused
         let executorID = Self.deviceID
+        let catchUp = catchingUp
+        // Read here, because `modelChoice` reaches `ContextModel.chosen` and
+        // this is the main actor; the worker below is detached.
+        let enrolModel = Self.modelChoice()
         activeRequest = request
         activePerson = request?.person
         manualRun = request != nil
@@ -558,15 +583,34 @@ final class ContextService {
                     var selected = request.map { Set($0.sources) }
                     var choice = request?.model
                     if request == nil, automaticAllowed {
+                        ContextEnrolment.sync(sources, model: enrolModel)
                         let document = try PeopleMemory.load()
-                        for label in Set(sources.flatMap(\.people)).sorted() {
-                            let policy = try MemoryPreferences.policy(MemoryPreferences.personID(label, root: Library.root), root: Library.root)
+                        // Least recently served first; `ContextEnrolment.order`
+                        // is where that is explained and is also what
+                        // `ContextCLI.Coverage.nextUp` reports, so the queue
+                        // the status command names is the queue this walks.
+                        let served = ContextEnrolment.served()
+                        let candidates = Set(sources.flatMap(\.people))
+                        var ids: [String: String] = [:], weight: [String: Int] = [:]
+                        for label in candidates {
+                            ids[label] = MemoryPreferences.personID(label, root: Library.root)
+                            weight[label] = sources.reduce(0) { $0 + ($1.names(label) ? 1 : 0) }
+                        }
+                        for label in ContextEnrolment.order(candidates, ids: ids, weight: weight, served: served) {
+                            guard let id = ids[label] else { continue }
+                            let policy = try MemoryPreferences.policy(id, root: Library.root)
                             guard policy.automatic, policy.model?.executor == executorID else { continue }
-                            let allowed = Set(sources.filter { $0.people.contains(label) && policy.includes($0.id) }.map(\.id))
+                            let allowed = Set(sources.filter { $0.people.contains(label) && policy.includes($0.id, named: $0.names(label)) }.map(\.id))
                             let work = ContextProcessor.pending(sources, document, person: label, selectedSources: allowed)
                             let needsSummary = try PeopleMemory.person(label, document: document).summaryPending
                             if !work.isEmpty || needsSummary {
-                                target = label; selected = allowed; choice = policy.model; break
+                                target = label; selected = allowed; choice = policy.model
+                                // Stamped on selection rather than on success,
+                                // so somebody whose extraction keeps failing
+                                // takes one turn at a time like everybody else
+                                // instead of holding the queue for ever.
+                                ContextEnrolment.markServed(id, in: served)
+                                break
                             }
                         }
                     }
@@ -589,7 +633,12 @@ final class ContextService {
                         ContextService.shared.notify()
                     }
                     if let request { try MemoryPreferences.finish(request, state: "running", message: "Preparing selected sources…", root: Library.root) }
-                    let result = try await ContextBudget.$automatic.withValue(request == nil) {
+                    // A catch-up is an explicit run that happens to have been
+                    // started once and kept going, so it counts as manual for
+                    // the budget exactly as a durable request does. Its usage
+                    // is still recorded; it just does not stop at the cap.
+                    let budgeted = request == nil && !catchUp
+                    let result = try await ContextBudget.$automatic.withValue(budgeted) {
                         try await ContextProcessor.update(person: target, limit: Settings.contextPartsPerPass, retry: request != nil,
                             selectedSources: selected, choice: choice, requestID: request?.id, onModel: { model in
                                 Task { @MainActor in ContextService.shared.activeModel = model; ContextService.shared.notify() }
@@ -607,6 +656,11 @@ final class ContextService {
                 }
                 let result = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
                 continuePending = result.pending > 0 && result.failed == 0 && (result.processed > 0 || result.summaries > 0)
+                // A catch-up is finished when a pass finds nothing left to do,
+                // which is the same condition that stops the chain anyway. It
+                // turns itself off rather than waiting to be turned off, so the
+                // button cannot be left claiming work that is over.
+                if catchUp, !continuePending { catchingUp = false }
                 if isGenerating {
                     lastError = result.errors.first
                     status = result.failed > 0 ? "Some sources need another attempt." : (result.pending > 0 ? "More sources are waiting." : "Up to date")

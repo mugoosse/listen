@@ -111,6 +111,8 @@ struct ContextSource: Codable {
     var generated: Bool? = nil
     var subjectScope: String? = nil
     var aboutPerson: String? = nil
+    /// Who speaks here, or who a note is explicitly about. See `names(_:)`.
+    var speakers: [String]? = nil
 
     var fingerprint: String {
         contentRevision ?? ContextFiles.hash(id + title + date + people.joined(separator: "\n")
@@ -139,6 +141,22 @@ struct ContextSource: Codable {
         source.batchCount = batches.count; source.passages = []
         return source
     }
+    /// Whether this source is somebody speaking, or a note explicitly about
+    /// them, rather than somebody else saying their name.
+    ///
+    /// `people` is the named speakers **plus** every roster name the regex in
+    /// `mentioned` found anywhere in the text, and the two are not the same
+    /// kind of evidence. While one person at a time was opted in, the
+    /// difference cost nothing. Enrolling the whole roster turns every passing
+    /// reference in an hour of transcript into eligible work: on this library
+    /// that is the difference between reading the meetings somebody was in and
+    /// reading every meeting anybody said their first name in.
+    ///
+    /// Absent on catalogue rows written by an older build, and those fall back
+    /// to `people` rather than to nothing, so a stale row keeps the behaviour
+    /// it was written with instead of silently dropping out of the sweep.
+    func names(_ label: String) -> Bool { (speakers ?? people).contains(label) }
+
     var marker: String { "[\(id)]" }
     var recordID: String? { kind == "recording" ? String(id.dropFirst(4)) : nil }
     var noteSlug: String? { kind == "note" ? String(id.dropFirst(5)) : nil }
@@ -285,7 +303,7 @@ enum ContextSources {
             sources.append(ContextSource(id: "rec:\(recording.id)", title: recording.metadata.title,
                 date: recording.metadata.recorded_at, kind: "recording", people: Array(Set(named + mentions)).sorted(),
                 tags: recording.metadata.tags ?? [], dependencies: deps, passages: passages,
-                extractable: !named.isEmpty))
+                extractable: !named.isEmpty, speakers: named))
         }
         for note in notes where !note.excludedFromAI && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let related = note.recordings.flatMap { participants[$0] ?? [] }
@@ -304,7 +322,8 @@ enum ContextSources {
             sources.append(ContextSource(id: "note:\(note.slug)", title: note.title, date: note.created,
                 kind: "note", people: people, tags: note.tags, dependencies: deps,
                 passages: pieces(note.body).enumerated().map { ContextPassage(ref: $0.offset + 1, text: $0.element, speaker: note.source == "you" ? SpeakerName.you : nil) },
-                extractable: !people.isEmpty, aboutPerson: about))
+                extractable: !people.isEmpty, aboutPerson: about,
+                speakers: Array(Set((about.map { [$0] } ?? []) + related)).sorted()))
         }
         for contact in ContactBook.load() {
             let note = contact.note
@@ -312,7 +331,8 @@ enum ContextSources {
             sources.append(ContextSource(id: "person:\(contact.name)", title: "Notes about \(contact.name)", date: "",
                 kind: "contact", people: [contact.name], tags: [],
                 dependencies: ["contact:" + contact.name: ContextFiles.stamp("contact:" + contact.name)],
-                passages: pieces(note).enumerated().map { ContextPassage(ref: $0.offset + 1, text: $0.element) }, extractable: true))
+                passages: pieces(note).enumerated().map { ContextPassage(ref: $0.offset + 1, text: $0.element) },
+                extractable: true, speakers: [contact.name]))
         }
         return sources.map { source in
             var source = source

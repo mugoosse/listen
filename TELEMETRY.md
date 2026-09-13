@@ -103,7 +103,8 @@ Once at the end of setup, and once if setup is closed before the end.
 `outcome` is `finished` or `dismissed`; the other properties describe
 whatever had been chosen by that point, so an abandoned run says how far it
 got. `mic_granted` (bool), `model` (model id or `none`), `dictation_on`
-(bool), `sync_on` (bool), `calendar_on` (bool). Choices, never contents.
+(bool), `sync_on` (bool), `calendar_on` (bool), `memory_on` (bool, whether
+people are remembered automatically). Choices, never contents.
 Re-running setup from Settings sends it again, so this is not once per
 install.
 

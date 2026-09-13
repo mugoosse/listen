@@ -301,7 +301,8 @@ enum Telemetry {
     /// who never opened the wizard at all. Both paths send the same choices;
     /// only this says whether the last step was reached.
     static func setupCompleted(outcome: String, micGranted: Bool, model: String,
-                               dictationOn: Bool, syncOn: Bool, calendarOn: Bool) {
+                               dictationOn: Bool, syncOn: Bool, calendarOn: Bool,
+                               memoryOn: Bool) {
         capture(.setupCompleted, [
             "outcome": outcome,
             "mic_granted": micGranted,
@@ -309,6 +310,7 @@ enum Telemetry {
             "dictation_on": dictationOn,
             "sync_on": syncOn,
             "calendar_on": calendarOn,
+            "memory_on": memoryOn,
         ])
     }
 

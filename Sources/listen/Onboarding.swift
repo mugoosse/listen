@@ -43,7 +43,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     /// and the feature is silently off for them. Its buttons say so: the way
     /// past it is "Not now" rather than "Skip", and nothing about it blocks.
     enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, calendar, model, dictation, ask, sync, done
+        case welcome, microphone, systemAudio, calendar, model, dictation, ask, memory, sync, done
     }
 
     private var window: NSWindow?
@@ -452,6 +452,39 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 status(true, "Ask is on", "")
             }
 
+        case .memory:
+            titleLabel.stringValue = "Remember the people you talk to"
+            // **Value first, then the cost, then one press**, which is the
+            // shape of the Ask step above and for the same reason: this is an
+            // optional feature nobody has heard of, and asking for a decision
+            // before saying what it is for gets "not now" from people who
+            // would have wanted it.
+            paragraph("Listen can keep a short brief on each person you record: "
+                      + "what they are working on, what they have asked you for, "
+                      + "what changed since last time. Every line is a quote from "
+                      + "a real conversation with the recording behind it, so you "
+                      + "can check any of it, correct it, or take it out.")
+            // Why it is asked here rather than left to be found. This is the
+            // whole reason the step exists: measured on a real library on 11
+            // September 2026, memory had read 18 parts and had 321 waiting,
+            // because it was off for everybody until each person was turned on
+            // by hand from their own page and nothing had ever said so.
+            paragraph("It works on everybody you have already recorded, not just "
+                      + "the next conversation, and it reads in the background "
+                      + "while Listen is open. You can turn any one person off on "
+                      + "their page, and Settings, People & Memory lists everyone "
+                      + "at once.")
+            paragraph(ContextModel.chosen(cachedOnly: true)?.needsNetwork == false
+                      ? "Reading is done by the model you just chose, on this Mac, "
+                        + "so nothing leaves it."
+                      : "Reading is done by the same model that answers your "
+                        + "questions, so the passages about a person are sent to "
+                        + "that provider. Choose a model running on this Mac under "
+                        + "Ollama and nothing leaves it at all.")
+            if MemoryPreferences.enrolsNewPeople(root: Library.root) {
+                status(true, "People will be remembered", "")
+            }
+
         case .sync:
             titleLabel.stringValue = "Your other devices"
             paragraph("With iCloud sync on, meetings recorded on your iPhone arrive "
@@ -635,6 +668,14 @@ final class Onboarding: NSObject, NSWindowDelegate {
             secondary.isHidden = Settings.askEnabled
             // "Not now" and not "Skip", for the calendar step's reason:
             // declining costs a feature, not half of every recording.
+            secondary.title = "Not now"
+        case .memory:
+            // Like Ask: the press is the consent and there is nothing to grant,
+            // so the step is finished either way the moment it is answered.
+            let on = MemoryPreferences.enrolsNewPeople(root: Library.root)
+            primary.title = on ? "Continue" : "Remember people"
+            primary.isEnabled = true
+            secondary.isHidden = on
             secondary.title = "Not now"
         case .sync:
             // One label whichever way it goes, like the calendar step: the
@@ -820,6 +861,22 @@ final class Onboarding: NSObject, NSWindowDelegate {
             render()
             return
 
+        case .memory where !MemoryPreferences.enrolsNewPeople(root: Library.root):
+            // Saying yes here enrols the people already in the library, not
+            // only the ones who arrive next: the answer to "remember the people
+            // I talk to" cannot be a library that goes on knowing nothing about
+            // everybody already in it. `ContextEnrolment.sync` writes an
+            // explicit register each, and the sweep does the reading later,
+            // in the background, a few at a time.
+            try? MemoryPreferences.enrolNewPeople(true, root: Library.root)
+            let sources = ContextSources.all()
+            ContextEnrolment.sync(sources, model: ContextService.modelChoice())
+            ContextService.shared.sourcesChanged()
+            // The window stays on this step so the tick can appear where it was
+            // promised, which is what Ask and sync both do.
+            render()
+            return
+
         case .sync where !Settings.cloudSyncApplies && !Settings.isForced("cloudSync"):
             // The press is the consent, exactly as the Sync pane's checkbox
             // is, and it does the same things that checkbox does. The first
@@ -842,7 +899,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 model: Settings.modelChosen ? Settings.model.id : "none",
                 dictationOn: Permissions.accessibility,
                 syncOn: Settings.cloudSyncApplies,
-                calendarOn: Permissions.calendar)
+                calendarOn: Permissions.calendar,
+                memoryOn: MemoryPreferences.enrolsNewPeople(root: Library.root))
             finish()
             return
 
@@ -863,6 +921,11 @@ final class Onboarding: NSObject, NSWindowDelegate {
             // Straight past, with nothing opened and nothing asked. "Not now"
             // means not now, and Settings, Permissions has the switch whenever
             // it does become now.
+            advance()
+        case .memory:
+            // The same as Ask: the register is left unwritten rather than
+            // written false, so Settings, People & Memory can still offer it
+            // as a question nobody has answered.
             advance()
         case .ask:
             // The same, and `askEnabled` is left alone: it is already off, and
@@ -1006,7 +1069,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 model: Settings.modelChosen ? Settings.model.id : "none",
                 dictationOn: Permissions.accessibility,
                 syncOn: Settings.cloudSyncApplies,
-                calendarOn: Permissions.calendar)
+                calendarOn: Permissions.calendar,
+                memoryOn: MemoryPreferences.enrolsNewPeople(root: Library.root))
         }
         Settings.onboarded = true
         stopPolling()

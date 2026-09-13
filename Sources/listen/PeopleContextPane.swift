@@ -27,6 +27,22 @@ final class PeopleContextPane: Pane {
     private var searchStatus: NSTextField?
     private var downloadButton: NSButton?
     private var downloadTask: Task<Void, Never>?
+    /// The roster, and what is drawn from it.
+    ///
+    /// **Rebuilt only when it changes shape.** `refresh()` runs on every
+    /// `PeopleMemory.changed`, which the sweep posts on every tick, and
+    /// tearing down thirty-four rows under the pointer once a pass is how a
+    /// checkbox stops being clickable. `rosterKey` is what makes that a
+    /// comparison rather than a rebuild.
+    private let enrolSwitch = NSSwitch()
+    private var rosterList: NSStackView?
+    private var rosterSummary: NSTextField?
+    private var rosterWaiting: NSTextField?
+    private var rosterRows: [ContextEnrolment.Roster.Row] = []
+    private var catchUp: NSButton?
+    private var catchUpNote: NSTextField?
+    private var rosterKey = ""
+    private var loadingRoster = false
 
     override func build() {
         let introduction = note("Remember the people in your conversations. Listen builds a summary with key details and relationships, each linked to its source.")
@@ -43,7 +59,43 @@ final class PeopleContextPane: Pane {
         automatic.setAccessibilityLabel("Automatic person summaries")
         let enableRow = row([title, space, automatic])
         widthCapped(enableRow)
-        note("Only people you enable on their own page are updated. New people start with memory off. Turning this off pauses automatic work on this Mac.")
+        note("Turning this off pauses automatic work on this Mac. People you have turned on stay on, and manual updates from a person's page still work.")
+
+        separator()
+        heading("Who is remembered")
+        let enrolTitle = NSTextField(labelWithString: "Remember new people automatically")
+        enrolTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        let enrolSpace = NSView()
+        enrolSpace.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        enrolSwitch.target = self
+        enrolSwitch.action = #selector(toggleEnrol)
+        enrolSwitch.setAccessibilityLabel("Remember new people automatically")
+        widthCapped(row([enrolTitle, enrolSpace, enrolSwitch]))
+        note("Everybody named in a conversation gets a summary unless you turn them off here. Reading happens in the background, a few sources at a time, and it never starts while you are recording.")
+        rosterSummary = note("")
+        rosterWaiting = note("")
+        // Raw buttons rather than the `button` helper, like `DictionaryPane`'s
+        // bar: the helper adds to `stack` and `row` then re-parents them out
+        // of it, which works and reads like a mistake.
+        let catchUpButton = NSButton(title: "Read Everything Now", target: self,
+                                     action: #selector(toggleCatchUp))
+        catchUp = catchUpButton
+        let everyone = row([
+            NSButton(title: "Turn On for Everyone", target: self, action: #selector(enableEveryone)),
+            NSButton(title: "Turn Off for Everyone", target: self, action: #selector(disableEveryone)),
+            catchUpButton,
+        ])
+        widthCapped(everyone)
+        // The daily limit is a pace, and this is the way past it for somebody
+        // who would rather wait once than wait a fortnight. It says what it
+        // will spend before it spends it, because that is a provider bill.
+        catchUpNote = note("")
+        let list = NSStackView()
+        list.orientation = .vertical
+        list.alignment = .leading
+        list.spacing = 6
+        stack.addArrangedSubview(list)
+        rosterList = list
 
         separator()
         heading("Summary model")
@@ -111,8 +163,227 @@ final class PeopleContextPane: Pane {
         return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
     }
 
+    // MARK: - The roster
+
+    /// Read the library off the main thread, then draw whatever came back.
+    ///
+    /// `ContextEnrolment.roster` reads every recording's turns to work out who
+    /// is in the library, which is not something to do on the main thread of a
+    /// pane that refreshes on every sweep tick. One at a time: a second request
+    /// arriving while the first is out would answer with the same numbers.
+    private func loadRoster() {
+        guard !loadingRoster else { return }
+        loadingRoster = true
+        Task.detached(priority: .userInitiated) {
+            let roster = ContextEnrolment.roster()
+            await MainActor.run { [weak self] in
+                self?.loadingRoster = false
+                self?.apply(roster)
+            }
+        }
+    }
+
+    private func apply(_ roster: ContextEnrolment.Roster) {
+        guard isViewLoaded else { return }
+        enrolSwitch.state = roster.enrolsNewPeople ? .on : .off
+        rosterRows = roster.rows
+
+        let people = roster.rows.count
+        var summary = "\(roster.enrolled) of \(people) \(people == 1 ? "person" : "people") remembered."
+        if roster.backlog > 0 {
+            let daily = max(1, Settings.contextDailyRequests)
+            let days = max(1, (roster.backlog + daily - 1) / daily)
+            summary += " \(roster.backlog) conversations left to read, about \(days) day\(days == 1 ? "" : "s") at \(daily) requests a day."
+        } else if roster.enrolled > 0 {
+            summary += " Everything they are in has been read."
+        }
+        rosterSummary?.stringValue = summary
+
+        let running = ContextService.shared.catchingUp
+        catchUp?.title = running ? "Stop Reading" : "Read Everything Now"
+        catchUp?.isEnabled = running || roster.backlog > 0
+        if roster.backlog == 0 {
+            catchUpNote?.stringValue = ""
+        } else if running {
+            catchUpNote?.stringValue = "Reading everything now, ignoring the daily limit. It keeps going while Listen is open."
+        } else {
+            // Priced from this Mac's own recorded requests rather than a
+            // guess. `ContextBudget` writes one usage row per provider call
+            // with what it actually cost, so the estimate is this library on
+            // this model, and it says so when there is nothing to go on yet.
+            let spent = (try? ContextBudget.recent()) ?? []
+            let priced = spent.compactMap(\.apiEquivalentUSD).filter { $0 > 0 }
+            if priced.count >= 5 {
+                let each = priced.sorted()[priced.count / 2]
+                catchUpNote?.stringValue = String(
+                    format: "Read all %d now, past the daily limit. About $%.0f at this library's measured cost per request.",
+                    roster.backlog, each * Double(roster.backlog))
+            } else {
+                catchUpNote?.stringValue = "Read all \(roster.backlog) now, past the daily limit. Your provider's usage charges apply."
+            }
+        }
+        catchUpNote?.isHidden = catchUpNote?.stringValue.isEmpty ?? true
+        // The one number on this pane that names something to go and do.
+        rosterWaiting?.stringValue = roster.waitingForNames == 0 ? ""
+            : "\(roster.waitingForNames) recording\(roster.waitingForNames == 1 ? " is" : "s are") waiting for speaker names. Nothing can be read from them until somebody says who is talking."
+        rosterWaiting?.isHidden = roster.waitingForNames == 0
+
+        // Shape, not content: the state words change every pass and must not
+        // cost a rebuild. See `rosterKey`.
+        let key = roster.rows.map { "\($0.id):\($0.automatic.map(String.init) ?? "-")" }.joined(separator: "|")
+        if key != rosterKey { rosterKey = key; rebuildRoster() } else { restyleRoster() }
+        resizeDocument()
+    }
+
+    private func rebuildRoster() {
+        guard let list = rosterList else { return }
+        for view in list.arrangedSubviews { view.removeFromSuperview() }
+        if rosterRows.isEmpty {
+            let empty = NSTextField(labelWithString: "Nobody is named in this library yet.")
+            empty.font = .systemFont(ofSize: 11)
+            empty.textColor = .secondaryLabelColor
+            list.addArrangedSubview(empty)
+            return
+        }
+        for (index, person) in rosterRows.enumerated() {
+            // Added first, then widened: `widthCapped` constrains against the
+            // pane's stack, and two views with no common ancestor yet is an
+            // exception rather than a layout that sorts itself out.
+            let view = rosterRow(person, index: index)
+            list.addArrangedSubview(view)
+            widthCapped(view)
+        }
+    }
+
+    private func rosterRow(_ person: ContextEnrolment.Roster.Row, index: Int) -> NSView {
+        let name = NSTextField(labelWithString: person.display + (person.isYou ? " (you)" : ""))
+        name.font = .systemFont(ofSize: 12, weight: person.isYou ? .medium : .regular)
+        name.lineBreakMode = .byTruncatingTail
+        name.toolTip = person.summary
+
+        let state = NSTextField(labelWithString: Self.state(person))
+        state.font = .systemFont(ofSize: 11)
+        state.textColor = person.automatic == true ? .secondaryLabelColor : .tertiaryLabelColor
+        state.identifier = NSUserInterfaceItemIdentifier("state:" + person.id)
+        state.alignment = .right
+
+        let box = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleOne(_:)))
+        box.state = person.automatic == true ? .on : .off
+        box.tag = index
+        box.setAccessibilityLabel("Remember " + person.display)
+
+        // A spacer so every checkbox lands in the same column. Without it each
+        // row is only as wide as its own name and the controls come out in a
+        // ragged diagonal that reads as thirty-four unrelated switches.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let view = NSStackView(views: [name, spacer, state, box])
+        view.orientation = .horizontal
+        view.spacing = 8
+        view.alignment = .centerY
+        view.distribution = .fill
+        return view
+    }
+
+    /// The words beside a name. Ordered by what somebody would act on first.
+    private static func state(_ person: ContextEnrolment.Roster.Row) -> String {
+        guard person.automatic == true else { return person.automatic == nil ? "Not asked" : "Off" }
+        if person.failed > 0 { return "Needs another attempt" }
+        if person.pending > 0 {
+            return person.claims > 0 ? "\(person.claims) details · \(person.pending) to read"
+                                     : "\(person.pending) to read"
+        }
+        if person.claims > 0 { return "\(person.claims) detail\(person.claims == 1 ? "" : "s")" }
+        return "Nothing found yet"
+    }
+
+    private func restyleRoster() {
+        guard let list = rosterList else { return }
+        for (index, view) in list.arrangedSubviews.enumerated() where index < rosterRows.count {
+            let person = rosterRows[index]
+            for field in view.subviews.compactMap({ $0 as? NSTextField })
+            where field.identifier?.rawValue == "state:" + person.id {
+                field.stringValue = Self.state(person)
+            }
+        }
+    }
+
+    @objc private func toggleCatchUp() {
+        let service = ContextService.shared
+        service.catchingUp.toggle()
+        if service.catchingUp { service.refresh(manual: true) }
+        refresh()
+    }
+
+    @objc private func toggleEnrol() {
+        let on = enrolSwitch.state == .on
+        try? MemoryPreferences.enrolNewPeople(on, root: Library.root)
+        if on { enrolEverybodyNow() } else { loadRoster() }
+    }
+
+    @objc private func enableEveryone() {
+        enrolSwitch.state = .on
+        try? MemoryPreferences.enrolNewPeople(true, root: Library.root)
+        // Everybody, including anybody who was explicitly turned off: this
+        // button says "everyone" and a switch that leaves some of them alone
+        // would be a switch that lies.
+        setAll(true)
+    }
+
+    @objc private func disableEveryone() {
+        enrolSwitch.state = .off
+        try? MemoryPreferences.enrolNewPeople(false, root: Library.root)
+        setAll(false)
+    }
+
+    /// Write an explicit register for every person on the roster.
+    private func setAll(_ on: Bool) {
+        let rows = rosterRows
+        let model = ContextService.modelChoice()
+        Task.detached(priority: .userInitiated) {
+            for person in rows {
+                try? MemoryPreferences.automatic(on, person: person.id, model: model, root: Library.root)
+            }
+            await MainActor.run {
+                ContextService.shared.sourcesChanged()
+                NotificationCenter.default.post(name: PeopleMemory.changed, object: nil)
+            }
+        }
+    }
+
+    /// Give everybody who has never been asked a register, now rather than on
+    /// the next sweep tick, so the numbers on this pane answer the switch.
+    private func enrolEverybodyNow() {
+        let model = ContextService.modelChoice()
+        Task.detached(priority: .userInitiated) {
+            ContextEnrolment.sync(ContextSources.all(), model: model)
+            await MainActor.run {
+                ContextService.shared.sourcesChanged()
+                NotificationCenter.default.post(name: PeopleMemory.changed, object: nil)
+            }
+        }
+    }
+
+    @objc private func toggleOne(_ sender: NSButton) {
+        guard sender.tag < rosterRows.count else { return }
+        let person = rosterRows[sender.tag]
+        let on = sender.state == .on
+        do {
+            try MemoryPreferences.automatic(on, person: person.id, model: ContextService.modelChoice(), root: Library.root)
+            ContextService.shared.sourcesChanged()
+            loadRoster()
+        } catch {
+            sender.state = on ? .off : .on
+            let alert = NSAlert()
+            alert.messageText = "Couldn’t change this person"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
     override func refresh() {
         guard isViewLoaded else { return }
+        loadRoster()
         let service = ContextService.shared
         automatic.state = Settings.peopleContextEnabled ? .on : .off
         searchModel.selectItem(at: Settings.multilingualSearch ? 1 : 0)

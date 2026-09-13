@@ -76,9 +76,14 @@ echo "$dump" | grep -q "Welcome to Listen"
 check $? "the setup window is up"
 [ "$("$PROBE" hasclose $APP "welcome")" = "no" ]
 check $? "and it has no close button"
-# "What's cooking" is the empty library's heading; "New Recording" would match
-# the menu bar, which is in the app's AX tree whatever window is up.
-! echo "$dump" | grep -q "What's cooking"
+# The home page's greeting is the tell; "New Recording" would match the menu
+# bar, which is in the app's AX tree whatever window is up. There are two
+# greetings and an empty library gets the other one: a library with nothing in
+# it says "Ready when you are", and only one with recordings, people, notes or
+# conversations says "What's cooking". Matching one of them alone passed this
+# assertion for the wrong reason and failed the two below for a real one.
+home() { echo "$1" | grep -qE "What's cooking|Ready when you are"; }
+! home "$dump"
 check $? "the library window is not on screen yet"
 
 echo "2. every step still has its own way past"
@@ -92,8 +97,15 @@ done
 check $reached_end "walked to the end pressing only safe buttons"
 sleep 2
 dump=$("$PROBE" texts $APP 2>&1)
-echo "$dump" | grep -q "What's cooking"
+home "$dump"
 check $? "the library window appeared after finishing"
+
+# The memory step is optional in the same way the Ask step is, so walking the
+# flow pressing only the way-past words must leave it off. Declining writes
+# nothing rather than writing false, so Settings can still offer it as a
+# question nobody has answered.
+! grep -q "enrolNewPeople" "$LISTEN_LIBRARY/people-memory-settings.json" 2>/dev/null
+check $? "declining the memory step leaves people un-enrolled"
 
 kill $APP 2>/dev/null
 sleep 1
@@ -105,7 +117,7 @@ sleep 4
 dump=$("$PROBE" texts $APP 2>&1)
 ! echo "$dump" | grep -q "Welcome to Listen"
 check $? "no setup window on the second launch"
-echo "$dump" | grep -q "What's cooking"
+home "$dump"
 check $? "the library came straight up"
 
 echo "4. the Settings re-run is closable"
@@ -116,6 +128,29 @@ echo "4. the Settings re-run is closable"
 "$PROBE" press $APP "Run setup again" >/dev/null 2>&1; sleep 1.5
 [ "$("$PROBE" hasclose $APP "welcome")" = "yes" ]
 check $? "setup opened from Settings has a close button"
+
+echo "5. the memory step turns memory on when it is pressed"
+# Walk forward with the safe words until the memory step names itself, then
+# press the one button on it that does something. It is the only step whose
+# consent is a file in the library rather than a defaults key, which is why
+# the assertion reads the library.
+reached_memory=1
+for step in 1 2 3 4 5 6 7 8 9 10; do
+  if "$PROBE" texts $APP 2>/dev/null | grep -q "Remember the people you talk to"; then
+    reached_memory=0; break
+  fi
+  advance $APP >/dev/null || break
+  sleep 1.2
+done
+check $reached_memory "the memory step is reachable from a Settings re-run"
+if [ "$reached_memory" = "0" ]; then
+  press $APP "Remember people" "pressing it is accepted"
+  sleep 1
+  "$PROBE" texts $APP 2>/dev/null | grep -q "People will be remembered"
+  check $? "and the step says so where it promised"
+  grep -q '"enrolNewPeople"' "$LISTEN_LIBRARY/people-memory-settings.json" 2>/dev/null
+  check $? "the library records that new people are remembered"
+fi
 
 kill $APP 2>/dev/null
 trap - EXIT

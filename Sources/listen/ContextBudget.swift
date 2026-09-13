@@ -72,4 +72,10 @@ enum ContextBudget {
     static func today() throws -> [ContextUsage] {
         try ContextStore.database().all(ContextUsage.self, in: .usage).values.filter { $0.day == day }
     }
+    /// Every request this Mac has recorded, for pricing what is still to come.
+    /// The rows carry what each call actually cost on this library and this
+    /// model, which is a better estimate than any constant would be.
+    static func recent() throws -> [ContextUsage] {
+        Array(try ContextStore.database().all(ContextUsage.self, in: .usage).values)
+    }
 }

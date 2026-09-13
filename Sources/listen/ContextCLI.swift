@@ -51,6 +51,9 @@ enum ContextCLI {
         /// Whether somebody nobody has answered for yet is enrolled
         /// automatically.
         var enrolsNewPeople: Bool
+        /// Whether this library carries no answer about memory at all, which
+        /// is what decides whether an upgrade offers it. See `MemoryOffer`.
+        var neverAnswered: Bool
         /// People at least one extractable source can speak for.
         var people: Int
         /// How many of them the sweep is allowed to read about.
@@ -123,6 +126,7 @@ enum ContextCLI {
             embeddingModels: Set(index.entries.compactMap { $0.vector?.model }).sorted(),
             indexedPassages: index.entries.count,
             enrolsNewPeople: MemoryPreferences.enrolsNewPeople(root: Library.root),
+            neverAnswered: MemoryOffer.neverAnswered(root: Library.root),
             people: candidates.count,
             enrolled: enrolled.count,
             enrolledPending: backlog.values.reduce(0, +),

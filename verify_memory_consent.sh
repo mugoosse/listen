@@ -92,6 +92,14 @@ is "the queue is empty"            "$(q "['nextUp']")"          "[]"
 # library every passing first name would do the same.
 is "only speakers are candidates"  "$(q "['people']")"          "3"
 
+# ------------------------------------------- whether an upgrade would ask
+# Setup runs on a first run only, so the memory step reaches nobody who was
+# already here and `MemoryOffer` asks them once instead. The guard that can
+# silently break is this one: offering to somebody who has already said no
+# reads as an app that did not listen, and the register names are the whole
+# test, so a rename that forgets them nags every user who declined.
+is "a library nobody has answered for would be asked" "$(q "['neverAnswered']")" "True"
+
 # ------------------------------------------------------------------- enrolling
 echo
 echo "After turning enrolment on"
@@ -100,6 +108,7 @@ s=$(run context status --json 2>/dev/null)
 is "everybody is enrolled"         "$(q "['enrolled']")"        "3"
 is "new people join automatically" "$(q "['enrolsNewPeople']")" "True"
 is "Zara is still not a person"    "$(q "['people']")"          "3"
+is "and saying yes counts as answered" "$(q "['neverAnswered']")" "False"
 [ "$(q "['enrolledPending']")" -gt 0 ] \
   && ok "there is a backlog to read" \
   || no "there is a backlog to read (got $(q "['enrolledPending']"))"
@@ -118,6 +127,12 @@ echo
 echo "An explicit decline"
 run context auto off --person Ada >/dev/null 2>&1
 run context enrol on >/dev/null 2>&1          # a second pass must not undo it
+# A decline is an answer too, and the one that matters: turning a single
+# person off from their page is somebody who has found the feature.
+run context enrol off >/dev/null 2>&1
+s=$(run context status --json 2>/dev/null)
+is "and so does turning one person off"  "$(q "['neverAnswered']")" "False"
+run context enrol on >/dev/null 2>&1
 s=$(run context status --json 2>/dev/null)
 is "a declined person stays declined" "$(q "['enrolled']")" "2"
 

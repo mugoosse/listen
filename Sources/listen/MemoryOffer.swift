@@ -54,6 +54,29 @@ enum MemoryOffer {
     private static var scanning = false
     private static var counted: Int?
 
+    /// Whether the library carries no answer about memory, either way.
+    ///
+    /// **Its own function because it is the guard that can silently break, and
+    /// the only one a script can check.** Offering to somebody who already
+    /// said no is the failure that costs trust rather than a screen: it reads
+    /// as an app that did not listen. The register names are the whole test,
+    /// so a rename that forgets this is exactly the change that would nag
+    /// every user who had declined. `ContextCLI.Coverage` reports it and
+    /// `verify_memory_consent.sh` asserts it over a synthetic library.
+    ///
+    /// Deliberately not the whole decision: `shown` is a per-install defaults
+    /// bool, and the rest of `offerIfNeeded` is about what is on screen right
+    /// now. Neither of those is a fact about a library and neither belongs
+    /// here.
+    /// `nonisolated` because it reads a file and nothing else: the CLI asks it
+    /// from no actor at all, and an offer decision that can only be made on the
+    /// main thread is one a script cannot check.
+    nonisolated static func neverAnswered(root: URL) -> Bool {
+        let values = (try? MemoryPreferences.read(root: root)) ?? [:]
+        return values["enrolNewPeople"] == nil
+            && !values.contains { $0.key.hasPrefix("person:") && $0.key.hasSuffix(":automatic") }
+    }
+
     /// Offer it, if this is somebody it has never been offered to.
     ///
     /// Every guard here is a state in which an alert would be wrong rather than
@@ -73,13 +96,7 @@ enum MemoryOffer {
         guard !shown, !scanning, !Settings.isFirstRun, NSApp.isActive,
               !Onboarding.shared.isShowing, !Capture.shared.isRecording,
               Settings.askEnabled else { return }
-        // Never answered: no library-wide enrolment register, and nobody turned
-        // on or off by hand either. Somebody who has used the roster has found
-        // the feature already and does not need telling about it.
-        let values = (try? MemoryPreferences.read(root: Library.root)) ?? [:]
-        guard values["enrolNewPeople"] == nil,
-              !values.contains(where: { $0.key.hasPrefix("person:") && $0.key.hasSuffix(":automatic") })
-        else { shown = true; return }
+        guard neverAnswered(root: Library.root) else { shown = true; return }
 
         // Already answered this launch. A scan that finished while somebody was
         // in another app leaves its count here, so the switch back that follows

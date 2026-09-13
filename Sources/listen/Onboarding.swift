@@ -893,6 +893,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
         case .done:
             // One summary of the choices made here, sent only if the step
             // before said yes; `Telemetry` drops it silently otherwise.
+            MemoryOffer.markAskedBySetup()
             Telemetry.setupCompleted(
                 outcome: "finished",
                 micGranted: Permissions.microphone,
@@ -1073,6 +1074,9 @@ final class Onboarding: NSObject, NSWindowDelegate {
                 memoryOn: MemoryPreferences.enrolsNewPeople(root: Library.root))
         }
         Settings.onboarded = true
+        // Setup asked, whichever way it was answered, so the upgrade offer must
+        // not ask again. See `MemoryOffer`.
+        MemoryOffer.markAskedBySetup()
         stopPolling()
         Dictation.shared.activate()
     }

@@ -1217,6 +1217,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// That is the bug `reloading` and `renderTurns(scrollToTop:)` already exist
     /// to prevent, and it would have been reintroduced here for free.
     @objc private func appBecameActive() {
+        // Before the reload guard below, which returns as soon as nothing on
+        // disk has moved: the offer is about somebody coming back to the app,
+        // not about the library having changed while they were away.
+        MemoryOffer.offerIfNeeded()
         guard mode == .library, window?.isVisible == true else { return }
         let now = Self.libraryStamps()
         guard now != libraryStamps else { return }

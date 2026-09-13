@@ -368,6 +368,51 @@ leaking through the page, so the stored predicate moved to the row's tooltip and
 newest evidence first: on the measured card the single most identifying line,
 "works as a psychotherapist and currently sees patients", was last of thirteen.
 
+## Setup only runs once, so the step reached nobody who was already here
+
+`Settings.isFirstRun` is the **absence** of the `onboarded` key, and
+`AppDelegate` shows setup on that alone. Every existing install has the key, so
+adding a memory step to setup changed nothing at all for anybody who already
+used Listen: they got a roster buried in Settings, the feature still off, and
+nothing asking them. The diagnosis this whole area was reworked from was that
+nothing ever asked. A fix that still does not ask them is the same bug with
+more code behind it.
+
+`MemoryOffer` asks once, on activation, in the setup step's words.
+`Updater.offerStagedUpdate` is the pattern and most of the guards are its
+guards. The one that is this feature's own: **an existing answer, either way,
+counts as having been asked.** Somebody who turned a person on from the roster,
+or off from their page, has found the feature, and `person:*:automatic` in the
+settings file is the evidence. `memoryOfferShown` is local rather than in the
+library file, because it records that a screen was shown on this Mac and that
+is not a fact about the library.
+
+## Caching is already doing most of what it can, and that changes the plan
+
+Solved from 40 real requests on 13 September 2026, Sonnet 5, by comparing what
+each one actually cost against what it would have cost with no cache and with a
+full one:
+
+| | |
+|---|---|
+| Median actual | **$0.0336** |
+| If fully uncached | $0.0480 |
+| If fully cached | $0.0122 |
+| Implied input served from cache | **~40%** |
+
+`Agent.swift` already sums `input_tokens`, `cache_creation_input_tokens` and
+`cache_read_input_tokens` into `promptTokens`, so the token column could never
+have answered this; the cost column is the only honest signal.
+
+**This reverses the advice that preceded it.** The expectation was that caching
+might be absent and turning it on would make merging requests unnecessary. The
+opposite is true: the instruction is already cached, and what is left uncached
+is the part that genuinely differs per call, the passages and the prior claims.
+There is no more caching to win. The remaining saving is **fewer requests**, so
+one extraction per source when everybody in it is enrolled is worth more than
+it looked, not less. Full caching would take $0.034 to $0.012; eliminating a
+request removes all of it.
+
 ## Verification commands
 
 **`defaults delete` does not delete the file.** `verify_context.py` gives each

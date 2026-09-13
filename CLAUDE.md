@@ -746,6 +746,8 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - One name would have eaten the budget every day
 - A passing mention is not somebody speaking
 - The card would not say "you", and said "in this session" for ever
+- Setup only runs once, so the step reached nobody who was already here
+- Caching is already doing most of what it can, and that changes the plan
 
 ### `.agents/notes/review-ios-scope.md`
 

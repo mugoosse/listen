@@ -50,8 +50,24 @@ func string(_ element: AXUIElement, _ name: String) -> String {
     (attribute(element, name) as? String) ?? ""
 }
 
-func children(_ element: AXUIElement) -> [AXUIElement] {
-    (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+func children(_ element: AXUIElement, windowsFirst: Bool = false) -> [AXUIElement] {
+    let kids = (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+    guard windowsFirst else { return kids }
+    // **Windows before the menu bar, at the application element.** An
+    // application's children are its windows and its menu bar, and a menu bar
+    // is not small: measured on 13 September 2026 at 8,460 `AXMenuItem` rows
+    // and 406 visits to the bar itself, which is more than the whole budget,
+    // so the walk finished without ever reaching a window. Every window
+    // assertion in every script then fails at once, and the dump it fails on
+    // reads exactly like an app that rendered nothing, which is the same
+    // symptom as a sleeping display and sends you looking in the wrong place.
+    // Depth-first order is otherwise preserved, so a menu item is still found
+    // where it always was, just after the windows rather than instead of them.
+    return kids.sorted { a, b in
+        let left = string(a, kAXRoleAttribute) == kAXWindowRole
+        let right = string(b, kAXRoleAttribute) == kAXWindowRole
+        return left && !right
+    }
 }
 
 func walk(_ element: AXUIElement, depth: Int = 0,
@@ -59,7 +75,7 @@ func walk(_ element: AXUIElement, depth: Int = 0,
     guard depth < 60, budget > 0 else { return }
     budget -= 1
     guard visit(element) else { return }
-    for child in children(element) {
+    for child in children(element, windowsFirst: depth == 0) {
         walk(child, depth: depth + 1, budget: &budget, visit: visit)
     }
 }

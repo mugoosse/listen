@@ -66,12 +66,15 @@ roots that remains clear at 16 points.
   any OpenAI-compatible endpoint, which includes one running on this Mac under
   Ollama or LM Studio and therefore nothing leaving it.
 - **Remembers people and projects with sources.** Person pages show a concise
-  brief, details, relationships and history, each linked to the original words.
-  Correct, pin or hide a detail without changing the recording. Explicit dated
-  changes preserve earlier states; a newer recording alone never ends a role.
-  Enable **Automatic briefs** in **Settings → AI → People & Memory**, choose a
-  background provider/model independently of Ask, and set a daily request budget.
-  Generation uses your existing Claude Code, Codex or compatible endpoint.
+  brief grouped by what a line is about, each detail dated and linked to the
+  original words. Correct, pin or hide a detail without changing the recording.
+  Explicit dated changes preserve earlier states; a newer recording alone never
+  ends a role. Setup asks once whether to remember the people you record, and
+  **Settings → AI → People & Memory** lists everybody with a backlog and a
+  switch each, so you can turn one person off or everybody on. Choose a
+  background provider/model independently of Ask, and set a daily request
+  budget. Generation uses your existing Claude Code, Codex or compatible
+  endpoint.
   An encrypted reading projection and corrections sync through your existing
   owner iCloud library to other Macs and iPhone; processing stays on Mac.
 - **Searches by meaning as well as words.** Apple's on-device sentence models
@@ -85,6 +88,16 @@ roots that remains clear at 16 points.
   sealed before they leave with a key Apple never holds. A lossless copy of the
   audio can travel with them, so a second Mac can play a meeting and transcribe
   it again rather than only read it.
+- **Hands back what it learned, once a week.** **View → This Week** opens the
+  review: a deck of cards where the sidebar sits, the galaxy beside it, and
+  this week's stars arriving into the library you already had. Every card
+  carries something to do rather than something to scroll past: name the people
+  in a recording nobody has labelled, accept or correct a detail Listen picked
+  up, or open somebody you have not spoken to in months. It is also on the home
+  page, and a person's page has **Catch Up**: the same deck scoped to them over
+  the last ninety days, with the span a control on the page. `listen review`
+  and `listen review --person <name>` print the same cards at the command
+  line.
 - **Draws the whole library as one picture.** **View → Galaxy** puts your
   recordings, notes, people and chats on four shells around this Mac, with a
   line wherever the library already records a relationship: a note naming a

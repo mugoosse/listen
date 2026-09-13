@@ -720,6 +720,9 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Reset was undone by the flight it started
 - A card open is not a hand on the picture, and Pause said otherwise
 - The list beside the picture is what the star links to
+- The week's review, and what the picture is allowed to know
+- `appear` is a field, not a colour, and it defaults to 1
+- A review outranks `interacting`, which is the pointer alone now
 - What is deliberately not here: no inferred edges, no importance in the radius, no accessible element per star
 
 ### `.agents/notes/person-context.md`
@@ -739,6 +742,21 @@ search. Read before changing `ContextSources`, `PeopleMemory`, `ContextProcessor
 - `defaults delete` does not delete the file
 - Coverage is a number the agent could not see
 - Exclusion reaches search, and now there is a test that says so
+- Nobody was enrolled, and the queue could never move
+- One name would have eaten the budget every day
+- A passing mention is not somebody speaking
+- The card would not say "you", and said "in this session" for ever
+
+### `.agents/notes/review-ios-scope.md`
+
+Scope for putting the review on iPhone, and what the measured request numbers
+say about collapsing the memory pipeline. Not a plan of record.
+
+- Reviews on iPhone are a seam, not a port: the phone has no ledger
+- 83% of every extraction request is instruction and prior claims, re-sent
+- One extraction per source once everybody in it is enrolled
+- An auto-summary note is table stakes, and never an input to memory
+- The paywall argument that works for Granola does not work here
 
 ### `.agents/notes/telemetry.md` (16k)
 
@@ -873,6 +891,25 @@ python3 tools/verify_context.py  # synthetic person memory, validation, retries,
 ./verify_sync_status.sh # a non-syncing Mac transcribes without ever saying
                         # "Syncing transcript"; sync status names its
                         # environment (AX-driven, display awake)
+./verify_review.sh      # the week's review, over a synthetic library the
+                        # script builds: which cards a week makes, the counts
+                        # on them, that every card carries something to do,
+                        # that the loose-ends card and `context status` agree
+                        # about what needs a speaker name, and that only this
+                        # week's stars are revealed. `--ui` adds the deck and
+                        # reads the motion policy out of the LISTEN_DEBUG
+                        # trace, because whether the picture is still drifting
+                        # while a card holds a star is invisible to the AX tree
+./verify_memory_consent.sh  # who person memory is allowed to read about, over
+                        # a synthetic library the script builds, so it needs no
+                        # recordings, no model and no network: enrolment writing
+                        # an explicit register each, an explicit decline
+                        # surviving later passes, somebody new joining on the
+                        # next pass, a person who is only ever mentioned staying
+                        # out of the queue, and the round-robin serving everyone
+                        # in turn rather than spending every day on whoever is
+                        # first alphabetically. `--ui` adds the People & Memory
+                        # roster (uitest copy)
 ./verify_onboarding.sh  # first run not dismissable, every step passable
                         # without granting anything, Settings re-run closable
                         # (uitest copy; expect the Keychain prompt, Deny it)

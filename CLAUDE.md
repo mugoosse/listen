@@ -304,7 +304,7 @@ the one of them a note carries too. `Notes`, `Tags`, `Taggable`,
 - A tag is a name string, and the vocabulary is derived
 - `tag:job ` looks finished and is not, and the field lifted the wrong pill
 - `kind:` is not a predicate on a recording, and `apply(to:)` ignores it
-- Lenses stack, and `RecordingFilter` is why there is not a fourth predicate
+- Lenses stack, and `RecordingFilter` is why there is not a fourth predicate (there is a fourth lens now, and it is the galaxy's)
 - The server is no longer read-only, and notes and tags are the whole exception
 - A note belongs to the library, not to a recording
 - A note may name no recording, and only the window may write one
@@ -444,6 +444,7 @@ this app, so read them before building any new window, menu or popover.
 - `MainMenu.install()` may not be called twice
 - A wrapping label's `fittingSize` is one line high, and the card it is in gets clipped
 - A view with no intrinsic size, laid out by frame, is solved at zero
+- An `NSTextField`'s accessibility answers from its cell, not from the view
 - Liquid Glass is a vocabulary, and the rule is one material per layer
 
 ### `.agents/notes/dictation.md` (18k)
@@ -712,11 +713,13 @@ The library drawn as concentric shells around this Mac. `Galaxy`,
 - Repulsion acts across shells, on purpose
 - A failed command buffer used to be a silent return
 - `mouseUp` must compare against where the press started
-- The sidebar stays live, so a row picked there has to leave the mode
+- The sidebar stays live, so a row picked there has to leave the mode (superseded: in the galaxy it moves the selection)
 - The shader is compiled from source, not added to the build
 - The two controls are in the title bar, and one of them is not always there
 - Reset is absent until there is something to undo, and it is a comparison
 - Reset was undone by the flight it started
+- A card open is not a hand on the picture, and Pause said otherwise
+- The list beside the picture is what the star links to
 - What is deliberately not here: no inferred edges, no importance in the radius, no accessible element per star
 
 ### `.agents/notes/person-context.md`
@@ -1018,6 +1021,14 @@ the title bar is asserted with it. It exits
 specially when the terminal lacks Accessibility permission and when the tree
 comes back empty, because a sleeping display empties every window's subtree
 and a script grepping for absence would pass on nothing.
+**A locked screen is the third shape of that, and `verify_galaxy.sh` now asks
+about it before running its window half.** Behind the lock every subtree is
+empty while `texts` still exits 0, so every positive assertion fails and every
+negative one passes: a page of confident FAILs about controls nothing looked
+at, which reads as a broken build rather than as a locked Mac. The guard is
+`ioreg -n Root -d1 | grep '"CGSSessionScreenIsLocked"=Yes'` and a skip, and it
+is worth copying into the other AX scripts. `caffeinate -u` wakes the display
+and does not clear it.
 
 `listen sync --fake` is the other half of the note-tag story and runs offline in
 about a second. It holds the pre-change `Note.version` digest as a hard-coded

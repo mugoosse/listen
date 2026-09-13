@@ -68,7 +68,15 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     private var visible: Galaxy.Snapshot {
         var nodes = snapshot.nodes
         if !hiddenKinds.isEmpty { nodes = nodes.filter { !hiddenKinds.contains($0.kind) } }
-        if !search.isEmpty {
+        // **A search with a star selected lights the picture rather than
+        // narrowing it.** The list beside it is that star's neighbourhood then,
+        // and the field is searching inside that list: taking stars out of the
+        // sphere under a card that is about one of them fights the reader twice
+        // over, once by moving the picture they are reading and once by
+        // dropping the selection the moment their own name stops matching what
+        // they typed. The matches are still lit, which is the half that answers
+        // "where is that in here".
+        if !search.isEmpty, selectedID == nil {
             let hits = matches
             let neighbours = Set(snapshot.edges.flatMap { edge -> [String] in
                 if hits.contains(edge.source) { return [edge.source, edge.target] }
@@ -97,7 +105,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         // keystroke, on the main thread, and the question of whether it needs a
         // debounce is a measurement rather than an opinion.
         let began = DEBUG ? DispatchTime.now().uptimeNanoseconds : 0
-        // A star that has fallen out of the search cannot stay selected.
+        // A star that has fallen out of the search cannot stay selected. It
+        // cannot fall out while it is the selection any more (see `visible`),
+        // so this is now only about the stars a struck-out shell takes away.
         if let id = selectedID, visible.node(id) == nil { select(nil) }
         renderGeneration += 1
         pushToRenderer()
@@ -624,7 +634,15 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     }
 
     private func applyMotionPolicy() {
-        policy.interacting = dragging || hoveredID != nil || selectedID != nil || focusFlight != nil
+        // **A selection is not an interaction.** It used to be, and the picture
+        // froze for as long as a card was open while the toolbar still offered
+        // to pause it: the one control that says whether the sky is moving was
+        // wrong about the state a reader spends the most time in. A flight is
+        // out for the same reason, since it would stop the drift for its own
+        // 0.65s and start it again on landing. What is left is the pointer:
+        // a drag is the hand moving the picture itself, and a hover is an aimed
+        // star that should hold still long enough to be clicked.
+        policy.interacting = dragging || hoveredID != nil
         // A flight that policy has just forbidden lands where it was going,
         // rather than stopping half way: the camera, the labels and picking all
         // read the same position, so a frozen intermediate frame would be a
@@ -764,6 +782,33 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         pendingSelection = id
     }
 
+    /// Select the star standing for one of the library's own things, if the
+    /// picture has one.
+    ///
+    /// **A row in the list is not always a star.** The recording being made now
+    /// is in staging rather than in the library, and the sphere is built from
+    /// the library; somebody out of the contact book has never been recorded at
+    /// all. Both are rows somebody can click while the picture is up, and
+    /// neither has anywhere to fly to. The selection is left where it is rather
+    /// than cleared: a click that cannot do what it says should not undo what
+    /// the reader did mean.
+    func selectIfPresent(_ id: String) {
+        guard visible.node(id) != nil else { return }
+        select(id)
+    }
+
+    /// Select the star standing for a person, which is the centre when that
+    /// person is you.
+    ///
+    /// `Galaxy.build` promotes the owner into the middle rather than drawing a
+    /// second star for them, so there is no `person:` id to ask for and the row
+    /// for your own name would otherwise point at nothing.
+    func select(person label: String) {
+        let id = Galaxy.personID(label)
+        if visible.node(id) != nil { select(id) }
+        else if SpeakerName.matches(label, SpeakerName.you) { select(Galaxy.deviceID) }
+    }
+
     /// Select a star by id, or nothing. Public so a verification script can
     /// drive what a click drives.
     func select(_ id: String?) {
@@ -818,9 +863,19 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
 
     var selection: String? { selectedID }
 
+    /// What is selected and what it links to, for the list beside the picture.
+    ///
+    /// The nodes rather than the edges, because the list is about things: which
+    /// relationship joins them is the card's sentence to write, and the sidebar
+    /// has no room for it. Called on every path that changes either, which is
+    /// this pane's selection and its reload, since a recording arriving from a
+    /// phone is a neighbour appearing under a card nobody has touched.
+    var onSelectionChanged: ((Galaxy.Node?, [Galaxy.Node]) -> Void)?
+
     private func updateInspector() {
         guard let id = selectedID, let node = visible.node(id) else {
             inspector.isHidden = true
+            onSelectionChanged?(nil, [])
             return
         }
         let links = visible.edges.filter { $0.source == id || $0.target == id }
@@ -828,6 +883,13 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         inspector.show(node: node, links: links, titles: titles,
                        openable: Galaxy.subject(of: id) != nil)
         inspector.isHidden = false
+        // The other end of every link, in the order the edges were built, with
+        // the star itself never among them: a self-link would put a recording
+        // in its own list of what it is joined to.
+        let neighbours = links.compactMap { edge -> Galaxy.Node? in
+            visible.node(edge.source == id ? edge.target : edge.source)
+        }.filter { $0.id != id }
+        onSelectionChanged?(node, neighbours)
     }
 
     @objc private func resetView() {
@@ -1013,6 +1075,12 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
                   !occupied.contains(where: { $0.intersects(rect.insetBy(dx: -3, dy: -2)) }) else { continue }
             occupied.append(rect)
             let label = GalaxyLabel(labelWithString: node.title)
+            // Set here rather than overridden on the class: `isAccessibilityElement`
+            // on an `NSTextField` is answered by its cell, and the override was
+            // ignored. Measured, because the symptom is a dump that still holds
+            // every title.
+            label.setAccessibilityElement(false)
+            label.cell?.setAccessibilityElement(false)
             label.font = font
             label.textColor = .white
             label.backgroundColor = NSColor.black.withAlphaComponent(0.38)
@@ -1056,6 +1124,16 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
 }
 
 /// A label that is drawn over the scene and never in the way of a click.
+/// A star's title, drawn over the scene.
+///
+/// **Not an accessibility element.** These are two dozen names scattered over a
+/// picture that cannot be reached, in an order that is a projection rather than
+/// a reading order, and none of them can be acted on: the pane's own label says
+/// exactly that and points at the list beside it, which holds the same things
+/// as rows that open. Leaving them in the tree made them noise for a reader and
+/// a trap for a script, because a dump then contained every title twice and an
+/// assertion about the sidebar passed on the picture. Found that way: the
+/// narrowed list was right and the test was wrong.
 private final class GalaxyLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

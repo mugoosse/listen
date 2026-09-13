@@ -651,6 +651,13 @@ replace, the way a row of tokens behaves everywhere else, and replacing is
 dismissing the old one first. Adding the lens already on is a no-op, because
 clicking a chip twice is something people do.
 
+**There is a fourth case now, and it is the one that is not a predicate.**
+`Lens.linked` carries one star's neighbourhood out of the galaxy, so the list
+beside the picture is what the selection links to and the field searches inside
+it. It is ANDed like the rest and dropped like the rest; what it does not have
+is an operator, because there is nothing to type that would set it. See "The
+list beside the picture is what the star links to" in `galaxy.md`.
+
 **The speaker lens is gone**, asked for directly, and with it the example above:
 what is left is `filter(byTag:)` and the unnamed lens. The stacking is unchanged
 and still earns its keep on tags. See "Nobody wanted the library narrowed by a

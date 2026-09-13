@@ -109,6 +109,10 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             self.rebuildToolbar()
         }
         pane.onMotionChanged = { [weak self] _ in self?.syncGalaxyControls() }
+        // The list beside the picture follows the picture. See `narrowSidebar`.
+        pane.onSelectionChanged = { [weak self] node, neighbours in
+            self?.narrowSidebar(to: node, neighbours: neighbours)
+        }
         return pane
     }()
     /// The conversations, in the sidebar's slot while one is being read. See
@@ -507,6 +511,52 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// this app takes, which is the point of `Galaxy.Node.id` carrying the
     /// library's own identifier: there is no second way into a recording here,
     /// only the same way from a different picture.
+    /// Point the list at what one star links to, or give it the library back.
+    ///
+    /// **The window converts, because only the window knows both halves.** The
+    /// pane speaks in galaxy ids and the sidebar in recordings, notes and
+    /// people; `Galaxy.subject` is the one function that turns one into the
+    /// other, and keeping it here leaves the list working in a window with no
+    /// picture in it.
+    ///
+    /// The centre is the exception: it stands for this Mac rather than for
+    /// anything openable, its card means "show me the whole thing", and it has
+    /// no links at all. Selecting it hands the whole library back.
+    ///
+    /// Conversations in the neighbourhood are dropped on the floor here, and
+    /// `SidebarViewController.Linked` says why: they are not a collection in
+    /// that list. The card over the picture still names them, and following one
+    /// there selects it, which is a better answer than a count in a row.
+    private func narrowSidebar(to node: Galaxy.Node?, neighbours: [Galaxy.Node]) {
+        // **The mode is part of the nothing case, not a guard above it.**
+        // Leaving the galaxy clears the selection, and it does that from inside
+        // `enter`, which has already set the mode: a guard that returned early
+        // here would leave the list narrowed by a picture that is no longer on
+        // screen, which is the whole failure this lens was written to avoid.
+        // The review is the other one: it selects a star per card, beside a
+        // sidebar it has replaced with the deck.
+        guard let node, mode == .galaxy, Galaxy.subject(of: node.id) != nil else {
+            sidebar.filter(linkedTo: nil)
+            return
+        }
+        var set = SidebarViewController.Linked(id: node.id, title: node.title)
+        for neighbour in neighbours {
+            guard let subject = Galaxy.subject(of: neighbour.id) else { continue }
+            switch subject.kind {
+            case Galaxy.Node.recording: set.recordings.insert(subject.key)
+            case Galaxy.Node.note: set.notes.insert(subject.key)
+            case Galaxy.Node.person: set.people.insert(subject.key)
+            default: continue
+            }
+        }
+        // Applied even when it is empty, which is the honest answer rather than
+        // the tidy one: a star with nothing this list can hold gets an empty
+        // list under a pill naming it, exactly as the card above says "nothing
+        // links to this yet". Handing back the whole library instead would read
+        // as the narrowing having failed.
+        sidebar.filter(linkedTo: set)
+    }
+
     private func openGalaxySubject(_ id: String) {
         guard let subject = Galaxy.subject(of: id) else { return }
         switch subject.kind {
@@ -771,52 +821,28 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
         sidebar.onSelect = { [weak self] recording in
             guard let self else { return }
-            // **A row picked while the galaxy is up leaves it.** The list is
-            // live in that mode rather than replaced, because the stars and the
-            // rows are the same recordings; what must not happen is the pane
-            // being swapped underneath a toolbar and a composer that still
-            // believe they are over a galaxy. `enter` is a no-op on the mode it
-            // is already in, so this costs a comparison on every other click.
+            // **A row picked while the galaxy is up moves the picture instead
+            // of leaving it.** The list beside the stars is an index into them:
+            // with a star selected it is that star's neighbourhood, and a row
+            // in it is one of the things the lines lead to. Opening a page
+            // instead would make the one gesture that walks the graph the same
+            // gesture that closes it. The page is still one press away, on the
+            // card's Open and on a double click, which is the shortcut the
+            // stars themselves already have.
+            if self.mode == .galaxy {
+                if let recording {
+                    self.galaxyPane.selectIfPresent(Galaxy.recordingID(recording.id))
+                }
+                return
+            }
+            // Elsewhere it leaves whatever mode it was in. What must not happen
+            // is the pane being swapped underneath a toolbar and a composer that
+            // still believe they are over something else. `enter` is a no-op on
+            // the mode it is already in, so this costs a comparison per click.
             self.enter(.library)
-            // Back from a note, if that is where we were. `PaneHost.show` is
-            // idempotent, so the ordinary case of clicking one recording after
-            // another costs a comparison and nothing else.
-            self.detailHost.show(self.detail)
-            self.detail.show(recording)
-            // **A row clicked while the list is narrowed by a word is a search
-            // result**, so the page opens on that word rather than making
-            // somebody type it a second time into a bar they have to find
-            // first. After `show`, which has already rendered the turns, so
-            // there is something to count.
-            //
-            // Read from the field at the moment of use rather than carried
-            // through this callback: `finishReload(keepID:)` restores the
-            // selection without firing it, so anything threaded through here is
-            // dropped on every reload. Three routes in get this for nothing,
-            // because `open(recording:note:)` and `reveal` both arrive through
-            // `sidebar.select(id)`; `LibraryWindow.reload()` calls `show`
-            // directly and so does not reopen the bar, which is right, since it
-            // runs on every activation and every queue tick.
-            let typed = self.sidebar.freeTextQuery
-            if recording != nil, !typed.isEmpty { self.detail.find(typed) }
-            // The composer follows the selection: a question typed while a
-            // meeting is open is about that meeting, and one typed with nothing
-            // open is about the library. `AskView.show` is a no-op when the id
-            // has not moved, so this costs a comparison per click.
-            self.askBar.show(recording)
-            // And whether it is on screen at all: the recording in progress is
-            // the one row that takes it away.
-            self.updateComposer()
-            // No rebuild, unless this click was the one that left the home page
-            // or came back to it. Which items belong used to depend on whether
-            // the recording in progress was the one selected, because the stop
-            // control stood in for People and Actions on that one screen.
-            // Stopping is `recordFAB`'s now, so a mode's items are otherwise
-            // fixed and a click in the list is a validation pass rather than
-            // five items removed and re-inserted.
-            self.syncToolbarWithHome()
-            self.window?.toolbar?.validateVisibleItems()
+            self.showSelected(recording)
         }
+
         // A note picked out of the one list. The transcript pane is put away
         // rather than left underneath: `saveYours` flushes a keystroke that has
         // not reached disk, and `stopPlayback` is here for the reason settings
@@ -824,42 +850,28 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // pause.
         sidebar.onSelectNote = { [weak self] note in
             guard let self else { return }
-            // **A row picked while the galaxy is up leaves it.** The list is
-            // live in that mode rather than replaced, because the stars and the
-            // rows are the same recordings; what must not happen is the pane
-            // being swapped underneath a toolbar and a composer that still
-            // believe they are over a galaxy. `enter` is a no-op on the mode it
-            // is already in, so this costs a comparison on every other click.
+            // **A row picked while the galaxy is up moves the picture**, and
+            // never swaps the pane underneath it: see `sidebar.onSelect`.
+            if self.mode == .galaxy {
+                self.galaxyPane.selectIfPresent(Galaxy.noteID(note.slug))
+                return
+            }
             self.enter(.library)
-            self.detail.saveYours()
-            self.detail.stopPlayback()
-            self.notePane.show(note)
-            self.detailHost.show(self.notePane)
-            // A pane swap can be the way off the recording screen too.
-            self.updateComposer()
-            self.syncToolbarWithHome()
-            self.window?.toolbar?.validateVisibleItems()
+            self.showSelected(note: note)
         }
         // A person picked out of the results shows the card, in the pane the
         // People collection used to own. This is what makes removing that
         // collection possible rather than a loss.
         sidebar.onSelectPerson = { [weak self] person in
             guard let self else { return }
-            // **A row picked while the galaxy is up leaves it.** The list is
-            // live in that mode rather than replaced, because the stars and the
-            // rows are the same recordings; what must not happen is the pane
-            // being swapped underneath a toolbar and a composer that still
-            // believe they are over a galaxy. `enter` is a no-op on the mode it
-            // is already in, so this costs a comparison on every other click.
+            // **A row picked while the galaxy is up moves the picture**, and
+            // never swaps the pane underneath it: see `sidebar.onSelect`.
+            if self.mode == .galaxy {
+                self.galaxyPane.select(person: person.label)
+                return
+            }
             self.enter(.library)
-            self.detail.saveYours()
-            self.detail.stopPlayback()
-            self.personPane.show(person)
-            self.detailHost.show(self.personPane)
-            self.askBar.show(person: person.display)
-            self.updateComposer()
-            self.syncToolbarWithHome()
-            self.window?.toolbar?.validateVisibleItems()
+            self.showSelected(person: person)
         }
         // An upcoming meeting opens its own page, in the pane a person's card
         // uses. The composer under it follows, which is the whole point: the
@@ -867,15 +879,12 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // happened arrives with somewhere to ask about it already on screen.
         sidebar.onSelectEvent = { [weak self] event in
             guard let self else { return }
+            // **No galaxy branch, and this is the one row that has none.** A
+            // meeting that has not happened is not in the picture at all: there
+            // is no star to move to, so the only thing a row can do is open its
+            // page, which means leaving.
             self.enter(.library)
-            self.detail.saveYours()
-            self.detail.stopPlayback()
-            self.upcomingPane.show(event)
-            self.detailHost.show(self.upcomingPane)
-            self.askBar.show(event: event)
-            self.updateComposer()
-            self.syncToolbarWithHome()
-            self.window?.toolbar?.validateVisibleItems()
+            self.showSelected(event: event)
         }
         // Prepare, from the button on that page rather than from a chip that
         // waits for the caret. It is the same prompt and the same path.
@@ -909,6 +918,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         sidebar.onSearchChanged = { [weak self] query in
             guard let self, self.mode == .galaxy else { return }
             self.galaxyPane.setSearch(query)
+        }
+        // The other direction: dropping the pill that says which star the list
+        // is about clears the selection that put it there. Two controls for one
+        // state, and the reader reaches for whichever is nearer. Guarded on the
+        // mode before the pane is touched, because it is lazy: reaching for it
+        // from the library would build a Metal device to clear a selection that
+        // cannot exist.
+        sidebar.onUnlink = { [weak self] in
+            guard let self, self.mode == .galaxy, self.galaxyPane.isViewLoaded else { return }
+            self.galaxyPane.select(nil)
         }
         sidebar.onRenamed = { [weak self] in self?.reload() }
         // The list, and not the pane that just wrote the change. `reload` calls
@@ -1115,6 +1134,117 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// rather than a navigation: Back, out of chat mode, which put the
     /// conversation down over the meeting it had grown from. Nothing grows from
     /// a meeting any more, and leaving the page is one rule however it is left.
+    /// The page for a row in the list, once the window is in library mode.
+    ///
+    /// Split out of the callback above when a double click in the galaxy
+    /// became a second way to reach it: the body was three panes and a
+    /// composer deep, and two copies of that is two places for the next
+    /// kind of row to be forgotten. See `openSelectedRow`.
+    func showSelected(_ recording: Recording?) {
+        // Back from a note, if that is where we were. `PaneHost.show` is
+        // idempotent, so the ordinary case of clicking one recording after
+        // another costs a comparison and nothing else.
+        self.detailHost.show(self.detail)
+        self.detail.show(recording)
+        // **A row clicked while the list is narrowed by a word is a search
+        // result**, so the page opens on that word rather than making
+        // somebody type it a second time into a bar they have to find
+        // first. After `show`, which has already rendered the turns, so
+        // there is something to count.
+        //
+        // Read from the field at the moment of use rather than carried
+        // through this callback: `finishReload(keepID:)` restores the
+        // selection without firing it, so anything threaded through here is
+        // dropped on every reload. Three routes in get this for nothing,
+        // because `open(recording:note:)` and `reveal` both arrive through
+        // `sidebar.select(id)`; `LibraryWindow.reload()` calls `show`
+        // directly and so does not reopen the bar, which is right, since it
+        // runs on every activation and every queue tick.
+        let typed = self.sidebar.freeTextQuery
+        if recording != nil, !typed.isEmpty { self.detail.find(typed) }
+        // The composer follows the selection: a question typed while a
+        // meeting is open is about that meeting, and one typed with nothing
+        // open is about the library. `AskView.show` is a no-op when the id
+        // has not moved, so this costs a comparison per click.
+        self.askBar.show(recording)
+        // And whether it is on screen at all: the recording in progress is
+        // the one row that takes it away.
+        self.updateComposer()
+        // No rebuild, unless this click was the one that left the home page
+        // or came back to it. Which items belong used to depend on whether
+        // the recording in progress was the one selected, because the stop
+        // control stood in for People and Actions on that one screen.
+        // Stopping is `recordFAB`'s now, so a mode's items are otherwise
+        // fixed and a click in the list is a validation pass rather than
+        // five items removed and re-inserted.
+        self.syncToolbarWithHome()
+        self.window?.toolbar?.validateVisibleItems()
+    }
+
+    /// The page for a note picked out of the one list.
+    ///
+    /// The transcript pane is put away rather than left underneath: `saveYours`
+    /// flushes a keystroke that has not reached disk, and `stopPlayback` is here
+    /// for the reason settings has it, which is that a transport nobody can see
+    /// is one nobody can pause.
+    func showSelected(note: Note) {
+        detail.saveYours()
+        detail.stopPlayback()
+        notePane.show(note)
+        detailHost.show(notePane)
+        // A pane swap can be the way off the recording screen too.
+        updateComposer()
+        syncToolbarWithHome()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    /// A person picked out of the results shows the card, in the pane the
+    /// People collection used to own. This is what makes removing that
+    /// collection possible rather than a loss.
+    func showSelected(person: Person) {
+        detail.saveYours()
+        detail.stopPlayback()
+        personPane.show(person)
+        detailHost.show(personPane)
+        askBar.show(person: person.display)
+        updateComposer()
+        syncToolbarWithHome()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    /// An upcoming meeting opens its own page, in the pane a person's card
+    /// uses. The composer under it follows, which is the whole point: the bar
+    /// belongs to the window, so a page for a meeting that has not happened
+    /// arrives with somewhere to ask about it already on screen.
+    func showSelected(event: CalendarEvent) {
+        detail.saveYours()
+        detail.stopPlayback()
+        upcomingPane.show(event)
+        detailHost.show(upcomingPane)
+        askBar.show(event: event)
+        updateComposer()
+        syncToolbarWithHome()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    /// Open the page for whichever row the sidebar has selected, leaving the
+    /// galaxy to do it.
+    ///
+    /// **The double click, because the single one has been taken.** A row while
+    /// the picture is up moves the selection in it, so this is the gesture that
+    /// still means "open this", and it is the same one a star answers to. The
+    /// order matters: `enter` puts back whichever pane the sidebar's selection
+    /// implies, and these fill that pane with what it is about, which a mode
+    /// change on its own cannot know.
+    func openSelectedRow() {
+        guard mode == .galaxy else { return }
+        enter(.library)
+        if let note = sidebar.selectedNote { showSelected(note: note) }
+        else if let person = sidebar.selectedPerson { showSelected(person: person) }
+        else if let event = sidebar.selectedEvent { showSelected(event: event) }
+        else if let recording = sidebar.selectedRecording { showSelected(recording) }
+    }
+
     private func enter(_ next: Mode) {
         guard let sidebarItem, let split, mode != next else { return }
         // A mode change leaves nothing behind to inspect afterwards, and "the

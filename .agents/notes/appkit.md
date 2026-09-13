@@ -956,6 +956,24 @@ true`, which is the default, so the fix is to delete the line rather than to add
 one. The reason it is stated explicitly in `buildComposer` instead is that the
 false was there for years and reads as deliberate.
 
+### An `NSTextField`'s accessibility answers from its cell, not from the view
+
+`setAccessibilityElement(false)` on the field does nothing, and neither does
+overriding `isAccessibilityElement()` on a subclass of it: the string is still
+in the tree, with the same role and the same value. `NSControl` builds its
+accessibility from `NSCell`, so the line that works is
+
+```swift
+label.setAccessibilityElement(false)
+label.cell?.setAccessibilityElement(false)
+```
+
+and it is the second one doing the work. Measured on the galaxy's star titles,
+where the first two were each tried and dumped before the third: two dozen names
+that cannot be reached or acted on stayed in every `axprobe texts` dump and made
+a script's assertions about the *sidebar* pass on the picture instead, because
+both draw the same words.
+
 ## Liquid Glass is a vocabulary, and the rule is one material per layer
 
 Nothing in AppKit stops you putting glass inside glass, and this app has drawn

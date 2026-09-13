@@ -522,6 +522,13 @@ and calls it a click. The press location is kept separately.
 
 ### The sidebar stays live, so a row picked there has to leave the mode
 
+**Superseded for the galaxy**, which is the mode this was written about: a row
+picked there moves the selection in the picture now, and the double click is
+what opens a page. See "The list beside the picture is what the star links to".
+The paragraph below still describes every other mode, and the guard it is about
+is still what stops a pane being swapped under a toolbar that believes it is
+over a galaxy.
+
 Settings and chat replace the sidebar's list because theirs is a different
 list. The galaxy is drawn from the same recordings the sidebar is showing, so
 taking the list away would hide the answer to "which of these is that star".
@@ -649,3 +656,129 @@ the picture settled a fraction off home. Nothing noticed while the only evidence
 was a slightly wrong camera; the control that appears when the camera has moved
 noticed immediately, because it came back a moment after being used.
 `frameHome` cancels the flight first.
+
+### A card open is not a hand on the picture, and Pause said otherwise
+
+`GalaxyMotionPolicy.interacting` used to be `dragging || hoveredID != nil ||
+selectedID != nil || focusFlight != nil`, and a selection lasts as long as the
+card does. So the ordinary way to read this picture, click a star and look at
+what it says, froze the sky for minutes at a time while the toolbar went on
+offering to pause it: the one control in the window that reports whether the
+picture is moving was wrong about the state a reader spends the most time in,
+and pressing it appeared to do nothing.
+
+It is `dragging || hoveredID != nil` now. What is left is the pointer and only
+the pointer: a drag is the hand moving the picture itself, and a hover is a star
+somebody is aiming at, which should hold still long enough to be clicked. Both
+end when the pointer moves. Everything that stops the drift for longer than a
+gesture is either a switch the reader threw (`enabled`) or one the system did
+(Reduce Motion, Low Power, the window covered), and each of those is reported.
+
+The flight came out with it. Left in, clicking a star stopped the drift for the
+0.65 s of the camera move and started it again on landing, which is a stutter
+rather than a policy. The framing it lands on is not measurably worse for the
+sky continuing to turn under it: the drift is 0.012 rad/s, so a flight lands
+0.45 degrees of world rotation from where it aimed.
+
+`verify_galaxy.sh` asserts it, off the trace rather than off a screenshot, in
+the `galaxy:selected` panel: no `galaxy motion off ... interacting=true` line,
+and "Pause motion" still in the title bar.
+
+### The list beside the picture is what the star links to
+
+Selecting a star narrows the sidebar to its neighbourhood: the people who spoke
+in it, the notes written about it, the recordings it is in. `GalaxyPane`
+reports the selection and the far end of every edge through
+`onSelectionChanged`, `LibraryWindow.narrowSidebar` turns those galaxy ids into
+the library's own keys with `Galaxy.subject`, and the sidebar holds them as a
+`Lens`.
+
+**A lens rather than a list of its own**, and that is the whole design. The
+sidebar already has a row of pills that stack, are ANDed, and are one click from
+off, so the neighbourhood arrives as a fourth `Lens` case and gets all of that
+for nothing: the pill says which star, the ✕ drops it, and the search field is
+ANDed with it, which is what makes typing search *inside* the neighbourhood
+rather than across the library. A second list built somewhere else would have
+been a second thing that could disagree with this one, and a search field that
+did nothing while it was up.
+
+**It is the only lens that is not a predicate.** The other three are questions
+`RecordingFilter` can answer about what is on disk; this one is a set of things
+somebody arrived at by clicking a star, out of a graph the window drew and
+nothing stored. So `Lens.linked` carries its members rather than a rule, the
+lists are intersected with it after the filter has run, and `RecordingFilter`
+gains nothing: the MCP server has no business narrowing by a picture.
+
+**`Lens.typed` is empty for it, which no other pill is.** Backspace at the head
+of the field puts the last pill back as text, and there is no `linked:` operator
+to write. Inventing one would be a second way to ask a question the picture
+answers by being looked at. The gesture still means "undo the last token", so an
+empty `typed` drops the pill and tells the window, which clears the selection.
+
+**Conversations are left out.** They are the one neighbour with no row in that
+list, deliberately: `Row.chats` is a way *over* to the conversations rather than
+a collection in the library, because two lists of conversations that could
+disagree is worse than one list you have to go to. A count that opened the
+unfiltered chat list would be a row that lies about what pressing it does. They
+stay on the card over the picture, where following one selects it by name.
+
+**A row picked while the picture is up moves the selection instead of leaving.**
+That reverses "The sidebar stays live, so a row picked there has to leave the
+mode", which was written when the list was the library beside a picture rather
+than an index into it. Walking the graph is the gesture this mode is for, and
+making it also the gesture that closes the mode would leave the neighbourhood
+list with nothing to do. The page is still one press away, on the card's Open
+and on a double click, which is what a star answers to. `openSelectedRow` is the
+double click, and it goes through the same `showSelected` bodies the library's
+own row handlers use, because the mode change alone puts a pane back without
+knowing what it is about.
+
+**Every row is not always a star.** The recording being made now is in staging
+rather than in the library, so it has no star; somebody out of the contact book
+has never been recorded. `selectIfPresent` leaves the selection alone for both,
+because a click that cannot do what it says should not undo what the reader did
+mean. Your own row is the third case and it does have a star: the centre.
+`Galaxy.build` promotes you into the middle rather than drawing a second star,
+so `select(person:)` falls back to `Galaxy.deviceID` for the owner alone.
+
+**A search with a star selected lights the picture rather than narrowing it.**
+`visible` skips the search filter entirely while something is selected. Without
+that, typing narrowed the sphere, the selected star fell out of it the moment
+the reader's word stopped matching its title, and `setSearch` cleared the
+selection, which dropped the lens and gave back the library: the field would
+have undone the thing it was supposed to be searching inside.
+
+**The mode is part of the nothing case in `narrowSidebar`, not a guard above
+it.** Leaving the galaxy clears the selection from inside `enter`, which has
+already set the mode, so an early return there left the library narrowed by a
+picture that was no longer on screen. That is the "Show Only Nick" failure
+(`speakers.md`) and the reason this lens is never off screen: the pill is beside
+the list and the card is over the stars, so one is always visible saying why the
+list looks like that.
+
+An empty neighbourhood still applies the lens. A star with nothing this list can
+hold gets an empty list under a pill naming it, which is the same answer the
+card gives above it ("Nothing links to this yet"); handing back the whole
+library instead would read as the narrowing having failed.
+
+`verify_galaxy.sh --ui` section 13 asserts it against the fixture, where Meeting
+0 is spoken in by two of the four people and written up in one note: the
+meetings disappear, the two speakers and the note stay, a word narrows what is
+left while the card stays up and the sphere stays whole, and pressing the pill
+gives the library back and clears the selection.
+
+**Two things had to be true before that section could assert anything**, and
+both made a wrong assertion pass first:
+
+1. **The star titles were in the accessibility tree**, so a dump held every name
+   twice and `field "$dump" "Ari Chen"` could not tell the sidebar row from the
+   label drawn over the picture. They are out of it now, which is right on its
+   own account: they are two dozen names in a projection's order, over a scene
+   that cannot be reached, and the pane's own label already says so and points
+   at the list. Hiding them takes a line on the *cell*, not on the view: see
+   `appkit.md`.
+2. **A note's row is not titled with the note's title.** `NoteCell` leads one of
+   the user's own notes with the meeting it is about, because every one of them
+   is called "Your notes"; the fixture's notes carry no agent marker, so the row
+   for "Write-up 0" reads "Meeting 0". Its subtitle is the string that is that
+   row and nothing else on screen.

@@ -83,6 +83,28 @@ final class SidebarViewController: NSViewController {
     /// reach for this at all. Setting one therefore adds rather than replaces,
     /// which is how a row of tokens behaves everywhere else; replacing is
     /// dismissing the old one first.
+    /// One star's neighbourhood, in the library's own keys.
+    ///
+    /// The galaxy knows its own ids; this list knows recordings, notes and
+    /// people. `LibraryWindow` converts between the two, so nothing in here has
+    /// to parse `person:` off the front of a string, and the sidebar keeps
+    /// working in a window with no galaxy in it.
+    ///
+    /// Conversations are deliberately absent. They are not a collection in this
+    /// list and never have been (see `Row.chats`), so a neighbour that is a chat
+    /// stays on the card over the picture, which is where it can be opened by
+    /// name rather than counted.
+    struct Linked: Equatable {
+        /// The star this is the neighbourhood of, so the pill has an identity.
+        var id: String
+        /// Its name, which is what the pill says.
+        var title: String
+        var recordings: Set<String> = []
+        var notes: Set<String> = []
+        /// `Person.label`, which is what the galaxy builds its ids from.
+        var people: Set<String> = []
+    }
+
     private enum Lens: Equatable {
         case tag(String)
         /// Recordings with a voice nobody has named. Unlike the other two this
@@ -93,6 +115,20 @@ final class SidebarViewController: NSViewController {
         /// Which kind of row the list may show, which is what the three
         /// segments above this used to be. See `LibraryKind`.
         case kind(LibraryKind)
+        /// What one star in the galaxy links to.
+        ///
+        /// **The only lens that is not a question about the library.** The
+        /// other three are predicates `RecordingFilter` can answer over what is
+        /// on disk; this one is a set of things somebody arrived at by clicking
+        /// a star, and the graph behind it is drawn by the window rather than
+        /// stored anywhere. So it carries its members rather than a rule for
+        /// finding them, and the list is intersected with them after the filter
+        /// has chosen what matches.
+        ///
+        /// It stacks with the others like everything else here, which is what
+        /// makes the field search *within* the neighbourhood rather than
+        /// replacing it.
+        case linked(Linked)
 
         /// What this reads as on its pill.
         var title: String {
@@ -100,6 +136,11 @@ final class SidebarViewController: NSViewController {
             case .tag(let name): return "#" + name
             case .unnamed:       return "Needs a speaker"
             case .kind(let k):   return k.label
+            // The star's own name, with no "Linked to" in front of it. The
+            // card naming the same thing is on screen beside this and the
+            // picture has its links lit, so a prefix would be the third place
+            // one sentence is said, in the narrowest 280 points of the window.
+            case .linked(let set): return set.title
             }
         }
 
@@ -114,6 +155,9 @@ final class SidebarViewController: NSViewController {
                     + "Click to drop this filter."
             case .kind(let k):
                 return "Only \(k.label.lowercased()). Click to drop this filter."
+            case .linked(let set):
+                return "Only what \(set.title) is linked to in the picture. "
+                    + "Click to drop this filter."
             }
         }
 
@@ -127,6 +171,13 @@ final class SidebarViewController: NSViewController {
                 return name.contains(" ") ? "tag:\"\(name)\"" : "tag:" + name
             case .unnamed:     return "is:unnamed"
             case .kind(let k): return "kind:" + k.rawValue
+            // **Nothing, and that is the one pill this is true of.** Every
+            // other lens here is an operator somebody could have typed; this
+            // one is a star they clicked, and there is no `linked:` in the
+            // search language to write it back as. Inventing one would be a
+            // second way to ask a question the picture answers by being looked
+            // at. The backspace lift reads this and drops the pill instead.
+            case .linked: return ""
             }
         }
 
@@ -136,6 +187,7 @@ final class SidebarViewController: NSViewController {
             case .tag(let name): return "tag:" + name
             case .unnamed:       return "unnamed"
             case .kind(let k):   return "kind:" + k.rawValue
+            case .linked(let set): return "linked:" + set.id
             }
         }
     }
@@ -520,11 +572,17 @@ final class SidebarViewController: NSViewController {
         var filter = RecordingFilter.parse(
             q, knownTags: Tags.all(in: library, notes: everyNote).map(\.name))
         stage("tags", tTags)
+        var linked: Linked?
         for lens in lenses {
             switch lens {
             case .tag(let name): filter.tags.append(name)
             case .unnamed: filter.needsSpeakers = true
             case .kind(let k): filter.kind = k
+            // Not a predicate over the library: see `Lens.linked`. Every list
+            // built below is intersected with it, after the filter and the
+            // query have chosen what matches, which is what makes the field
+            // search inside the neighbourhood rather than across it.
+            case .linked(let set): linked = set
             }
         }
 
@@ -534,8 +592,13 @@ final class SidebarViewController: NSViewController {
         // A query still being typed sections the list even before it matches
         // anything, so the headings do not appear and disappear under the
         // pointer as somebody types.
+        // A neighbourhood is sectioned by kind too, and never by day. It is a
+        // handful of rows of three different kinds, and "Yesterday" over one of
+        // them answers a question nobody asked of a list that is already an
+        // answer: what a reader wants to see here is that two people and a note
+        // link to this, which is what the headings say.
         sectionsByKind = !filter.query.trimmingCharacters(in: .whitespaces).isEmpty
-            || kind != nil
+            || kind != nil || linked != nil
 
         // `search` rather than `apply`, so the rows can show the sentence that
         // matched instead of only the fact that something did.
@@ -544,7 +607,12 @@ final class SidebarViewController: NSViewController {
             ? filter.search(library)
             : RecordingFilter.Found(recordings: [], hits: [:], counts: [:])
         stage("search", tSearch)
-        let matching = searched.recordings
+        // The intersection, and the only thing the linked lens does to the
+        // recordings: the search above has already run, so a word typed with a
+        // star selected narrows this list rather than the library's.
+        let matching = linked.map { set in
+            searched.recordings.filter { set.recordings.contains($0.id) }
+        } ?? searched.recordings
         rowMatches = [:]
         for (id, hits) in searched.hits {
             rowMatches[id] = Self.summarise(hits, count: searched.counts[id] ?? hits.count)
@@ -592,9 +660,16 @@ final class SidebarViewController: NSViewController {
         // is for, and reading the two separately was how a typed `tag:` and a
         // clicked one could behave differently.
         let listingRecordings = kind == nil || kind == .recordings
-        let mayDoubleUp = listingRecordings && filter.tags.isEmpty
+        // **A linked lens turns the doubling-up rule off**, for the same reason
+        // a tag lens does. A note about exactly one recording is the note that
+        // links to that recording: it is the whole answer to "what is written
+        // up about this", and hiding it because it has a home on that
+        // recording's own page would be the wrong answer rather than the
+        // tidier one.
+        let mayDoubleUp = listingRecordings && filter.tags.isEmpty && linked == nil
         let noteRows = !filter.needsSpeakers && (kind == nil || kind == .notes)
             ? everyNote.filter { note in
+                if let linked, !linked.notes.contains(note.slug) { return false }
                 guard Self.pageless(note) || !mayDoubleUp else { return false }
                 guard let hits = Self.matches(note, query: filter.query,
                                               tags: filter.tags) else { return false }
@@ -642,7 +717,7 @@ final class SidebarViewController: NSViewController {
         // One section above the library says what they are and leaves the rest
         // of the list meaning exactly what it meant before anybody typed.
         let people = matchingPeople(filter.query, needsSpeakers: filter.needsSpeakers,
-                                    kind: kind, in: library)
+                                    kind: kind, linked: linked, in: library)
         if !people.isEmpty {
             // Singular when there is one, and it is still the kind's heading:
             // the lens it sets is People either way.
@@ -922,8 +997,27 @@ final class SidebarViewController: NSViewController {
     /// way to browse the people you cannot already name, which is exactly the
     /// case a roster is for.
     private func matchingPeople(_ query: String, needsSpeakers: Bool,
-                                kind: LibraryKind?, in library: [Recording]) -> [Person] {
+                                kind: LibraryKind?, linked: Linked?,
+                                in library: [Recording]) -> [Person] {
         guard !needsSpeakers, kind == nil || kind == .people else { return [] }
+        // **A linked lens lists people with nothing typed, which no other lens
+        // here does.** The list is then one star's neighbourhood rather than
+        // the library, and the neighbourhood of a recording is mostly the
+        // people who spoke in it: dropping them because the field is empty
+        // would leave the commonest selection of all with almost nothing in
+        // the list. Typing still narrows what is here, which is the whole point
+        // of the field while this lens is on.
+        //
+        // The contact book is not consulted, unlike the typed path below: this
+        // answers "who is linked to this star", and somebody the library has
+        // never recorded is linked to nothing.
+        if let linked {
+            let wanted = query.trimmingCharacters(in: .whitespaces)
+            return People.roster(in: library).filter {
+                linked.people.contains($0.label)
+                    && (wanted.isEmpty || $0.display.localizedCaseInsensitiveContains(wanted))
+            }
+        }
         // A tag lens is still disqualifying: no tag says anything about a
         // person, so a card surviving one would be a row the filter did not
         // consider.
@@ -1167,7 +1261,13 @@ final class SidebarViewController: NSViewController {
     /// come up under it, which is the other half of that question.
     func reveal(person: Person) {
         loadViewIfNeeded()
+        // Including the star's neighbourhood, so the window lets go of the
+        // selection that put it there. Arriving here from the picture is not a
+        // path anything takes today, and a lens dropped with nobody told is
+        // exactly the kind of thing that stops being true quietly.
+        let hadLink = hasLinked
         lenses = []
+        if hadLink { onUnlink?() }
         let name = person.display
         searchField.stringValue = name
         query = name
@@ -1199,6 +1299,41 @@ final class SidebarViewController: NSViewController {
         add(name.map { Lens.tag($0) })
     }
 
+    /// Narrow the list to one star's neighbourhood, or drop that lens alone.
+    ///
+    /// **`nil` drops this lens and nothing else**, unlike `add(nil)`. A tag
+    /// somebody put on before opening the picture is theirs, and clearing the
+    /// selection is not a reason to take it off.
+    ///
+    /// A second star replaces the first rather than ANDing with it: only one
+    /// thing is selected in the picture at a time, and "what two stars are both
+    /// linked to" is a question nothing on screen can ask.
+    func filter(linkedTo set: Linked?) {
+        loadViewIfNeeded()
+        let current = lenses.compactMap { lens -> Linked? in
+            if case .linked(let existing) = lens { return existing }
+            return nil
+        }.first
+        guard current != set else { return }
+        lenses.removeAll { if case .linked = $0 { return true }; return false }
+        if let set { lenses.append(.linked(set)) }
+        renderLenses()
+    }
+
+    /// Somebody dropped the linked pill, so the star it came from is no longer
+    /// what this list is about.
+    ///
+    /// The window answers by clearing the selection, which is the half that
+    /// makes the pill and the card agree: two controls for one state, and the
+    /// one the reader reached for is whichever is nearer.
+    var onUnlink: (() -> Void)?
+
+    /// Whether the linked lens is on, for the paths that have to know whether
+    /// dropping every filter drops it too.
+    private var hasLinked: Bool {
+        lenses.contains { if case .linked = $0 { return true }; return false }
+    }
+
     /// Add a lens, or clear them all.
     ///
     /// Adding the one already on is a no-op rather than a duplicate: clicking a
@@ -1207,8 +1342,15 @@ final class SidebarViewController: NSViewController {
     private func add(_ next: Lens?) {
         loadViewIfNeeded()
         guard let next else {
+            // Everything includes the star's neighbourhood, and the window has
+            // to be told: `clearFilters` is how a recording hidden by a filter
+            // is reached from outside the list, and leaving the picture
+            // selected behind a list that is no longer about it is the state
+            // this whole lens exists to avoid.
+            let hadLink = hasLinked
             lenses = []
             renderLenses()
+            if hadLink { onUnlink?() }
             return
         }
         guard insert(next) else { return }
@@ -1300,8 +1442,12 @@ final class SidebarViewController: NSViewController {
 
     @objc private func dropLens(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue else { return }
+        let wasLink = id.hasPrefix("linked:")
         lenses.removeAll { $0.id == id }
         renderLenses()
+        // After the render, so the window's answer lands on a list that has
+        // already let the star go.
+        if wasLink { onUnlink?() }
     }
 
     /// Redraw the row of the recording in progress, for its clock.
@@ -1579,6 +1725,14 @@ final class SidebarViewController: NSViewController {
     }
 
     @objc private func doubleClicked() {
+        // **In the galaxy the single click has been taken by the picture**, so
+        // this is the gesture that opens a page, which is what the same two
+        // clicks do on a star. Rename would be the wrong verb there anyway: the
+        // row is one end of a link somebody is following.
+        if LibraryWindow.shared.isShowingGalaxy {
+            LibraryWindow.shared.openSelectedRow()
+            return
+        }
         // Double-click is rename, matching Finder. The single click already
         // means "show me this one".
         LibraryWindow.shared.renameSelected()
@@ -1902,6 +2056,16 @@ extension SidebarViewController: NSSearchFieldDelegate {
 
         lenses.removeLast()
         let restored = last.typed
+        // **A pill with no operator behind it is dropped rather than written
+        // back.** The linked lens is the one of those: it says what a star in
+        // the picture is joined to, and there is nothing to type that would set
+        // it again. The gesture still means "undo the last token", which here
+        // is the selection itself, so the window is told.
+        guard !restored.isEmpty else {
+            renderLenses()
+            if case .linked = last { onUnlink?() }
+            return true
+        }
         let text = query.isEmpty ? restored : restored + " " + query
         searchField.stringValue = text
         query = text

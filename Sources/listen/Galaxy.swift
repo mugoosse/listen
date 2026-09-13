@@ -410,11 +410,20 @@ struct GalaxyMotionPolicy {
     var visible = false
     var reducedMotion = false
     var lowPower = false
+    /// The pointer is on the picture: a drag, or a star under the cursor.
+    ///
+    /// **A selection is not one of these.** It was, and a card left open then
+    /// froze the sky for as long as it stood there while the toolbar went on
+    /// offering to pause something that had already stopped. The pause button
+    /// is the way to stop the drift by hand; this is only the hand moving or
+    /// aiming at the picture, and both end when the pointer does.
     var interacting = false
 
     var ambient: Bool { enabled && visible && !reducedMotion && !lowPower && !interacting }
     /// A camera flight to a star somebody just clicked. It ignores
-    /// `interacting`, because the selection *is* the interaction, but it still
-    /// honours every system and user switch above it.
+    /// `interacting`, because a pointer crossing a star while the camera is
+    /// moving would otherwise snap the flight to its goal half way, and a drag
+    /// cancels the flight outright rather than freezing it. Every system and
+    /// user switch above it still applies.
     var flights: Bool { enabled && visible && !reducedMotion && !lowPower }
 }

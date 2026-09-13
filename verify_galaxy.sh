@@ -262,6 +262,22 @@ if [ "${1:-}" != "--ui" ]; then
   exit 0
 fi
 
+# **A locked screen is not a failing build, and it reads exactly like one.**
+# Every window subtree comes back empty behind the lock: `axprobe texts` exits 0
+# with nothing but `AXApplication Listen` lines, so every positive assertion
+# below fails and every negative one passes, which is a page of confident FAILs
+# about controls nothing ever looked at. Measured here, twice. `caffeinate -u`
+# wakes the display and does not clear this, so it is asked rather than worked
+# around.
+if ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+  echo "  SKIP: the screen is locked, so every window assertion would read an" >&2
+  echo "        empty tree. Unlock it and run this again." >&2
+  echo
+  echo "$pass passed, $fail failed (window checks skipped)"
+  [ "$fail" = "0" ] || exit 1
+  exit 2
+fi
+
 [ -x "$PROBE" ] || swiftc -O "$ROOT/tools/axprobe.swift" -o "$PROBE" || exit 2
 cp -R "$ROOT/Listen.app" "$COPY"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.mgo.listen-uitest" \
@@ -456,6 +472,23 @@ else
 fi
 stop
 
+# **A selection is not an interaction.** A card left open used to freeze the sky
+# for as long as it stood there, while the one control that says whether the
+# picture is moving went on offering to pause it. Read out of the trace, because
+# a still picture and a drifting one photograph exactly the same.
+: > "$TRACE"
+launch galaxy:selected
+if grep -q "galaxy motion on" "$TRACE"; then
+  ! grep -q "galaxy motion off .*interacting=true" "$TRACE"
+  check $? "selecting a star does not stop the drift"
+  dump=$("$PROBE" texts $APP 2>&1)
+  field "$dump" "Pause motion"
+  check $? "so the control over it still offers to pause something that moves"
+else
+  ok "a selection was not asked about: this Mac has motion off for a setting"
+fi
+stop
+
 echo
 echo "11. the legend gets out of the way of the window's own controls"
 : > "$TRACE"
@@ -525,6 +558,68 @@ narrow ""
 back=$(stars)
 [ "$back" = "$whole" ]
 check $? "clearing the field gives the whole picture back ($back)"
+stop
+
+echo
+echo "13. a selected star is what the list beside it is about"
+# The fixture decides these: Meeting 0 is spoken in by Ari Chen and Morgan Bell
+# (never Samira Patel, who joins from Meeting 1 on), and Write-up 0 is the note
+# written about it. So its neighbourhood is two people and a note, and no
+# recording at all, which is why the meetings are what disappear.
+: > "$TRACE"
+launch galaxy
+before=$("$PROBE" texts $APP 2>&1)
+field "$before" "Meeting 1"
+check $? "the whole library is in the list before a star is picked"
+stop
+
+: > "$TRACE"
+launch galaxy:selected
+dump=$("$PROBE" texts $APP 2>&1)
+! echo "$dump" | grep -q "Meeting 1"
+check $? "picking one drops everything it is not linked to"
+# **`field`, not `grep`.** The card lists the same links as "Speaker Ari Chen"
+# and "Written up in Write-up 0", so a substring match here would pass on the
+# card alone and say nothing about the list. A row's text field is the name
+# exactly.
+field "$dump" "Ari Chen"
+check $? "and lists the people who spoke in it"
+# **Not "Write-up 0", which is the note's title and not its row.** `NoteCell`
+# leads one of the user's own notes with the meeting it is about, because every
+# one of them is titled "Your notes"; the fixture's notes have no agent marker,
+# so the row reads "Meeting 0" over "Your notes · 2 recordings". The subtitle is
+# the half that is this row and nothing else on screen.
+echo "$dump" | grep -q "Your notes · 2 recordings"
+check $? "and the note written about it"
+! field "$dump" "Samira Patel"
+check $? "and nobody who is linked to something else"
+# Searching inside the list, which is the whole reason this is a lens rather
+# than a list built somewhere else: the pill and the field are ANDed.
+narrow "Ari"
+dump=$("$PROBE" texts $APP 2>&1)
+field "$dump" "Ari Chen"
+check $? "a word typed with a star selected searches inside that list"
+! echo "$dump" | grep -q "Your notes · 2 recordings"
+check $? "and narrows it"
+field "$dump" "Open recording"
+check $? "while the card stays up, so the star cannot fall out of its own list"
+lit=$(stars)
+[ "$lit" = "19" ]
+check $? "and the picture is lit rather than narrowed (19 stars, got ${lit:-nothing})"
+narrow ""
+# The pill is the way out, and pressing it has to reach the picture: the
+# selection is what put it there.
+dump=$("$PROBE" texts $APP 2>&1)
+pill=$(echo "$dump" | awk -F'\t' '/AXButton/ && $3 ~ /✕/ { print $3; exit }')
+[ -n "$pill" ]
+check $? "the list says which star it is about, on a pill you can drop ($pill)"
+"$PROBE" press $APP "$pill" >/dev/null 2>&1
+sleep 2
+dump=$("$PROBE" texts $APP 2>&1)
+field "$dump" "Meeting 1"
+check $? "dropping it gives the library back"
+! field "$dump" "Open recording"
+check $? "and clears the selection the pill came from"
 stop
 
 defaults delete com.mgo.listen-uitest >/dev/null 2>&1

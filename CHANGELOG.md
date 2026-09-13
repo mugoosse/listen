@@ -8,6 +8,73 @@ publish when its version disagrees with `VERSION`.
 A section starts at a heading that is `##` followed by a version number, so
 headings inside an entry can be anything that is not one of those.
 
+## 0.41.0 (2026-09-13)
+
+Listen remembers the people you talk to, and once a week it hands back what it
+learned. Memory was switched off for everybody and nothing ever asked; now setup
+asks, the roster lists everyone, and there is a page that gives it back to you.
+
+### Memory was off, and could not turn itself on
+
+Measured on a real 86-recording library: 34 named people, **one** enrolled, 321
+pending parts against 18 processed. Consent defaulted off and the only way in
+was a modal reached from a person's page, so nobody was ever asked. The one
+enrolled person had nothing left to read, which meant the background work was
+finished and the queue could never move again.
+
+Setup now asks once, with the cost stated: reading is done by the same model
+that answers your questions, so passages about a person are sent to that
+provider. Saying yes covers the people already recorded, not only the ones who
+arrive next. If you have used Listen before, setup does not run again, so you
+are asked once when you next come back to the app. Declining writes nothing and
+is never asked again.
+
+Two things had to be fixed before that default was safe. The background sweep
+walked people alphabetically and stopped at the first with work, which is
+harmless at one enrolled person and a starvation bug at thirty-four: the first
+name spends the whole daily limit every day and nobody after them is ever read.
+It now serves whoever has waited longest. And a person merely *mentioned* in a
+conversation is no longer treated as having spoken in it.
+
+**Settings, People & Memory** lists everybody with their backlog and a switch
+each, says how long the remaining work will take at the current daily limit, and
+has "Read Everything Now" for going past that limit in one go, priced from what
+requests have actually cost on your own library.
+
+### A brief that reads like it is about somebody you know
+
+Details are grouped by what they are about rather than by the extractor's
+vocabulary, every line carries the date it was said, and things that were only
+true of one conversation, "in this session", "next week", sit under "Last time
+you spoke" rather than on the permanent card. The card addresses you as you
+rather than as "the other person". Nothing stored changes: this is how it is
+shown, and `listen context person --json` is unaffected.
+
+### This Week
+
+**View, This Week** opens a deck of cards where the sidebar sits, with the
+galaxy beside it and the week's new conversations, people and notes arriving
+into the library you already had. Every card carries something to do: name the
+speakers in a recording nobody labelled, accept or correct a detail, open
+somebody you have not spoken to in months. It does not advance itself.
+
+Two cards look forward rather than back. What was promised, in the words
+somebody actually used, and what you already know about whoever you are seeing
+next, drawn from your calendar.
+
+A person's page has **Catch Up**: the same deck about them over the last ninety
+days. `listen review` and `listen review --person <name>` print the same cards.
+
+### Known limitations
+
+Memory reads in the background while Listen is open and a large library takes a
+while: roughly a fortnight at the default of 40 requests a day, or one sitting
+with "Read Everything Now". Until it has caught up, the cards about what was
+learned will be thin, while the counts and conversations are complete from the
+first day.
+
+There is no automatic summary of a recording yet, and the review is Mac only.
+
 ## 0.40.0 (2026-09-11)
 
 Ask takes dictation and more than one line, a correction proposed about somebody

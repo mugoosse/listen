@@ -58,7 +58,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// than a place you have to leave. A tab set cannot express "all three",
     /// which is why pressing Notes on a library with none read as the control
     /// being broken instead of as an empty answer.
-    private enum Mode { case library, settings, chat, galaxy }
+    private enum Mode { case library, settings, chat, galaxy, review }
     private var mode: Mode = .library
     /// Where Back goes, which is wherever chat mode was entered from.
     ///
@@ -96,6 +96,31 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     /// a recording. The sidebar stays as it is underneath, because the galaxy
     /// and the list are two views of the same set and moving between them
     /// should not lose the row somebody had selected.
+    /// The week's review. It shares `galaxyPane`, because the picture is the
+    /// same picture: two Metal devices for one scene would be two of
+    /// everything, and the modes are mutually exclusive.
+    private lazy var reviewDeck: ReviewDeck = {
+        let deck = ReviewDeck()
+        deck.onFocus = { [weak self] stars in
+            guard let self, self.mode == .review else { return }
+            // The first star of the card, because framing a neighbourhood is
+            // what `select` already does and a card is a neighbourhood.
+            self.galaxyPane.select(stars.first)
+        }
+        deck.onOpen = { [weak self] target in self?.openReviewSubject(target) }
+        deck.onClose = { [weak self] in self?.enter(.library) }
+        deck.onRange = { [weak self] days in
+            guard let self else { return }
+            self.showReview(scope: self.reviewScope, days: days)
+        }
+        deck.onAsk = { [weak self] question in
+            guard let self else { return }
+            self.enter(.library)
+            _ = self.askBar.ask(question: question)
+        }
+        return deck
+    }()
+
     private lazy var galaxyPane: GalaxyPane = {
         let pane = GalaxyPane()
         pane.onOpen = { [weak self] id in self?.openGalaxySubject(id) }
@@ -137,6 +162,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let actionsItem = NSToolbarItem.Identifier("recordingActions")
     private static let settingsItem = NSToolbarItem.Identifier("openSettings")
     private static let backItem = NSToolbarItem.Identifier("backToLibrary")
+    private static let reviewTitleItem = NSToolbarItem.Identifier("reviewTitle")
     private static let recordItem = NSToolbarItem.Identifier("recordToggle")
     // There is no History item any more. It was a menu of the conversations
     // about the page you were on, in the top left of every page but the home
@@ -291,6 +317,18 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         return name
     }()
 
+    /// And in review mode, where it names what is being reviewed: "This Week",
+    /// or the person a catch-up is about. The slot the app's own name has
+    /// everywhere else, beside the Back that leaves it, which is the pair
+    /// settings and chats already make.
+    private lazy var reviewMark: NSTextField = {
+        let name = NSTextField(labelWithString: "This Week")
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.lineBreakMode = .byTruncatingTail
+        name.sizeToFit()
+        return name
+    }()
+
     /// And what it says in chat mode, in the same slot for the same reason.
     ///
     /// "Chats" rather than "History": the list under it is every conversation
@@ -431,6 +469,75 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
 
     /// Show the library as concentric shells. The View menu, and nothing else.
+    /// Open the week's review: the deck where the list is, the picture beside
+    /// it, and this week's stars arriving into it.
+    @objc func showReview() { showReview(scope: .library) }
+
+    /// Open a review of the library, or of one person, over a window.
+    ///
+    /// **Scope and span are held here rather than passed into `enter`**,
+    /// because the deck can change them without leaving the mode: picking 90
+    /// days is a reload, not a navigation, and `enter` returns early when the
+    /// mode is already the one being asked for.
+    func showReview(scope: WeeklyReview.Scope, days: Int? = nil) {
+        guard Settings.galaxyEnabled else { return }
+        if window == nil { build() }
+        reviewScope = scope
+        // A person is asked about over a longer span than a week. "Where were
+        // we" is a question about the relationship, and seven days of somebody
+        // you see monthly is an empty page.
+        reviewDays = days ?? (scope.person != nil ? 90 : 7)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        // Already here means the scope or the span changed under us, and the
+        // masthead names the scope: `enter` is what normally rebuilds the
+        // toolbar, and it returns early when the mode is the one being asked
+        // for, so a catch-up opened from a review would keep the old name.
+        if mode == .review { rebuildToolbar(); loadReview() } else { enter(.review) }
+    }
+
+    /// Build the review off the main thread, then hand it to the deck.
+    ///
+    /// `WeeklyReview.build` reads every recording's turns and every person's
+    /// claims, which is not a main-thread job, and the pane it feeds is
+    /// already on screen: the deck shows its own empty state until this lands.
+    private var reviewScope: WeeklyReview.Scope = .library
+    private var reviewDays = 7
+
+    private func loadReview() {
+        // The library's own review picks up where the last one left off; a
+        // scoped one is asked for explicitly and takes the span it was asked
+        // for. Either way it is clamped, because a window of zero days is a
+        // page with nothing on it and one of ten years is a page nobody reads.
+        let to = Date()
+        let from = reviewScope.person == nil && reviewDays == 7
+            ? WeeklyReview.defaultWindow.from
+            : to.addingTimeInterval(-Double(max(1, min(365, reviewDays))) * 86_400)
+        let scope = reviewScope, days = reviewDays
+        Task.detached(priority: .userInitiated) {
+            let review = WeeklyReview.build(from: from, to: to, scope: scope)
+            await MainActor.run { [weak self] in
+                guard let self, self.mode == .review else { return }
+                self.reviewDeck.show(review, days: days)
+                // Everything that is not new is already on screen; these
+                // arrive into it. That is the claim the picture is making, so
+                // it must not replay the whole library.
+                self.galaxyPane.reveal(review.appeared.compactMap(\.galaxyID))
+            }
+        }
+    }
+
+    /// Open whatever a review card points at, and leave the review to do it.
+    private func openReviewSubject(_ target: String) {
+        if target.hasPrefix("rec:") {
+            openGalaxySubject(Galaxy.recordingID(String(target.dropFirst(4))))
+        } else if target.hasPrefix("note:") {
+            openGalaxySubject(Galaxy.noteID(String(target.dropFirst(5))))
+        } else if !target.isEmpty {
+            openGalaxySubject(Galaxy.personID(target))
+        }
+    }
+
     @objc func showGalaxy() {
         // The menu item is rebuilt away when the galaxy is off, and this is
         // what makes that true rather than merely tidy: a key equivalent stays
@@ -709,7 +816,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // for somebody who never opens the galaxy at all. `enter(.galaxy)`
             // applies whatever the last number was.
             self.drawerHeight = points
-            if self.mode == .galaxy { self.galaxyPane.setBottomInset(points) }
+            if self.mode == .galaxy || self.mode == .review { self.galaxyPane.setBottomInset(points) }
         }
         // **The drawer asks; the window decides.** A page is a mode, and a mode
         // change is the window's to make: it swaps the sidebar's list, its
@@ -1356,8 +1463,33 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             galaxyPane.setSearch(sidebar.searchQuery)
             galaxyPane.reload()
 
+        case .review:
+            detail.saveYours()
+            detail.stopPlayback()
+            // Locked open like settings and chat, and for their reason: the
+            // deck is the only navigation this screen has. Unlike the galaxy,
+            // the list is replaced rather than left alone, which is what makes
+            // `sidebar.onSelect`'s escape into `.library` and the search
+            // wiring at `onSearchChanged` irrelevant here: neither is on
+            // screen to fire.
+            if was != .settings && was != .chat { sidebarWasCollapsed = sidebarItem.isCollapsed }
+            if sidebarItem.isCollapsed { sidebarItem.isCollapsed = false }
+            sidebarItem.canCollapse = false
+            split.canToggleSidebar = false
+            sidebarHost.show(reviewDeck)
+            paintSidebarSky(true)
+            askBar.show(nil)
+            galaxyPane.setBottomInset(0)
+            detailHost.show(galaxyPane)
+            galaxyPane.reviewing = true
+            galaxyPane.refreshMotionPolicy()
+            galaxyPane.setSearch("")
+            galaxyPane.reload()
+            loadReview()
+
         case .library:
             paintSidebarSky(false)
+            if was == .review { galaxyPane.reviewing = false }
             sidebarItem.canCollapse = true
             split.canToggleSidebar = true
             // Only settings hid the sidebar, so only settings restores it.
@@ -1384,7 +1516,8 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // Whatever the galaxy had selected goes with it. Coming back to a
             // card floating over a transcript, for a star that is no longer on
             // screen, would be a second selection nobody made.
-            if was == .galaxy { galaxyPane.select(nil) }
+            if was == .galaxy || was == .review { galaxyPane.select(nil) }
+            if was == .review { galaxyPane.reveal([]) }
             reload()
             if was == .settings { askBar.refreshModelSelection() }
             // **`isViewLoaded` first, and asking without it was a bug in the
@@ -1491,7 +1624,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // card for the bottom-right corner, and a question asked from here has
         // a page of its own to be asked from: the star you were looking at.
         composerHost?.showsComposer = mode == .chat
-            || (mode != .settings && mode != .galaxy && !live && !reviewingSpeaker)
+            || (mode != .settings && mode != .galaxy && mode != .review && !live && !reviewingSpeaker)
     }
 
     /// Put the list's highlight on the conversation the page is showing.
@@ -1618,7 +1751,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         // quite the same thing on all four screens any more: on the two
         // full-window modes it puts the mode away and leaves what was under it,
         // and on a page it closes the page.
-        if mode == .galaxy { enter(.library); return }
+        if mode == .galaxy || mode == .review { enter(.library); return }
         if mode == .chat { enter(.library) }
         closeSelected()
     }
@@ -2055,6 +2188,21 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             // is nothing to collide with.
             return [Self.settingsTitleItem, .flexibleSpace, Self.backItem,
                     .sidebarTrackingSeparator, .flexibleSpace]
+        case .review:
+            // **Settings' shape, not the galaxy's.** The deck has replaced the
+            // list, so there is no sidebar to collapse and no toggle for one,
+            // and Reset and Pause belong to a picture somebody is steering
+            // rather than one being walked for them.
+            //
+            // Back rather than a cross, in the slot settings and chats both
+            // keep it: this is a mode you came into from somewhere and go back
+            // out of, which is what those two are and what the galaxy is not.
+            var items: [NSToolbarItem.Identifier] =
+                [Self.reviewTitleItem, .flexibleSpace, Self.backItem,
+                 .sidebarTrackingSeparator, .flexibleSpace]
+            if Capture.shared.isRecording { items += [Self.recordItem, .space] }
+            return items
+
         case .galaxy:
             // **The library's shape, not settings'.** The sidebar is live in
             // this mode, so its collapse control stays where it always is and
@@ -2283,6 +2431,16 @@ final class LibraryWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             item.view = brandMark
             item.minSize = brandMark.frame.size
             item.maxSize = brandMark.frame.size
+            return item
+
+        case Self.reviewTitleItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Review"
+            reviewMark.stringValue = reviewScope.person.map(SpeakerName.display) ?? "This Week"
+            reviewMark.sizeToFit()
+            item.view = reviewMark
+            item.minSize = reviewMark.frame.size
+            item.maxSize = reviewMark.frame.size
             return item
 
         case Self.settingsTitleItem:

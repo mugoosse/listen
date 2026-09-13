@@ -1926,6 +1926,53 @@ private var continuationHeight: NSLayoutConstraint!
                            rows: rows)
         }
 
+        // **This week, as one row rather than a fifth section.** The sections
+        // below are each a list of things on disk with a Show All behind them;
+        // a review is neither a list nor a thing on disk, it is a reading of
+        // the ones that are. Giving it a section would promise a collection
+        // that cannot exist, so it gets the one row it actually is: a way in,
+        // with the week's own numbers on it so the row says what is behind it
+        // rather than asking you to look.
+        //
+        // Above the people and notes, below the recordings, because it is
+        // about the week those recordings just made.
+        if Settings.galaxyEnabled, !recordings.isEmpty {
+            let span = WeeklyReview.defaultWindow
+            let week = recordings.filter { ($0.date ?? .distantPast) >= span.from }
+            if !week.isEmpty {
+                let people = Set(week.flatMap { recording in
+                    recording.storedTurns.map(\.speaker)
+                        .filter { !VoiceBank.isPlaceholder($0) && $0 != SpeakerName.you }
+                })
+                let seconds = week.reduce(0.0) { $0 + $1.metadata.duration }
+                // Sized like every other leading view on this page. Left to
+                // itself an `NSImageView` holding a symbol has no width the
+                // row can lay out against, and the row solves with the icon
+                // centred and the title pushed to the trailing edge.
+                let icon = NSImageView()
+                icon.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+                icon.contentTintColor = Brand.accent
+                icon.symbolConfiguration = .init(pointSize: 15, weight: .semibold)
+                icon.imageScaling = .scaleProportionallyUpOrDown
+                icon.setAccessibilityElement(false)
+                NSLayoutConstraint.activate([
+                    icon.widthAnchor.constraint(equalToConstant: 28),
+                    icon.heightAnchor.constraint(equalToConstant: 28),
+                ])
+                let row = homeRow(
+                    title: "This week",
+                    detail: [week.count == 1 ? "1 conversation" : "\(week.count) conversations",
+                             Recording.length(seconds),
+                             people.isEmpty ? "" : (people.count == 1 ? "1 person" : "\(people.count) people")]
+                        .filter { !$0.isEmpty }.joined(separator: " · "),
+                    leading: icon,
+                    identifier: "review",
+                    action: #selector(openThisWeek),
+                    toolTip: "See what Listen learned this week")
+                addHomeSection("Review", actions: [], rows: [row])
+            }
+        }
+
         let addPerson = HoverButton(.ink)
         addPerson.title = "Add Person"
         addPerson.image = NSImage(systemSymbolName: "person.badge.plus",
@@ -2257,6 +2304,10 @@ private var continuationHeight: NSLayoutConstraint!
 
     @objc private func addPersonFromHome() {
         LibraryWindow.shared.addPerson()
+    }
+
+    @objc private func openThisWeek() {
+        LibraryWindow.shared.showReview(scope: .library)
     }
 
     @objc private func showAllRecordings() {

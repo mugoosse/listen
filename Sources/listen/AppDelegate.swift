@@ -315,6 +315,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // screen. See `LibraryWindow.previewPage`.
         case "page":
             LibraryWindow.shared.previewPage()
+        // The week's review, for the same reason the galaxy is here: it is two
+        // menu items deep, its whole job is being looked at, and the deck is
+        // the only part of it a probe can read at all.
+        case "review":
+            LibraryWindow.shared.show()
+            LibraryWindow.shared.showReview()
         case let want where want.hasPrefix("galaxy"):
             LibraryWindow.shared.show()
             LibraryWindow.shared.showGalaxy()

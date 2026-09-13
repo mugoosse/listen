@@ -782,3 +782,114 @@ both made a wrong assertion pass first:
    is called "Your notes"; the fixture's notes carry no agent marker, so the row
    for "Write-up 0" reads "Meeting 0". Its subtitle is the string that is that
    row and nothing else on screen.
+
+
+## The week's review, and what the picture is allowed to know
+
+`WeeklyReview` builds the deck and `ReviewDeck` draws it, in the sidebar's slot
+with `GalaxyPane` filling the rest. `Mode.review` is the fifth window mode.
+
+**New comes from the library, never from a stored picture.** The obvious
+implementation is to keep last week's `Galaxy.Snapshot` and diff it, and it is
+wrong twice: a `Snapshot` carries no dates at all, and `Galaxy.digest` hashes
+positions and ignores edges entirely, so it cannot answer "what changed" even
+in principle. Worse, a `Snapshot` on disk is a file of every title in the
+library, which is a list of everybody the owner has met: `listen galaxy` and
+`GalaxyImage` both refuse to print titles for that reason, so writing them to a
+cache is not a thing this feature may do. `Recording.date`, `Note.created`,
+`Chat.created` and claim evidence dates answer it while keeping nothing. The
+only thing stored is `lastReviewedAt`, a defaults key, following
+`Settings.lastSeenVersion`.
+
+**`appear` is a field, not a colour the caller dims.** Two traps make colour
+the wrong channel. `galaxyStarFragment` identifies the centre by `color.r > .95
+&& color.g > .85`, so brightening a person star into that range makes it render
+as the centre's lit sphere; and `starRadius` is shared with `pick`, so a star
+faded out by colour alone stays fully clickable. `appear` scales the quad and
+multiplies the alpha, and picking ignores it, so hit-testing stays honest about
+where things are. A line takes the lesser `appear` of its two ends, so an edge
+never reaches a star that has not arrived.
+
+**It defaults to 1, and that is the regression guard.** `GalaxyImage.write`
+encodes one frame at time 0 and `verify_galaxy.sh` counts pixels off it, so
+anything that renders with no animation driving it has to render finished. The
+Swift struct and the shader struct both gained the field plus explicit padding;
+they must be changed together or the picture is garbage with no compile error
+to say so.
+
+**A review outranks `interacting`.** `GalaxyMotionPolicy.ambient` is false
+while `interacting`, which is now the pointer alone: a cursor left parked over a
+star behind the cards would otherwise stop the shader clock for the rest of the
+walk. It mattered more when `interacting` still included the selection, since a
+review selects a star per card and the picture froze on the first one; that half
+is gone, and `reviewing` stays for the pointer. Reduce Motion and Low Power
+still win, and a reveal under either lands finished rather than freezing half
+drawn, which is the rule every other animation on this pane keeps.
+
+**The deck replaces the list; the galaxy mode does not.** That is the one thing
+`enter(.galaxy)` is written around, and it is why `sidebar.onSelect`'s escape
+into `.library` and the `onSearchChanged` guard do not apply in `.review`:
+neither control is on screen. `.review` locks the sidebar open the way settings
+and chat do, and shares the single lazy `GalaxyPane` rather than building a
+second Metal device.
+
+
+## The reveal never ran, and `policy.flights` is why
+
+`reveal` gated on `policy.flights`, which includes `visible`. A review opened
+while the window is still coming up is not visible yet, so the arrival was
+cancelled before it started, every time, and silently: the appearance map was
+cleared, the stars drew finished, and a screenshot taken afterwards is
+identical to one of a scene that never animated. It shipped dead and nothing
+could have noticed.
+
+Two fixes. The land-immediately decision now reads only the switches a person
+or the system actually set (`enabled`, `reducedMotion`, `lowPower`), because
+visibility is a thing that arrives rather than a preference. And the reveal is
+deferred to the scene: the review's cards and the galaxy's snapshot are two
+separate background passes and the cards usually win, so `reveal` before
+`apply` was setting an appearance for stars that did not exist yet and starting
+a clock that had run out by the time they did. `pendingReveal` is consumed by
+`apply`, exactly as `pendingSelection` already was.
+
+It is traced now (`galaxy reveal N stars`, `galaxy reveal done after Ns`) and
+`verify_review.sh` asserts both lines, for the same reason the motion policy is
+traced: what the GPU is doing is invisible to accessibility and to a still.
+
+## A review is a lens, so it is a row and not a collection
+
+The home page's sections are each a list of things on disk with a Show All
+behind them: recordings are folders, notes are Markdown, conversations are
+sidecars. A review is none of those. It is a reading of the others, derived
+from recording dates, note dates and claim evidence dates, and it holds nothing
+of its own except `lastReviewedAt`.
+
+Giving it a section, a `kind:` filter or a sidebar collection would promise a
+collection that cannot exist and a list that can never be enumerated, and a
+stored one would go stale the moment somebody corrects a fact or names a
+speaker. It gets the one row it actually is, with the week's numbers on it so
+the row says what is behind it. The app has an existing answer for "I want to
+keep this reading": save it as a note, which is how an Ask answer outlives its
+conversation.
+
+## `axprobe` can spend its whole budget on the menu bar
+
+Measured while writing `verify_review.sh`: a dump with `activate` answering
+"active" contained 8,460 `AXMenuItem` rows, 406 visits to the menu bar itself,
+60 application entries and **no window element at all**. Every window assertion
+then fails for a reason that has nothing to do with the screen under test,
+which rendered correctly in a screenshot taken the same second.
+
+`walk` now sorts the application's own children so windows come before the
+menu bar, which is right on its own merits and costs nothing. It is **not
+sufficient**: the same dump still shows 8,460 menu items, 406 visits to the bar
+and **60 visits to the application element itself**, which means the menu bar's
+subtree reaches back up to the application and the walk is going in circles. A
+depth cap and a budget bound it; neither stops it. The remaining fix is a
+visited set keyed on `CFHash`, which nothing here has needed before.
+
+Until then a UI script has to check that a window was reached before believing
+an absence, and say which it was. `verify_review.sh` skips with that sentence
+and prints the role histogram it saw instead, captured **before** the app is
+killed: read afterwards it is empty every time, whatever happened, which is a
+diagnostic that always blames the same thing.

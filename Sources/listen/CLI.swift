@@ -129,6 +129,8 @@ enum CLI {
             people(rest)
         case "galaxy":
             galaxy(rest)
+        case "review":
+            review(rest)
         case "rename":
             renamePerson(rest)
         case "merge":
@@ -1961,6 +1963,8 @@ enum CLI {
       galaxy [--json] [--image F.png [--closest]]
                                  what the galaxy would draw, in counts, and
                                  optionally as an image with no titles
+      review [--person NAME] [--days N] [--json]
+                                 the week's review, or one person's
       context <command>          person facts, relationships and local semantic search
                                 (run context help for update and search options)
       rename <name> <new name>   rename one person in every recording
@@ -2845,7 +2849,68 @@ enum CLI {
         exit(0)
     }
 
-    /// `listen galaxy [--json]`: what the galaxy would draw, without opening it.
+    /// `listen review [--person NAME] [--days N] [--json]`: a review, as text.
+///
+/// The test mechanism for the review page, in the family of `listen galaxy`:
+/// the deck is built from `WeeklyReview.build` and so is this, so a card that
+/// is wrong here is wrong on screen. Like `listen galaxy` it names recordings
+/// and people, which a real library makes personal, so it is a command
+/// somebody runs rather than anything that writes a file.
+private static func review(_ arguments: [String]) -> Never {
+    let json = arguments.contains("--json")
+    var days = 7.0
+    if let index = arguments.firstIndex(of: "--days"), index + 1 < arguments.count,
+       let value = Double(arguments[index + 1]) { days = max(1, min(365, value)) }
+    var scope = WeeklyReview.Scope.library
+    if let index = arguments.firstIndex(of: "--person"), index + 1 < arguments.count {
+        guard let label = try? PeopleMemory.resolve(arguments[index + 1]) else {
+            fail("no such person `\(arguments[index + 1])`. Try `listen people`.")
+        }
+        scope = .person(label)
+        // A person is asked about over a longer span than a week: "where were
+        // we" is a question about the relationship, not about the last seven
+        // days, and seven days of somebody you see monthly is an empty page.
+        if !arguments.contains("--days") { days = 90 }
+    }
+    let to = Date(), from = to.addingTimeInterval(-days * 86_400)
+    let review = WeeklyReview.build(from: from, to: to, scope: scope)
+    if json {
+        var cards: [[String: Any]] = []
+        for card in review.cards {
+            cards.append([
+                "id": card.id, "kind": card.kind.rawValue, "title": card.title,
+                // `JSONSerialization` takes Foundation types only, and a
+                // `ReviewRef` is a Swift struct: left as one it throws
+                // "Invalid type in JSON write" at runtime rather than failing
+                // to compile.
+                "detail": card.detail, "verbs": card.verbs,
+                "stars": card.stars.map(\.target),
+                "items": card.items.map { ["id": $0.id, "text": $0.text, "quote": $0.quote,
+                                           "source": $0.ref?.target ?? "", "date": $0.date] },
+            ])
+        }
+        let payload: [String: Any] = ["days": days, "cards": cards,
+                                      "new_stars": review.appeared.map(\.target),
+                                      "card_kinds": review.cards.map { $0.kind.rawValue }]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
+            print(String(decoding: data, as: UTF8.self))
+        }
+        exit(0)
+    }
+    for card in review.cards {
+        print(card.title)
+        if !card.detail.isEmpty { print("  " + card.detail) }
+        for item in card.items {
+            print("  · " + item.text + (item.date.isEmpty ? "" : "  (" + String(item.date.prefix(10)) + ")"))
+            if !item.quote.isEmpty { print("      “" + item.quote.prefix(90) + "”") }
+        }
+        if !card.verbs.isEmpty { print("  [" + card.verbs.joined(separator: " · ") + "]") }
+        print("")
+    }
+    exit(0)
+}
+
+/// `listen galaxy [--json]`: what the galaxy would draw, without opening it.
     ///
     /// **Counts and structure, never a title.** It exists so the picture can be
     /// checked from a script on a machine with a locked screen, which is where

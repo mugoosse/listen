@@ -419,7 +419,16 @@ struct GalaxyMotionPolicy {
     /// aiming at the picture, and both end when the pointer does.
     var interacting = false
 
-    var ambient: Bool { enabled && visible && !reducedMotion && !lowPower && !interacting }
+    /// A review is walking the scene on the reader's behalf.
+    ///
+    /// **It outranks `interacting`.** A review drives the scene with no
+    /// pointer, and a cursor parked over a star behind the card would
+    /// otherwise stop the drift for the rest of the walk. Every system switch
+    /// above still applies: Reduce Motion and Low Power turn it off like
+    /// everything else here.
+    var reviewing = false
+
+    var ambient: Bool { enabled && visible && !reducedMotion && !lowPower && (reviewing || !interacting) }
     /// A camera flight to a star somebody just clicked. It ignores
     /// `interacting`, because a pointer crossing a star while the camera is
     /// moving would otherwise snap the flight to its goal half way, and a drag

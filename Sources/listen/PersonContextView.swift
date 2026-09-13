@@ -126,7 +126,31 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
         let options = hasContent || waiting
             ? iconButton("ellipsis.circle", "Summary options", #selector(showOptions(_:)))
             : iconButton("gearshape", "People & Memory settings", #selector(openPeopleMemorySettings))
-        let top = NSStackView(views: [heading, spacer(), addNote, update, options])
+        // **Catch up, beside Add Note.** The two verbs on this header are now
+        // "write something down about them" and "show me where we got to", and
+        // the second one needed a home: a review scoped to one person was
+        // reachable only from `listen review --person`, which is not a place
+        // anybody is standing when they are about to see somebody again.
+        //
+        // Offered whether or not there is a summary yet, unlike the options
+        // menu beside it: a catch-up is built from recordings and their dates,
+        // so it has something to say about anybody you have actually talked
+        // to, months before the model has read a word of it.
+        let catchUp = NSButton(title: "Catch Up", target: self, action: #selector(catchUpOnPerson))
+        catchUp.bezelStyle = .inline
+        catchUp.controlSize = .small
+        catchUp.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        catchUp.imagePosition = .imageLeading
+        // **Not gated on the memory having anything in it.** It was, on
+        // `memory.sources`, which contradicts the paragraph above: a catch-up
+        // is built from recordings and their dates, so it has something to say
+        // about anybody you have talked to months before the model has read a
+        // word of it, and hiding it until then is hiding it exactly when it is
+        // the only thing on the page with an answer. An empty window says so
+        // in its own words.
+        catchUp.isHidden = !Settings.galaxyEnabled
+        catchUp.setAccessibilityLabel("Catch up on " + SpeakerName.display(person ?? "this person"))
+        let top = NSStackView(views: [heading, spacer(), catchUp, addNote, update, options])
         top.orientation = .horizontal; top.alignment = .centerY; top.spacing = 8
         add(top)
         setCustomSpacing(16, after: top)
@@ -158,7 +182,9 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
             }
             if hasContent {
                 if !memory.summary.isEmpty {
-                    for sentence in memory.summary { add(label(sentence.text, size: 14)) }
+                    for sentence in memory.summary {
+                        add(label(ContextPresentation.addressed(sentence.text, you: Settings.userName), size: 14))
+                    }
                     let all = memory.facts + memory.relations
                     let evidence = memory.summary.flatMap { sentence in
                         sentence.claims.flatMap { id -> [MemoryEvidence] in
@@ -171,8 +197,13 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
                     if showsSources { sourceLinks(evidence) }
                 } else {
                     // A useful preview while summary generation is pending.
-                    for item in (memory.facts + memory.relations).filter({ !["historical", "retracted"].contains($0.status) }).prefix(2) {
-                        add(label(item.value, size: 14))
+                    // Never an episodic line: the one this replaced opened a
+                    // real card with somebody's goal "in this session", months
+                    // after the session.
+                    for item in (memory.facts + memory.relations)
+                        .filter({ !["historical", "retracted"].contains($0.status) && !ContextPresentation.episodic($0.value) })
+                        .sorted(by: { Self.recency($0) > Self.recency($1) }).prefix(2) {
+                        add(label(ContextPresentation.addressed(item.value, you: Settings.userName), size: 14))
                     }
                 }
                 if let updated = memory.updated {
@@ -193,12 +224,27 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
                         + (proposed > 0 ? " · \(proposed) suggested" : "")
                     add(disclosure(title, open: showsDetails, #selector(toggleDetails)))
                     if showsDetails {
-                        if !currentFacts.isEmpty {
-                            for item in currentFacts { claim(item) }
+                        // Grouped by what a line is about and newest first
+                        // inside each group, rather than facts then relations
+                        // in whatever order the store returned. On a real card
+                        // the single most identifying line, "works as a
+                        // psychotherapist and currently sees patients", was
+                        // last of thirteen.
+                        let episodic = (currentFacts + currentRelations).filter { ContextPresentation.episodic($0.value) }
+                        let lasting = (currentFacts + currentRelations).filter { !ContextPresentation.episodic($0.value) }
+                        for section in ContextPresentation.sections {
+                            let group = lasting.filter { ContextPresentation.section($0.attribute) == section }
+                                .sorted { Self.recency($0) > Self.recency($1) }
+                            guard !group.isEmpty else { continue }
+                            headingRow(section)
+                            for item in group { claim(item) }
                         }
-                        if !currentRelations.isEmpty {
-                            headingRow("Relationships")
-                            for item in currentRelations { claim(item) }
+                        if !episodic.isEmpty {
+                            // Said once, about an occasion. Kept, dated, and
+                            // out of the part of the card that claims to
+                            // describe somebody.
+                            headingRow("Last time you spoke")
+                            for item in episodic.sorted(by: { Self.recency($0) > Self.recency($1) }) { claim(item) }
                         }
                     }
                 }
@@ -264,6 +310,19 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
         }
     }
 
+    /// The newest date any evidence for this claim carries, for ordering.
+    private static func recency(_ item: PersonMemory.Item) -> String {
+        (item.evidence + (item.changeEvidence ?? [])).map(\.date).max() ?? ""
+    }
+
+    /// When it was said, which every row needed and none of them had: the card
+    /// read `[recorded]` against all thirteen lines whether one was from
+    /// yesterday or from March.
+    private static func when(_ item: PersonMemory.Item) -> String {
+        let date = recency(item)
+        return date.isEmpty ? "Recorded" : Self.date(date)
+    }
+
     private static func friendlyFailure(_ failure: String) -> String {
         if failure == "The person summary did not cite valid claims."
             || failure == "The model did not return the required context JSON. Retry the source." {
@@ -309,12 +368,17 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
     }
 
     private func claim(_ item: PersonMemory.Item) {
-        let category = ContextPresentation.category(item.attribute, polarity: item.polarity ?? "positive")
+        // The stored predicate moves to the tooltip; the heading above the
+        // group is what a reader gets. See `ContextPresentation.section`.
+        let predicate = ContextPresentation.category(item.attribute, polarity: item.polarity ?? "positive")
+        let category = Self.when(item)
             + (["historical", "retracted"].contains(item.status) ? " · Historical" : "")
             + (item.pinned == true ? " · Pinned" : "")
         let more = iconButton("ellipsis", "More options for " + category.lowercased(), #selector(claimMenu(_:)))
         more.identifier = NSUserInterfaceItemIdentifier(item.id)
-        let metadata = NSStackView(views: [label(category, size: 11, color: .secondaryLabelColor), spacer(), more])
+        let categoryLabel = label(category, size: 11, color: .secondaryLabelColor)
+        categoryLabel.toolTip = predicate
+        let metadata = NSStackView(views: [categoryLabel, spacer(), more])
         metadata.orientation = .horizontal; metadata.alignment = .centerY; metadata.spacing = 8
         add(metadata)
         setCustomSpacing(2, after: metadata)
@@ -331,7 +395,7 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
             row.setAccessibilityLabel("Open " + name)
             value = row
         } else {
-            value = label(item.value, size: 13)
+            value = label(ContextPresentation.addressed(item.value, you: Settings.userName), size: 13)
         }
         add(value)
         let qualifiers = ContextPresentation.qualifiers(modality: item.modality ?? "asserted", attribution: item.attribution ?? "direct")
@@ -450,6 +514,10 @@ final class PersonContextView: NSStackView, NSSearchFieldDelegate {
             }
         }
         render()
+    }
+    @objc private func catchUpOnPerson() {
+        guard let person else { return }
+        LibraryWindow.shared.showReview(scope: .person(person))
     }
     @objc private func addPersonNote() {
         guard let person, let window else { return }

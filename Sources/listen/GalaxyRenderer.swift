@@ -206,8 +206,29 @@ enum GalaxyRendererError: LocalizedError {
     }
 }
 
-private struct GalaxyGPUStar { var position: SIMD3<Float>; var radius: Float; var color: SIMD4<Float> }
-private struct GalaxyGPULine { var position: SIMD3<Float>; var color: SIMD4<Float> }
+/// `appear` is how far into existence a star is, 0 to 1.
+///
+/// **A field of its own rather than a colour the caller dims.** Two things make
+/// colour the wrong channel: `galaxyStarFragment` identifies the centre by
+/// `color.r > .95 && color.g > .85`, so brightening a person star into that
+/// range makes it render as the centre's lit sphere; and `starRadius` is shared
+/// with `pick`, so a star faded out by colour alone stays fully clickable.
+/// `appear` scales the quad and the alpha together and `pick` ignores it, which
+/// keeps hit-testing honest about where things really are.
+///
+/// **It defaults to 1.** `GalaxyImage.write` encodes a single frame at time 0
+/// and `verify_galaxy.sh` counts pixels off it, so anything that renders
+/// without an animation driving it has to render finished.
+private struct GalaxyGPUStar {
+    var position: SIMD3<Float>; var radius: Float; var color: SIMD4<Float>
+    var appear: Float = 1
+    var padding: SIMD3<Float> = .zero
+}
+private struct GalaxyGPULine {
+    var position: SIMD3<Float>; var color: SIMD4<Float>
+    var appear: Float = 1
+    var padding: SIMD3<Float> = .zero
+}
 private struct GalaxyGPUUniforms {
     var viewProjection: simd_float4x4
     var model: simd_float4x4
@@ -324,6 +345,11 @@ final class GalaxyRenderer {
     /// `highlight` is the search's matches. **A selection outranks it**:
     /// clicking a star while a search is up is a narrower question than the
     /// search, and two sets of lit stars would answer neither.
+    /// How far each star has arrived, for the weekly review's reveal.
+    ///
+    /// Empty means everything is here, which is every caller but the review.
+    var appearance: [String: Float] = [:]
+
     func update(snapshot: Galaxy.Snapshot, selectionID: String?, hoverID: String? = nil,
                 highlight: Set<String> = []) {
         nodes = snapshot.nodes
@@ -344,7 +370,8 @@ final class GalaxyRenderer {
             return GalaxyGPUStar(position: node.position,
                                  radius: Self.starRadius(id: node.id, kind: node.kind,
                                                          selectionID: selectionID, hoverID: hoverID),
-                                 color: lit ? base : dimmed)
+                                 color: lit ? base : dimmed,
+                                 appear: appearance[node.id] ?? 1)
         }
         let byID = Dictionary(snapshot.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         lines.removeAll(keepingCapacity: true)
@@ -363,8 +390,11 @@ final class GalaxyRenderer {
             else if selectionID != nil || !highlight.isEmpty {
                 color = SIMD4(color.x * 0.24, color.y * 0.24, color.z * 0.24, 0.08)
             }
-            lines.append(GalaxyGPULine(position: source.position, color: color))
-            lines.append(GalaxyGPULine(position: target.position, color: color))
+            // A line is only as present as the less-arrived end of it, so an
+            // edge never reaches a star that is not there yet.
+            let arrived = min(appearance[edge.source] ?? 1, appearance[edge.target] ?? 1)
+            lines.append(GalaxyGPULine(position: source.position, color: color, appear: arrived))
+            lines.append(GalaxyGPULine(position: target.position, color: color, appear: arrived))
         }
         starBuffer = Self.buffer(device: device, values: stars)
         lineBuffer = Self.buffer(device: device, values: lines)
@@ -532,8 +562,8 @@ final class GalaxyRenderer {
     private static let shaderSource = """
     #include <metal_stdlib>
     using namespace metal;
-    struct Star { float3 position; float radius; float4 color; };
-    struct Line { float3 position; float4 color; };
+    struct Star { float3 position; float radius; float4 color; float appear; float3 pad; };
+    struct Line { float3 position; float4 color; float appear; float3 pad; };
     struct Uniforms { float4x4 viewProjection; float4x4 model; float2 viewport; float pointScale; float time; float3 sky; float padding; };
     struct Out { float4 position [[position]]; float4 color; float2 local; float3 world; };
     float galaxyHash(float2 p) { p = fract(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -568,10 +598,14 @@ final class GalaxyRenderer {
         Star s = stars[iid];
         float4 world = u.model * float4(s.position, 1);
         float4 clip = u.viewProjection * world;
-        float scale = s.radius * u.pointScale / max(clip.w, .01);
+        // A star arrives by growing and brightening at once. `appear` is 1
+        // for everything but a review's reveal, so this is a multiply by one
+        // in every other frame the app ever draws.
+        float a = clamp(s.appear, 0., 1.);
+        float scale = s.radius * u.pointScale * (.35 + .65 * a) / max(clip.w, .01);
         Out o;
         o.position = clip + float4(quad[vid] * scale * float2(2. / u.viewport.x, 2. / u.viewport.y) * clip.w, 0, 0);
-        o.color = s.color; o.local = quad[vid]; o.world = world.xyz;
+        o.color = float4(s.color.rgb, s.color.a * a); o.local = quad[vid]; o.world = world.xyz;
         return o;
     }
     fragment float4 galaxyStarFragment(Out in [[stage_in]], constant Uniforms &u [[buffer(2)]]) {
@@ -590,12 +624,13 @@ final class GalaxyRenderer {
             float light = max(0., 1. - length(in.local - float2(-.28, .32)));
             color *= .55 + .72 * light;
         }
-        return float4(color * (.25 + core * 1.45) * shimmer, edge * (.28 + .72 * core));
+        return float4(color * (.25 + core * 1.45) * shimmer, in.color.a * edge * (.28 + .72 * core));
     }
 
     vertex Out galaxyLineVertex(const device Line *v [[buffer(0)]], constant Uniforms &u [[buffer(2)]], uint vid [[vertex_id]]) {
         Out o; o.position = u.viewProjection * u.model * float4(v[vid].position, 1);
-        o.color = v[vid].color; o.local = 0; o.world = 0; return o;
+        float a = clamp(v[vid].appear, 0., 1.);
+        o.color = float4(v[vid].color.rgb, v[vid].color.a * a); o.local = 0; o.world = 0; return o;
     }
     fragment float4 galaxyLineFragment(Out in [[stage_in]]) { return in.color; }
 

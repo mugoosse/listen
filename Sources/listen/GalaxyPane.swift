@@ -531,8 +531,104 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
     }
 
     private func pushToRenderer() {
+        renderer?.appearance = appearance
         renderer?.update(snapshot: visible, selectionID: selectedID,
                          hoverID: hoveredID, highlight: matches)
+    }
+
+    // MARK: - The weekly review's reveal
+
+    /// How far each star has arrived. Empty means the whole picture is here,
+    /// which is every mode but the review.
+    private var appearance: [String: Float] = [:]
+    private var revealStart: Date?
+    private var revealing: [String] = []
+    /// A reveal asked for before the scene it is about had loaded.
+    ///
+    /// The review builds its cards and the galaxy builds its snapshot on two
+    /// separate background passes, and the cards usually win: `reveal` then
+    /// set an appearance for stars that were not in the scene yet, the clock
+    /// started, and by the time `apply` put the scene on screen the whole
+    /// arrival had already elapsed into nothing. Held here and consumed by
+    /// `apply`, which is exactly what `pendingSelection` does on this pane.
+    private var pendingReveal: [String]?
+
+    /// Whether a review is driving this scene.
+    ///
+    /// Set before the cards start, cleared on the way out. It keeps the drift
+    /// running while a card holds a selection: see `GalaxyMotionPolicy`.
+    var reviewing: Bool {
+        get { policy.reviewing }
+        set { policy.reviewing = newValue; applyMotionPolicy() }
+    }
+
+    /// Bring the library up as it was, then play these stars in.
+    ///
+    /// The stars named here start at nothing and arrive over `revealLength`,
+    /// staggered so a busy week does not land as one flash. Everything else is
+    /// already there, because the point of the picture is that the new things
+    /// arrive **into** a library that was already yours.
+    func reveal(_ stars: [String]) {
+        guard !stars.isEmpty else {
+            pendingReveal = nil
+            appearance = [:]; revealing = []; revealStart = nil
+            pushToRenderer(); return
+        }
+        // Nothing to arrive into yet. Wait for the scene rather than running
+        // the clock against an empty one.
+        guard !snapshot.nodes.isEmpty else { pendingReveal = stars; return }
+        pendingReveal = nil
+        revealing = stars
+        // **The switches, not `policy.flights`.** `flights` includes `visible`,
+        // and a review opened while the window is still coming up is not
+        // visible yet: gating on it cancelled the reveal before it started,
+        // every time, and silently. Reduce Motion and Low Power still land it
+        // finished rather than freezing it half drawn, which is the rule every
+        // other animation on this pane keeps.
+        guard policy.enabled, !policy.reducedMotion, !policy.lowPower else {
+            appearance = [:]; revealing = []; revealStart = nil
+            renderGeneration += 1; pushToRenderer(); metalView?.needsDisplay = true
+            return
+        }
+        revealStart = Date()
+        for star in stars { appearance[star] = 0 }
+        // Whether the stars are actually arriving is invisible to the
+        // accessibility tree and to a screenshot taken after it finishes, so
+        // it is traced, exactly as the motion policy is. `verify_review.sh`
+        // reads this.
+        trace("galaxy reveal \(stars.count) stars over \(Self.revealLength)s")
+        renderGeneration += 1
+        pushToRenderer()
+        applyMotionPolicy()
+        metalView?.needsDisplay = true
+    }
+
+    /// How long the whole arrival takes, however many stars there are.
+    private static let revealLength = 2.2
+    /// How much of that length one star's own arrival occupies.
+    private static let revealRise = 0.55
+
+    /// Advance the reveal. Returns whether anything still has to move.
+    private func stepReveal(now: Date) -> Bool {
+        guard let start = revealStart, !revealing.isEmpty else { return false }
+        let elapsed = now.timeIntervalSince(start)
+        let stagger = max(0, Self.revealLength - Self.revealRise)
+        var moving = false
+        for (index, star) in revealing.enumerated() {
+            let begins = revealing.count <= 1 ? 0 : stagger * Double(index) / Double(revealing.count - 1)
+            let progress = min(1, max(0, (elapsed - begins) / Self.revealRise))
+            // Ease out, so a star settles rather than snapping to full size.
+            let eased = 1 - pow(1 - progress, 3)
+            appearance[star] = Float(eased)
+            if progress < 1 { moving = true }
+        }
+        if !moving {
+            trace("galaxy reveal done after \(String(format: "%.2f", elapsed))s")
+            revealing = []; revealStart = nil; appearance = [:]
+        }
+        renderGeneration += 1
+        pushToRenderer()
+        return moving
     }
 
     private func apply(_ built: Galaxy.Snapshot) {
@@ -552,6 +648,8 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             pendingSelection = nil
             select(wanted)
         }
+        // Now there is a scene for them to arrive into. See `pendingReveal`.
+        if let waiting = pendingReveal { pendingReveal = nil; reveal(waiting) }
         pushToRenderer()
         updateStatus()
         updateInspector()
@@ -655,7 +753,9 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
         }
         let wasAnimating = isAnimating
         isAnimating = policy.ambient
-        let continuous = isAnimating || (focusFlight != nil && policy.flights)
+        // A reveal keeps the view drawing even when nothing else would: the
+        // stars are arriving, and `isAnimating` only covers the ambient drift.
+        let continuous = isAnimating || (focusFlight != nil && policy.flights) || revealStart != nil
         // Whether the GPU is running, and why not when it is not. Invisible to
         // the accessibility tree and to a screenshot alike, which is why
         // `verify_galaxy.sh` reads it out of the trace the way the find bar's
@@ -694,6 +794,10 @@ final class GalaxyPane: NSViewController, MTKViewDelegate {
             focusFlight = flight.elapsed >= 0.65 ? nil : flight
             if focusFlight == nil { refreshMotionPolicy(); updateResetButton() }
         }
+        // The reveal rebuilds the instance buffers, so it runs before the draw
+        // below rather than on its own timer: a star that has grown since the
+        // last frame has to be in the buffer this frame reads.
+        if revealStart != nil, !stepReveal(now: Date()) { applyMotionPolicy() }
         // Ten times a second, not thirty: rebuilding two dozen NSTextFields on
         // every frame is the one part of this that is not on the GPU.
         if now - lastLabelTime > 0.1 { updateLabels(); lastLabelTime = now }

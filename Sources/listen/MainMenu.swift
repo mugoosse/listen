@@ -23,9 +23,16 @@ enum MainMenu {
 
     /// The galaxy's row, held for the same reason and hidden the same way.
     private static weak var galaxyItem: NSMenuItem?
+    /// The review's row. It draws the same picture, so it follows the same
+    /// switch: a review with the galaxy off would be a screen made of a
+    /// feature somebody has turned off.
+    private static weak var reviewItem: NSMenuItem?
 
-    /// Show or hide it, after `Settings.galaxyEnabled` has changed.
-    static func refreshGalaxy() { galaxyItem?.isHidden = !Settings.galaxyEnabled }
+    /// Show or hide them, after `Settings.galaxyEnabled` has changed.
+    static func refreshGalaxy() {
+        galaxyItem?.isHidden = !Settings.galaxyEnabled
+        reviewItem?.isHidden = !Settings.galaxyEnabled
+    }
 
     static func install() {
         let main = NSMenu()
@@ -227,6 +234,14 @@ enum MainMenu {
         // to be worth teaching for a screen opened once in a while.
         galaxyItem = add(menu, "Galaxy", #selector(MenuActions.openGalaxy), "")
         galaxyItem?.target = MenuActions.shared
+        // Above the galaxy rather than below it: this is the one somebody
+        // opens on a Sunday, and the galaxy is the thing it is made of.
+        reviewItem = add(menu, "This Week", #selector(MenuActions.openReview), "")
+        reviewItem?.target = MenuActions.shared
+        if let reviewItem, let galaxyItem, let index = menu.items.firstIndex(of: galaxyItem) {
+            menu.removeItem(reviewItem)
+            menu.insertItem(reviewItem, at: index)
+        }
         refreshAsk()
         refreshGalaxy()
         add(menu, "Open Listen", #selector(MenuActions.openLibrary), "0")
@@ -288,6 +303,7 @@ final class MenuActions: NSObject {
     @objc func openLibrary() { LibraryWindow.shared.show() }
     @objc func openChats() { LibraryWindow.shared.openChats() }
     @objc func openGalaxy() { LibraryWindow.shared.showGalaxy() }
+    @objc func openReview() { LibraryWindow.shared.showReview() }
     /// The window, not the settings section. See `AboutWindow`.
     @objc func showAbout() { AboutWindow.show() }
     /// The notes that shipped with this build, not the ones on GitHub. See

@@ -1,0 +1,44 @@
+# **This no longer deploys the site. It deploys the redirect to it.**
+#
+# listenbrain.app is the site, in its own repository. What is left in docs/ here
+# is index.html and 404.html, which send mugoosse.github.io/listen and every
+# deep link under it to the new address, plus the two managed-deployment files
+# the live site still links by their blob URL.
+#
+# Keeping this workflow is not sentiment. `Links.swift` shipped the old address
+# in every build up to 0.44.0 and those copies cannot be edited, so Help, Listen
+# Website would 404 for everybody who already installed it. Delete this when
+# telemetry says those builds are gone, and not before.
+name: Deploy the redirect to listenbrain.app
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4

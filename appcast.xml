@@ -1,0 +1,56 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Listen</title>
+        <item>
+            <title>0.46.0</title>
+            <pubDate>Wed, 16 Sep 2026 12:27:49 +0100</pubDate>
+            <link>https://listenbrain.app/</link>
+            <sparkle:fullReleaseNotesLink>https://listenbrain.app/changelog</sparkle:fullReleaseNotesLink>
+            <sparkle:version>529</sparkle:version>
+            <sparkle:shortVersionString>0.46.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[Listen has a website of its own at [listenbrain.app](https://listenbrain.app/),
+and everything the app used to send you to GitHub for is there instead: the
+release notes, the telemetry dictionary, the managed-deployment guide and where
+to write when something is wrong. Updates come from there now too.
+
+### Updates come from dl.listenbrain.app
+
+Sparkle used to fetch its feed and the download from the GitHub repository.
+Both now come from `dl.listenbrain.app`, and the app declares that host in the
+`InternetAccessPolicy.plist` a firewall like Little Snitch reads, so the change
+is visible where it should be rather than a surprise in a connection log.
+
+**Copies before this one keep updating from GitHub and always will.** The feed
+address is compiled into a build and cannot be changed afterwards, so releases
+are published to both places, and will be for as long as anybody is still
+running an older copy.
+
+Nothing about what is sent has changed. The check is still a request for a file
+listing versions, it still carries nothing about you, and turning it off is
+still one setting.
+
+### Where the app sends you
+
+Help, Listen Website now opens listenbrain.app. Release Notes opens
+listenbrain.app/changelog, which has every version rather than stopping at the
+one you have. The Privacy pane's "see exactly what is shared" opens
+listenbrain.app/telemetry. Reporting something opens listenbrain.app/support,
+which says what to send and, more usefully, what not to: never a recording or a
+transcript.
+
+On the iPhone the same four moved, and the sentence that travels with Share
+Listen was rewritten. It had been describing a Mac recorder that writes down
+who spoke, which is what Listen was two positionings ago.
+
+### Fixes
+
+- The notes for 0.45.0 described two name styles and the app shipped three.
+
+]]></description>
+            <enclosure url="https://dl.listenbrain.app/v0.46.0/Listen-0.46.0.zip" length="19917989" type="application/octet-stream" sparkle:edSignature="SdcHjMOSFAD7+naM1gbCk3fEQxD2ShA0FIJ/mT7PVDCenMWNORTeL/2tBKsi9XkEUBE0qjhJrn4q9VJnvjxzBg=="/>
+        </item>
+    </channel>
+</rss>
